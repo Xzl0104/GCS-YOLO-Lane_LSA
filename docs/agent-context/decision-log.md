@@ -347,8 +347,12 @@ gcs_count_sum = 0.03
 gcs_quality = 0.4
 gcs_quality_neg_weight = 0.5
 gcs_count_cls_w2/w3/w4/w5 = 0.5/1.2/1.4/1.8
+gcs_count_boundary_gt5_pos_weight = 1.15
 gcs_point_valid_gt5_pos_weight = 2.0
 gcs_gt5_edge_loss_weight = 1.15
+gcs_candidate_gt5_edge_weight = 1.10
+gcs_point_valid_gt5_edge_continuity = 0.05
+gcs_point_valid_gt5_edge_continuity_thr = 0.55
 gcs_gt5_oversample_weight = 1.0
 gcs_group_sampler_ratios = 2:0.01,3:0.29,4:0.42,5:0.28
 ```
@@ -364,12 +368,26 @@ Alternatives considered:
 - promote aggressive GT5 oversampling/hard-edge/soft-count/rescue as default
 - keep the old weaker count/quality defaults
 - disable Count Boundary by default
+- rely on decode-side rescue instead of improving real matched query candidates
 
 Tradeoff:
 
-The conservative defaults reduce GT5-specific over-concentration while preserving Count Head supervision. Count Boundary remains part of the active model/decode path, so the output contract must mention it explicitly. These defaults are not proof of a new metric gain until retrained and selected on official-val.
+The conservative defaults reduce GT5-specific over-concentration while preserving Count Head supervision. Count Boundary remains part of the active model/decode path, so the output contract must mention it explicitly. The new training-side candidate-quality defaults concentrate a small amount of extra gradient on real matched GT5 edge queries/lanes and adjacent visible point-valid anchors. `gcs_candidate_gt5_edge_weight` is matched edge-query/lane weighting, not per-anchor positive-target-only weighting. This can improve candidate quality only if retraining confirms it on official-val; it may also over-weight rare edge lanes if the defaults are too high.
 
 Validation evidence:
+
+Latest local validation for the training-side GT5 candidate-quality update:
+
+```text
+python -m py_compile ultralytics/utils/gcs_loss.py ultralytics/models/yolo/gcs_lane/train.py tools/train_gcs.py tests/test_gcs_count_aware.py
+python -m pytest tests/test_gcs_count_aware.py -q
+python scripts/verify_loss_cleanup.py
+python scripts/check_gcs_agent_setup.py
+```
+
+No official-val result is available yet for the new training-side knobs.
+
+Previous local contract validation for the Count Boundary/count-aware mainline:
 
 Local contract validation passed after the change:
 

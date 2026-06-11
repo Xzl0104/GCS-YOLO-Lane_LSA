@@ -7,14 +7,19 @@ import pytest
 import torch
 
 from tools import train_gcs
+from ultralytics.cfg import CFG_FLOAT_KEYS, CFG_FRACTION_KEYS
 from ultralytics.models.yolo.gcs_lane.train import (
+    GCS_MAINLINE_CANDIDATE_GT5_EDGE_WEIGHT,
     GCS_MAINLINE_COUNT_CLS_WEIGHTS,
     GCS_MAINLINE_COUNT_BOUNDARY_GAIN,
+    GCS_MAINLINE_COUNT_BOUNDARY_GT5_POS_WEIGHT,
     GCS_MAINLINE_COUNT_BOUNDARY_LABEL_SMOOTHING,
     GCS_MAINLINE_COUNT_SUM_GAIN,
     GCS_MAINLINE_GROUP_SAMPLER_RATIOS,
     GCS_MAINLINE_GT5_EDGE_LOSS_WEIGHT,
     GCS_MAINLINE_GT5_OVERSAMPLE_WEIGHT,
+    GCS_MAINLINE_POINT_VALID_GT5_EDGE_CONTINUITY,
+    GCS_MAINLINE_POINT_VALID_GT5_EDGE_CONTINUITY_THR,
     GCS_MAINLINE_POINT_VALID_GT5_POS_WEIGHT,
     GCS_MAINLINE_QUALITY_GAIN,
     GCS_MAINLINE_QUALITY_NEG_WEIGHT,
@@ -258,6 +263,13 @@ def test_mainline_sampler_defaults_and_ratio_boost_boundaries(monkeypatch):
     assert math.isclose(DEFAULT_CFG_DICT["gcs_gt5_edge_loss_weight"], GCS_MAINLINE_GT5_EDGE_LOSS_WEIGHT)
     assert DEFAULT_CFG_DICT["gcs_count_boundary"] == GCS_MAINLINE_COUNT_BOUNDARY_GAIN
     assert DEFAULT_CFG_DICT["gcs_count_boundary_label_smoothing"] == GCS_MAINLINE_COUNT_BOUNDARY_LABEL_SMOOTHING
+    assert DEFAULT_CFG_DICT["gcs_count_boundary_gt5_pos_weight"] == GCS_MAINLINE_COUNT_BOUNDARY_GT5_POS_WEIGHT
+    assert DEFAULT_CFG_DICT["gcs_candidate_gt5_edge_weight"] == GCS_MAINLINE_CANDIDATE_GT5_EDGE_WEIGHT
+    assert DEFAULT_CFG_DICT["gcs_point_valid_gt5_edge_continuity"] == GCS_MAINLINE_POINT_VALID_GT5_EDGE_CONTINUITY
+    assert (
+        DEFAULT_CFG_DICT["gcs_point_valid_gt5_edge_continuity_thr"]
+        == GCS_MAINLINE_POINT_VALID_GT5_EDGE_CONTINUITY_THR
+    )
 
     monkeypatch.setattr(sys, "argv", ["train_gcs.py"])
     args = train_gcs.parse_args()
@@ -271,6 +283,10 @@ def test_mainline_sampler_defaults_and_ratio_boost_boundaries(monkeypatch):
     assert math.isclose(args.gcs_gt5_edge_loss_weight, GCS_MAINLINE_GT5_EDGE_LOSS_WEIGHT)
     assert args.gcs_count_boundary == GCS_MAINLINE_COUNT_BOUNDARY_GAIN
     assert args.gcs_count_boundary_label_smoothing == GCS_MAINLINE_COUNT_BOUNDARY_LABEL_SMOOTHING
+    assert args.gcs_count_boundary_gt5_pos_weight == GCS_MAINLINE_COUNT_BOUNDARY_GT5_POS_WEIGHT
+    assert args.gcs_candidate_gt5_edge_weight == GCS_MAINLINE_CANDIDATE_GT5_EDGE_WEIGHT
+    assert args.gcs_point_valid_gt5_edge_continuity == GCS_MAINLINE_POINT_VALID_GT5_EDGE_CONTINUITY
+    assert args.gcs_point_valid_gt5_edge_continuity_thr == GCS_MAINLINE_POINT_VALID_GT5_EDGE_CONTINUITY_THR
 
     trainer_overrides = {}
     monkeypatch.setattr(BaseTrainer, "__init__", lambda self, cfg, overrides, callbacks: trainer_overrides.update(overrides))
@@ -288,6 +304,13 @@ def test_mainline_sampler_defaults_and_ratio_boost_boundaries(monkeypatch):
     assert math.isclose(trainer_overrides["gcs_gt5_edge_loss_weight"], GCS_MAINLINE_GT5_EDGE_LOSS_WEIGHT)
     assert trainer_overrides["gcs_count_boundary"] == GCS_MAINLINE_COUNT_BOUNDARY_GAIN
     assert trainer_overrides["gcs_count_boundary_label_smoothing"] == GCS_MAINLINE_COUNT_BOUNDARY_LABEL_SMOOTHING
+    assert trainer_overrides["gcs_count_boundary_gt5_pos_weight"] == GCS_MAINLINE_COUNT_BOUNDARY_GT5_POS_WEIGHT
+    assert trainer_overrides["gcs_candidate_gt5_edge_weight"] == GCS_MAINLINE_CANDIDATE_GT5_EDGE_WEIGHT
+    assert trainer_overrides["gcs_point_valid_gt5_edge_continuity"] == GCS_MAINLINE_POINT_VALID_GT5_EDGE_CONTINUITY
+    assert (
+        trainer_overrides["gcs_point_valid_gt5_edge_continuity_thr"]
+        == GCS_MAINLINE_POINT_VALID_GT5_EDGE_CONTINUITY_THR
+    )
 
     criterion = GCSLoss(model={"gcs_point_mode": "fixed_y", "gcs_imgsz": [544, 960]})
     assert math.isclose(criterion.count_sum_gain, GCS_MAINLINE_COUNT_SUM_GAIN)
@@ -298,12 +321,162 @@ def test_mainline_sampler_defaults_and_ratio_boost_boundaries(monkeypatch):
     assert math.isclose(criterion.gt5_edge_loss_weight, GCS_MAINLINE_GT5_EDGE_LOSS_WEIGHT)
     assert math.isclose(criterion.count_boundary_gain, GCS_MAINLINE_COUNT_BOUNDARY_GAIN)
     assert math.isclose(criterion.count_boundary_label_smoothing, GCS_MAINLINE_COUNT_BOUNDARY_LABEL_SMOOTHING)
+    assert math.isclose(criterion.count_boundary_gt5_pos_weight, GCS_MAINLINE_COUNT_BOUNDARY_GT5_POS_WEIGHT)
+    assert math.isclose(criterion.candidate_gt5_edge_weight, GCS_MAINLINE_CANDIDATE_GT5_EDGE_WEIGHT)
+    assert math.isclose(criterion.point_valid_gt5_edge_continuity, GCS_MAINLINE_POINT_VALID_GT5_EDGE_CONTINUITY)
+    assert math.isclose(
+        criterion.point_valid_gt5_edge_continuity_thr, GCS_MAINLINE_POINT_VALID_GT5_EDGE_CONTINUITY_THR
+    )
 
     ratios = {2: 0.01, 3: 0.29, 4: 0.42, 5: 0.28}
     assert apply_gt5_oversample_weight_to_ratios(ratios, 1.0) == ratios
     assert ratios[5] == 0.28
     with pytest.raises(ValueError, match="must be > 0"):
         apply_gt5_oversample_weight_to_ratios(ratios, 0.0)
+
+
+def test_gcs_loss_item_names_stay_stable():
+    expected = (
+        "exist_loss",
+        "point_loss",
+        "point_valid_loss",
+        "line_iou_loss",
+        "count_cls_loss",
+        "count_sum_loss",
+        "quality_loss",
+    )
+    assert GCSLoss.loss_names == expected
+    assert GCSLaneTrainer.loss_names == expected
+    assert GCSLaneTrainer.progress_loss_names == expected
+
+
+def test_gt5_candidate_cfg_keys_have_expected_types():
+    assert {
+        "gcs_count_boundary_gt5_pos_weight",
+        "gcs_candidate_gt5_edge_weight",
+        "gcs_point_valid_gt5_edge_continuity",
+    } <= CFG_FLOAT_KEYS
+    assert "gcs_point_valid_gt5_edge_continuity_thr" in CFG_FRACTION_KEYS
+
+
+def test_count_boundary_gt5_pos_weight_increases_count_loss():
+    _, valid = _gt([0.1, 0.25, 0.4, 0.55, 0.7])
+    preds = {
+        "pred_count_logits": torch.zeros(1, 4),
+        "pred_count_boundary_logits": torch.tensor([[0.0, -2.0]]),
+    }
+    pred_points = torch.zeros(1, 5, 6, 2)
+    common = {
+        "gcs_point_mode": "fixed_y",
+        "gcs_imgsz": [544, 960],
+        "gcs_count_boundary": 1.0,
+        "gcs_count_boundary_label_smoothing": 0.0,
+    }
+    base = GCSLoss(model={**common, "gcs_count_boundary_gt5_pos_weight": 1.0})
+    boosted = GCSLoss(model={**common, "gcs_count_boundary_gt5_pos_weight": 2.0})
+
+    base_loss = base.count_head_loss(preds, pred_points, [valid])
+    boosted_loss = boosted.count_head_loss(preds, pred_points, [valid])
+
+    assert boosted_loss > base_loss
+
+
+def test_candidate_gt5_edge_weight_targets_real_edge_queries():
+    lanes, valid = _gt([0.1, 0.25, 0.4, 0.55, 0.7])
+    criterion = GCSLoss(
+        model={
+            "gcs_point_mode": "fixed_y",
+            "gcs_imgsz": [544, 960],
+            "gcs_gt5_edge_loss_weight": 1.0,
+            "gcs_candidate_gt5_edge_weight": 1.5,
+        }
+    )
+
+    weights = criterion._matched_target_weights(
+        lanes,
+        valid,
+        torch.tensor([0, 1, 2, 3, 4]),
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+        term="point",
+    )
+
+    assert torch.isclose(weights[0], torch.tensor(1.5))
+    assert torch.isclose(weights[2], torch.tensor(1.0))
+    assert torch.isclose(weights[4], torch.tensor(1.5))
+
+
+def test_gt5_edge_weight_reaches_quality_loss():
+    lanes, valid = _gt([0.1, 0.25, 0.4, 0.55, 0.7])
+    pred_points = lanes.unsqueeze(0).clone()
+    pred_quality_logits = torch.tensor([[-3.0, 3.0, 3.0, 3.0, -3.0]], requires_grad=True)
+    indices = [(torch.arange(5), torch.arange(5))]
+    hard_negative_mask = torch.zeros(1, 5, dtype=torch.bool)
+    duplicate_negative_mask = torch.zeros(1, 5, dtype=torch.bool)
+    common = {
+        "gcs_point_mode": "fixed_y",
+        "gcs_imgsz": [544, 960],
+        "gcs_gt5_edge_loss_weight": 1.0,
+        "gcs_quality_dist_thr_px": 100.0,
+    }
+    base = GCSLoss(model={**common, "gcs_candidate_gt5_edge_weight": 1.0})
+    boosted = GCSLoss(model={**common, "gcs_candidate_gt5_edge_weight": 2.0})
+
+    base_loss = base.quality_loss(
+        pred_quality_logits,
+        pred_points,
+        [lanes],
+        [valid],
+        indices,
+        hard_negative_mask=hard_negative_mask,
+        duplicate_negative_mask=duplicate_negative_mask,
+    )
+    boosted_loss = boosted.quality_loss(
+        pred_quality_logits,
+        pred_points,
+        [lanes],
+        [valid],
+        indices,
+        hard_negative_mask=hard_negative_mask,
+        duplicate_negative_mask=duplicate_negative_mask,
+    )
+
+    assert boosted_loss > base_loss
+    boosted_loss.backward()
+    assert pred_quality_logits.grad is not None
+
+
+def test_point_valid_gt5_edge_continuity_adds_loss():
+    lanes, valid = _gt([0.1, 0.25, 0.4, 0.55, 0.7])
+    pred_points = lanes.unsqueeze(0).clone()
+    logits = torch.full((1, 5, 6), 4.0)
+    logits[0, 0, 2] = -4.0
+    logits[0, 4, 3] = -4.0
+    pred_valid_logits = logits.requires_grad_()
+    indices = [(torch.arange(5), torch.arange(5))]
+    common = {
+        "gcs_point_mode": "fixed_y",
+        "gcs_imgsz": [544, 960],
+        "gcs_gt5_edge_loss_weight": 1.0,
+        "gcs_candidate_gt5_edge_weight": 1.0,
+        "gcs_point_valid_gt5_pos_weight": 1.0,
+        "gcs_point_valid_unmatched_weight": 1.0,
+    }
+    base = GCSLoss(model={**common, "gcs_point_valid_gt5_edge_continuity": 0.0})
+    continuity = GCSLoss(
+        model={
+            **common,
+            "gcs_point_valid_gt5_edge_continuity": 0.5,
+            "gcs_point_valid_gt5_edge_continuity_thr": 0.8,
+        }
+    )
+
+    base_loss = base.point_valid_loss(pred_valid_logits, pred_points, [valid], indices, gt_points=[lanes])
+    continuity_loss = continuity.point_valid_loss(pred_valid_logits, pred_points, [valid], indices, gt_points=[lanes])
+
+    assert continuity_loss > base_loss
+    continuity_loss.backward()
+    assert pred_valid_logits.grad is not None
 
 
 def test_edge_lane_weights_do_not_affect_count_sum():
@@ -337,6 +510,7 @@ def test_hard_edge_loss_weights_match_manifest_and_count(tmp_path):
             "gcs_point_mode": "fixed_y",
             "gcs_imgsz": [544, 960],
             "gcs_gt5_edge_loss_weight": 1.0,
+            "gcs_candidate_gt5_edge_weight": 1.0,
             "gcs_hard_loss_file": str(manifest),
             "gcs_hard_loss_lane_counts": "5",
             "gcs_hard_edge_loss_weight_by_count": "4:1.15,5:1.6",

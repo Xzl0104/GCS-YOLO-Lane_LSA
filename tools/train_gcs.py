@@ -11,13 +11,17 @@ if str(ROOT) not in sys.path:
 os.chdir(ROOT)
 
 from ultralytics.models.yolo.gcs_lane.train import (
+    GCS_MAINLINE_CANDIDATE_GT5_EDGE_WEIGHT,
     GCS_MAINLINE_COUNT_CLS_WEIGHTS,
     GCS_MAINLINE_COUNT_BOUNDARY_GAIN,
+    GCS_MAINLINE_COUNT_BOUNDARY_GT5_POS_WEIGHT,
     GCS_MAINLINE_COUNT_BOUNDARY_LABEL_SMOOTHING,
     GCS_MAINLINE_COUNT_SUM_GAIN,
     GCS_MAINLINE_GROUP_SAMPLER_RATIOS,
     GCS_MAINLINE_GT5_EDGE_LOSS_WEIGHT,
     GCS_MAINLINE_GT5_OVERSAMPLE_WEIGHT,
+    GCS_MAINLINE_POINT_VALID_GT5_EDGE_CONTINUITY,
+    GCS_MAINLINE_POINT_VALID_GT5_EDGE_CONTINUITY_THR,
     GCS_MAINLINE_POINT_VALID_GT5_POS_WEIGHT,
     GCS_MAINLINE_QUALITY_GAIN,
     GCS_MAINLINE_QUALITY_NEG_WEIGHT,
@@ -218,6 +222,12 @@ def parse_args() -> argparse.Namespace:
         default=GCS_MAINLINE_COUNT_BOUNDARY_LABEL_SMOOTHING,
         help="Label smoothing for Count Boundary count>=4/count>=5 targets.",
     )
+    parser.add_argument(
+        "--gcs-count-boundary-gt5-pos-weight",
+        type=float,
+        default=GCS_MAINLINE_COUNT_BOUNDARY_GT5_POS_WEIGHT,
+        help="Extra Count Boundary BCE weight for count>=5 positive targets. 1 disables.",
+    )
     parser.add_argument("--gcs-exist-pos-weight", type=float, default=1.0)
     parser.add_argument("--gcs-exist-focal-gamma", type=float, default=2.0, help="Quality focal gamma for existence BCE. 0 disables focal weighting.")
     parser.add_argument(
@@ -312,6 +322,24 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=GCS_MAINLINE_GT5_EDGE_LOSS_WEIGHT,
         help="Multiplier for matched left/right edge lanes on images with at least 4 GT lanes. 1 disables.",
+    )
+    parser.add_argument(
+        "--gcs-candidate-gt5-edge-weight",
+        type=float,
+        default=GCS_MAINLINE_CANDIDATE_GT5_EDGE_WEIGHT,
+        help="Matched left/right GT5 edge-query/lane loss multiplier. 1 disables.",
+    )
+    parser.add_argument(
+        "--gcs-point-valid-gt5-edge-continuity",
+        type=float,
+        default=GCS_MAINLINE_POINT_VALID_GT5_EDGE_CONTINUITY,
+        help="Point-valid continuity gain for matched left/right edge lanes on GT>=5 images. 0 disables.",
+    )
+    parser.add_argument(
+        "--gcs-point-valid-gt5-edge-continuity-thr",
+        type=float,
+        default=GCS_MAINLINE_POINT_VALID_GT5_EDGE_CONTINUITY_THR,
+        help="Minimum adjacent point-valid probability used by the GT>=5 edge continuity penalty.",
     )
     parser.add_argument(
         "--gcs-hard-loss-file",
@@ -801,6 +829,7 @@ def main() -> None:
         "gcs_count_cls_w5": args.gcs_count_cls_w5,
         "gcs_count_boundary": args.gcs_count_boundary,
         "gcs_count_boundary_label_smoothing": args.gcs_count_boundary_label_smoothing,
+        "gcs_count_boundary_gt5_pos_weight": args.gcs_count_boundary_gt5_pos_weight,
         "gcs_exist_pos_weight": args.gcs_exist_pos_weight,
         "gcs_exist_focal_gamma": args.gcs_exist_focal_gamma,
         "gcs_exist_focal_alpha": args.gcs_exist_focal_alpha,
@@ -826,6 +855,9 @@ def main() -> None:
         "gcs_point_valid_hard_negative_weight": args.gcs_point_valid_hard_negative_weight,
         "gcs_point_valid_duplicate_negative_weight": args.gcs_point_valid_duplicate_negative_weight,
         "gcs_gt5_edge_loss_weight": args.gcs_gt5_edge_loss_weight,
+        "gcs_candidate_gt5_edge_weight": args.gcs_candidate_gt5_edge_weight,
+        "gcs_point_valid_gt5_edge_continuity": args.gcs_point_valid_gt5_edge_continuity,
+        "gcs_point_valid_gt5_edge_continuity_thr": args.gcs_point_valid_gt5_edge_continuity_thr,
         "gcs_hard_loss_file": args.gcs_hard_loss_file,
         "gcs_hard_loss_lane_counts": args.gcs_hard_loss_lane_counts,
         "gcs_hard_edge_loss_weight_by_count": args.gcs_hard_edge_loss_weight_by_count,

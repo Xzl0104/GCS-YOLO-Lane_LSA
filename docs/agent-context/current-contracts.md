@@ -105,11 +105,23 @@ gcs_count_sum = 0.03
 gcs_quality = 0.4
 gcs_quality_neg_weight = 0.5
 gcs_count_cls_w2/w3/w4/w5 = 0.5/1.2/1.4/1.8
+gcs_count_boundary_gt5_pos_weight = 1.15
 gcs_point_valid_gt5_pos_weight = 2.0
 gcs_gt5_edge_loss_weight = 1.15
+gcs_candidate_gt5_edge_weight = 1.10
+gcs_point_valid_gt5_edge_continuity = 0.05
+gcs_point_valid_gt5_edge_continuity_thr = 0.55
 gcs_gt5_oversample_weight = 1.0
 gcs_group_sampler_ratios = 2:0.01,3:0.29,4:0.42,5:0.28
 ```
+
+The GT5 candidate-quality knobs above are training-side only. They strengthen real matched query supervision inside the existing 7 loss items:
+
+- `gcs_count_boundary_gt5_pos_weight` weights the Count Boundary `count>=5` positive target inside `count_cls_loss`.
+- `gcs_candidate_gt5_edge_weight` weights matched left/right GT5 edge queries/lanes inside `exist_loss`, `point_loss`, `point_valid_loss`, `line_iou_loss`, and `quality_loss`; it is matched edge-query/lane weighting, not per-anchor positive-target-only weighting.
+- `gcs_point_valid_gt5_edge_continuity` adds a small adjacent-anchor continuity penalty inside `point_valid_loss`.
+
+They do not change decode, do not use GT during inference/decode, and do not fabricate lanes.
 
 `gcs_soft_count_decision`, `gcs_last_lane_rescue`, and `gcs_edge_last_lane_rescue` remain default-off unless selected by official-val evidence.
 

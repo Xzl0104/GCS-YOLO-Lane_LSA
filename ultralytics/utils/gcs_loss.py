@@ -42,6 +42,7 @@ class GCSLoss(nn.Module):
         line_iou_width_px: float | None = None,
         count_head_warmup_epochs: float | None = None,
         count_min_gt_points: int | None = None,
+        count_boundary_gt5_pos_weight: float | None = None,
         quality_dist_thr_px: float | None = None,
         quality_neg_weight: float | None = None,
         quality_hard_negative_weight: float | None = None,
@@ -61,6 +62,9 @@ class GCSLoss(nn.Module):
         point_valid_hard_negative_weight: float | None = None,
         point_valid_duplicate_negative_weight: float | None = None,
         gt5_edge_loss_weight: float | None = None,
+        candidate_gt5_edge_weight: float | None = None,
+        point_valid_gt5_edge_continuity: float | None = None,
+        point_valid_gt5_edge_continuity_thr: float | None = None,
         hard_loss_file: str | None = None,
         hard_loss_lane_counts: str | list[int] | tuple[int, ...] | set[int] | None = None,
         hard_edge_loss_weight_by_count: str | dict[int, float] | None = None,
@@ -145,6 +149,11 @@ class GCSLoss(nn.Module):
         )
         self.count_boundary_gain = float(self._arg(args, "gcs_count_boundary", 0.05))
         self.count_boundary_label_smoothing = float(self._arg(args, "gcs_count_boundary_label_smoothing", 0.05))
+        self.count_boundary_gt5_pos_weight = float(
+            count_boundary_gt5_pos_weight
+            if count_boundary_gt5_pos_weight is not None
+            else self._arg(args, "gcs_count_boundary_gt5_pos_weight", 1.15)
+        )
         self.updates = 0
         self.exist_pos_weight = float(
             exist_pos_weight if exist_pos_weight is not None else self._arg(args, "gcs_exist_pos_weight", 1.0)
@@ -224,6 +233,21 @@ class GCSLoss(nn.Module):
             if gt5_edge_loss_weight is not None
             else self._arg(args, "gcs_gt5_edge_loss_weight", 1.15)
         )
+        self.candidate_gt5_edge_weight = float(
+            candidate_gt5_edge_weight
+            if candidate_gt5_edge_weight is not None
+            else self._arg(args, "gcs_candidate_gt5_edge_weight", 1.10)
+        )
+        self.point_valid_gt5_edge_continuity = float(
+            point_valid_gt5_edge_continuity
+            if point_valid_gt5_edge_continuity is not None
+            else self._arg(args, "gcs_point_valid_gt5_edge_continuity", 0.05)
+        )
+        self.point_valid_gt5_edge_continuity_thr = float(
+            point_valid_gt5_edge_continuity_thr
+            if point_valid_gt5_edge_continuity_thr is not None
+            else self._arg(args, "gcs_point_valid_gt5_edge_continuity_thr", 0.55)
+        )
         self.hard_edge_loss_weight_by_count = self._parse_count_weight_map(
             hard_edge_loss_weight_by_count
             if hard_edge_loss_weight_by_count is not None
@@ -278,6 +302,7 @@ class GCSLoss(nn.Module):
             "gcs_point_valid_hard_negative_weight": self.point_valid_hard_negative_weight,
             "gcs_point_valid_duplicate_negative_weight": self.point_valid_duplicate_negative_weight,
             "gcs_count_head_warmup_epochs": self.count_head_warmup_epochs,
+            "gcs_point_valid_gt5_edge_continuity": self.point_valid_gt5_edge_continuity,
         }
         for name, value in nonnegative.items():
             if value < 0.0:
@@ -289,6 +314,7 @@ class GCSLoss(nn.Module):
             "gcs_quality_neg_weight": self.quality_neg_weight,
             "gcs_hard_negative_quality_thr": self.hard_negative_quality_thr,
             "gcs_count_boundary_label_smoothing": self.count_boundary_label_smoothing,
+            "gcs_point_valid_gt5_edge_continuity_thr": self.point_valid_gt5_edge_continuity_thr,
             "gcs_duplicate_iou_thr": self.duplicate_iou_thr,
         }
         for name, value in fractions.items():
@@ -300,6 +326,15 @@ class GCSLoss(nn.Module):
             )
         if self.gt5_edge_loss_weight < 1.0:
             raise ValueError(f"gcs_gt5_edge_loss_weight must be >= 1.0, got {self.gt5_edge_loss_weight}.")
+        if self.count_boundary_gt5_pos_weight < 1.0:
+            raise ValueError(
+                "gcs_count_boundary_gt5_pos_weight must be >= 1.0, "
+                f"got {self.count_boundary_gt5_pos_weight}."
+            )
+        if self.candidate_gt5_edge_weight < 1.0:
+            raise ValueError(
+                f"gcs_candidate_gt5_edge_weight must be >= 1.0, got {self.candidate_gt5_edge_weight}."
+            )
         if self.exist_pos_margin < self.exist_neg_margin:
             raise ValueError(
                 "gcs_exist_pos_margin must be >= gcs_exist_neg_margin "
@@ -788,6 +823,67 @@ class GCSLoss(nn.Module):
                 )
         return lookup
 
+    @staticmethod
+    def _matched_target_edge_mask(
+        gt_points_b: torch.Tensor,
+        gt_valid_b: torch.Tensor,
+        tgt_idx: torch.Tensor,
+        *,
+        device: torch.device,
+        dtype: torch.dtype,
+        min_lane_count: int = 4,
+    ) -> tuple[torch.Tensor, int]:
+        """Return matched left/right edge-lane mask and valid GT lane count for one image."""
+        is_edge = torch.zeros(tgt_idx.shape[0], device=device, dtype=torch.bool)
+        if tgt_idx.numel() == 0:
+            return is_edge, 0
+        valid = gt_valid_b.detach().to(device=device, dtype=dtype)
+        points = gt_points_b.detach().to(device=device, dtype=dtype)
+        if valid.ndim != 2 or points.ndim != 3 or points.shape[:2] != valid.shape:
+            raise ValueError(
+                "GT points/valid shapes must be N x K x 2 and N x K for edge lane weighting, "
+                f"got {tuple(points.shape)} and {tuple(valid.shape)}."
+            )
+        lane_mask = valid.sum(dim=1) >= 2
+        lane_count = int(lane_mask.sum().item())
+        if lane_count < int(min_lane_count):
+            return is_edge, lane_count
+        visible_den = valid.sum(dim=1).clamp_min(1.0)
+        mean_x = (points[..., 0] * valid).sum(dim=1) / visible_den
+        mean_x = torch.where(lane_mask, mean_x, torch.full_like(mean_x, float("inf")))
+        left = int(torch.argmin(mean_x).item())
+        mean_x_right = torch.where(lane_mask, mean_x, torch.full_like(mean_x, float("-inf")))
+        right = int(torch.argmax(mean_x_right).item())
+        edge = torch.tensor([left, right], device=device, dtype=torch.long)
+        matched_tgt = tgt_idx.to(device=device, dtype=torch.long)
+        is_edge = (matched_tgt[:, None] == edge.view(1, -1)).any(dim=1)
+        return is_edge, lane_count
+
+    def _gt5_edge_query_mask(
+        self,
+        pred_logits: torch.Tensor,
+        gt_points: list[torch.Tensor],
+        gt_valid: list[torch.Tensor],
+        indices: list[tuple[torch.Tensor, torch.Tensor]],
+    ) -> torch.Tensor:
+        """Return B x Q mask for matched left/right edge lanes in images with at least 5 GT lanes."""
+        mask = torch.zeros_like(pred_logits, dtype=torch.bool)
+        device, dtype = pred_logits.device, pred_logits.dtype
+        for b, (src_idx, tgt_idx) in enumerate(indices):
+            if src_idx.numel() == 0:
+                continue
+            is_edge, lane_count = self._matched_target_edge_mask(
+                gt_points[b],
+                gt_valid[b],
+                tgt_idx,
+                device=device,
+                dtype=dtype,
+                min_lane_count=5,
+            )
+            if lane_count >= 5:
+                mask[b, src_idx.to(device=device, dtype=torch.long)] = is_edge
+        return mask
+
     def _matched_target_weights(
         self,
         gt_points_b: torch.Tensor,
@@ -802,34 +898,34 @@ class GCSLoss(nn.Module):
         """Return per-matched-lane weights, boosting left/right edge lanes for dense-lane images."""
         weights = torch.ones(tgt_idx.shape[0], device=device, dtype=dtype)
         hard_enabled = self._hard_edge_loss_enabled_for(term, hard_image)
-        if tgt_idx.numel() == 0 or (float(self.gt5_edge_loss_weight) <= 1.0 and not hard_enabled):
+        candidate_enabled = float(self.candidate_gt5_edge_weight) > 1.0
+        if tgt_idx.numel() == 0 or (
+            float(self.gt5_edge_loss_weight) <= 1.0 and not hard_enabled and not candidate_enabled
+        ):
             return weights
-        valid = gt_valid_b.detach().to(device=device, dtype=dtype)
-        points = gt_points_b.detach().to(device=device, dtype=dtype)
-        if valid.ndim != 2 or points.ndim != 3 or points.shape[:2] != valid.shape:
-            raise ValueError(
-                "GT points/valid shapes must be N x K x 2 and N x K for edge lane weighting, "
-                f"got {tuple(points.shape)} and {tuple(valid.shape)}."
-            )
-        lane_mask = valid.sum(dim=1) >= 2
-        lane_count = int(lane_mask.sum().item())
+        is_edge, lane_count = self._matched_target_edge_mask(
+            gt_points_b,
+            gt_valid_b,
+            tgt_idx,
+            device=device,
+            dtype=dtype,
+            min_lane_count=4,
+        )
         if lane_count < 4:
             return weights
         base_edge_multiplier = float(self.gt5_edge_loss_weight) if float(self.gt5_edge_loss_weight) > 1.0 else 1.0
+        candidate_multiplier = (
+            float(self.candidate_gt5_edge_weight)
+            if lane_count >= 5 and float(self.candidate_gt5_edge_weight) > 1.0
+            else 1.0
+        )
         hard_multiplier = self._hard_edge_loss_multiplier(lane_count, term, hard_image)
-        if base_edge_multiplier <= 1.0 and hard_multiplier <= 1.0:
+        if base_edge_multiplier <= 1.0 and candidate_multiplier <= 1.0 and hard_multiplier <= 1.0:
             return weights
-        visible_den = valid.sum(dim=1).clamp_min(1.0)
-        mean_x = (points[..., 0] * valid).sum(dim=1) / visible_den
-        mean_x = torch.where(lane_mask, mean_x, torch.full_like(mean_x, float("inf")))
-        left = int(torch.argmin(mean_x).item())
-        mean_x_right = torch.where(lane_mask, mean_x, torch.full_like(mean_x, float("-inf")))
-        right = int(torch.argmax(mean_x_right).item())
-        edge = torch.tensor([left, right], device=device, dtype=torch.long)
-        matched_tgt = tgt_idx.to(device=device, dtype=torch.long)
-        is_edge = (matched_tgt[:, None] == edge.view(1, -1)).any(dim=1)
         if base_edge_multiplier > 1.0:
             weights = torch.where(is_edge, weights * base_edge_multiplier, weights)
+        if candidate_multiplier > 1.0:
+            weights = torch.where(is_edge, weights * candidate_multiplier, weights)
         if hard_multiplier > 1.0:
             hard_apply = is_edge if self.hard_edge_only else torch.ones_like(is_edge)
             weights = torch.where(hard_apply, weights * hard_multiplier, weights)
@@ -846,8 +942,10 @@ class GCSLoss(nn.Module):
     ) -> torch.Tensor:
         """Return B x Q query weights for matched edge lanes; unmatched queries stay at weight 1."""
         weights = torch.ones_like(pred_logits)
-        if float(self.gt5_edge_loss_weight) <= 1.0 and (
-            hard_loss_mask is None or not bool(hard_loss_mask.detach().any().item())
+        if (
+            float(self.gt5_edge_loss_weight) <= 1.0
+            and float(self.candidate_gt5_edge_weight) <= 1.0
+            and (hard_loss_mask is None or not bool(hard_loss_mask.detach().any().item()))
         ):
             return weights
         device, dtype = pred_logits.device, pred_logits.dtype
@@ -1313,6 +1411,7 @@ class GCSLoss(nn.Module):
         gt_points: list[torch.Tensor],
         gt_valid: list[torch.Tensor],
         indices: list[tuple[torch.Tensor, torch.Tensor]],
+        hard_loss_mask: torch.Tensor | None = None,
         hard_negative_mask: torch.Tensor | None = None,
         duplicate_negative_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
@@ -1324,7 +1423,19 @@ class GCSLoss(nn.Module):
 
         pos_mask = target_quality > 0.0
         neg_mask = target_quality == 0.0
-        pos_loss = raw_loss[pos_mask].mean() if bool(pos_mask.any()) else self._zero_like(pred_points)
+        if bool(pos_mask.any()):
+            pos_query_weight = self._edge_query_weight_matrix(
+                pred_quality_logits,
+                gt_points,
+                gt_valid,
+                indices,
+                hard_loss_mask=hard_loss_mask,
+                term="quality",
+            )
+            pos_loss = (raw_loss[pos_mask] * pos_query_weight[pos_mask]).sum()
+            pos_loss = pos_loss / pos_query_weight[pos_mask].sum().clamp_min(1.0)
+        else:
+            pos_loss = self._zero_like(pred_points)
         if bool(neg_mask.any()):
             neg_weight = torch.full_like(raw_loss, float(self.quality_neg_weight))
             if hard_negative_mask is not None:
@@ -1419,6 +1530,23 @@ class GCSLoss(nn.Module):
         else:
             loss = loss_elem.mean()
 
+        if (
+            self.point_valid_gt5_edge_continuity > 0.0
+            and gt_points is not None
+            and pred_valid_logits.shape[-1] > 1
+        ):
+            edge_query_mask = self._gt5_edge_query_mask(pred_valid_logits[..., 0], gt_points, gt_valid, indices)
+            pair_mask = (target[..., :-1] > 0.5) & (target[..., 1:] > 0.5) & edge_query_mask.unsqueeze(-1)
+            if bool(pair_mask.any()):
+                valid_prob = pred_valid_logits.sigmoid()
+                pair_prob = torch.minimum(valid_prob[..., :-1], valid_prob[..., 1:])
+                threshold = pred_valid_logits.new_tensor(float(self.point_valid_gt5_edge_continuity_thr))
+                continuity_penalty = torch.relu(threshold - pair_prob).pow(2)
+                pair_weight = 0.5 * (anchor_weight[..., :-1] + anchor_weight[..., 1:])
+                continuity_loss = (continuity_penalty[pair_mask] * pair_weight[pair_mask]).sum()
+                continuity_loss = continuity_loss / pair_weight[pair_mask].sum().clamp_min(1.0)
+                loss = loss + float(self.point_valid_gt5_edge_continuity) * continuity_loss
+
         if self.point_valid_neg_gain > 0.0:
             neg_anchor_mask = target < 0.5
             if bool(neg_anchor_mask.any()):
@@ -1509,9 +1637,20 @@ class GCSLoss(nn.Module):
                 f"got {tuple(pred_count_boundary_logits.shape)} vs B={pred_count_logits.shape[0]}."
             )
         boundary_targets = self.count_boundary_targets(pred_count_boundary_logits, gt_valid)
-        boundary_loss = F.binary_cross_entropy_with_logits(
-            pred_count_boundary_logits.float(), boundary_targets.float()
+        boundary_loss_elem = F.binary_cross_entropy_with_logits(
+            pred_count_boundary_logits.float(), boundary_targets.float(), reduction="none"
         )
+        if self.count_boundary_gt5_pos_weight > 1.0:
+            boundary_weight = torch.ones_like(boundary_loss_elem)
+            gt5_positive = boundary_targets[:, 1] > 0.5
+            boundary_weight[:, 1] = torch.where(
+                gt5_positive,
+                boundary_weight[:, 1] * float(self.count_boundary_gt5_pos_weight),
+                boundary_weight[:, 1],
+            )
+            boundary_loss = (boundary_loss_elem * boundary_weight).mean()
+        else:
+            boundary_loss = boundary_loss_elem.mean()
         return count_loss + self.count_boundary_gain * boundary_loss
 
     def count_boundary_targets(self, pred_count_boundary_logits: torch.Tensor, gt_valid: list[torch.Tensor]) -> torch.Tensor:
@@ -1661,6 +1800,7 @@ class GCSLoss(nn.Module):
                 gt_points,
                 gt_valid,
                 indices,
+                hard_loss_mask=hard_loss_mask,
                 hard_negative_mask=hard_negative_mask,
                 duplicate_negative_mask=duplicate_negative_mask,
             )

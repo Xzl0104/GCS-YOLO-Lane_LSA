@@ -134,6 +134,7 @@ gcs_count_cls_w4: 1.4 # (float) Count Head CE class weight for 4-lane images
 gcs_count_cls_w5: 1.8 # (float) Count Head CE class weight for 5-lane images
 gcs_count_boundary: 0.05 # (float) Count Boundary BCE gain for count>=4 and count>=5 calibration inside count_cls_loss
 gcs_count_boundary_label_smoothing: 0.05 # (float) label smoothing for Count Boundary count>=4/count>=5 targets
+gcs_count_boundary_gt5_pos_weight: 1.15 # (float) extra Count Boundary BCE weight for count>=5 positive targets; 1 disables
 gcs_exist_pos_weight: 1.0 # (float) positive query weight for GCS lane existence BCE
 gcs_exist_focal_gamma: 2.0 # (float) quality focal gamma for GCS existence BCE; 0 disables focal weighting
 gcs_exist_focal_alpha: -1.0 # (float) optional focal alpha for GCS existence BCE; set 0..1 to enable alpha weighting
@@ -159,6 +160,9 @@ gcs_point_valid_unmatched_weight: 0.35 # (float) BCE/margin weight for ordinary 
 gcs_point_valid_hard_negative_weight: 1.25 # (float) BCE/margin weight for mined unmatched hard negatives
 gcs_point_valid_duplicate_negative_weight: 1.5 # (float) BCE/margin weight for unmatched duplicate negatives
 gcs_gt5_edge_loss_weight: 1.15 # (float) matched left/right edge-lane loss multiplier for >=4-lane images; 1 disables
+gcs_candidate_gt5_edge_weight: 1.10 # (float) matched left/right GT5 edge-query/lane loss multiplier; 1 disables
+gcs_point_valid_gt5_edge_continuity: 0.05 # (float) point-valid continuity gain for matched left/right edge lanes on GT>=5 images; 0 disables
+gcs_point_valid_gt5_edge_continuity_thr: 0.55 # (float) adjacent point-valid probability floor for GT>=5 edge continuity
 gcs_hard_loss_file: "" # (str) optional txt/json manifest for hard-edge loss weighting; independent of hard sampler
 gcs_hard_loss_lane_counts: "" # (str) optional GT lane-count filter for hard-edge loss manifest hits, e.g. "5" or "4,5"
 gcs_hard_edge_loss_weight_by_count: "4:1.15,5:1.6" # (str) per-GT-count hard-edge loss multipliers for manifest hits
