@@ -138,6 +138,13 @@ Keep rollback possible:
 - keep commit messages specific enough to identify the algorithm change
 - roll back a bad change with `git revert <commit>` or by checking out an earlier commit SHA
 
+Archive notes and summaries:
+
+- treat each Git commit/push sync as a project archive point
+- write a concise commit note based on the completed work, not a generic message
+- include important validation results or remaining risk in the commit body when useful
+- after the archive is pushed, report a work summary to the user with changed files, validation, commit SHA, and GitHub sync status
+
 ## Experiment Candidate Validation Order
 
 ```text

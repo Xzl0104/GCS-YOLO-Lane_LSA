@@ -422,6 +422,8 @@ https://github.com/Xzl0104/GCS-YOLO-Lane_LSA
 
 Each sync should be a normal Git commit on `main`. Do not force-push or rewrite published history, so earlier algorithm states remain recoverable by commit SHA or `git revert`.
 
+Each archive commit must include a concise note based on the completed work. After pushing the archive commit, the assistant must give the user a work summary covering changed files, validation performed, commit SHA, and GitHub sync status.
+
 The GitHub repository is limited to these folders:
 
 ```text
@@ -438,6 +440,7 @@ Why:
 
 The user wants GitHub to stay current with future code changes while keeping local-only artifacts out of the public repository.
 Keeping ordinary Git history also gives each validated algorithm state a rollback point.
+Per-archive notes make the rollback history understandable, and the post-archive summary gives the user immediate confirmation of what was saved.
 
 Alternatives considered:
 
