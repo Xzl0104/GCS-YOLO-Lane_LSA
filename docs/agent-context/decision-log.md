@@ -230,6 +230,38 @@ Policy.
 
 ---
 
+## Decision: Close completed runtime agents and raise max_threads to 8
+
+Status: current policy
+
+Decision:
+
+Set project `agents.max_threads` to 8 and require assistant-originated runtime delegation to track every spawned agent id, collect final results with `wait_agent`, and call `close_agent` for completed, stale, cancelled, failed, interrupted, or no-longer-needed agents before ending the turn.
+
+Why:
+
+Completed runtime agents can remain open after producing a final result and continue to count against the open-thread limit until they are explicitly closed. Without explicit cleanup, later delegation can fail with an agent thread limit error even when no useful work is still running.
+
+Alternatives considered:
+
+- keep `max_threads=4` and rely on manual cleanup
+- increase the limit without adding lifecycle cleanup
+- avoid assistant-originated runtime delegation entirely
+
+Tradeoff:
+
+The project can run wider read-only fan-out when useful, but the main assistant must do explicit lifecycle bookkeeping. Closed agents can be resumed with `resume_agent` when needed, so closing completed agents is preferred over keeping them open only for context preservation.
+
+Validation evidence:
+
+`python scripts/check_gcs_agent_setup.py` validates `agents.max_threads=8` and checks that root and multi-agent guidance require the `spawn_agent` -> `wait_agent` -> `close_agent` lifecycle.
+
+Mainline or experiment:
+
+Policy.
+
+---
+
 ## Decision: Normalize low-level spawn payloads at the final adapter boundary
 
 Status: current policy

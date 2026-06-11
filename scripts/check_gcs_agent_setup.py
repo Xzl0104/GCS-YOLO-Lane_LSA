@@ -169,7 +169,7 @@ def check_config() -> None:
     path = ROOT / ".codex" / "config.toml"
     data = tomllib.loads(path.read_text(encoding="utf-8"))
     agents = data.get("agents", {})
-    require(agents.get("max_threads") == 4, "agents.max_threads must be 4")
+    require(agents.get("max_threads") == 8, "agents.max_threads must be 8")
     require(agents.get("max_depth") == 1, "agents.max_depth must be 1")
     require(agents.get("job_max_runtime_seconds") == 1800, "agent CSV worker timeout must be 1800 seconds")
 
@@ -218,8 +218,11 @@ def check_skills() -> None:
             and "`multi_agent_v1 spawn_agent`" in skill_text
             and "current API/tool surface does not expose runtime multi-Agent delegation" in skill_text
             and "continue only with local workflow execution" in skill_text
+            and "track each spawned agent id" in skill_text
+            and "wait_agent" in skill_text
+            and "close_agent" in skill_text
             and "A loaded Skill is not a spawned Agent" in skill_text,
-            f"{skill_path} must require tool_search before declaring subagents unavailable",
+            f"{skill_path} must require tool_search and runtime lifecycle cleanup before declaring subagents unavailable",
         )
         ui_path = root / name / "agents" / "openai.yaml"
         require(ui_path.is_file(), f"missing UI metadata: {ui_path}")
@@ -272,6 +275,11 @@ def check_context_and_index() -> None:
         and "Do not say that runtime subagents are unavailable merely because" in content
         and "current API/tool surface does not expose runtime multi-Agent delegation" in content
         and "Do not simulate Agent roles" in content
+        and "maintain an active agent id list" in content
+        and "wait_agent" in content
+        and "close_agent" in content
+        and "Completed agents remain open and count against `max_threads` until closed" in content
+        and "agents.max_threads` is 8" in content
         and "does not mean an Agent was spawned" in content
         and "Live `multi_agent_v1` `agent_type` values are runtime-discovered" in content
         and "built-in roles `explorer`, `worker`, and `default`" in content
@@ -295,6 +303,13 @@ def check_context_and_index() -> None:
         and "Do not say that runtime subagents are unavailable merely because" in multi_agent_usage
         and "current API/tool surface does not expose runtime multi-Agent delegation" in multi_agent_usage
         and "Do not simulate Agent roles" in multi_agent_usage
+        and "Runtime Lifecycle Rule" in multi_agent_usage
+        and "agents.max_threads` is 8" in multi_agent_usage
+        and "active agent list" in multi_agent_usage
+        and "wait_agent" in multi_agent_usage
+        and "close_agent" in multi_agent_usage
+        and "Completed agents remain open and count toward `max_threads` until `close_agent` is called" in multi_agent_usage
+        and "resume_agent" in multi_agent_usage
         and "Skill loading is not delegation" in multi_agent_usage
         and "does not mean an Agent was spawned" in multi_agent_usage
         and "If the assistant writes `$gcs-review-change ...`" in multi_agent_usage
@@ -326,6 +341,9 @@ def check_context_and_index() -> None:
         and "current API/tool surface does not expose runtime multi-Agent delegation" in decision_log
         and "must not simulate Agent roles" in decision_log
         and "Skill loading remains separate from delegation" in decision_log
+        and "Close completed runtime agents and raise max_threads to 8" in decision_log
+        and "wait_agent" in decision_log
+        and "close_agent" in decision_log
         and "wrapper calls still must use" in decision_log,
         "decision-log.md must record the assistant-originated runtime delegation policy",
     )

@@ -56,6 +56,20 @@ For assistant-originated runtime delegation, first verify that `multi_agent_v1.s
 
 Do not hand-write raw low-level `spawn_agent` JSON in chat unless you are testing the wrapper itself. Use the exposed `multi_agent_v1.spawn_agent` tool when assistant-originated runtime delegation is authorized and available.
 
+## Runtime Lifecycle Rule
+
+Project `agents.max_threads` is 8 and `agents.max_depth` is 1. Treat `max_threads` as the maximum number of open agent threads, not as a cleanup substitute.
+
+For every assistant-originated `spawn_agent` call:
+
+- Record the returned agent id in an active agent list.
+- Use `wait_agent` when the result is needed.
+- Integrate the final result, including evidence, uncertainty, confidence, and next action.
+- Immediately call `close_agent` for each completed agent after its result is integrated.
+- Call `close_agent` for stale, cancelled, interrupted, failed, or no-longer-needed agents before ending the turn.
+
+Completed agents remain open and count toward `max_threads` until `close_agent` is called. Do not leave completed sidecar agents open just to preserve context; use `resume_agent` only when a closed agent must be reactivated for a follow-up.
+
 Recommended prompt shape:
 
 ```text
