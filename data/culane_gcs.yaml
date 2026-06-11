@@ -1,0 +1,7 @@
+train: ../datasets/culane/images/train
+val: ../datasets/culane/images/val
+test: ../datasets/culane/images/test
+image_shape: [384, 960]  # H, W; CULane is trained as 960x384 (W x H)
+
+names:
+  0: lane

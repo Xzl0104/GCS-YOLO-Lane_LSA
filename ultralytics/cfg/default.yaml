@@ -1,0 +1,313 @@
+# Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
+
+# Global configuration YAML with settings and hyperparameters for YOLO training, validation, prediction and export
+# For documentation see https://docs.ultralytics.com/usage/cfg/
+
+task: detect # (str) YOLO task, i.e. detect, segment, classify, pose, obb
+mode: train # (str) YOLO mode, i.e. train, val, predict, export, track, benchmark
+
+# Train settings -------------------------------------------------------------------------------------------------------
+model: # (str, optional) path to model file, i.e. yolov8n.pt or yolov8n.yaml
+data: # (str, optional) path to data file, i.e. coco8.yaml
+epochs: 100 # (int) number of epochs to train for
+time: # (float, optional) max hours to train; overrides epochs if set
+patience: 100 # (int) early stop after N epochs without val improvement
+batch: 16 # (int | float) batch size as int (e.g. 16), or float 0.0–1.0 for AutoBatch fraction of GPU memory
+imgsz: 640 # (int | list) train/val use int (square); predict/export may use [h,w]
+save: True # (bool) save train checkpoints and predict results
+save_period: -1 # (int) save checkpoint every N epochs; disabled if < 1
+cache: False # (bool | str) cache images in RAM (True/'ram') or on 'disk' to speed dataloading; False disables
+device: # (int | str | list) device: 0 or [0,1,2,3] for CUDA, 'cpu'/'mps', or -1/[-1,-1] to auto-select idle GPUs
+workers: 8 # (int) dataloader workers (per RANK if DDP)
+project: # (str, optional) project name for results root
+name: # (str, optional) experiment name; results in 'project/name'
+exist_ok: False # (bool) overwrite existing 'project/name' if True
+pretrained: True # (bool | str) use pretrained weights (bool) or load weights from path (str)
+optimizer: auto # (str) optimizer: SGD, MuSGD, Adam, Adamax, AdamW, NAdam, RAdam, RMSProp, or auto
+verbose: True # (bool) print verbose logs during training/val
+seed: 0 # (int) random seed for reproducibility
+deterministic: True # (bool) enable deterministic ops; reproducible but may be slower
+single_cls: False # (bool) treat all classes as a single class
+rect: False # (bool) rectangular batches for train; rectangular batching for val when mode='val'
+cos_lr: False # (bool) cosine learning rate scheduler
+close_mosaic: 10 # (int) disable mosaic augmentation for final N epochs (0 to keep enabled)
+resume: False # (bool) resume training from last checkpoint in the run dir
+amp: True # (bool) Automatic Mixed Precision (AMP) training; True runs AMP capability check
+fraction: 1.0 # (float) fraction of training dataset to use (1.0 = all)
+profile: False # (bool) profile ONNX/TensorRT speeds during training for loggers
+freeze: # (int | list, optional) freeze first N layers (int) or specific layer indices (list)
+multi_scale: 0.0 # (float) multi-scale range as a fraction of imgsz; sizes are rounded to stride multiples
+compile: False # (bool | str) enable torch.compile() backend='inductor'; True="default", False=off, or "default|reduce-overhead|max-autotune-no-cudagraphs"
+
+# Segmentation
+overlap_mask: True # (bool) merge instance masks into one mask during training (segment only)
+mask_ratio: 4 # (int) mask downsample ratio (segment only)
+
+# Classification
+dropout: 0.0 # (float) dropout for classification head (classify only)
+
+# Val/Test settings ----------------------------------------------------------------------------------------------------
+val: True # (bool) run validation/testing during training
+split: val # (str) dataset split to evaluate: 'val', 'test' or 'train'
+save_json: False # (bool) save results to COCO JSON for external evaluation
+conf: # (float, optional) confidence threshold; defaults: predict=0.25, val=0.001
+iou: 0.7 # (float) IoU threshold used for NMS
+max_det: 300 # (int) maximum number of detections per image
+half: False # (bool) use half precision (FP16) if supported
+dnn: False # (bool) use OpenCV DNN for ONNX inference
+plots: True # (bool) save plots and images during train/val
+end2end: # (bool, optional) whether to use end2end head (YOLO26, YOLOv10) for predict/val/export
+
+# Predict settings -----------------------------------------------------------------------------------------------------
+source: # (str, optional) path/dir/URL/stream for images or videos; e.g. 'ultralytics/assets' or '0' for webcam
+vid_stride: 1 # (int) read every Nth frame for video sources
+stream_buffer: False # (bool) True buffers all frames; False keeps the most recent frame for low-latency streams
+visualize: False # (bool) visualize model features (predict) or TP/FP/FN confusion (val)
+augment: False # (bool) apply test-time augmentation during prediction
+agnostic_nms: False # (bool) class-agnostic NMS
+classes: # (int | list[int], optional) filter by class id(s), e.g. 0 or [0,2,3]
+retina_masks: False # (bool) use high-resolution segmentation masks (segment)
+embed: # (list[int], optional) return feature embeddings from given layer indices
+
+# Visualize settings ---------------------------------------------------------------------------------------------------
+show: False # (bool) show images/videos in a window if supported
+save_frames: False # (bool) save individual frames from video predictions
+save_txt: False # (bool) save results as .txt files (xywh format)
+save_conf: False # (bool) save confidence scores with results
+save_crop: False # (bool) save cropped prediction regions to files
+show_labels: True # (bool) draw class labels on images, e.g. 'person'
+show_conf: True # (bool) draw confidence values on images, e.g. '0.99'
+show_boxes: True # (bool) draw bounding boxes on images
+line_width: # (int, optional) line width of boxes; auto-scales with image size if not set
+
+# Export settings ------------------------------------------------------------------------------------------------------
+format: torchscript # (str) target format, e.g. torchscript|onnx|openvino|engine|coreml|saved_model|pb|tflite|edgetpu|tfjs|paddle|mnn|ncnn|imx|rknn|executorch|axelera
+keras: False # (bool) TF SavedModel only (format=saved_model); enable Keras layers during export
+optimize: False # (bool) TorchScript only; apply mobile optimizations to the scripted model
+int8: False # (bool) INT8/PTQ where supported (openvino, engine, coreml, tflite, tfjs, mnn, imx, axelera); needs calibration data/fraction
+dynamic: False # (bool) dynamic shapes for torchscript, onnx, openvino, engine, coreml; enable variable image sizes
+simplify: True # (bool) ONNX/engine only; run graph simplifier for cleaner ONNX before runtime conversion
+opset: # (int, optional) ONNX/engine only; opset version for export; leave unset to use a tested default
+workspace: # (float, optional) engine (TensorRT) only; workspace size in GiB, e.g. 4
+nms: False # (bool) fuse NMS into exported model when backend supports; if True, conf/iou apply (agnostic_nms except coreml)
+
+# Hyperparameters ------------------------------------------------------------------------------------------------------
+lr0: 0.01 # (float) initial learning rate (SGD=1e-2, Adam/AdamW=1e-3)
+lrf: 0.01 # (float) final LR fraction; final LR = lr0 * lrf
+momentum: 0.937 # (float) SGD momentum or Adam beta1
+weight_decay: 0.0005 # (float) weight decay (L2 regularization)
+warmup_epochs: 3.0 # (float) warmup epochs (fractions allowed)
+warmup_momentum: 0.8 # (float) initial momentum during warmup
+warmup_bias_lr: 0.1 # (float) bias learning rate during warmup
+box: 7.5 # (float) box loss gain
+cls: 0.5 # (float) classification loss gain
+cls_pw: 0.0 # (float) class weights power for handling class imbalance (0.0=disable, 1.0=full inverse frequency)
+dfl: 1.5 # (float) distribution focal loss gain
+pose: 12.0 # (float) pose loss gain (pose tasks)
+kobj: 1.0 # (float) keypoint objectness loss gain (pose tasks)
+rle: 1.0 # (float) rle loss gain (pose tasks)
+angle: 1.0 # (float) oriented angle loss gain (obb tasks)
+train_images: # (str, optional) explicit GCS-YOLO-Lane train image directory/list
+train_gcs_labels: # (str, optional) explicit GCS-YOLO-Lane train labels_gcs directory
+val_images: # (str, optional) explicit GCS-YOLO-Lane val image directory/list
+val_gcs_labels: # (str, optional) explicit GCS-YOLO-Lane val labels_gcs directory
+gcs_imgsz: # (list[int], optional) real GCS input shape as [height, width], e.g. [544, 960]
+gcs_exist: 1.0 # (float) GCS quality-aware lane existence/confidence loss gain
+gcs_point: 5.0 # (float) GCS normalized point L1 loss gain
+gcs_point_valid: 0.5 # (float) GCS per-point visibility BCE loss gain for fixed-y lane anchors
+gcs_point_invalid_x: 0.05 # (float) relative pseudo-x penalty for matched invisible anchors weighted by point-valid probability
+gcs_line_iou: 0.3 # (float) GCS whole-lane LineIoU loss gain
+gcs_line_iou_width_px: 15.0 # (float) half-width in pixels used to expand lane points for LineIoU
+gcs_count_cls: 0.3 # (float) explicit image-level Count Head count=2/3/4/5 CE loss gain
+gcs_count_sum: 0.03 # (float) exist-count consistency loss gain for sum(sigmoid(pred_logits)) ~= GT lane count
+gcs_count_sum_normalize: True # (bool) normalize count_sum_loss by GT lane count
+gcs_quality: 0.4 # (float) lane-level Quality Head BCE loss gain
+gcs_quality_dist_thr_px: 20.0 # (float) pixel threshold for quality target point-inlier score
+gcs_quality_neg_weight: 0.5 # (float) relative weight for unmatched-query quality negatives
+gcs_quality_hard_negative_weight: 1.0 # (float) absolute Quality Head BCE weight for mined unmatched hard negatives
+gcs_quality_duplicate_negative_weight: 1.5 # (float) absolute Quality Head BCE weight for unmatched duplicate negatives
+gcs_count_head_warmup_epochs: 5.0 # (float) linearly ramp Count Head losses over this many epochs; 0 disables warmup
+gcs_count_min_gt_points: 1 # (int) minimum visible anchors for a GT lane to count in Count Head targets
+gcs_count_cls_w2: 0.5 # (float) Count Head CE class weight for 2-lane images
+gcs_count_cls_w3: 1.2 # (float) Count Head CE class weight for 3-lane images
+gcs_count_cls_w4: 1.4 # (float) Count Head CE class weight for 4-lane images
+gcs_count_cls_w5: 1.8 # (float) Count Head CE class weight for 5-lane images
+gcs_count_boundary: 0.05 # (float) Count Boundary BCE gain for count>=4 and count>=5 calibration inside count_cls_loss
+gcs_count_boundary_label_smoothing: 0.05 # (float) label smoothing for Count Boundary count>=4/count>=5 targets
+gcs_exist_pos_weight: 1.0 # (float) positive query weight for GCS lane existence BCE
+gcs_exist_focal_gamma: 2.0 # (float) quality focal gamma for GCS existence BCE; 0 disables focal weighting
+gcs_exist_focal_alpha: -1.0 # (float) optional focal alpha for GCS existence BCE; set 0..1 to enable alpha weighting
+gcs_hard_negative_quality_thr: 0.5 # (float) mine unmatched queries above exist_prob * mean_valid_prob
+gcs_hard_negative_topk: 2 # (int) additionally mine this many highest-quality unmatched queries per image
+gcs_hard_negative_exist_weight: 4.0 # (float) existence BCE/margin weight for mined hard negatives
+gcs_duplicate_negative_exist_weight: 4.0 # (float) existence BCE/margin weight for unmatched duplicate negatives
+gcs_duplicate_dist_thr_px: 25.0 # (float) unmatched query is duplicate-negative below this mean GT distance
+gcs_duplicate_iou_thr: 0.30 # (float) unmatched query is duplicate-negative above this max GT LineIoU
+gcs_exist_margin: 0.5 # (float) relative probability margin penalty for matched positives and unmatched negatives
+gcs_exist_pos_margin: 0.55 # (float) matched high-quality positives are pushed above this exist probability
+gcs_exist_neg_margin: 0.20 # (float) unmatched queries are pushed below this exist probability
+gcs_exist_quality_alpha: 1.0 # (float) blend factor for quality-aware existence targets; 1 uses pure geometry quality, 0 restores hard matched labels
+gcs_exist_quality_lane_iou_alpha: 1.0 # (float, legacy) retained for checkpoint/config compatibility
+gcs_exist_quality_mode: linear # (str) linear uses strict APE thresholds; exp uses exponential APE decay
+gcs_exist_quality_tau: 25.0 # (float) APE decay scale in pixels for exp quality mode
+gcs_exist_quality_floor: 0.0 # (float) optional matched exist-target floor above the mandatory 0.5 lower bound
+gcs_exist_quality_pos_px: 10.0 # (float) APE at or below this value receives quality 1.0 in linear mode
+gcs_exist_quality_neg_px: 25.0 # (float) APE at or above this value receives quality 0.0 in linear mode
+gcs_point_valid_pos_weight_max: 10.0 # (float) maximum positive weight for GCS per-point visibility loss
+gcs_point_valid_gt5_pos_weight: 2.0 # (float) extra positive point-valid multiplier on images with at least 5 GT lanes; 1 disables
+gcs_point_valid_unmatched_weight: 0.35 # (float) BCE/margin weight for ordinary unmatched point-valid negatives
+gcs_point_valid_hard_negative_weight: 1.25 # (float) BCE/margin weight for mined unmatched hard negatives
+gcs_point_valid_duplicate_negative_weight: 1.5 # (float) BCE/margin weight for unmatched duplicate negatives
+gcs_gt5_edge_loss_weight: 1.15 # (float) matched left/right edge-lane loss multiplier for >=4-lane images; 1 disables
+gcs_hard_loss_file: "" # (str) optional txt/json manifest for hard-edge loss weighting; independent of hard sampler
+gcs_hard_loss_lane_counts: "" # (str) optional GT lane-count filter for hard-edge loss manifest hits, e.g. "5" or "4,5"
+gcs_hard_edge_loss_weight_by_count: "4:1.15,5:1.6" # (str) per-GT-count hard-edge loss multipliers for manifest hits
+gcs_hard_edge_loss_terms: "exist,point,point_valid,line_iou" # (str) loss terms that receive hard-edge weighting
+gcs_hard_edge_only: True # (bool) apply hard loss multipliers only to matched left/right edge lanes
+gcs_point_valid_neg: 0.25 # (float) relative penalty for invisible anchors whose point-valid probability is too high
+gcs_point_valid_neg_thr: 0.20 # (float) invisible-anchor point-valid probability margin
+gcs_cost_point: 5.0 # (float) Hungarian matching point-distance cost gain
+gcs_cost_exist: 0.1 # (float) Hungarian matching existence-confidence cost gain
+gcs_match_min_overlap: 2 # (int) minimum valid GT points required for training Hungarian matching
+gcs_match_max_x_dist: 0.0 # (float) optional training matcher mean x-distance gate in pixels; 0 disables
+gcs_match_gate_px: 160.0 # (float) training matcher APE gate in pixels; 0 disables
+gcs_eval_conf: 0.2 # (float) GCS validation lane existence threshold for Precision/Recall/F1; quality-aware exist is calibrated lower
+gcs_eval_ape_thr: 20.0 # (float) GCS validation APE threshold in pixels for TP matching
+gcs_eval_match_gate_px: # (float, optional) strict validation APE gate; null defaults to gcs_eval_ape_thr
+gcs_eval_max_x_dist: 0.0 # (float) optional strict validation mean x-distance gate in pixels; 0 disables
+gcs_eval_min_overlap: 6 # (int) minimum overlapping visible anchors required for strict validation matching
+gcs_eval_min_points: 6 # (int) minimum decoded visible anchors required to keep a validation prediction
+gcs_eval_min_gt_cover_ratio: 0.3 # (float) minimum GT visible-anchor coverage ratio for strict validation matching
+gcs_eval_min_pred_cover_ratio: 0.3 # (float) minimum predicted visible-anchor coverage ratio for strict validation matching
+gcs_eval_nms_dist_px: 18.0 # (float) lane duplicate suppression distance in pixels; 0 disables
+gcs_use_count_head_decode: True # (bool) use explicit Count Head K for validation/inference Top-K decode when logits are present
+gcs_count_head_temp: 1.0 # (float) Count Head softmax temperature for decode
+gcs_decode_candidate_conf: 0.05 # (float) relaxed candidate-pool existence threshold for Count Head Top-K decode
+gcs_decode_candidate_point_valid_thr: 0.20 # (float) relaxed candidate-pool point-valid threshold for Count Head Top-K decode
+gcs_decode_candidate_min_points: 5 # (int) relaxed candidate-pool visible-anchor floor before final Top-K
+gcs_enable_rescue_candidate_pool: True # (bool) use weaker real-query rescue candidates only when Count Head K exceeds the normal pool
+gcs_decode_rescue_candidate_conf: 0.005 # (float) rescue candidate-pool existence threshold for Count Head Top-K decode
+gcs_decode_rescue_candidate_point_valid_thr: 0.08 # (float) rescue candidate-pool point-valid threshold for Count Head Top-K decode
+gcs_decode_rescue_candidate_min_points: 4 # (int) rescue candidate-pool visible-anchor floor before final Top-K
+gcs_decode_final_min_points: 6 # (int) final visible-anchor floor for selected ranks 1-4
+gcs_decode_fifth_min_points: 5 # (int) final visible-anchor floor for selected rank 5
+gcs_line_nms_min_overlap: 6 # (int) minimum shared visible anchors for lane-NMS duplicate suppression
+gcs_line_nms_rescue_dist_px: 30.0 # (float) duplicate distance used when rescuing lanes from pre-NMS candidates
+gcs_quality_rescue_5th: True # (bool) enable quality-gated fifth-lane rescue when pred_quality_logits are present
+gcs_quality_rescue_count5_thr: 0.70 # (float) minimum Count Head P(count=5) for fifth-lane rescue
+gcs_quality_rescue_conf_thr: 0.03 # (float) minimum lane existence probability for fifth-lane rescue
+gcs_quality_rescue_mean_valid_thr: 0.45 # (float) minimum mean point-valid probability for fifth-lane rescue
+gcs_quality_rescue_quality_thr: 0.55 # (float) minimum Quality Head probability for fifth-lane rescue
+gcs_quality_rescue_min_points: 5 # (int) minimum visible anchors for fifth-lane rescue
+gcs_quality_rescue_dist_px: 24.0 # (float) minimum distance to existing lanes for fifth-lane rescue
+gcs_last_lane_rescue: False # (bool) fill Count Head K>=4 final shortfalls from a separate weak last-lane candidate pool
+gcs_last_lane_rescue_min_policy_count: 4 # (int) minimum Count Head policy K that enables last-lane rescue
+gcs_last_lane_rescue_conf_thr: null # (float|null) existence threshold for last-lane rescue; null uses rescue candidate conf
+gcs_last_lane_rescue_point_valid_thr: 0.08 # (float) point-valid threshold used only for last-lane rescue candidates
+gcs_last_lane_rescue_min_points: 4 # (int) minimum visible anchors for last-lane rescue candidates
+gcs_last_lane_rescue_mean_valid_thr: 0.40 # (float) minimum mean point-valid probability for last-lane rescue
+gcs_last_lane_rescue_quality_thr: 0.50 # (float) minimum Quality Head probability for last-lane rescue
+gcs_last_lane_rescue_dist_px: 24.0 # (float) minimum distance to existing lanes for last-lane rescue
+gcs_edge_last_lane_rescue: False # (bool) prioritize outside-left/right real-query candidates for final lane shortfalls
+gcs_edge_rescue_conf_thr: 0.02 # (float) existence threshold for edge-aware last-lane rescue candidates
+gcs_edge_rescue_point_valid_thr: 0.06 # (float) point-valid threshold for edge-aware last-lane rescue candidates
+gcs_edge_rescue_min_points: 4 # (int) minimum visible anchors for edge-aware last-lane rescue candidates
+gcs_edge_rescue_mean_valid_thr: 0.35 # (float) minimum mean point-valid probability for edge-aware rescue
+gcs_edge_rescue_quality_thr: 0.45 # (float) minimum Quality Head probability for edge-aware rescue
+gcs_edge_rescue_outside_gap_px: 28.0 # (float) candidate must be this far outside current left/right selected lanes
+gcs_edge_rescue_dist_px: 24.0 # (float) minimum distance to selected lanes for edge-aware rescue
+gcs_edge_rescue_min_policy_count: 4 # (int) minimum effective policy K that enables edge-aware rescue
+gcs_edge_count4_to5_upgrade: True # (bool) allow Count Head raw K=4 -> effective K=5 only when a valid edge candidate exists
+gcs_edge_count4_to5_prob_margin: 0.20 # (float) require P4-P5 <= this margin for edge K=4->5 upgrade
+gcs_soft_count_decision: False # (bool) choose K by candidate quality when Count Head probabilities are close
+gcs_soft_count_prob_margin: 0.08 # (float) probability gap for considering neighbor count classes in soft count decision
+gcs_soft_count_quality_weight: 1.0 # (float) candidate quality term weight for soft count decision
+gcs_soft_count_prior_weight: 0.5 # (float) log Count Head probability term weight for soft count decision
+gcs_soft_count_duplicate_penalty: 1.0 # (float) duplicate-lane penalty weight for soft count decision
+gcs_soft_count_invalid_penalty: 1.0 # (float) invalid/short candidate penalty weight for soft count decision
+gcs_eval_point_valid_thr: 0.5 # (float) per-point visibility threshold used when decoding fixed-y lanes for validation
+gcs_eval_max_det: 5 # (int) maximum decoded lane queries kept for GCS validation metrics
+gcs_train_include_val: False # (bool) append val split to train loader for final train+val fitting; use with val=False
+gcs_sampler_mode: "group_cycle" # (str) GCS train sampler: group_cycle, weighted, or none
+gcs_group_sampler_ratios: "2:0.01,3:0.29,4:0.42,5:0.28" # (str) target lane-count ratios for group-cycle no-replacement sampler
+gcs_lane_count_balanced: True # (bool) sample GCS training images with inverse-frequency lane-count weights
+gcs_lane_count_balance_power: 1.0 # (float) lane-count sampler exponent; 1.0 gives equal lane-count groups
+gcs_lane_count_min_group: 50 # (int) minimum group size used to smooth lane-count sampler weights
+gcs_hard_sampling: False # (bool) legacy weighted-mode lane-count boost; failure hard-sample files work independently
+gcs_hard_lane_counts: "" # (str) comma/space separated GT lane counts to boost when legacy hard sampling is enabled
+gcs_hard_sampling_boost: 1.5 # (float) multiplier for samples whose GT lane count is in gcs_hard_lane_counts
+gcs_hard_sampling_boost_by_count: "" # (str) optional final per-count multipliers for legacy weighted sampling, e.g. "4:1.5,5:2.0"
+gcs_hard_sample_file: "" # (str) optional txt/json manifest of hard image stems, paths, or raw_file ids
+gcs_hard_sample_boost: 2.0 # (float) multiplier for samples matched by gcs_hard_sample_file
+gcs_gt5_oversample_weight: 1.0 # (float) additional GT=5 sampler ratio/weight multiplier; 1 disables
+gcs_gt5_extra_aug: True # (bool) apply image-only multi-view augmentation to rare >=5-lane training samples
+gcs_gt5_aug_min_lanes: 5 # (int) minimum GT lane count for gcs_gt5_extra_aug
+gcs_gt5_erasing: 0.15 # (float) extra erasing probability for gcs_gt5_extra_aug samples
+gcs_gt5_blur: 0.15 # (float) blur probability for gcs_gt5_extra_aug samples
+gcs_gt5_noise: 0.15 # (float) Gaussian noise probability for gcs_gt5_extra_aug samples
+gcs_gt5_shadow: 0.20 # (float) synthetic shadow probability for gcs_gt5_extra_aug samples
+gcs_official_best: False # (bool) periodically select weights/best.pt using TuSimple official val sweep
+gcs_official_best_period: 0 # (int) official-best sweep interval; 0 reuses save_period
+gcs_official_best_gt_json: "" # (str) stratified official-val json-lines used for best.pt selection
+gcs_official_best_archive_root: "archive" # (str) path to archive/ or archive/TUSimple for official-best sweeps
+gcs_official_best_split: "val" # (str) TuSimple split for official-best image lookup
+gcs_official_best_confs: "0.005 0.01 0.015 0.02 0.03 0.05 0.08 0.10" # (str) candidate-pool confidence thresholds for official-best sweep
+gcs_official_best_point_valid_thrs: "0.20 0.25 0.30 0.35" # (str) candidate-pool point-valid thresholds for official-best sweep
+gcs_official_best_nms_dist_pxs: "18.0" # (str) lane-NMS thresholds for official-best sweep
+gcs_official_best_max_dets: "5" # (str) max_det values for official-best sweep
+gcs_official_best_min_points: "6" # (str) min_points values for official-best sweep
+gcs_official_best_rank_min_points: "none 5:5" # (str) optional rank:min_points overrides for official-best sweep
+gcs_official_best_last_lane_rescue_point_valid_thrs: "0.08" # (str) last-lane rescue point-valid thresholds for official-best sweep
+gcs_official_best_last_lane_rescue_min_points: "4" # (str) last-lane rescue min-points values for official-best sweep
+gcs_official_best_last_lane_rescue_mean_valid_thrs: "0.40" # (str) last-lane rescue mean-valid thresholds for official-best sweep
+gcs_official_best_last_lane_rescue_quality_thrs: "0.50" # (str) last-lane rescue quality thresholds for official-best sweep
+gcs_official_best_last_lane_rescue_dist_pxs: "24.0" # (str) last-lane rescue duplicate-distance thresholds for official-best sweep
+gcs_official_best_max_images: 0 # (int) optional official-best image cap; 0 uses the whole GT json
+gcs_official_best_warmup: 0 # (int) warmup forwards before each official-best sweep
+gcs_official_best_half: False # (bool) use FP16 for official-best sweep inference on CUDA
+gcs_official_best_score_fp_weight: 0.02 # (float) FP penalty in official_score for official-best sweeps
+gcs_official_best_score_fn_weight: 0.02 # (float) FN penalty in official_score for official-best sweeps
+gcs_official_best_count_acc3_weight: 0.0 # (float) optional count_acc_3 bonus in official_count_score
+gcs_official_best_count_acc4_weight: 0.006 # (float) count_acc_4 bonus in official_count_score
+gcs_official_best_count_acc5_weight: 0.004 # (float) count_acc_5 bonus in official_count_score
+gcs_official_best_rate_4_to_5_weight: 0.004 # (float) GT=4 -> pred=5 rate penalty in official_count_score
+gcs_official_best_rate_3_to_5_weight: 0.0025 # (float) GT=3 -> pred=5 rate penalty in official_count_score
+gcs_official_best_rate_4_to_3_weight: 0.0015 # (float) GT=4 -> pred=3 rate penalty in official_count_score
+gcs_official_best_rate_3_to_4_weight: 0.001 # (float) GT=3 -> pred=4 rate penalty in official_count_score
+gcs_official_best_rate_5_to_4_weight: 0.0 # (float) optional GT=5 -> pred=4 rate penalty in official_count_score
+gcs_official_best_min_count_acc3: -1.0 # (float) soft diagnostic floor for GT=3 count accuracy; negative disables
+gcs_official_best_min_count_acc4: -1.0 # (float) soft diagnostic floor for GT=4 count accuracy; negative disables
+gcs_official_best_min_count_acc5: -1.0 # (float) legacy soft diagnostic floor for GT=5 count accuracy; negative disables
+gcs_official_best_min_gt5_output5_rate: 0.80 # (float) soft diagnostic floor for GT=5 images with final output count=5; negative disables
+gcs_official_best_max_gt5_count_head_under_rate: 0.15 # (float) soft diagnostic ceiling for GT=5 images where Count Head policy K<5; negative disables
+gcs_official_best_max_gt5_valid_points_fail_rate: 0.10 # (float) soft diagnostic ceiling for GT=5 images where Count Head K=5 but final output has <5 lanes; negative disables
+gcs_official_best_max_rate_3_to_4: -1.0 # (float) soft diagnostic ceiling for GT=3 decoded as 4 lanes; negative disables
+gcs_official_best_max_rate_4_to_3: -1.0 # (float) soft diagnostic ceiling for GT=4 decoded as 3 lanes; negative disables
+gcs_official_best_max_rate_4_to_5: -1.0 # (float) optional soft diagnostic ceiling for GT=4 decoded as 5 lanes; negative disables
+gcs_official_best_max_rate_3_to_5: -1.0 # (float) optional soft diagnostic ceiling for GT=3 decoded as 5 lanes; negative disables
+gcs_official_best_max_rate_5_to_4: -1.0 # (float) soft diagnostic ceiling for GT=5 decoded as 4 lanes; negative disables
+nbs: 64 # (int) nominal batch size used for loss normalization
+hsv_h: 0.015 # (float) HSV hue augmentation fraction
+hsv_s: 0.7 # (float) HSV saturation augmentation fraction
+hsv_v: 0.4 # (float) HSV value (brightness) augmentation fraction
+degrees: 0.0 # (float) rotation degrees (+/-)
+translate: 0.1 # (float) translation fraction (+/-)
+scale: 0.5 # (float) scale gain (+/-)
+shear: 0.0 # (float) shear degrees (+/-)
+perspective: 0.0 # (float) perspective fraction (0–0.001 typical)
+flipud: 0.0 # (float) vertical flip probability
+fliplr: 0.5 # (float) horizontal flip probability
+bgr: 0.0 # (float) RGB↔BGR channel swap probability
+mosaic: 1.0 # (float) mosaic augmentation probability
+mixup: 0.0 # (float) MixUp augmentation probability
+cutmix: 0.0 # (float) CutMix augmentation probability
+copy_paste: 0.0 # (float) segmentation copy-paste probability
+copy_paste_mode: flip # (str) copy-paste strategy for segmentation: flip or mixup
+auto_augment: null # (str) classification auto augmentation policy: randaugment, autoaugment, augmix; null disables
+erasing: 0.0 # (float) random erasing probability for classification/GCS training (0.0–1.0)
+
+# Custom config.yaml ---------------------------------------------------------------------------------------------------
+cfg: # (str, optional) path to a config.yaml that overrides defaults
+
+# Tracker settings ------------------------------------------------------------------------------------------------------
+tracker: botsort.yaml # (str) tracker config file: botsort.yaml or bytetrack.yaml

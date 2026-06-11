@@ -1,0 +1,7 @@
+train: ../datasets/tusimple_fixed_y_960x544/images/train
+val: ../datasets/tusimple_fixed_y_960x544/images/val
+test: ../datasets/tusimple_fixed_y_960x544/images/test
+image_shape: [544, 960]  # H, W; TuSimple is trained as 960x544 (W x H)
+
+names:
+  0: lane

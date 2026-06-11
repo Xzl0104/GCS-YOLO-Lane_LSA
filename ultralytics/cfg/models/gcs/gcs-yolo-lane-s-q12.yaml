@@ -1,0 +1,38 @@
+# GCS-YOLO-Lane based on a YOLO11-style backbone.
+# Q12 variant for better candidate coverage on weak/edge lanes.
+
+# Parameters
+nc: 1 # lane class placeholder required by Ultralytics model construction
+imgsz: [544, 960] # H, W default for TuSimple 960x544; use [384, 960] for CULane
+depth_multiple: 0.50 # YOLO11s depth
+width_multiple: 0.50 # YOLO11s width
+
+# GCS head parameters used in the final layer:
+# num_queries=12, num_points=32, decoder_layers=3, nhead=8
+# point_mode=fixed_y means the head predicts only x at shared bottom-to-top y anchors.
+
+# Backbone
+backbone:
+  # [from, repeats, module, args]
+  - [-1, 1, Conv, [64, 3, 2]] # 0-P1/2
+  - [-1, 1, Conv, [128, 3, 2]] # 1-P2/4
+  - [-1, 2, C3k2, [256, False, 0.25]] # 2-P2/4
+
+  - [-1, 1, Conv, [256, 3, 2]] # 3-P3/8
+  - [-1, 2, C3k2, [512, False, 0.25]] # 4-P3/8
+  - [-1, 1, LSEM, []] # 5-P3/8: Line-Strip Attention + dilated context
+
+  - [-1, 1, Conv, [512, 3, 2]] # 6-P4/16
+  - [-1, 2, C3k2, [512, True]] # 7-P4/16
+  - [-1, 1, LSEM, []] # 8-P4/16: Line-Strip Attention + dilated context
+
+  - [-1, 1, Conv, [1024, 3, 2]] # 9-P5/32
+  - [-1, 2, C3k2, [1024, True]] # 10-P5/32
+  - [-1, 1, SPPF, [1024, 5]] # 11-P5/32
+  - [-1, 2, C2PSA, [1024]] # 12-P5/32
+
+# Structured lane head
+head:
+  # P2=2, enhanced P3=5, enhanced P4=8, P5=12
+  - [[2, 5, 8, 12], 1, LaneBiFPN, [128]] # 13-P2/P3/P4/P5 bidirectional fusion
+  - [-1, 1, GCSLaneHead, [12, 32, 3, 8, fixed_y, 0.9861111111111112, 0.25]] # 14 fixed-y x-only query lane decoder, bottom y=710/720

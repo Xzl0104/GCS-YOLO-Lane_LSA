@@ -1,0 +1,30 @@
+# GCS-YOLO-Lane fixed-y x-only Q12 variant.
+# The lane head predicts x at shared bottom-to-top y anchors and returns Kx2 points.
+
+nc: 1
+imgsz: [544, 960]
+depth_multiple: 0.50
+width_multiple: 0.50
+
+# Head args:
+# num_queries=12, num_points=32, decoder_layers=3, nhead=8,
+# point_mode=fixed_y, fixed_y_start=0.9861111111111112 (TuSimple h=710/720), fixed_y_end=0.25
+
+backbone:
+  - [-1, 1, Conv, [64, 3, 2]]
+  - [-1, 1, Conv, [128, 3, 2]]
+  - [-1, 2, C3k2, [256, False, 0.25]]
+  - [-1, 1, Conv, [256, 3, 2]]
+  - [-1, 2, C3k2, [512, False, 0.25]]
+  - [-1, 1, LSEM, []]
+  - [-1, 1, Conv, [512, 3, 2]]
+  - [-1, 2, C3k2, [512, True]]
+  - [-1, 1, LSEM, []]
+  - [-1, 1, Conv, [1024, 3, 2]]
+  - [-1, 2, C3k2, [1024, True]]
+  - [-1, 1, SPPF, [1024, 5]]
+  - [-1, 2, C2PSA, [1024]]
+
+head:
+  - [[2, 5, 8, 12], 1, LaneBiFPN, [128]]
+  - [-1, 1, GCSLaneHead, [12, 32, 3, 8, fixed_y, 0.9861111111111112, 0.25]]
