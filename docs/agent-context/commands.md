@@ -109,6 +109,35 @@ For changed Python files:
 python -m py_compile <changed-python-files>
 ```
 
+## GitHub Sync
+
+After any code change is implemented and the relevant local validation has passed, sync the published source to:
+
+```text
+https://github.com/Xzl0104/GCS-YOLO-Lane_LSA
+```
+
+The published repository should contain only these project folders:
+
+```text
+data
+gcs_tools
+scripts
+tests
+tools
+ultralytics
+docs
+```
+
+Do not publish local training outputs, checkpoints, datasets, zip archives, caches, or Python bytecode.
+
+Keep rollback possible:
+
+- sync each validated code change as a normal Git commit
+- do not use force-push or history rewrite for the published repository
+- keep commit messages specific enough to identify the algorithm change
+- roll back a bad change with `git revert <commit>` or by checking out an earlier commit SHA
+
 ## Experiment Candidate Validation Order
 
 ```text

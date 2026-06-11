@@ -355,3 +355,54 @@ python scripts/check_gcs_agent_setup.py
 Mainline or experiment:
 
 Mainline defaults. Any claim of improvement requires a fresh official-val sweep; test remains reserved for one-shot final evaluation.
+
+---
+
+## Decision: Sync code changes to GitHub after validation
+
+Status: current workflow policy
+
+Decision:
+
+After each code change, sync the validated published source to:
+
+```text
+https://github.com/Xzl0104/GCS-YOLO-Lane_LSA
+```
+
+Each sync should be a normal Git commit on `main`. Do not force-push or rewrite published history, so earlier algorithm states remain recoverable by commit SHA or `git revert`.
+
+The GitHub repository is limited to these folders:
+
+```text
+data
+gcs_tools
+scripts
+tests
+tools
+ultralytics
+docs
+```
+
+Why:
+
+The user wants GitHub to stay current with future code changes while keeping local-only artifacts out of the public repository.
+Keeping ordinary Git history also gives each validated algorithm state a rollback point.
+
+Alternatives considered:
+
+- keep GitHub synchronization as an ad hoc manual step
+- publish the entire local workspace, including runs, outputs, archives, and checkpoints
+- track only the algorithm source folders in the published repository
+
+Tradeoff:
+
+The local workspace is not a standard repository root, so synchronization must preserve the published-folder boundary and avoid pushing generated or large local artifacts.
+
+Validation evidence:
+
+The initial GitHub publish was created from a clean mirror containing only the allowed folders, excluding `__pycache__` and `.pyc` files.
+
+Mainline or experiment:
+
+Workflow policy.
