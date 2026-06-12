@@ -161,6 +161,10 @@ Default selection:
 official_best.pt is selected by official_acc.
 ```
 
+`weights/best.pt` remains the ordinary validation-fitness checkpoint. `weights/official_best.pt` is maintained only by TuSimple official-val `official_acc`.
+
+`gcs_official_best_top_k` defaults to `1`. When set above `1`, training preserves the top-K official-val checkpoint candidates under `weights/official_topk/` and records them in `official_best_summary.json`. This is checkpoint preservation only; it does not change decode behavior, use diagnostics as selection tie-breakers, or allow test-driven selection.
+
 Diagnostic metrics include:
 
 ```text

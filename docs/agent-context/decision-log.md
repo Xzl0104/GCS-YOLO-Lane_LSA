@@ -459,3 +459,269 @@ The initial GitHub publish was created from a clean mirror containing only the a
 Mainline or experiment:
 
 Workflow policy.
+
+---
+
+## Decision: Treat the 2026-06-12 Count Boundary GT4/GT5 fine-tune as a promising experiment, not a mainline promotion
+
+Status: experimental candidate, requires longer official-val confirmation
+
+Decision:
+
+Do not promote `gcs_soft_count_decision` or threshold/NMS/rescue sweeps from the 2026-06-12 analysis.
+
+Keep the short Count Boundary / GT4-GT5 fine-tune result as the next experimental direction. The strongest local candidate is:
+
+```text
+runs/gcs_lane/gcs_yolo_lane_s_q12_cb_gt45_ft6_from_official_best_b8w0_v1/weights/last.pt
+```
+
+Its selected official-val decode row used:
+
+```text
+conf = 0.005 through 0.15 tied
+point_valid_thr = 0.15
+nms_dist_px = 18
+max_det = 5
+min_points = 6
+rank_min_points = 5:4
+```
+
+The next smallest safe action is to rerun this direction for a longer controlled fine-tune with official-val checkpoint/top-k preservation, using official-val only for selection.
+
+Why:
+
+The original run `gcs_yolo_lane_s_q12_e180_countboundary_rankfix_balgt45_v1` showed that threshold, NMS, and rescue were not the main bottlenecks. Candidate-pool shortfall, GT5 valid-points failure, and GT5 NMS suppression were near zero in the selected official-val rows, while Count Head / Count Boundary GT4/GT5 confusion remained visible.
+
+Soft-count decode was tested directly and did not improve official-val:
+
+```text
+official_best.pt baseline:      official_acc=0.954137
+official_best.pt soft-count:    official_acc=0.953481
+best.pt baseline:               official_acc=0.953319
+best.pt soft-count:             official_acc=0.953319, with higher FP
+```
+
+The short Count Boundary / GT4-GT5 fine-tune improved the official-val selected row:
+
+```text
+original official_best.pt: official_acc=0.954137, FP=0.051377, FN=0.036272,
+                           count_acc_4=0.818182, count_acc_5=0.864865,
+                           gt5_count_head_under_rate=0.135135
+
+ft6 last.pt:              official_acc=0.954782, FP=0.047658, FN=0.034665,
+                           count_acc_4=0.818182, count_acc_5=0.891892,
+                           gt5_count_head_under_rate=0.094595
+```
+
+Alternatives considered:
+
+- Continue threshold, NMS, or rescue sweeps.
+- Promote `gcs_soft_count_decision`.
+- Promote the 6-epoch fine-tune immediately.
+- Revisit training-side Count Boundary / GT4-GT5 weighting with longer official-val checkpoint selection.
+
+Tradeoff:
+
+The 6-epoch result is useful but not stable enough for mainline promotion. The same short fine-tune run's ordinary `best.pt` regressed GT5 behavior:
+
+```text
+ft6 best.pt: official_acc=0.953056, count_acc_5=0.797297,
+             gt5_count_head_under_rate=0.189189
+```
+
+This means ordinary validation fitness is not sufficient for this experiment family. Future runs need official-val checkpoint preservation or top-k official-val candidates, and test must remain reserved for one-shot final confirmation after candidate selection.
+
+Validation evidence:
+
+Official-val sweeps were run with `--imgsz 544 960` on the 363-image official-val subset:
+
+```text
+runs/gcs_lane/gcs_yolo_lane_s_q12_e180_countboundary_rankfix_balgt45_v1/analysis_official_best_val_sweep/tusimple_official_sweep_summary.json
+runs/gcs_lane/gcs_yolo_lane_s_q12_e180_countboundary_rankfix_balgt45_v1/analysis_official_best_softcount_val_sweep/tusimple_official_sweep_summary.json
+runs/gcs_lane/gcs_yolo_lane_s_q12_e180_countboundary_rankfix_balgt45_v1/analysis_best_val_sweep/tusimple_official_sweep_summary.json
+runs/gcs_lane/gcs_yolo_lane_s_q12_e180_countboundary_rankfix_balgt45_v1/analysis_best_softcount_val_sweep/tusimple_official_sweep_summary.json
+runs/gcs_lane/gcs_yolo_lane_s_q12_cb_gt45_ft6_from_official_best_b8w0_v1/analysis_best_val_sweep/tusimple_official_sweep_summary.json
+runs/gcs_lane/gcs_yolo_lane_s_q12_cb_gt45_ft6_from_official_best_b8w0_v1/analysis_last_val_sweep/tusimple_official_sweep_summary.json
+```
+
+One failed training attempt is also part of the experiment record: a 20-epoch batch-32 run failed on the local Windows environment with CUDA OOM followed by `WinError 1455`; the successful short run used `batch=8` and `workers=0`.
+
+Mainline or experiment:
+
+Experiment only. Current mainline defaults and contracts are unchanged.
+
+---
+
+## Decision: Do not promote the 2026-06-12 GT5 calibration mainline seed0 run
+
+Status: experimental result, rejected for mainline promotion
+
+Decision:
+
+Do not promote:
+
+```text
+runs/gcs_lane/gcs_yolo_lane_s_q12_e180_gt5calib_mainline_seed0
+```
+
+as a mainline improvement. Keep its artifacts as diagnostic evidence that the current GT5-calibration mainline recipe can improve some GT5 output behavior but does not improve clean official-val Accuracy.
+
+The official-val selected checkpoint for this run remains:
+
+```text
+runs/gcs_lane/gcs_yolo_lane_s_q12_e180_gt5calib_mainline_seed0/weights/official_best.pt
+```
+
+but it is not better than the prior countboundary baseline or the short GT4/GT5 fine-tune result.
+
+Why:
+
+The run was evaluated with the same protected protocol: threshold/rank selection on official-val only, and test used only afterward as confirmation/diagnostic evidence.
+
+Official-val results:
+
+```text
+best.pt:          official_acc=0.951660, FP=0.061111, FN=0.047521,
+                  conf=0.15, point_valid_thr=0.15, rank_min_points=none,
+                  count_acc_4=0.787879, count_acc_5=0.932432,
+                  gt5_count_head_under_rate=0.027027,
+                  gt5_valid_points_fail_rate=0.040541
+
+official_best.pt: official_acc=0.953507, FP=0.048714, FN=0.037649,
+                  conf=0.005, point_valid_thr=0.15, rank_min_points=none,
+                  count_acc_4=0.818182, count_acc_5=0.905405,
+                  gt5_count_head_under_rate=0.054054,
+                  gt5_valid_points_fail_rate=0.040541
+```
+
+This is below the prior local official-val references:
+
+```text
+gcs_yolo_lane_s_q12_e180_countboundary_rankfix_balgt45_v1 official_best.pt: official_acc=0.954137
+gcs_yolo_lane_s_q12_cb_gt45_ft6_from_official_best_b8w0_v1 last.pt:          official_acc=0.954782
+```
+
+Test results were recorded only as diagnostic evidence:
+
+```text
+best.pt:          Accuracy=0.955855, FP=0.037946, FN=0.038761
+official_best.pt: Accuracy=0.955466, FP=0.035436, FN=0.038342
+```
+
+The ordinary `best.pt` test Accuracy being slightly higher must not be used to choose the checkpoint, because it had worse official-val Accuracy and test must not participate in checkpoint or threshold selection.
+
+GT5 diagnosis on official-val showed:
+
+```text
+official_best.pt: GT5 count-under=4/74, valid-points fail=3/74, rescue success=0
+best.pt:          GT5 count-under=2/74, valid-points fail=2/74, rescue success=0
+```
+
+`best.pt` improved GT5 count/output but paid for it with worse GT4-to-5 and FP behavior. `official_best.pt` was more balanced, but still did not beat the previous official-val candidates. Candidate-pool shortfall and GT5 NMS suppression were not the main failure mode.
+
+Alternatives considered:
+
+- Promote `official_best.pt` because it is the run's official-val best.
+- Select ordinary `best.pt` because its test Accuracy was slightly higher.
+- Continue broad threshold, NMS, rank, or rescue sweeps.
+- Abandon GT5 calibration entirely.
+- Treat GT5 calibration as a useful direction only when combined with GT4/GT5 joint calibration and official-val checkpoint preservation.
+
+Tradeoff:
+
+Rejecting promotion avoids locking in a lower official-val result. The test comparison is useful for understanding split instability, but it cannot justify test-driven checkpoint selection. The useful signal is narrower: GT5-specific weighting can help fifth-lane output, but it must be constrained by GT4 false-to-5 behavior and overall FP/FN.
+
+Validation evidence:
+
+Official-val sweeps and GT5 diagnostics were generated under:
+
+```text
+runs/gcs_lane/gcs_yolo_lane_s_q12_e180_gt5calib_mainline_seed0/analysis_best_val_sweep/tusimple_official_sweep_summary.json
+runs/gcs_lane/gcs_yolo_lane_s_q12_e180_gt5calib_mainline_seed0/analysis_official_best_val_sweep/tusimple_official_sweep_summary.json
+runs/gcs_lane/gcs_yolo_lane_s_q12_e180_gt5calib_mainline_seed0/analysis_best_gt5_diag_val/gt5_rank_diagnostics_summary.json
+runs/gcs_lane/gcs_yolo_lane_s_q12_e180_gt5calib_mainline_seed0/analysis_official_best_gt5_diag_val/gt5_rank_diagnostics_summary.json
+```
+
+Test summaries, diagnostic only:
+
+```text
+runs/gcs_lane/gcs_yolo_lane_s_q12_e180_gt5calib_mainline_seed0/analysis_best_test_official_from_val/tusimple_official_summary.json
+runs/gcs_lane/gcs_yolo_lane_s_q12_e180_gt5calib_mainline_seed0/analysis_official_best_test_official_from_val/tusimple_official_summary.json
+```
+
+Next smallest safe action:
+
+Run a controlled GT4/GT5 joint-calibration experiment from the stronger countboundary or short fine-tune checkpoint, with official-val checkpoint/top-k preservation. Do not spend the next iteration on broad threshold/NMS/rescue sweeps unless a new hypothesis changes those controls.
+
+Mainline or experiment:
+
+Experiment only. Current mainline defaults and contracts are unchanged.
+
+---
+
+## Decision: Preserve official-val Top-K checkpoints during unstable fine-tunes
+
+Status: current workflow support, default-compatible
+
+Decision:
+
+Add `gcs_official_best_top_k` to training configuration. The default is:
+
+```text
+gcs_official_best_top_k = 1
+```
+
+so existing behavior is unchanged. When set above `1`, training still updates:
+
+```text
+weights/official_best.pt
+```
+
+strictly by official-val `official_acc`, and additionally preserves the retained Top-K official-val candidate checkpoints under:
+
+```text
+weights/official_topk/
+```
+
+with metadata recorded in:
+
+```text
+official_best_summary.json
+```
+
+Why:
+
+The 2026-06-12 experiment evidence shows ordinary `best.pt`, `last.pt`, and `official_best.pt` can disagree in short GT4/GT5 fine-tunes. The promising 6-epoch Count Boundary / GT4-GT5 fine-tune improved official-val Accuracy on `last.pt`, while ordinary `best.pt` regressed GT5 output. The newest `gt5calib_mainline_seed0` run also showed a val/test ranking mismatch: ordinary `best.pt` had slightly higher diagnostic test Accuracy, but worse official-val Accuracy and worse FP/GT4-to-5 behavior.
+
+The project objective is official Accuracy under official-val selection. Preserving official-val Top-K candidates gives the next fine-tune run more recoverable checkpoints without changing model architecture, loss, decode, official metric calculation, or test usage.
+
+Alternatives considered:
+
+- rely on ordinary `best.pt`
+- rely on `last.pt`
+- enable `save_period` epoch checkpoints and sweep them manually
+- change checkpoint selection to `official_score`, GT5 diagnostics, or test Accuracy
+- continue broad threshold, NMS, soft-count, or rescue sweeps
+
+Tradeoff:
+
+Top-K preservation uses extra disk space only when `gcs_official_best_top_k > 1`. It does not solve GT4/GT5 calibration by itself; it removes a checkpoint-selection failure mode so the next controlled fine-tune can be judged cleanly on official-val.
+
+Validation evidence:
+
+Local checks passed after the implementation:
+
+```text
+python -m py_compile tools/train_gcs.py ultralytics/models/yolo/gcs_lane/train.py ultralytics/cfg/__init__.py tests/test_gcs_boundary_decode_plumbing.py tests/test_gcs_count_aware.py tools/check_gcs_algorithm_contract.py
+python -m pytest tests/test_gcs_boundary_decode_plumbing.py tests/test_gcs_count_aware.py -q
+python scripts/verify_loss_cleanup.py
+python tools/check_gcs_algorithm_contract.py
+python tools/check_gcs_count_head_topk_contract.py
+python tools/check_gcs_decode_meta_contract.py
+python scripts/check_gcs_agent_setup.py
+```
+
+Mainline or experiment:
+
+Workflow support. Default behavior is unchanged at Top-K `1`; use `--gcs-official-best-top-k 3` for the next controlled GT4/GT5 fine-tune.

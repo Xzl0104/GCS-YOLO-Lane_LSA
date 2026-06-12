@@ -7,7 +7,7 @@ import pytest
 import torch
 
 from tools import train_gcs
-from ultralytics.cfg import CFG_FLOAT_KEYS, CFG_FRACTION_KEYS
+from ultralytics.cfg import CFG_FLOAT_KEYS, CFG_FRACTION_KEYS, CFG_INT_KEYS
 from ultralytics.models.yolo.gcs_lane.train import (
     GCS_MAINLINE_CANDIDATE_GT5_EDGE_WEIGHT,
     GCS_MAINLINE_COUNT_CLS_WEIGHTS,
@@ -270,6 +270,7 @@ def test_mainline_sampler_defaults_and_ratio_boost_boundaries(monkeypatch):
         DEFAULT_CFG_DICT["gcs_point_valid_gt5_edge_continuity_thr"]
         == GCS_MAINLINE_POINT_VALID_GT5_EDGE_CONTINUITY_THR
     )
+    assert DEFAULT_CFG_DICT["gcs_official_best_top_k"] == 1
 
     monkeypatch.setattr(sys, "argv", ["train_gcs.py"])
     args = train_gcs.parse_args()
@@ -287,6 +288,7 @@ def test_mainline_sampler_defaults_and_ratio_boost_boundaries(monkeypatch):
     assert args.gcs_candidate_gt5_edge_weight == GCS_MAINLINE_CANDIDATE_GT5_EDGE_WEIGHT
     assert args.gcs_point_valid_gt5_edge_continuity == GCS_MAINLINE_POINT_VALID_GT5_EDGE_CONTINUITY
     assert args.gcs_point_valid_gt5_edge_continuity_thr == GCS_MAINLINE_POINT_VALID_GT5_EDGE_CONTINUITY_THR
+    assert args.gcs_official_best_top_k == 1
 
     trainer_overrides = {}
     monkeypatch.setattr(BaseTrainer, "__init__", lambda self, cfg, overrides, callbacks: trainer_overrides.update(overrides))
@@ -357,6 +359,7 @@ def test_gt5_candidate_cfg_keys_have_expected_types():
         "gcs_point_valid_gt5_edge_continuity",
     } <= CFG_FLOAT_KEYS
     assert "gcs_point_valid_gt5_edge_continuity_thr" in CFG_FRACTION_KEYS
+    assert "gcs_official_best_top_k" in CFG_INT_KEYS
 
 
 def test_count_boundary_gt5_pos_weight_increases_count_loss():

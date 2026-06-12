@@ -15,6 +15,24 @@ python tools/train_gcs.py \
   --imgsz 544 960
 ```
 
+## Train With Official-Val Checkpoint Preservation
+
+Use this when ordinary `best.pt` is not reliable for TuSimple official Accuracy selection.
+
+```bash
+python tools/train_gcs.py \
+  --model ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12.yaml \
+  --data data/tusimple_gcs_fixed_y_960x544.yaml \
+  --imgsz 544 960 \
+  --gcs-official-best \
+  --gcs-official-best-period 1 \
+  --gcs-official-best-top-k 3 \
+  --gcs-official-best-gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
+  --gcs-official-best-archive-root runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset
+```
+
+`official_best.pt` is selected by official-val `official_acc`. `gcs_official_best_top_k > 1` additionally preserves retained candidates under `weights/official_topk/` and records them in `official_best_summary.json`.
+
 ## Inference
 
 ```bash

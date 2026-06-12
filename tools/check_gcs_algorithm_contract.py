@@ -638,6 +638,8 @@ def check_official_best_cross_epoch_priority() -> None:
     )
     trainer_text = (ROOT / "ultralytics" / "models" / "yolo" / "gcs_lane" / "train.py").read_text(encoding="utf-8")
     _assert("official_non_best" not in trainer_text, "training must not save official_non_best checkpoints")
+    _assert("gcs_official_best_top_k" in trainer_text, "training must expose official-val Top-K preservation")
+    _assert("official_top_k" in trainer_text, "official_best summary must record preserved Top-K candidates")
 
 
 def main() -> None:

@@ -54,7 +54,7 @@ Use test only once for final evaluation of a candidate already selected on offic
 2. Add the candidate as an isolated explicit option.
 3. Keep the current baseline reproducible.
 4. Run targeted contract checks.
-5. Run official-val sweep or focused official-val validation.
+5. Run official-val sweep or focused official-val validation. For unstable short fine-tunes, preserve official-val candidates with `gcs_official_best_top_k > 1`.
 6. Compare official ACC against the baseline.
 7. Analyze FP, FN, GT4/GT5 confusion, output5 rate, rescue precision, candidate shortfall, and valid-points failure.
 8. Promote only with official-val evidence.

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 import unittest
@@ -61,6 +62,34 @@ def _patched_official_inference(module, tmp_path: Path, boundary_logits: torch.T
         stack.enter_context(mock.patch.object(module, "gcs_lanes_to_tusimple_lanes", return_value=[]))
         stack.enter_context(mock.patch.object(module, "decode_gcs_predictions", side_effect=capture_decode))
         yield
+
+
+def _make_official_best_trainer(tmp_path: Path, *, top_k: int = 2) -> tuple[GCSLaneTrainer, Path, Path]:
+    weights_dir = tmp_path / "weights"
+    weights_dir.mkdir(exist_ok=True)
+    last = weights_dir / "last.pt"
+
+    trainer = object.__new__(GCSLaneTrainer)
+    trainer.args = SimpleNamespace(
+        gcs_official_best=True,
+        gcs_official_best_split="val",
+        gcs_official_best_period=1,
+        gcs_official_best_top_k=top_k,
+        gcs_official_best_gt_json=str(tmp_path / "official_val.json"),
+        gcs_official_best_archive_root=str(tmp_path),
+        gcs_official_best_confs="0.005",
+        gcs_official_best_point_valid_thrs="0.15",
+        gcs_official_best_nms_dist_pxs="18.0",
+        gcs_official_best_max_dets="5",
+        gcs_official_best_min_points="6",
+        gcs_official_best_rank_min_points="none",
+    )
+    trainer.save_dir = tmp_path
+    trainer.wdir = weights_dir
+    trainer.last = last
+    trainer.gcs_official_best_fitness = None
+    trainer._resolve_gcs_imgsz = lambda: (544, 960)
+    return trainer, weights_dir, last
 
 
 class CountBoundaryDecodePlumbingTest(unittest.TestCase):
@@ -187,6 +216,88 @@ class CountBoundaryDecodePlumbingTest(unittest.TestCase):
         with mock.patch.object(gcs_train, "RANK", -1):
             with self.assertRaisesRegex(ValueError, "Training official_best selection"):
                 trainer._run_official_best_sweep()
+
+    def test_training_official_best_topk_preserves_candidates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            trainer, weights_dir, last = _make_official_best_trainer(tmp_path, top_k=2)
+
+            sweep_results = iter((0.95, 0.96, 0.955, 0.96))
+
+            def fake_run_sweep(_args):
+                acc = next(sweep_results)
+                return {
+                    "best": {
+                        "official_acc": acc,
+                        "official_fp": 0.04,
+                        "official_fn": 0.03,
+                        "rank_min_points": "none",
+                    }
+                }
+
+            with mock.patch.object(gcs_train, "RANK", -1), mock.patch.object(
+                sweep_tusimple_official, "run_sweep", side_effect=fake_run_sweep
+            ):
+                for epoch, content in enumerate((b"epoch1", b"epoch2", b"epoch3", b"epoch4")):
+                    trainer.epoch = epoch
+                    last.write_bytes(content)
+                    trainer._run_official_best_sweep()
+
+            record = json.loads((tmp_path / "official_best_summary.json").read_text(encoding="utf-8"))
+            self.assertEqual(record["best_epoch"], 2)
+            self.assertEqual(record["best_fitness"], 0.96)
+            self.assertEqual((weights_dir / "official_best.pt").read_bytes(), b"epoch2")
+            self.assertEqual(record["official_top_k_size"], 2)
+            self.assertEqual([entry["candidate_epoch"] for entry in record["official_top_k"]], [2, 4])
+            self.assertEqual([entry["rank"] for entry in record["official_top_k"]], [1, 2])
+            top1 = tmp_path / record["official_top_k"][0]["weights"]
+            top2 = tmp_path / record["official_top_k"][1]["weights"]
+            self.assertEqual(top1.read_bytes(), b"epoch2")
+            self.assertEqual(top2.read_bytes(), b"epoch4")
+
+    def test_training_official_best_topk_migrates_legacy_summary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            trainer, weights_dir, last = _make_official_best_trainer(tmp_path, top_k=2)
+            (weights_dir / "official_best.pt").write_bytes(b"legacy-best")
+            (tmp_path / "official_best_summary.json").write_text(
+                json.dumps(
+                    {
+                        "best_epoch": 6,
+                        "best_fitness": 0.954,
+                        "best": {"official_acc": 0.954, "rank_min_points": "none"},
+                        "selector": {"metric": "official_acc"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            last.write_bytes(b"new-candidate")
+            trainer.epoch = 6
+
+            def fake_run_sweep(_args):
+                return {
+                    "best": {
+                        "official_acc": 0.953,
+                        "official_fp": 0.04,
+                        "official_fn": 0.03,
+                        "rank_min_points": "none",
+                    }
+                }
+
+            with mock.patch.object(gcs_train, "RANK", -1), mock.patch.object(
+                sweep_tusimple_official, "run_sweep", side_effect=fake_run_sweep
+            ):
+                trainer._run_official_best_sweep()
+
+            record = json.loads((tmp_path / "official_best_summary.json").read_text(encoding="utf-8"))
+            self.assertEqual(record["best_epoch"], 6)
+            self.assertEqual(record["best_fitness"], 0.954)
+            self.assertEqual((weights_dir / "official_best.pt").read_bytes(), b"legacy-best")
+            self.assertEqual([entry["candidate_epoch"] for entry in record["official_top_k"]], [6, 7])
+            migrated = tmp_path / record["official_top_k"][0]["weights"]
+            current = tmp_path / record["official_top_k"][1]["weights"]
+            self.assertEqual(migrated.read_bytes(), b"legacy-best")
+            self.assertEqual(current.read_bytes(), b"new-candidate")
 
 
 if __name__ == "__main__":

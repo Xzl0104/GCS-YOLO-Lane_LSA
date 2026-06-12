@@ -250,9 +250,10 @@ gcs_gt5_erasing: 0.15 # (float) extra erasing probability for gcs_gt5_extra_aug 
 gcs_gt5_blur: 0.15 # (float) blur probability for gcs_gt5_extra_aug samples
 gcs_gt5_noise: 0.15 # (float) Gaussian noise probability for gcs_gt5_extra_aug samples
 gcs_gt5_shadow: 0.20 # (float) synthetic shadow probability for gcs_gt5_extra_aug samples
-gcs_official_best: False # (bool) periodically select weights/best.pt using TuSimple official val sweep
+gcs_official_best: False # (bool) periodically select weights/official_best.pt using TuSimple official val sweep
 gcs_official_best_period: 0 # (int) official-best sweep interval; 0 reuses save_period
-gcs_official_best_gt_json: "" # (str) stratified official-val json-lines used for best.pt selection
+gcs_official_best_top_k: 1 # (int) preserve top-K official-val checkpoints under weights/official_topk; 1 keeps legacy behavior
+gcs_official_best_gt_json: "" # (str) stratified official-val json-lines used for official_best.pt selection
 gcs_official_best_archive_root: "archive" # (str) path to archive/ or archive/TUSimple for official-best sweeps
 gcs_official_best_split: "val" # (str) TuSimple split for official-best image lookup
 gcs_official_best_confs: "0.005 0.01 0.015 0.02 0.03 0.05 0.08 0.10" # (str) candidate-pool confidence thresholds for official-best sweep

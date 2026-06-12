@@ -382,6 +382,7 @@ CFG_INT_KEYS = frozenset(
         "gcs_lane_count_min_group",
         "gcs_gt5_aug_min_lanes",
         "gcs_official_best_period",
+        "gcs_official_best_top_k",
         "gcs_official_best_max_images",
         "gcs_official_best_warmup",
     }

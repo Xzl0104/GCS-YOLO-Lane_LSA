@@ -996,6 +996,10 @@ class GCSLaneTrainer(BaseTrainer):
             return explicit
         return 10
 
+    def _official_best_top_k(self) -> int:
+        """Resolve how many official-val candidate checkpoints to preserve."""
+        return max(1, int(getattr(self.args, "gcs_official_best_top_k", 1) or 1))
+
     def _load_official_best_fitness(self) -> None:
         """Restore the current official-best fitness when resuming an existing run."""
         if self.gcs_official_best_fitness is not None:
@@ -1021,6 +1025,83 @@ class GCSLaneTrainer(BaseTrainer):
         if previous is None:
             return True
         return float(current.get("official_acc", 0.0)) > float(previous.get("official_acc", 0.0))
+
+    @staticmethod
+    def _official_topk_score(entry: dict[str, Any]) -> tuple[float, int]:
+        """Sort official-val checkpoint candidates by official Accuracy, then earlier epoch."""
+        candidate = entry.get("candidate", {})
+        fitness = entry.get("candidate_fitness", None)
+        if fitness is None and isinstance(candidate, dict):
+            fitness = candidate.get("official_acc", 0.0)
+        epoch = int(entry.get("candidate_epoch", entry.get("best_epoch", -1)) or -1)
+        return (float(fitness or 0.0), -epoch)
+
+    def _official_topk_checkpoint_path(self, epoch_num: int, fitness: float) -> Path:
+        """Return the immutable Top-K checkpoint path for one official-val candidate."""
+        safe_acc = f"{float(fitness):.6f}".replace(".", "p")
+        return self.wdir / "official_topk" / f"epoch{int(epoch_num):04d}_acc{safe_acc}.pt"
+
+    def _copy_official_topk_checkpoint(self, entry: dict[str, Any], source: Path) -> None:
+        """Copy a candidate checkpoint into the official Top-K archive and record its relative path."""
+        if not source.exists():
+            return
+        epoch_num = int(entry.get("candidate_epoch", entry.get("best_epoch", -1)) or -1)
+        fitness = float(entry.get("candidate_fitness", entry.get("best_fitness", 0.0)) or 0.0)
+        if epoch_num < 0:
+            return
+        target = self._official_topk_checkpoint_path(epoch_num, fitness)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+        entry["weights"] = target.relative_to(self.save_dir).as_posix()
+
+    @staticmethod
+    def _official_topk_entries_from_record(record: dict[str, Any] | None) -> list[dict[str, Any]]:
+        """Load preserved official-val Top-K entries from an existing summary record."""
+        if not isinstance(record, dict):
+            return []
+        entries = record.get("official_top_k", [])
+        if isinstance(entries, list) and entries:
+            return [dict(x) for x in entries if isinstance(x, dict)]
+        best = record.get("best")
+        best_epoch = record.get("best_epoch", None)
+        if isinstance(best, dict) and best_epoch is not None:
+            return [
+                {
+                    "candidate_epoch": int(best_epoch),
+                    "candidate_fitness": float(record.get("best_fitness", best.get("official_acc", 0.0))),
+                    "candidate": best,
+                    "selector": record.get("selector", {}),
+                }
+            ]
+        return []
+
+    def _update_official_topk(
+        self,
+        candidate_record: dict[str, Any],
+        previous_record: dict[str, Any] | None,
+        top_k: int,
+    ) -> list[dict[str, Any]]:
+        """Update official-val Top-K metadata and archive retained checkpoint files."""
+        if top_k <= 1:
+            return []
+        candidate_epoch = int(candidate_record["candidate_epoch"])
+        entries = [
+            entry
+            for entry in self._official_topk_entries_from_record(previous_record)
+            if int(entry.get("candidate_epoch", -1) or -1) != candidate_epoch
+        ]
+        entries.append(dict(candidate_record))
+        entries = sorted(entries, key=self._official_topk_score, reverse=True)[:top_k]
+
+        previous_best_source = self.wdir / "official_best.pt"
+        for rank, entry in enumerate(entries, start=1):
+            entry["rank"] = rank
+            entry_epoch = int(entry.get("candidate_epoch", -1) or -1)
+            if entry_epoch == candidate_epoch:
+                self._copy_official_topk_checkpoint(entry, self.last)
+            elif not entry.get("weights") and previous_best_source.exists():
+                self._copy_official_topk_checkpoint(entry, previous_best_source)
+        return entries
 
     def _run_official_best_sweep(self) -> None:
         """Run a TuSimple official sweep for the current checkpoint and update official_best.pt when it improves."""
@@ -1241,6 +1322,8 @@ class GCSLaneTrainer(BaseTrainer):
             "candidate": best,
             "selector": selector,
         }
+        top_k = self._official_best_top_k()
+        official_top_k = self._update_official_topk(candidate_record, previous_record, top_k)
         self._load_official_best_fitness()
         if previous_best is None and self.gcs_official_best_fitness is not None:
             previous_best = {"official_acc": float(self.gcs_official_best_fitness)}
@@ -1270,6 +1353,9 @@ class GCSLaneTrainer(BaseTrainer):
                 f"GCS official best unchanged at epoch {epoch_num}: current={fitness:.6f}, "
                 f"best={self.gcs_official_best_fitness:.6f}"
             )
+        if top_k > 1:
+            record["official_top_k_size"] = top_k
+            record["official_top_k"] = official_top_k
         record_path.write_text(json.dumps(record, indent=2), encoding="utf-8")
 
     def save_model(self):

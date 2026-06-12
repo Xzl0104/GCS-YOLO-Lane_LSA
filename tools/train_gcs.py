@@ -598,6 +598,12 @@ def parse_args() -> argparse.Namespace:
         default=0,
         help="Epoch interval for official best sweeps. 0 uses --save-period once for legacy commands, otherwise defaults to 10.",
     )
+    parser.add_argument(
+        "--gcs-official-best-top-k",
+        type=int,
+        default=1,
+        help="Preserve the top K official-val candidate checkpoints under weights/official_topk. 1 keeps legacy behavior.",
+    )
     parser.add_argument("--gcs-official-best-gt-json", default="", help="Stratified official-val json-lines used for official_best.pt selection.")
     parser.add_argument("--gcs-official-best-archive-root", default="archive", help="Path to archive/ or archive/TUSimple.")
     parser.add_argument("--gcs-official-best-split", default="val", choices=("train", "val", "test"))
@@ -946,6 +952,7 @@ def main() -> None:
         "gcs_gt5_shadow": args.gcs_gt5_shadow,
         "gcs_official_best": args.gcs_official_best,
         "gcs_official_best_period": gcs_official_best_period,
+        "gcs_official_best_top_k": args.gcs_official_best_top_k,
         "gcs_official_best_gt_json": args.gcs_official_best_gt_json,
         "gcs_official_best_archive_root": args.gcs_official_best_archive_root,
         "gcs_official_best_split": args.gcs_official_best_split,
