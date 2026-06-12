@@ -47,7 +47,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--dataset", default="tusimple", choices=sorted(DATASET_IMAGE_SHAPES))
     parser.add_argument("--archive-root", default=str(DEFAULT_ARCHIVE), help="Path to archive/ or archive/TUSimple.")
-    parser.add_argument("--split", default="test", choices=("test", "train", "val"), help="TuSimple archive split.")
+    parser.add_argument("--split", default="val", choices=("test", "train", "val"), help="TuSimple archive split.")
     parser.add_argument("--gt-json", default=None, help="TuSimple official GT json-lines file.")
     parser.add_argument("--weights", default=str(DEFAULT_WEIGHTS), help="GCS checkpoint .pt.")
     parser.add_argument("--imgsz", nargs="+", type=int, default=None, help="GCS inference shape as H W.")
@@ -135,7 +135,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", default="0", help="Inference device, e.g. 0 or cpu.")
     parser.add_argument("--half", action="store_true", help="Use FP16 on CUDA.")
     parser.add_argument("--save-dir", default=None, help="Output directory. Defaults under the weight run.")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.split == "test":
+        raise SystemExit("GT5 diagnosis rejects --split test. Use --split val for diagnosis; reserve test for final official evaluation only.")
+    return args
 
 
 def _weight_run_dir(weights: str | Path) -> Path | None:
@@ -247,14 +250,15 @@ def _candidate_quality(
             lane_length_px = float(np.sum(np.linalg.norm(points_px[1:] - points_px[:-1], axis=1)))
         else:
             jump_factor = 0.5
-        lane_length_px = 0.0
+            lane_length_px = 0.0
 
     length_factor = min(1.0, float(lane_length) / max(float(rank_len_norm), 1e-6))
     total_points = max(int(lane_points.shape[0]), 1)
-    valid_count_score = float(
+    anchor_valid_count_score = float(
         np.clip((float(rank_valid_count) - float(min_points) + 1.0) / float(total_points), 0.0, 1.0)
     )
-    quality_proxy = mean_valid_score_all * valid_count_score
+    valid_count_score = length_factor
+    quality_proxy = mean_valid_score * valid_count_score
     rank_score = float(exist_score) * quality_proxy
     return {
         "rank_score": float(rank_score),
@@ -264,8 +268,10 @@ def _candidate_quality(
         "rank_valid_count": int(rank_valid_count),
         "lane_length": int(lane_length),
         "lane_length_px": float(lane_length_px),
-        "mean_valid_score": float(mean_valid_score_all),
+        "mean_valid_score": float(mean_valid_score),
+        "mean_valid_score_all": float(mean_valid_score_all),
         "valid_count_score": float(valid_count_score),
+        "anchor_valid_count_score": float(anchor_valid_count_score),
         "length_factor": float(length_factor),
         "smooth_factor": float(smooth_factor),
         "jump_factor": float(jump_factor),
@@ -810,6 +816,8 @@ def add_topk_fields(row: dict, candidates: list[dict], topk: int) -> None:
         row[f"valid_points_{prefix}"] = None if item is None else int(item["valid_points"])
         row[f"lane_length_{prefix}"] = None if item is None else int(item["lane_length"])
         row[f"lane_length_px_{prefix}"] = None if item is None else round(float(item["lane_length_px"]), 4)
+        row[f"mean_valid_score_{prefix}"] = None if item is None else round(float(item["mean_valid_score"]), 8)
+        row[f"mean_valid_score_all_{prefix}"] = None if item is None else round(float(item["mean_valid_score_all"]), 8)
 
 
 @torch.inference_mode()
@@ -1017,6 +1025,9 @@ def main() -> None:
                     "lane_length": int(item["lane_length"]),
                     "lane_length_px": round(float(item["lane_length_px"]), 4),
                     "mean_valid_score": round(float(item["mean_valid_score"]), 8),
+                    "mean_valid_score_all": round(float(item["mean_valid_score_all"]), 8),
+                    "valid_count_score": round(float(item["valid_count_score"]), 8),
+                    "anchor_valid_count_score": round(float(item["anchor_valid_count_score"]), 8),
                     "length_factor": round(float(item["length_factor"]), 8),
                     "smooth_factor": round(float(item["smooth_factor"]), 8),
                     "jump_factor": round(float(item["jump_factor"]), 8),
@@ -1085,6 +1096,8 @@ def main() -> None:
                 f"valid_points_{rank}",
                 f"lane_length_{rank}",
                 f"lane_length_px_{rank}",
+                f"mean_valid_score_{rank}",
+                f"mean_valid_score_all_{rank}",
             ]
         )
     write_csv(save_dir / "gt5_rank_diagnostics.csv", rows, fields)
@@ -1103,6 +1116,9 @@ def main() -> None:
             "lane_length",
             "lane_length_px",
             "mean_valid_score",
+            "mean_valid_score_all",
+            "valid_count_score",
+            "anchor_valid_count_score",
             "length_factor",
             "smooth_factor",
             "jump_factor",

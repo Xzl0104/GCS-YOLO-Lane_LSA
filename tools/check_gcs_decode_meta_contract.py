@@ -135,11 +135,42 @@ def check_top5_nms_suppression_meta() -> None:
     _assert(len(lanes) == 5, f"suppressed recovery should still respect Count Head K=5, got {len(lanes)}")
 
 
+def check_short_visible_segment_rank_metadata() -> None:
+    points = _lane_points([100, 250, 400, 550, 700], points=32)
+    valid_logits = torch.full((5, 32), 10.0)
+    valid_logits[4, 5:] = -10.0
+    lanes = decode_gcs_predictions(
+        pred_points=points,
+        pred_logits=torch.full((5,), 6.0),
+        pred_valid_logits=valid_logits,
+        pred_count_logits=torch.tensor([-5.0, -5.0, -5.0, 5.0]),
+        image_shape=(720, 960),
+        score_thr=0.0,
+        point_valid_thr=0.5,
+        min_points=6,
+        max_det=5,
+        nms_dist_px=0.0,
+        use_count_head_decode=True,
+        dataset_name="culane",
+        candidate_score_thr=0.0,
+        candidate_point_valid_thr=0.5,
+        candidate_min_points=5,
+        final_min_points=6,
+        fifth_min_points=5,
+    )
+    short_lane = next((lane for lane in lanes if int(lane["query"]) == 4), None)
+    _assert(short_lane is not None, "short visible edge query should remain selectable as fifth lane")
+    _assert(float(short_lane["mean_valid_score"]) > 0.9, "mean_valid_score should track visible segment quality")
+    _assert(float(short_lane["mean_valid_score_all"]) < 0.2, "decode metadata should retain all-anchor mean")
+    _assert(float(short_lane["valid_count_score"]) > float(short_lane["anchor_valid_count_score"]), "visible support should avoid all-anchor underweighting")
+
+
 def main() -> None:
     checks = (
         check_lane_nms_return_suppressed,
         check_rescue_pool_meta_and_no_fabrication,
         check_top5_nms_suppression_meta,
+        check_short_visible_segment_rank_metadata,
     )
     for check in checks:
         check()

@@ -217,7 +217,7 @@ def check_decode_quality_rank_and_rescue() -> None:
     )
     _assert(len(ranked) == 1 and int(ranked[0]["query"]) == 1, "visibility-aware rank must prefer complete lane")
     _assert(ranked[0]["rank_score_source"] == "exist_visibility", "composite rank source should be recorded")
-    expected = float(pred_logits[1].sigmoid()) * float(rank_valid_logits[1].sigmoid().mean()) * (3.0 / 8.0)
+    expected = float(pred_logits[1].sigmoid()) * float(rank_valid_logits[1].sigmoid().mean()) * (8.0 / 12.0)
     _assert(abs(float(ranked[0]["rank_score"]) - expected) < 1e-5, "rank score formula mismatch")
     _assert(float(ranked[0]["quality_head_score"]) < 0.01, "Quality Head score should remain diagnostic only")
 

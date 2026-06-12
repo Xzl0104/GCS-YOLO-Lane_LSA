@@ -1319,12 +1319,13 @@ def _lane_rank_quality(
     if point_valid_scores is not None:
         threshold_mask = point_valid_scores >= float(point_valid_thr)
         rank_valid_count = int(threshold_mask.sum())
-        mean_valid_score = float(point_valid_scores.mean()) if point_valid_scores.numel() > 0 else 0.0
+        mean_valid_score_all = float(point_valid_scores.mean()) if point_valid_scores.numel() > 0 else 0.0
         visible_mask = longest_contiguous_valid_mask(threshold_mask, min_points=min_points)
         valid_count = int(visible_mask.sum())
         if valid_count < min_points:
             return None
         seg_idx = torch.nonzero(visible_mask, as_tuple=False).flatten()
+        mean_valid_score = float(point_valid_scores[seg_idx].mean()) if seg_idx.numel() > 0 else 0.0
     else:
         if int(lane_points.shape[0]) < min_points:
             return None
@@ -1333,12 +1334,14 @@ def _lane_rank_quality(
         valid_count = int(seg_idx.numel())
         rank_valid_count = valid_count
         mean_valid_score = 1.0 if valid_count > 0 else 0.0
+        mean_valid_score_all = mean_valid_score
 
     total_points = max(int(lane_points.shape[0]), 1)
-    valid_count_score = float(
+    anchor_valid_count_score = float(
         np.clip((float(rank_valid_count) - float(min_points) + 1.0) / float(total_points), 0.0, 1.0)
     )
     length_factor = min(1.0, float(valid_count) / 12.0)
+    valid_count_score = length_factor
     if image_shape is not None:
         h, w = int(image_shape[0]), int(image_shape[1])
         scale = lane_points.new_tensor([float(w), float(h)]).view(1, 2)
@@ -1359,7 +1362,7 @@ def _lane_rank_quality(
     else:
         jump_factor = 0.5
 
-    geometry_rank_score = float(exist_score) * mean_valid_score * length_factor * smooth_factor * jump_factor
+    geometry_rank_score = float(exist_score) * mean_valid_score * valid_count_score * smooth_factor * jump_factor
     rank_quality_score = float(exist_score) * mean_valid_score * valid_count_score
     quality_score = (
         None if lane_quality_score is None else float(np.clip(float(lane_quality_score), 0.0, 1.0))
@@ -1369,7 +1372,9 @@ def _lane_rank_quality(
         "valid_count": valid_count,
         "rank_valid_count": rank_valid_count,
         "mean_valid_score": mean_valid_score,
+        "mean_valid_score_all": mean_valid_score_all,
         "valid_count_score": valid_count_score,
+        "anchor_valid_count_score": anchor_valid_count_score,
         "length_factor": length_factor,
         "smooth_factor": smooth_factor,
         "jump_factor": jump_factor,
@@ -1433,7 +1438,9 @@ def _build_lane_candidates(
             "valid_count": int(rank_quality["valid_count"]),
             "rank_valid_count": int(rank_quality["rank_valid_count"]),
             "mean_valid_score": float(rank_quality["mean_valid_score"]),
+            "mean_valid_score_all": float(rank_quality["mean_valid_score_all"]),
             "valid_count_score": float(rank_quality["valid_count_score"]),
+            "anchor_valid_count_score": float(rank_quality["anchor_valid_count_score"]),
             "length_factor": float(rank_quality["length_factor"]),
             "smooth_factor": float(rank_quality["smooth_factor"]),
             "jump_factor": float(rank_quality["jump_factor"]),
@@ -1584,7 +1591,7 @@ def decode_gcs_predictions(
             predicts the final K; query scores only decide which K lanes survive.
         pred_count_boundary_logits: Optional count>=4/count>=5 logits used only to calibrate image-level K.
         pred_quality_logits: Optional Q lane-quality logits retained for diagnostics and quality-gated rescue.
-            Top-K ranking always uses ``exist * mean_point_valid * valid_count_score``.
+            Top-K ranking uses ``exist * visible_segment_mean_valid * visible_support_score``.
         image_shape: Optional original image shape as (height, width). If provided, pixel points are added.
         score_thr: Existence probability threshold.
         point_valid_thr: Per-point visibility probability threshold.

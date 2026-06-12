@@ -359,7 +359,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--gcs-hard-edge-loss-terms",
         default="exist,point,point_valid,line_iou",
-        help="Comma/space separated terms that receive hard-edge weighting: exist, point, point_valid, line_iou.",
+        help="Comma/space separated terms that receive hard-edge weighting: exist, point, point_valid, line_iou, quality.",
     )
     parser.add_argument(
         "--gcs-hard-edge-only",

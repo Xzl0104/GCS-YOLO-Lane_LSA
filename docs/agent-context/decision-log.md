@@ -462,6 +462,99 @@ Workflow policy.
 
 ---
 
+## Decision: Rank lane candidates by visible-segment quality instead of all-anchor mean valid
+
+Status: current decode default, requires fresh training confirmation before any 0.97-range improvement claim
+
+Decision:
+
+Use the longest contiguous visible segment to compute rank visibility:
+
+```text
+rank_score = exist_score * visible_segment_mean_valid * min(1, visible_segment_points / 12)
+```
+
+Keep the all-anchor mean as diagnostic metadata:
+
+```text
+mean_valid_score_all
+```
+
+`mean_valid_score` now means the visible-segment mean used by rank and quality-gated rescue.
+
+Why:
+
+The fixed-y TuSimple label has `K=32`, but the fifth edge lane in GT5 images is often visible for only about 5-7 anchors. The old all-anchor mean divided high-confidence visible anchors by all 32 anchors, so a real short edge lane could receive a rank score near zero even when its visible segment was reliable.
+
+Official-val diagnosis of:
+
+```text
+runs/gcs_lane/gcs_yolo_lane_s_q12_cb_gt45_ft6_officialtopk_seed2_b8w0
+```
+
+showed this structural failure:
+
+```text
+old official_best.pt: official_acc=0.952530
+gt5_output5_rate=0.000000
+count_acc_5=0.000000
+gt5_rank5_score_low_rate=0.648649
+rank_score_low=48/74 GT5 images
+s5 mean=0.005515
+```
+
+With visible-segment rank on the same checkpoint and official-val split:
+
+```text
+official_acc=0.954186
+gt5_output5_rate=0.594595
+count_acc_5=0.594595
+gt5_rank5_score_low_rate=0.013514
+rank_score_low=1/74 GT5 images
+s5 mean=0.214644
+rescue_precision=0.891304
+```
+
+Alternatives considered:
+
+- continue threshold, NMS, and rescue sweeps
+- keep the old all-anchor mean and lower `s5_low_thr`
+- add a default-off rank mode
+- train only, leaving decode rank unchanged
+
+Tradeoff:
+
+The new rank removes a root bias against short visible lanes, but it also exposes the next bottleneck: Quality Head and Count Head must distinguish true fifth lanes from false fifth candidates. On the older strong FT6 `last.pt`, visible-segment rank reached `gt5_output5_rate=0.743243` but official-val Accuracy was `0.954474`, below the old selected row `0.954782`, because FP/GT4-to-5 cost rose. Raising the quality gate to `0.75` improved rescue precision but reduced GT5 recall and did not improve Accuracy. Therefore the next progress must come from training-side quality/count separation, not from simply tightening decode thresholds.
+
+Validation evidence:
+
+Local checks passed:
+
+```text
+python -m py_compile ultralytics/utils/gcs_postprocess.py tools/diagnose_gcs_gt5.py ultralytics/utils/gcs_loss.py tools/train_gcs.py tools/infer_gcs.py tools/check_gcs_count_head_topk_contract.py tools/check_gcs_decode_meta_contract.py tools/check_gcs_algorithm_contract.py tests/test_gcs_count_aware.py
+python tools/check_gcs_count_head_topk_contract.py
+python tools/check_gcs_decode_meta_contract.py
+python tools/check_gcs_algorithm_contract.py
+python -m pytest tests/test_gcs_count_aware.py -q
+python scripts/verify_loss_cleanup.py
+python scripts/check_gcs_agent_setup.py
+```
+
+Official-val evidence, not test:
+
+```text
+runs/gcs_lane/gcs_yolo_lane_s_q12_cb_gt45_ft6_officialtopk_seed2_b8w0/analysis_official_best_visible_segment_rank_val_sweep/tusimple_official_sweep_summary.json
+runs/gcs_lane/gcs_yolo_lane_s_q12_cb_gt45_ft6_officialtopk_seed2_b8w0/analysis_official_best_visible_segment_rank_gt5_diag_val/gt5_rank_diagnostics_summary.json
+runs/gcs_lane/gcs_yolo_lane_s_q12_e180_countboundary_rankfix_balgt45_v1/analysis_official_best_visible_segment_rank_val_sweep/tusimple_official_sweep_summary.json
+runs/gcs_lane/gcs_yolo_lane_s_q12_cb_gt45_ft6_from_official_best_b8w0_v1/analysis_last_visible_segment_rank_val_sweep/tusimple_official_sweep_summary.json
+```
+
+Mainline or experiment:
+
+Decode default. Improvement claims still require retraining and official-val selection; test remains final-only.
+
+---
+
 ## Decision: Treat the 2026-06-12 Count Boundary GT4/GT5 fine-tune as a promising experiment, not a mainline promotion
 
 Status: experimental candidate, requires longer official-val confirmation

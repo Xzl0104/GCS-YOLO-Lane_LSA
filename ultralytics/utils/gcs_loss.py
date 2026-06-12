@@ -483,12 +483,12 @@ class GCSLoss(nn.Module):
                 return set()
             tokens = [x for x in re.split(r"[,;\s]+", text) if x]
 
-        allowed = {"exist", "point", "point_valid", "line_iou"}
+        allowed = {"exist", "point", "point_valid", "line_iou", "quality"}
         terms = {cls._normalize_hard_edge_term(token) for token in tokens}
         invalid = sorted(terms - allowed)
         if invalid:
             raise ValueError(
-                "gcs_hard_edge_loss_terms supports only exist, point, point_valid, and line_iou; "
+                "gcs_hard_edge_loss_terms supports only exist, point, point_valid, line_iou, and quality; "
                 f"got {invalid}."
             )
         return terms

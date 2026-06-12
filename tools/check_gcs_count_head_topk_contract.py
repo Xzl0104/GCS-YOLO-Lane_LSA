@@ -322,6 +322,8 @@ def check_quality_rank_and_rescue() -> None:
     )
     _assert(len(ranked) == 1 and ranked[0]["query"] == 1, "composite rank should prefer the complete lane")
     _assert(ranked[0]["rank_score_source"] == "exist_visibility", "composite rank source should be recorded")
+    expected_rank = float(pred_logits[1].sigmoid()) * float(rank_valid_logits[1].sigmoid().mean()) * (8.0 / 12.0)
+    _assert(abs(float(ranked[0]["rank_score"]) - expected_rank) < 1e-5, "visible-segment rank formula mismatch")
     _assert(float(ranked[0]["quality_head_score"]) < 0.01, "Quality Head must not override composite ranking")
 
     common = dict(
@@ -355,6 +357,43 @@ def check_quality_rank_and_rescue() -> None:
     high_p5 = decode_gcs_predictions(pred_count_logits=torch.tensor([-5.0, -5.0, -5.0, 5.0]), **common)
     _assert(len(high_p5) == 5, f"high-quality fifth rescue should output 5 lanes, got {len(high_p5)}")
     _assert(any(lane.get("quality_rescue_5th") for lane in high_p5), "rescued fifth lane should be marked")
+
+    points32 = _lane_points(5, points=32)
+    short_edge_valid = _valid_logits([32, 32, 32, 32, 5], points=32)
+    short_edge, short_meta = decode_gcs_predictions(
+        pred_points=points32,
+        pred_logits=torch.full((5,), 6.0),
+        pred_valid_logits=short_edge_valid,
+        pred_quality_logits=torch.full((5,), 5.0),
+        pred_count_logits=torch.tensor([-5.0, -5.0, 2.0, 1.9]),
+        image_shape=(720, 960),
+        score_thr=0.0,
+        point_valid_thr=0.5,
+        min_points=6,
+        max_det=5,
+        nms_dist_px=0.0,
+        use_count_head_decode=True,
+        dataset_name="culane",
+        candidate_score_thr=0.0,
+        candidate_point_valid_thr=0.5,
+        candidate_min_points=5,
+        final_min_points=6,
+        fifth_min_points=5,
+        quality_rescue_5th=True,
+        quality_rescue_count5_thr=0.30,
+        quality_rescue_conf_thr=0.03,
+        quality_rescue_mean_valid_thr=0.45,
+        quality_rescue_quality_thr=0.55,
+        quality_rescue_min_points=5,
+        quality_rescue_dist_px=24.0,
+        return_meta=True,
+    )
+    rescued = [lane for lane in short_edge if lane.get("quality_rescue_5th")]
+    _assert(len(short_edge) == 5 and rescued, f"short visible edge lane should pass quality rescue: {short_meta}")
+    _assert(int(rescued[0]["query"]) == 4, f"expected real short edge query 4 to be rescued, got {rescued}")
+    _assert(float(rescued[0]["mean_valid_score"]) > 0.9, "rank gate should use visible-segment mean valid")
+    _assert(float(rescued[0]["mean_valid_score_all"]) < 0.2, "diagnostics should retain all-anchor mean valid")
+    _assert(float(rescued[0]["rank_score"]) > 0.25, "short edge rank should no longer be structurally near zero")
 
 
 def check_pre_nms_rescue() -> None:
@@ -403,7 +442,7 @@ def check_stale_rule_calibration_is_not_active() -> None:
 
 def check_no_score_contamination() -> None:
     pattern = re.compile(
-        r"(count_prob.*rank|rank.*count_prob|pred_count.*rank|rank_score.*count|count.*rank_score)"
+        r"(count_prob.*rank|rank.*count_prob|pred_count.*rank|rank_score.*count_head|count_head.*rank_score)"
     )
     hits: list[str] = []
     for rel in ("ultralytics", "tools"):

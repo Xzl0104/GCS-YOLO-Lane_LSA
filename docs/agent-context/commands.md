@@ -83,7 +83,7 @@ python tools/diagnose_gcs_gt5.py \
   --imgsz 544 960
 ```
 
-Use this to separate Count Head underprediction from candidate-pool shortfall, valid-points failure, NMS suppression, and final-output shortfall. Do not use `--split test` for diagnosis or tuning.
+Use this to separate Count Head underprediction from candidate-pool shortfall, valid-points failure, NMS suppression, rank-score failure, quality-gate failure, and final-output shortfall. The tool defaults to `--split val` and rejects `--split test`; do not use test for diagnosis or tuning.
 
 ## Contract Checks
 

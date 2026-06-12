@@ -12,6 +12,8 @@ This file summarizes recurring technical and experiment bottlenecks for GCS-YOLO
 - A 6-epoch Count Boundary / GT4-GT5 short fine-tune from `official_best.pt` improved official-val Accuracy from `0.954137` to `0.954782` on `last.pt`, with lower FP/FN and lower GT5 underprediction. The same run's ordinary `best.pt` regressed GT5 output, so short fine-tunes need official-val checkpoint selection and Top-K preservation through `gcs_official_best_top_k`.
 - 2026-06-12 official-val/test analysis for `gcs_yolo_lane_s_q12_e180_gt5calib_mainline_seed0` showed that the full GT5-calibration mainline recipe is not promotable: `official_best.pt` reached official-val Accuracy `0.953507`, below the prior countboundary baseline `0.954137` and the short fine-tune `0.954782`. Its ordinary `best.pt` had stronger GT5 output on val but worse FP/GT4-to-5 tradeoff and lower official-val Accuracy `0.951660`.
 - In the same `gt5calib_mainline_seed0` run, GT5 diagnosis still localized failures to Count Head underprediction and fifth-lane valid-points quality (`official_best.pt`: 4/74 GT5 count-under, 3/74 valid-points fail; `best.pt`: 2/74 and 2/74). Candidate-pool shortfall and GT5 NMS suppression were near zero, so the next useful work is GT4/GT5 joint calibration and matched candidate quality, not more broad threshold/NMS sweeps.
+- 2026-06-13 analysis of `gcs_yolo_lane_s_q12_cb_gt45_ft6_officialtopk_seed2_b8w0` showed that the old rank formula structurally suppressed short GT5 edge lanes: official-val `gt5_output5_rate=0.0`, `count_acc_5=0.0`, and GT5 diagnosis had `rank_score_low=48/74`. Changing rank to use longest-visible-segment mean valid plus 12-point support restored `gt5_output5_rate=0.594595` and reduced `rank_score_low` to `1/74` on the same checkpoint, but official-val Accuracy only reached `0.954186`.
+- The remaining GT5 bottleneck after visible-segment rank is quality/count separation, not raw fifth-lane availability. On the same seed2 checkpoint with visible-segment rank, GT5 diagnosis still showed `quality_too_low=13/74` and `count_head_under_predict=12/74`. On the older strong FT6 `last.pt`, visible-segment rank reached `gt5_output5_rate=0.743243` but official-val Accuracy was `0.954474`, below its old selected row `0.954782`, because FP/GT4-to-5 cost rose. The next training step should increase hard GT5 edge `quality_loss` supervision and hard/duplicate quality-negative pressure, not just sweep thresholds.
 
 ## Decode Bottlenecks
 
@@ -21,6 +23,7 @@ This file summarizes recurring technical and experiment bottlenecks for GCS-YOLO
 - `gcs_soft_count_decision`, `gcs_last_lane_rescue`, and `gcs_edge_last_lane_rescue` remain default-off until selected by official-val evidence.
 - The 2026-06-12 `gcs_soft_count_decision` official-val sweeps did not improve Accuracy. On `official_best.pt`, Accuracy dropped from `0.954137` to `0.953481`; on ordinary `best.pt`, Accuracy held at `0.953319` but FP increased. Do not prioritize soft-count decode unless a new hypothesis changes its objective or guardrails.
 - The `gt5calib_mainline_seed0` official-val sweeps again showed a mostly flat `conf` surface and no useful rescue effect: last-lane and edge-last-lane rescue attempts had zero successes, and `edge_count4_to5_upgrade` did not fire. Treat rescue/edge-upgrade evidence from this run as diagnostic only, not a reason to promote decode defaults.
+- Candidate ranking now uses visible-segment mean valid instead of all-anchor mean valid. This fixes a root decode bias against short TuSimple edge lanes, but it can surface false fifth lanes when the Quality Head does not separate true and false fifth candidates.
 
 ## Data And Evaluation Bottlenecks
 
@@ -30,6 +33,7 @@ This file summarizes recurring technical and experiment bottlenecks for GCS-YOLO
 - Keep train, val, official-val, and test roles separate when interpreting runs.
 - Test evidence from 2026-06-12 is diagnostic only and must not be used to choose thresholds, checkpoints, or model settings. The actionable selection signal remains official-val.
 - `gt5calib_mainline_seed0` had a val/test ranking mismatch: ordinary `best.pt` test Accuracy `0.955855` slightly exceeded `official_best.pt` test Accuracy `0.955466`, despite worse official-val Accuracy. This is a leakage risk if misused; do not select `best.pt` from this test comparison.
+- `tools/diagnose_gcs_gt5.py` must be used on official-val for diagnosis. It defaults to `--split val` and rejects `--split test`; test remains final-only.
 
 ## Implementation Bottlenecks
 

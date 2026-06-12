@@ -166,7 +166,7 @@ gcs_point_valid_gt5_edge_continuity_thr: 0.55 # (float) adjacent point-valid pro
 gcs_hard_loss_file: "" # (str) optional txt/json manifest for hard-edge loss weighting; independent of hard sampler
 gcs_hard_loss_lane_counts: "" # (str) optional GT lane-count filter for hard-edge loss manifest hits, e.g. "5" or "4,5"
 gcs_hard_edge_loss_weight_by_count: "4:1.15,5:1.6" # (str) per-GT-count hard-edge loss multipliers for manifest hits
-gcs_hard_edge_loss_terms: "exist,point,point_valid,line_iou" # (str) loss terms that receive hard-edge weighting
+gcs_hard_edge_loss_terms: "exist,point,point_valid,line_iou" # (str) hard-edge weighted terms; quality is supported only when listed explicitly
 gcs_hard_edge_only: True # (bool) apply hard loss multipliers only to matched left/right edge lanes
 gcs_point_valid_neg: 0.25 # (float) relative penalty for invisible anchors whose point-valid probability is too high
 gcs_point_valid_neg_thr: 0.20 # (float) invisible-anchor point-valid probability margin

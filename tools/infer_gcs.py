@@ -477,7 +477,10 @@ def _json_lane(lane: dict) -> dict:
     for key in (
         "valid_count",
         "mean_valid_score",
+        "mean_valid_score_all",
         "length_factor",
+        "valid_count_score",
+        "anchor_valid_count_score",
         "smooth_factor",
         "jump_factor",
         "count_head_raw_count",

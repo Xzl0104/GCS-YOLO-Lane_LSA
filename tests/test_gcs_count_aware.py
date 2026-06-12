@@ -585,6 +585,32 @@ def test_hard_edge_loss_weights_match_manifest_and_count(tmp_path):
     assert torch.equal(non_hard, torch.ones_like(non_hard))
     assert torch.equal(quality_term, torch.ones_like(quality_term))
 
+    quality_criterion = GCSLoss(
+        model={
+            "gcs_point_mode": "fixed_y",
+            "gcs_imgsz": [544, 960],
+            "gcs_gt5_edge_loss_weight": 1.0,
+            "gcs_candidate_gt5_edge_weight": 1.0,
+            "gcs_hard_loss_file": str(manifest),
+            "gcs_hard_loss_lane_counts": "5",
+            "gcs_hard_edge_loss_weight_by_count": "4:1.15,5:1.6",
+            "gcs_hard_edge_loss_terms": "exist,point,point_valid,line_iou,quality",
+            "gcs_hard_edge_only": True,
+        }
+    )
+    quality_weighted = quality_criterion._matched_target_weights(
+        lanes5,
+        valid5,
+        torch.tensor([0, 1, 2, 3, 4]),
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+        hard_image=True,
+        term="quality",
+    )
+    assert torch.isclose(quality_weighted[0], torch.tensor(1.6))
+    assert torch.isclose(quality_weighted[2], torch.tensor(1.0))
+    assert torch.isclose(quality_weighted[4], torch.tensor(1.6))
+
 
 def test_count_aware_refill_does_not_fabricate_lanes():
     selected = [{"query": i, "points_norm": _cand(0.1 + i * 0.1, q=i, rank=i + 1).points.numpy(), "valid_count": 6, "rank_score": 1.0} for i in range(4)]

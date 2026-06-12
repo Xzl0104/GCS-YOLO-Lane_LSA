@@ -120,6 +120,7 @@ The GT5 candidate-quality knobs above are training-side only. They strengthen re
 - `gcs_count_boundary_gt5_pos_weight` weights the Count Boundary `count>=5` positive target inside `count_cls_loss`.
 - `gcs_candidate_gt5_edge_weight` weights matched left/right GT5 edge queries/lanes inside `exist_loss`, `point_loss`, `point_valid_loss`, `line_iou_loss`, and `quality_loss`; it is matched edge-query/lane weighting, not per-anchor positive-target-only weighting.
 - `gcs_point_valid_gt5_edge_continuity` adds a small adjacent-anchor continuity penalty inside `point_valid_loss`.
+- `gcs_hard_edge_loss_terms` defaults to `exist,point,point_valid,line_iou`. `quality` is also a supported explicit term for controlled experiments, but it is not in the default list.
 
 They do not change decode, do not use GT during inference/decode, and do not fabricate lanes.
 
@@ -146,6 +147,13 @@ Default decode behavior:
 
 - Count Head Top-K determines the final policy K after explicit count-boundary calibration when boundary logits are present.
 - Candidate ranking must be explicit and traceable.
+- Default candidate ranking uses:
+
+```text
+rank_score = exist_score * visible_segment_mean_valid * visible_support_score
+```
+
+where `visible_segment_mean_valid` is the mean point-valid probability on the longest contiguous visible segment that passes the active visible-anchor floor, and `visible_support_score = min(1, visible_segment_points / 12)`. `mean_valid_score_all` remains diagnostic-only metadata for the all-anchor mean. This avoids structurally suppressing short but reliable TuSimple edge lanes.
 - Quality Head may be used for quality loss, diagnostics, and rescue gates.
 - Quality Head should not silently override the intended ranking policy unless that is an explicit experimental candidate.
 - Rescue may only use real query candidates.
@@ -187,6 +195,6 @@ These are diagnostics unless explicitly promoted into a controlled experimental 
 
 The test set must not be used for threshold search, rescue parameter search, soft-count search, rank-min-points search, final/fifth min-points search, NMS distance search, checkpoint selection, model design iteration, or loss-weight tuning.
 
-`tools/sweep_tusimple_official.py` defaults to `--split val` and rejects `--split test`. Training-time `official_best` selection also rejects `split=test`.
+`tools/sweep_tusimple_official.py` and `tools/diagnose_gcs_gt5.py` default to `--split val` and reject `--split test`. Training-time `official_best` selection also rejects `split=test`.
 
 Test is only for one-shot final evaluation of a candidate already selected on official-val, using `tools/eval_tusimple_official.py --split test`.
