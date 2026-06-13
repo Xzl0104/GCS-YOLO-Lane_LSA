@@ -1498,9 +1498,9 @@ class GCSLoss(nn.Module):
         target_quality = self.build_quality_targets(pred_quality_logits, pred_points, gt_points, gt_valid, indices)
         raw_loss = F.binary_cross_entropy_with_logits(pred_quality_logits, target_quality, reduction="none")
 
-        pos_mask = target_quality > 0.0
-        neg_mask = target_quality == 0.0
-        if bool(pos_mask.any()):
+        matched_mask = self._matched_query_mask(pred_quality_logits, indices)
+        unmatched_mask = ~matched_mask
+        if bool(matched_mask.any()):
             pos_query_weight = self._edge_query_weight_matrix(
                 pred_quality_logits,
                 gt_points,
@@ -1509,32 +1509,35 @@ class GCSLoss(nn.Module):
                 hard_loss_mask=hard_loss_mask,
                 term="quality",
             )
-            pos_loss = (raw_loss[pos_mask] * pos_query_weight[pos_mask]).sum()
-            pos_loss = pos_loss / pos_query_weight[pos_mask].sum().clamp_min(1.0)
+            pos_loss = (raw_loss[matched_mask] * pos_query_weight[matched_mask]).sum()
+            pos_loss = pos_loss / pos_query_weight[matched_mask].sum().clamp_min(1.0)
         else:
             pos_loss = self._zero_like(pred_points)
-        if bool(neg_mask.any()):
+        if bool(unmatched_mask.any()):
             neg_weight = torch.full_like(raw_loss, float(self.quality_neg_weight))
             if self.quality_hard_negative_from_head:
-                head_hard_negative_mask = self._quality_head_hard_negative_mask(pred_quality_logits, neg_mask)
+                head_hard_negative_mask = self._quality_head_hard_negative_mask(pred_quality_logits, unmatched_mask)
                 hard_negative_mask = (
                     head_hard_negative_mask
                     if hard_negative_mask is None
                     else (hard_negative_mask | head_hard_negative_mask)
                 )
             if hard_negative_mask is not None:
+                hard_negative_mask = hard_negative_mask & unmatched_mask
                 neg_weight = torch.where(
                     hard_negative_mask,
                     neg_weight.new_tensor(self.quality_hard_negative_weight),
                     neg_weight,
                 )
             if duplicate_negative_mask is not None:
+                duplicate_negative_mask = duplicate_negative_mask & unmatched_mask
                 neg_weight = torch.where(
                     duplicate_negative_mask,
                     neg_weight.new_tensor(self.quality_duplicate_negative_weight),
                     neg_weight,
                 )
-            neg_loss = (raw_loss[neg_mask] * neg_weight[neg_mask]).sum() / neg_mask.sum().clamp_min(1)
+            neg_loss = (raw_loss[unmatched_mask] * neg_weight[unmatched_mask]).sum()
+            neg_loss = neg_loss / unmatched_mask.sum().clamp_min(1)
         else:
             neg_loss = self._zero_like(pred_points)
         return pos_loss + neg_loss

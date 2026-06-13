@@ -137,6 +137,8 @@ gcs_point_valid_gt5_edge_segment_min_points = 5
 
 These are intended for controlled GT5 segment-quality experiments. They do not change decode, read GT during inference, fabricate lanes, or alter official metrics.
 
+When `gcs_quality_hard_negative_from_head` is enabled, Quality Head hard negatives are mined from unmatched queries only. Hungarian-matched queries remain matched quality targets even when their current continuous quality target is `0.0`; they must not be reclassified as hard negatives.
+
 ## Experimental Loss Policy
 
 The current 7-loss setup is a default baseline, not a permanent restriction.

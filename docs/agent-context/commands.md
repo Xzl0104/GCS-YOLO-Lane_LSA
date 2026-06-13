@@ -35,7 +35,9 @@ python tools/train_gcs.py \
 
 ## GT5 Segment-Quality Candidate Training
 
-Use this controlled candidate after the 2026-06-13 `gcs_yolo_lane_s_q12_cb_gt45_ft8_visrank_qhard_seed1_b8w0` analysis. It targets GT5 fifth-lane valid support and Quality Head false-positive separation. Select checkpoints and thresholds on official-val only.
+Use this controlled candidate after the 2026-06-13 `gcs_yolo_lane_s_q12_cb_gt45_ft8_visrank_qhard_seed1_b8w0` analysis and the follow-up unmatched-only Quality Head hard-negative fix. It targets GT5 fifth-lane valid support and Quality Head false-positive separation. Select checkpoints and thresholds on official-val only.
+
+The pre-fix `gcs_yolo_lane_s_q12_gt5segq_ft10_seed1_b8w0_v1` run is not promotable; rerun this recipe only after the hard-negative contract fix is present. The example uses Top-K `5` because this experiment family has unstable short fine-tunes.
 
 ```bash
 python tools/train_gcs.py \

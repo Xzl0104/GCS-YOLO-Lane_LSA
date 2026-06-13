@@ -50,6 +50,19 @@ def _gt(xs: list[float], points: int = 6) -> tuple[torch.Tensor, torch.Tensor]:
     return lanes, valid
 
 
+def _gt_fixed_y32(
+    xs: list[float],
+    *,
+    visible_start: int = 20,
+    visible_end: int = 26,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    y = torch.linspace(710.0 / 720.0, 0.25, 32)
+    lanes = torch.stack([torch.stack((torch.full_like(y, x), y), dim=-1) for x in xs], dim=0)
+    valid = torch.zeros((len(xs), 32), dtype=torch.float32)
+    valid[:, visible_start:visible_end] = 1.0
+    return lanes, valid
+
+
 def _cand(
     x: float,
     *,
@@ -528,6 +541,53 @@ def test_quality_hard_negative_from_head_increases_quality_loss():
     assert pred_quality_logits.grad is not None
 
 
+def test_quality_head_hard_negative_from_head_ignores_matched_zero_quality_lane():
+    lanes, valid = _gt_fixed_y32([0.8])
+    pred_points = torch.zeros(1, 3, 32, 2)
+    pred_points[0, :, :, 1] = lanes[0, :, 1]
+    pred_quality_logits = torch.tensor([[4.0, -4.0, -4.0]], requires_grad=True)
+    indices = [(torch.tensor([0]), torch.tensor([0]))]
+    hard_negative_mask = torch.zeros(1, 3, dtype=torch.bool)
+    duplicate_negative_mask = torch.zeros(1, 3, dtype=torch.bool)
+    common = {
+        "gcs_point_mode": "fixed_y",
+        "gcs_imgsz": [544, 960],
+        "gcs_quality_dist_thr_px": 5.0,
+        "gcs_quality_neg_weight": 0.5,
+        "gcs_quality_hard_negative_weight": 3.0,
+        "gcs_hard_negative_quality_thr": 0.5,
+        "gcs_hard_negative_topk": 0,
+    }
+    base = GCSLoss(model={**common, "gcs_quality_hard_negative_from_head": False})
+    head_mined = GCSLoss(model={**common, "gcs_quality_hard_negative_from_head": True})
+
+    target_quality = base.build_quality_targets(pred_quality_logits, pred_points, [lanes], [valid], indices)
+    assert torch.isclose(target_quality[0, 0], torch.tensor(0.0))
+
+    base_loss = base.quality_loss(
+        pred_quality_logits,
+        pred_points,
+        [lanes],
+        [valid],
+        indices,
+        hard_negative_mask=hard_negative_mask,
+        duplicate_negative_mask=duplicate_negative_mask,
+    )
+    head_loss = head_mined.quality_loss(
+        pred_quality_logits,
+        pred_points,
+        [lanes],
+        [valid],
+        indices,
+        hard_negative_mask=hard_negative_mask,
+        duplicate_negative_mask=duplicate_negative_mask,
+    )
+
+    assert torch.isclose(head_loss, base_loss)
+    head_loss.backward()
+    assert pred_quality_logits.grad is not None
+
+
 def test_point_valid_gt5_edge_continuity_adds_loss():
     lanes, valid = _gt([0.1, 0.25, 0.4, 0.55, 0.7])
     pred_points = lanes.unsqueeze(0).clone()
@@ -594,6 +654,65 @@ def test_point_valid_gt5_edge_segment_adds_loss():
     assert segment_loss > base_loss
     segment_loss.backward()
     assert pred_valid_logits.grad is not None
+
+
+def test_point_valid_gt5_edge_segment_uses_fixed_y32_edge_queries_only():
+    visible_start, visible_end = 20, 26
+    lanes5, valid5 = _gt_fixed_y32(
+        [0.1, 0.25, 0.4, 0.55, 0.7],
+        visible_start=visible_start,
+        visible_end=visible_end,
+    )
+    pred_points5 = lanes5.unsqueeze(0).clone()
+    indices5 = [(torch.arange(5), torch.arange(5))]
+    common = {
+        "gcs_point_mode": "fixed_y",
+        "gcs_imgsz": [544, 960],
+        "gcs_gt5_edge_loss_weight": 1.0,
+        "gcs_candidate_gt5_edge_weight": 1.0,
+        "gcs_point_valid_gt5_pos_weight": 1.0,
+        "gcs_point_valid_unmatched_weight": 1.0,
+        "gcs_point_valid_gt5_edge_continuity": 0.0,
+    }
+    base = GCSLoss(model={**common, "gcs_point_valid_gt5_edge_segment": 0.0})
+    segment = GCSLoss(
+        model={
+            **common,
+            "gcs_point_valid_gt5_edge_segment": 0.5,
+            "gcs_point_valid_gt5_edge_segment_thr": 0.8,
+            "gcs_point_valid_gt5_edge_segment_min_points": 5,
+        }
+    )
+
+    edge_logits = torch.full((1, 5, 32), 4.0)
+    edge_logits[0, 0, visible_start:visible_end] = -3.0
+    edge_logits[0, 4, visible_start:visible_end] = -3.0
+    edge_logits = edge_logits.requires_grad_()
+    edge_base_loss = base.point_valid_loss(edge_logits, pred_points5, [valid5], indices5, gt_points=[lanes5])
+    edge_segment_loss = segment.point_valid_loss(edge_logits, pred_points5, [valid5], indices5, gt_points=[lanes5])
+    assert edge_segment_loss > edge_base_loss
+    edge_segment_loss.backward()
+    assert edge_logits.grad is not None
+
+    middle_logits = torch.full((1, 5, 32), 4.0)
+    middle_logits[0, 2, visible_start:visible_end] = -3.0
+    middle_base_loss = base.point_valid_loss(middle_logits, pred_points5, [valid5], indices5, gt_points=[lanes5])
+    middle_segment_loss = segment.point_valid_loss(middle_logits, pred_points5, [valid5], indices5, gt_points=[lanes5])
+    assert torch.isclose(middle_segment_loss, middle_base_loss)
+
+    lanes4, valid4 = _gt_fixed_y32(
+        [0.1, 0.25, 0.55, 0.7],
+        visible_start=visible_start,
+        visible_end=visible_end,
+    )
+    pred_points4 = lanes4.unsqueeze(0).clone()
+    indices4 = [(torch.arange(4), torch.arange(4))]
+    gt4_logits = torch.full((1, 4, 32), 4.0)
+    gt4_logits[0, 0, visible_start:visible_end] = -3.0
+    gt4_logits[0, 3, visible_start:visible_end] = -3.0
+    gt4_base_loss = base.point_valid_loss(gt4_logits, pred_points4, [valid4], indices4, gt_points=[lanes4])
+    gt4_segment_loss = segment.point_valid_loss(gt4_logits, pred_points4, [valid4], indices4, gt_points=[lanes4])
+    assert torch.isclose(gt4_segment_loss, gt4_base_loss)
 
 
 def test_edge_lane_weights_do_not_affect_count_sum():

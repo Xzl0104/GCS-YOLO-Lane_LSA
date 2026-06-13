@@ -909,3 +909,64 @@ python scripts/check_gcs_agent_setup.py
 Mainline or experiment:
 
 Experiment only. Improvement claims require a fresh official-val run using the new knobs and official-best Top-K preservation. Test remains final-only after official-val selection.
+
+---
+
+## Decision: Restrict Quality Head hard-negative mining to unmatched queries
+
+Status: current implementation, experimental-knob behavior fix
+
+Decision:
+
+When `gcs_quality_hard_negative_from_head` is enabled, Quality Head hard-negative mining uses the explicit Hungarian unmatched-query mask. A matched query remains part of the matched quality-target loss even if its current continuous `target_quality` is `0.0`.
+
+Why:
+
+The first GT5 segment-quality fine-tune:
+
+```text
+runs/gcs_lane/gcs_yolo_lane_s_q12_gt5segq_ft10_seed1_b8w0_v1
+```
+
+was not promotable. Its best independent official-val row was `last.pt`:
+
+```text
+official_acc=0.953994
+official_fp=0.042424
+official_fn=0.035354
+count_acc_5=0.662162
+gt5_output5_rate=0.662162
+gt5_count_head_under_rate=0.148649
+gt5_valid_points_fail_rate=0.189189
+decode/k5_to_output4_rate=0.208955
+```
+
+This was only a small gain over the FT8 `official_best.pt` (`0.953179`) and remained below the prior `0.954137` countboundary baseline and `0.954782` FT6 reference. The candidate improved Quality Head separation (`matched/unmatched=0.870587/0.716851`), but it reduced GT5 output relative to the FT8 `official_best.pt` (`0.729730 -> 0.662162`) and pushed GT5 underprediction close to the diagnostic limit.
+
+The implementation review found that `quality_loss` used `target_quality == 0.0` as the negative mask. Because continuous quality targets can be `0.0` for matched lanes with poor current geometry, this allowed real matched GT5 edge candidates to be reweighted as Quality Head hard negatives. That directly conflicts with the intended "unmatched hard negative" contract and can suppress rare real fifth-lane candidates early in fine-tuning.
+
+Alternatives considered:
+
+- Keep `target_quality == 0.0` as the negative definition and document that zero-quality matched lanes are also hard negatives.
+- Reduce the hard-negative weight only.
+- Disable `gcs_quality_hard_negative_from_head`.
+- Keep the feature but use explicit matched/unmatched masks.
+
+Tradeoff:
+
+Matched lanes with very poor current geometry still receive BCE pressure toward their continuous quality target, including `0.0`; they are just not multiplied by unmatched hard-negative weights. This preserves false-candidate suppression while reducing the risk of training against real matched edge lanes.
+
+Validation evidence:
+
+Local checks after the fix:
+
+```text
+python -m py_compile ultralytics/utils/gcs_loss.py tests/test_gcs_count_aware.py
+python -m pytest tests/test_gcs_count_aware.py -q
+```
+
+The test suite includes a K=32 fixed-y case with `fixed_y_start=710/720` to verify that matched zero-quality lanes are not mined as hard negatives, and that GT5 edge segment support applies only to GT5 left/right edge lanes.
+
+Mainline or experiment:
+
+Experimental-knob behavior fix. Mainline defaults remain unchanged because `gcs_quality_hard_negative_from_head=False` and `gcs_point_valid_gt5_edge_segment=0.0` by default.
