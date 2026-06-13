@@ -317,6 +317,9 @@ def test_mainline_sampler_defaults_and_ratio_boost_boundaries(monkeypatch):
     assert DEFAULT_CFG_DICT["gcs_count_boundary"] == GCS_MAINLINE_COUNT_BOUNDARY_GAIN
     assert DEFAULT_CFG_DICT["gcs_count_boundary_label_smoothing"] == GCS_MAINLINE_COUNT_BOUNDARY_LABEL_SMOOTHING
     assert DEFAULT_CFG_DICT["gcs_count_boundary_gt5_pos_weight"] == GCS_MAINLINE_COUNT_BOUNDARY_GT5_POS_WEIGHT
+    assert DEFAULT_CFG_DICT["gcs_count_adjacent_margin"] == 0.2
+    assert DEFAULT_CFG_DICT["gcs_count_adjacent_margin_gain"] == 0.0
+    assert DEFAULT_CFG_DICT["gcs_count_adjacent_margin_gt45_weight"] == 1.0
     assert DEFAULT_CFG_DICT["gcs_candidate_gt5_edge_weight"] == GCS_MAINLINE_CANDIDATE_GT5_EDGE_WEIGHT
     assert DEFAULT_CFG_DICT["gcs_point_valid_gt5_edge_continuity"] == GCS_MAINLINE_POINT_VALID_GT5_EDGE_CONTINUITY
     assert (
@@ -345,6 +348,9 @@ def test_mainline_sampler_defaults_and_ratio_boost_boundaries(monkeypatch):
     assert args.gcs_count_boundary == GCS_MAINLINE_COUNT_BOUNDARY_GAIN
     assert args.gcs_count_boundary_label_smoothing == GCS_MAINLINE_COUNT_BOUNDARY_LABEL_SMOOTHING
     assert args.gcs_count_boundary_gt5_pos_weight == GCS_MAINLINE_COUNT_BOUNDARY_GT5_POS_WEIGHT
+    assert args.gcs_count_adjacent_margin == 0.2
+    assert args.gcs_count_adjacent_margin_gain == 0.0
+    assert args.gcs_count_adjacent_margin_gt45_weight == 1.0
     assert args.gcs_candidate_gt5_edge_weight == GCS_MAINLINE_CANDIDATE_GT5_EDGE_WEIGHT
     assert args.gcs_point_valid_gt5_edge_continuity == GCS_MAINLINE_POINT_VALID_GT5_EDGE_CONTINUITY
     assert args.gcs_point_valid_gt5_edge_continuity_thr == GCS_MAINLINE_POINT_VALID_GT5_EDGE_CONTINUITY_THR
@@ -398,6 +404,9 @@ def test_mainline_sampler_defaults_and_ratio_boost_boundaries(monkeypatch):
     assert math.isclose(criterion.count_boundary_gain, GCS_MAINLINE_COUNT_BOUNDARY_GAIN)
     assert math.isclose(criterion.count_boundary_label_smoothing, GCS_MAINLINE_COUNT_BOUNDARY_LABEL_SMOOTHING)
     assert math.isclose(criterion.count_boundary_gt5_pos_weight, GCS_MAINLINE_COUNT_BOUNDARY_GT5_POS_WEIGHT)
+    assert math.isclose(criterion.count_adjacent_margin, 0.2)
+    assert math.isclose(criterion.count_adjacent_margin_gain, 0.0)
+    assert math.isclose(criterion.count_adjacent_margin_gt45_weight, 1.0)
     assert math.isclose(criterion.candidate_gt5_edge_weight, GCS_MAINLINE_CANDIDATE_GT5_EDGE_WEIGHT)
     assert math.isclose(criterion.point_valid_gt5_edge_continuity, GCS_MAINLINE_POINT_VALID_GT5_EDGE_CONTINUITY)
     assert math.isclose(
@@ -435,6 +444,9 @@ def test_gcs_loss_item_names_stay_stable():
 def test_gt5_candidate_cfg_keys_have_expected_types():
     assert {
         "gcs_count_boundary_gt5_pos_weight",
+        "gcs_count_adjacent_margin",
+        "gcs_count_adjacent_margin_gain",
+        "gcs_count_adjacent_margin_gt45_weight",
         "gcs_candidate_gt5_edge_weight",
         "gcs_point_valid_gt5_edge_continuity",
         "gcs_point_valid_gt5_edge_segment",
@@ -466,6 +478,81 @@ def test_count_boundary_gt5_pos_weight_increases_count_loss():
     boosted_loss = boosted.count_head_loss(preds, pred_points, [valid])
 
     assert boosted_loss > base_loss
+
+
+def test_count_adjacent_margin_is_default_off_for_count_loss():
+    _, valid = _gt([0.1, 0.25, 0.4, 0.55, 0.7])
+    pred_count_logits = torch.tensor([[0.0, 0.0, 2.0, 1.7]], requires_grad=True)
+    preds = {"pred_count_logits": pred_count_logits}
+    pred_points = torch.zeros(1, 5, 6, 2)
+    common = {
+        "gcs_point_mode": "fixed_y",
+        "gcs_imgsz": [544, 960],
+        "gcs_count_boundary": 0.0,
+        "gcs_count_adjacent_margin": 0.2,
+    }
+    base = GCSLoss(model={**common, "gcs_count_adjacent_margin_gain": 0.0})
+    explicit_off = GCSLoss(model={**common, "gcs_count_adjacent_margin_gain": 0.0})
+
+    base_loss = base.count_head_loss(preds, pred_points, [valid])
+    explicit_off_loss = explicit_off.count_head_loss(preds, pred_points, [valid])
+
+    assert torch.isclose(explicit_off_loss, base_loss)
+
+
+def test_count_adjacent_margin_penalizes_neighbor_count_confusion():
+    _, valid = _gt([0.1, 0.25, 0.4, 0.55, 0.7])
+    pred_count_logits = torch.tensor([[0.0, 0.0, 2.0, 1.7]], requires_grad=True)
+    preds = {"pred_count_logits": pred_count_logits}
+    pred_points = torch.zeros(1, 5, 6, 2)
+    common = {
+        "gcs_point_mode": "fixed_y",
+        "gcs_imgsz": [544, 960],
+        "gcs_count_boundary": 0.0,
+        "gcs_count_adjacent_margin": 0.2,
+    }
+    base = GCSLoss(model={**common, "gcs_count_adjacent_margin_gain": 0.0})
+    margin = GCSLoss(
+        model={
+            **common,
+            "gcs_count_adjacent_margin_gain": 1.0,
+            "gcs_count_adjacent_margin_gt45_weight": 1.5,
+        }
+    )
+
+    gt_count, gt_count_cls, _ = margin.count_head_targets(pred_count_logits, [valid])
+    margin_term = margin.count_adjacent_margin_loss(pred_count_logits, gt_count_cls, gt_count)
+    base_loss = base.count_head_loss(preds, pred_points, [valid])
+    adjacent_count_loss = margin.count_head_loss(preds, pred_points, [valid])
+
+    assert margin_term > 0
+    assert adjacent_count_loss > base_loss
+    adjacent_count_loss.backward()
+    assert pred_count_logits.grad is not None
+    assert pred_count_logits.grad[0, 3] < 0
+
+
+def test_count_adjacent_margin_gt45_weight_boosts_mixed_batch_gradient():
+    _, valid_gt2 = _gt([0.2, 0.6])
+    _, valid_gt5 = _gt([0.1, 0.25, 0.4, 0.55, 0.7])
+    logits_base = torch.tensor([[1.0, 0.95, 0.0, 0.0], [0.0, 0.0, 0.95, 1.0]], requires_grad=True)
+    logits_boosted = logits_base.detach().clone().requires_grad_(True)
+    common = {
+        "gcs_point_mode": "fixed_y",
+        "gcs_imgsz": [544, 960],
+        "gcs_count_boundary": 0.0,
+        "gcs_count_adjacent_margin": 0.2,
+    }
+    base = GCSLoss(model={**common, "gcs_count_adjacent_margin_gt45_weight": 1.0})
+    boosted = GCSLoss(model={**common, "gcs_count_adjacent_margin_gt45_weight": 1.5})
+
+    gt_count, gt_count_cls, _ = boosted.count_head_targets(logits_base, [valid_gt2, valid_gt5])
+    base.count_adjacent_margin_loss(logits_base, gt_count_cls, gt_count).backward()
+    boosted.count_adjacent_margin_loss(logits_boosted, gt_count_cls, gt_count).backward()
+
+    assert torch.isclose(logits_base.grad[0, 0].abs(), logits_base.grad[1, 3].abs())
+    assert logits_boosted.grad[1, 3].abs() > logits_boosted.grad[0, 0].abs()
+    assert logits_boosted.grad[1, 3].abs() > logits_base.grad[1, 3].abs()
 
 
 def test_candidate_gt5_edge_weight_targets_real_edge_queries():

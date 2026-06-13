@@ -44,29 +44,27 @@ source /root/miniconda3/etc/profile.d/conda.sh
 conda activate ssh_lane
 ```
 
-Run the clean FT6 control first. It verifies whether the prior `0.954782` short fine-tune family is reproducible under current code before comparing new candidates.
+The clean FT6 control has already been run after the Count Head visible-segment evidence change and is not promotable:
 
-```bash
-python tools/train_gcs.py \
-  --model ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12.yaml \
-  --data data/tusimple_gcs_fixed_y_960x544.yaml \
-  --imgsz 544 960 \
-  --pretrained runs/gcs_lane/gcs_yolo_lane_s_q12_e180_countboundary_rankfix_balgt45_v1/weights/official_best.pt \
-  --epochs 6 --batch 8 --workers 0 --device 0 --seed 1 \
-  --optimizer AdamW \
-  --lr0 8e-5 \
-  --lrf 0.2 \
-  --cos_lr true \
-  --project runs/gcs_lane \
-  --name gcs_yolo_lane_s_q12_cb_gt45_ft6_countvis_clean_seed1_b8w0 \
-  --gcs-official-best \
-  --gcs-official-best-period 1 \
-  --gcs-official-best-top-k 5 \
-  --gcs-official-best-gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
-  --gcs-official-best-archive-root runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset
+```text
+run: gcs_yolo_lane_s_q12_cb_gt45_ft6_countvis_clean_seed1_b8w0
+commit: ec9cf5f47
+best official-val: 0.953415
+reference countboundary baseline: 0.954137
+reference old FT6: 0.954782
 ```
 
-Run the joint Count calibration candidate next. It targets GT3/GT4/GT5 balance instead of pushing GT5 alone.
+Remote audit artifacts for this rejected control should stay tied to the run directory:
+
+```text
+runs/gcs_lane/gcs_yolo_lane_s_q12_cb_gt45_ft6_countvis_clean_seed1_b8w0/args.yaml
+runs/gcs_lane/gcs_yolo_lane_s_q12_cb_gt45_ft6_countvis_clean_seed1_b8w0/results.csv
+runs/gcs_lane/gcs_yolo_lane_s_q12_cb_gt45_ft6_countvis_clean_seed1_b8w0/weights/official_best_summary.json
+runs/gcs_lane/gcs_yolo_lane_s_q12_cb_gt45_ft6_countvis_clean_seed1_b8w0/<official-val-sweep-summary>
+runs/gcs_lane/gcs_yolo_lane_s_q12_cb_gt45_ft6_countvis_clean_seed1_b8w0/<gt5-diagnostic-output>
+```
+
+Do not rerun this control unless checking reproducibility. Run the joint Count calibration gate next. It targets GT3/GT4/GT5 balance and neighboring-count separation instead of pushing GT5 alone.
 
 ```bash
 python tools/train_gcs.py \
@@ -84,9 +82,12 @@ python tools/train_gcs.py \
   --gcs-count-boundary 0.10 \
   --gcs-count-boundary-label-smoothing 0.02 \
   --gcs-count-boundary-gt5-pos-weight 1.10 \
+  --gcs-count-adjacent-margin 0.25 \
+  --gcs-count-adjacent-margin-gain 0.25 \
+  --gcs-count-adjacent-margin-gt45-weight 1.5 \
   --gcs-group-sampler-ratios 2:0.01,3:0.29,4:0.42,5:0.28 \
   --project runs/gcs_lane \
-  --name gcs_yolo_lane_s_q12_jointcount_countvis_ft12_seed1_b8w0 \
+  --name gcs_yolo_lane_s_q12_jointcount_adjmargin_countvis_ft12_seed1_b8w0 \
   --gcs-official-best \
   --gcs-official-best-period 1 \
   --gcs-official-best-top-k 5 \
@@ -94,7 +95,7 @@ python tools/train_gcs.py \
   --gcs-official-best-archive-root runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset
 ```
 
-Run only this mild unmatched-only segment-quality candidate, not the previous strong hard-negative recipe. The earlier strong recipe improved some quality separation but reduced GT5 output and remained below the prior references.
+Defer the mild unmatched-only segment-quality candidate until the joint Count gate is analyzed. Run it only if the joint Count gate improves or preserves official ACC while leaving `quality_too_low`, `valid_points_fail`, or `min_points` as the dominant GT5 drop reasons. Do not run the previous strong hard-negative recipe; it improved some quality separation but reduced GT5 output and remained below the prior references.
 
 ```bash
 python tools/train_gcs.py \

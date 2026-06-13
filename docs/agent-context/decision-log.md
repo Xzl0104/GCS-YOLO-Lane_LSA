@@ -1085,4 +1085,125 @@ The new unit/contract tests build a `K=32` short-edge fixture where six contiguo
 
 Mainline or experiment:
 
-Current implementation. Official-val improvement still requires the next remote training runs, starting with a clean FT6 control plus joint Count and mild segment-quality candidates.
+Current implementation. The first clean FT6 control after this change was not promotable; continue with a joint Count calibration gate rather than claiming this implementation as an ACC improvement.
+
+---
+
+## Decision: Reject the Count-visible FT6 control and add a default-off adjacent Count margin candidate
+
+Status: experimental candidate, default-off
+
+Decision:
+
+Do not promote:
+
+```text
+gcs_yolo_lane_s_q12_cb_gt45_ft6_countvis_clean_seed1_b8w0
+```
+
+Add a default-off training-side adjacent Count Head margin inside the existing `count_cls_loss`:
+
+```text
+gcs_count_adjacent_margin = 0.2
+gcs_count_adjacent_margin_gain = 0.0
+gcs_count_adjacent_margin_gt45_weight = 1.0
+```
+
+When enabled, the margin penalizes neighboring count logits that are too close to or above the GT count logit. It does not change model outputs, decode, official metric calculation, GT usage during inference, or the seven logged loss items.
+
+Why:
+
+The remote clean FT6 control from commit `ec9cf5f47` reached best official-val:
+
+```text
+official_acc=0.953415
+official_fp=0.045592
+official_fn=0.037190
+count_acc_3=0.950673
+count_acc_4=0.848485
+count_acc_5=0.824324
+gt5_output5_rate=0.824324
+gt5_count_head_under_rate=0.040541
+gt5_valid_points_fail_rate=0.135135
+```
+
+This is below both official-val references:
+
+```text
+gcs_yolo_lane_s_q12_e180_countboundary_rankfix_balgt45_v1 official_best.pt: 0.954137
+gcs_yolo_lane_s_q12_cb_gt45_ft6_from_official_best_b8w0_v1 last.pt:          0.954782
+```
+
+The selected-threshold GT5 diagnosis showed candidate supply and rank are no longer the dominant bottleneck:
+
+```text
+GT5 images: 74
+kept: 61
+count_head_under_predict: 3
+valid_points_fail: 3
+quality_too_low: 5
+candidate_pool_shortfall: 2
+gt5_rank5_score_low_rate: 0.0
+valid_points_5 mean/median: 5.824324 / 6.0
+```
+
+The remaining count confusion still creates an FP/FN tradeoff:
+
+```text
+3->4: 11
+4->3: 6
+4->5: 4
+5->4: 12
+```
+
+Alternatives considered:
+
+- Promote the clean FT6 control because it recovered some GT5 availability.
+- Run the mild segment-quality candidate immediately.
+- Sweep thresholds, NMS, rescue, or soft-count decode.
+- Add a new output head or change decode policy.
+- Add a smaller default-off margin term to make adjacent count separation trainable under official-val selection.
+
+Tradeoff:
+
+The adjacent margin is a direct count-calibration pressure, but it is still an experimental knob. If too strong, it can over-separate neighboring counts and increase GT4/GT5 false transitions. Keeping it default-off preserves baseline reproducibility; using it only in the next gate keeps the result attributable.
+
+Validation evidence:
+
+Local checks after adding the knob:
+
+```text
+D:\miniconda3\envs\lsa_yolo\python.exe -m py_compile ultralytics/utils/gcs_loss.py tools/train_gcs.py ultralytics/cfg/__init__.py tests/test_gcs_count_aware.py
+D:\miniconda3\envs\lsa_yolo\python.exe -m pytest tests/test_gcs_count_aware.py tests/test_gcs_boundary_decode_plumbing.py -q -p no:cacheprovider --basetemp .tmp_pytest\basetemp
+D:\miniconda3\envs\lsa_yolo\python.exe scripts/verify_loss_cleanup.py
+D:\miniconda3\envs\lsa_yolo\python.exe tools/check_gcs_count_head_topk_contract.py
+D:\miniconda3\envs\lsa_yolo\python.exe tools/check_gcs_decode_meta_contract.py
+D:\miniconda3\envs\lsa_yolo\python.exe tools/check_gcs_algorithm_contract.py
+D:\miniconda3\envs\lsa_yolo\python.exe tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12.yaml --imgsz 544 960
+D:\miniconda3\envs\lsa_yolo\python.exe scripts/check_gcs_agent_setup.py
+```
+
+Remote control audit artifacts:
+
+```text
+runs/gcs_lane/gcs_yolo_lane_s_q12_cb_gt45_ft6_countvis_clean_seed1_b8w0/args.yaml
+runs/gcs_lane/gcs_yolo_lane_s_q12_cb_gt45_ft6_countvis_clean_seed1_b8w0/results.csv
+runs/gcs_lane/gcs_yolo_lane_s_q12_cb_gt45_ft6_countvis_clean_seed1_b8w0/weights/official_best_summary.json
+official-val sweep summary and GT5 diagnostic output under the same run analysis area
+```
+
+Next smallest safe action:
+
+Run one remote gate experiment from the parent countboundary `official_best.pt` with joint Count calibration plus:
+
+```text
+gcs_count_adjacent_margin = 0.25
+gcs_count_adjacent_margin_gain = 0.25
+gcs_count_adjacent_margin_gt45_weight = 1.5
+```
+
+Use official-val Top-K preservation. Defer the mild segment-quality candidate until this gate shows whether the remaining official-val failures are still `quality_too_low`, `valid_points_fail`, or `min_points`.
+
+Mainline or experiment:
+
+Experiment only. No improvement claim is valid until the remote gate beats the official-val references under the protected protocol.

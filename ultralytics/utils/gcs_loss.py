@@ -164,6 +164,11 @@ class GCSLoss(nn.Module):
             if count_boundary_gt5_pos_weight is not None
             else self._arg(args, "gcs_count_boundary_gt5_pos_weight", 1.15)
         )
+        self.count_adjacent_margin = float(self._arg(args, "gcs_count_adjacent_margin", 0.2))
+        self.count_adjacent_margin_gain = float(self._arg(args, "gcs_count_adjacent_margin_gain", 0.0))
+        self.count_adjacent_margin_gt45_weight = float(
+            self._arg(args, "gcs_count_adjacent_margin_gt45_weight", 1.0)
+        )
         self.updates = 0
         self.exist_pos_weight = float(
             exist_pos_weight if exist_pos_weight is not None else self._arg(args, "gcs_exist_pos_weight", 1.0)
@@ -315,6 +320,8 @@ class GCSLoss(nn.Module):
             "gcs_point_invalid_x": self.point_invalid_x_gain,
             "gcs_count_cls": self.count_cls_gain,
             "gcs_count_boundary": self.count_boundary_gain,
+            "gcs_count_adjacent_margin": self.count_adjacent_margin,
+            "gcs_count_adjacent_margin_gain": self.count_adjacent_margin_gain,
             "gcs_count_sum": self.count_sum_gain,
             "gcs_quality": self.quality_gain,
             "gcs_quality_dist_thr_px": self.quality_dist_thr_px,
@@ -357,6 +364,11 @@ class GCSLoss(nn.Module):
             raise ValueError(
                 "gcs_count_boundary_gt5_pos_weight must be >= 1.0, "
                 f"got {self.count_boundary_gt5_pos_weight}."
+            )
+        if self.count_adjacent_margin_gt45_weight < 1.0:
+            raise ValueError(
+                "gcs_count_adjacent_margin_gt45_weight must be >= 1.0, "
+                f"got {self.count_adjacent_margin_gt45_weight}."
             )
         if self.candidate_gt5_edge_weight < 1.0:
             raise ValueError(
@@ -1731,11 +1743,15 @@ class GCSLoss(nn.Module):
         if pred_count_logits.ndim != 2 or pred_count_logits.shape[1] != 4:
             raise ValueError(f"pred_count_logits must have shape B x 4, got {tuple(pred_count_logits.shape)}.")
 
-        _, gt_count_cls, _ = self.count_head_targets(pred_count_logits, gt_valid)
+        gt_count, gt_count_cls, _ = self.count_head_targets(pred_count_logits, gt_valid)
         class_weight = torch.tensor(
             self.count_cls_weights, device=pred_count_logits.device, dtype=torch.float32
         )
         count_loss = F.cross_entropy(pred_count_logits.float(), gt_count_cls, weight=class_weight)
+        if self.count_adjacent_margin_gain > 0.0:
+            count_loss = count_loss + self.count_adjacent_margin_gain * self.count_adjacent_margin_loss(
+                pred_count_logits, gt_count_cls, gt_count
+            )
         if self.count_boundary_gain <= 0.0:
             return count_loss
         pred_count_boundary_logits = preds.get("pred_count_boundary_logits")
@@ -1765,6 +1781,41 @@ class GCSLoss(nn.Module):
         else:
             boundary_loss = boundary_loss_elem.mean()
         return count_loss + self.count_boundary_gain * boundary_loss
+
+    def count_adjacent_margin_loss(
+        self, pred_count_logits: torch.Tensor, gt_count_cls: torch.Tensor, gt_count: torch.Tensor
+    ) -> torch.Tensor:
+        """Penalize adjacent Count Head classes that outrank the target class by a configurable margin."""
+        logits = pred_count_logits.float()
+        target_idx = gt_count_cls.to(device=logits.device, dtype=torch.long).view(-1, 1)
+        target_logit = logits.gather(dim=1, index=target_idx).squeeze(1)
+        margin = logits.new_tensor(float(self.count_adjacent_margin))
+        loss = logits.new_zeros(logits.shape[0])
+        neighbor_count = logits.new_zeros(logits.shape[0])
+
+        left_mask = gt_count_cls > 0
+        if bool(left_mask.any()):
+            left_idx = (target_idx[left_mask] - 1).clamp_min(0)
+            left_logit = logits[left_mask].gather(dim=1, index=left_idx).squeeze(1)
+            loss[left_mask] = loss[left_mask] + torch.relu(margin - (target_logit[left_mask] - left_logit)).pow(2)
+            neighbor_count[left_mask] = neighbor_count[left_mask] + 1.0
+
+        right_mask = gt_count_cls < (logits.shape[1] - 1)
+        if bool(right_mask.any()):
+            right_idx = (target_idx[right_mask] + 1).clamp_max(logits.shape[1] - 1)
+            right_logit = logits[right_mask].gather(dim=1, index=right_idx).squeeze(1)
+            loss[right_mask] = loss[right_mask] + torch.relu(margin - (target_logit[right_mask] - right_logit)).pow(2)
+            neighbor_count[right_mask] = neighbor_count[right_mask] + 1.0
+
+        loss = loss / neighbor_count.clamp_min(1.0)
+        sample_weight = torch.ones_like(loss)
+        if self.count_adjacent_margin_gt45_weight > 1.0:
+            sample_weight = torch.where(
+                gt_count.to(device=logits.device) >= 4,
+                sample_weight * float(self.count_adjacent_margin_gt45_weight),
+                sample_weight,
+            )
+        return (loss * sample_weight).sum() / sample_weight.sum().clamp_min(1.0)
 
     def count_boundary_targets(self, pred_count_boundary_logits: torch.Tensor, gt_valid: list[torch.Tensor]) -> torch.Tensor:
         """Build smoothed binary targets for count>=4 and count>=5 boundary logits."""

@@ -238,6 +238,24 @@ def parse_args() -> argparse.Namespace:
         default=GCS_MAINLINE_COUNT_BOUNDARY_GT5_POS_WEIGHT,
         help="Extra Count Boundary BCE weight for count>=5 positive targets. 1 disables.",
     )
+    parser.add_argument(
+        "--gcs-count-adjacent-margin",
+        type=float,
+        default=0.2,
+        help="Target-vs-neighbor Count Head logit margin for adjacent count classes.",
+    )
+    parser.add_argument(
+        "--gcs-count-adjacent-margin-gain",
+        type=float,
+        default=0.0,
+        help="Adjacent count margin gain inside count_cls_loss. 0 disables the experimental margin term.",
+    )
+    parser.add_argument(
+        "--gcs-count-adjacent-margin-gt45-weight",
+        type=float,
+        default=1.0,
+        help="Extra adjacent-margin sample weight for GT4/GT5 images. 1 disables.",
+    )
     parser.add_argument("--gcs-exist-pos-weight", type=float, default=1.0)
     parser.add_argument("--gcs-exist-focal-gamma", type=float, default=2.0, help="Quality focal gamma for existence BCE. 0 disables focal weighting.")
     parser.add_argument(
@@ -865,6 +883,9 @@ def main() -> None:
         "gcs_count_boundary": args.gcs_count_boundary,
         "gcs_count_boundary_label_smoothing": args.gcs_count_boundary_label_smoothing,
         "gcs_count_boundary_gt5_pos_weight": args.gcs_count_boundary_gt5_pos_weight,
+        "gcs_count_adjacent_margin": args.gcs_count_adjacent_margin,
+        "gcs_count_adjacent_margin_gain": args.gcs_count_adjacent_margin_gain,
+        "gcs_count_adjacent_margin_gt45_weight": args.gcs_count_adjacent_margin_gt45_weight,
         "gcs_exist_pos_weight": args.gcs_exist_pos_weight,
         "gcs_exist_focal_gamma": args.gcs_exist_focal_gamma,
         "gcs_exist_focal_alpha": args.gcs_exist_focal_alpha,
