@@ -35,7 +35,7 @@ python tools/train_gcs.py \
 
 ## Next Remote Official-Val Experiments
 
-Next selected gate: fine-tune a default-off matched GT5 edge Quality target floor candidate. This is a training-side experiment only; it must not change decode, official evaluation, or test usage.
+No next remote training command is selected at this checkpoint. The matched GT5 edge Quality target floor gate has completed and is not promotable. Pause before launching another run; the next candidate needs a new hypothesis for preserving GT5 real-candidate quality without increasing GT4-to-5 false lanes.
 
 When a new remote CUDA experiment is selected, run it from a dedicated Git clone checked out to the exact pushed commit SHA. Do not run training locally from Codex. Activate the remote CUDA environment first:
 
@@ -95,7 +95,7 @@ runs/gcs_lane/gcs_yolo_lane_s_q12_gt5segq_vishn_countvis_ft12_seed1_b8w0/analysi
 
 Do not rerun these rejected gates unless checking reproducibility. Do not use test to choose the next candidate.
 
-Current-code audit baseline before this gate:
+Current-code audit baseline before the rejected GT5 edge Quality floor gate:
 
 ```text
 weights: runs/gcs_lane/gcs_yolo_lane_s_q12_e180_countboundary_rankfix_balgt45_v1/weights/official_best.pt
@@ -107,7 +107,7 @@ GT5 kept: 49/74
 GT5 failure counts: quality_too_low=14, count_head_under_predict=7, valid_points_fail=3, candidate_pool_shortfall=1
 ```
 
-Run the next candidate only from the exact pushed commit that contains `gcs_quality_gt5_edge_floor`:
+Rejected gate command, kept for reproducibility only:
 
 ```bash
 python tools/train_gcs.py \
@@ -128,7 +128,36 @@ python tools/train_gcs.py \
   --gcs-official-best-archive-root runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset
 ```
 
-After training, run an independent official-val sweep and GT5 diagnosis on `weights/official_best.pt` only. If `official_acc`, FP/FN, or GT5 retention do not beat the current-code audit baseline under the same protocol, keep the knob default-off and document the bottleneck.
+Result:
+
+```text
+run: gcs_yolo_lane_s_q12_quality_gt5edgefloor_ft12_seed1_b8w0
+commit: 7adbf03a6
+knob: gcs_quality_gt5_edge_floor=0.65
+training-time official_best epoch: 12
+independent official-val: 0.953587
+official FP/FN: 0.048990 / 0.035583
+gt5_output5_rate: 0.716216
+gt5_count_head_under_rate: 0.027027
+gt5_valid_points_fail_rate: 0.256757
+matched/unmatched quality mean: 0.857180 / 0.703256
+GT5 diagnosis: kept=53/74, quality_too_low=16, count_head_under_predict=2, valid_points_fail=2, candidate_pool_shortfall=1
+decision: not promotable; keep default-off
+```
+
+Remote/local audit artifacts:
+
+```text
+runs/gcs_lane/gcs_yolo_lane_s_q12_quality_gt5edgefloor_ft12_seed1_b8w0/args.yaml
+runs/gcs_lane/gcs_yolo_lane_s_q12_quality_gt5edgefloor_ft12_seed1_b8w0/results.csv
+runs/gcs_lane/gcs_yolo_lane_s_q12_quality_gt5edgefloor_ft12_seed1_b8w0/official_best_summary.json
+runs/gcs_lane/gcs_yolo_lane_s_q12_quality_gt5edgefloor_ft12_seed1_b8w0/weights/official_best.pt
+runs/gcs_lane/gcs_yolo_lane_s_q12_quality_gt5edgefloor_ft12_seed1_b8w0/weights/official_topk/
+runs/gcs_lane/gcs_yolo_lane_s_q12_quality_gt5edgefloor_ft12_seed1_b8w0/analysis_official_best_val_sweep/tusimple_official_sweep_summary.json
+runs/gcs_lane/gcs_yolo_lane_s_q12_quality_gt5edgefloor_ft12_seed1_b8w0/analysis_official_best_gt5_diag_val/gt5_rank_diagnostics_summary.json
+```
+
+Do not rerun this exact `0.65` floor gate unless checking reproducibility. Do not use test to choose the next candidate.
 
 For every run, fetch `args.yaml`, `results.csv`, `weights/official_best_summary.json`, retained `weights/official_topk/` metadata, independent official-val sweep summaries, and GT5 diagnostics. The minimum analysis fields are `official_acc`, FP, FN, `count_acc_3/4/5`, GT3/GT4/GT5 confusion rates, `gt5_output5_rate`, `gt5_count_head_under_rate`, `gt5_valid_points_fail_rate`, candidate shortfall, GT5 NMS, `decode/k5_to_output4_rate`, rank-score failure counts, visible valid-point distributions, and matched/unmatched quality means.
 

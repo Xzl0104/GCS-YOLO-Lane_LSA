@@ -1524,3 +1524,113 @@ D:\miniconda3\envs\lsa_yolo\python.exe scripts/check_gcs_agent_setup.py
 Mainline or experiment:
 
 Experimental candidate. Default-off. No decode change, no official metric change, no test usage.
+
+## 2026-06-13: Reject GT5 edge Quality target floor 0.65 gate
+
+Decision:
+
+Do not promote `gcs_quality_gt5_edge_floor=0.65`. Keep `gcs_quality_gt5_edge_floor` default-off at `0.0`.
+
+Why:
+
+The remote gate:
+
+```text
+gcs_yolo_lane_s_q12_quality_gt5edgefloor_ft12_seed1_b8w0
+commit: 7adbf03a6
+weights init: runs/gcs_lane/gcs_yolo_lane_s_q12_e180_countboundary_rankfix_balgt45_v1/weights/official_best.pt
+```
+
+completed 12 epochs on the remote CUDA server with official-best Top-K preservation. Training-time official_best selected epoch 12. Independent official-val resweep on `weights/official_best.pt` confirmed:
+
+```text
+official_acc=0.953587
+FP=0.048990
+FN=0.035583
+count_acc_3/4/5=0.910314/0.803030/0.716216
+gt5_output5_rate=0.716216
+gt5_count_head_under_rate=0.027027
+gt5_valid_points_fail_rate=0.256757
+matched/unmatched quality mean=0.857180/0.703256
+```
+
+This does not beat the current-code audit baseline:
+
+```text
+official_acc=0.953756
+FP=0.046006
+FN=0.036961
+gt5_output5_rate=0.662162
+```
+
+and remains below the archived countboundary baseline (`0.954137`) and old FT6 reference (`0.954782`).
+
+GT5 diagnosis on 74 GT5 images showed:
+
+```text
+kept=53
+quality_too_low=16
+count_head_under_predict=2
+valid_points_fail=2
+candidate_pool_shortfall=1
+gt5_candidate_pool_shortfall_rate=0.013514
+gt5_rank5_score_low_rate=0.0
+gt5_top5_suppressed_by_nms_rate=0.0
+valid_points_5 mean/median=5.837838/6.0
+s5 mean/median=0.203062/0.216318
+```
+
+The floor reduced Count Head underprediction and eventually recovered more GT5 output, but it did not solve quality-gated fifth-lane survival and introduced a worse FP tradeoff. The root bottleneck remains short fifth-lane quality/valid-point separation, not raw candidate supply, rank, NMS, or Count Head K alone.
+
+Alternatives considered:
+
+- Promote the gate because it slightly improved FN and GT5 output versus the current-code audit baseline.
+- Try the same floor for more epochs.
+- Sweep floor values immediately.
+- Keep the code path default-off and treat this as a negative gate.
+
+Tradeoff:
+
+The negative result is useful because it isolates a training-side hypothesis without decode or metric changes. It does not justify changing mainline defaults. A lower floor or schedule could be a future controlled candidate, but it must be justified as a new experiment and compared against the same official-val baseline.
+
+Validation evidence:
+
+Local source validation before the remote run:
+
+```text
+D:\miniconda3\envs\lsa_yolo\python.exe -m py_compile ultralytics/utils/gcs_loss.py ultralytics/models/yolo/gcs_lane/train.py tools/train_gcs.py ultralytics/cfg/__init__.py tests/test_gcs_count_aware.py
+D:\miniconda3\envs\lsa_yolo\python.exe -m pytest tests/test_gcs_count_aware.py -q --basetemp=.tmp_pytest\basetemp -o cache_dir=.tmp_pytest\cache
+D:\miniconda3\envs\lsa_yolo\python.exe scripts/verify_loss_cleanup.py
+D:\miniconda3\envs\lsa_yolo\python.exe tools/check_gcs_count_head_topk_contract.py
+D:\miniconda3\envs\lsa_yolo\python.exe tools/check_gcs_decode_meta_contract.py
+D:\miniconda3\envs\lsa_yolo\python.exe tools/check_gcs_algorithm_contract.py
+D:\miniconda3\envs\lsa_yolo\python.exe tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12.yaml --imgsz 544 960
+D:\miniconda3\envs\lsa_yolo\python.exe tools/check_gcs_label_order_split.py
+D:\miniconda3\envs\lsa_yolo\python.exe scripts/check_gcs_agent_setup.py
+```
+
+Remote preflight:
+
+```text
+python -m py_compile ultralytics/utils/gcs_loss.py ultralytics/models/yolo/gcs_lane/train.py tools/train_gcs.py ultralytics/cfg/__init__.py tests/test_gcs_count_aware.py
+python scripts/verify_loss_cleanup.py
+python tools/check_gcs_count_head_topk_contract.py
+python tools/check_gcs_decode_meta_contract.py
+python tools/check_gcs_algorithm_contract.py
+```
+
+Remote artifacts:
+
+```text
+runs/gcs_lane/gcs_yolo_lane_s_q12_quality_gt5edgefloor_ft12_seed1_b8w0/args.yaml
+runs/gcs_lane/gcs_yolo_lane_s_q12_quality_gt5edgefloor_ft12_seed1_b8w0/results.csv
+runs/gcs_lane/gcs_yolo_lane_s_q12_quality_gt5edgefloor_ft12_seed1_b8w0/official_best_summary.json
+runs/gcs_lane/gcs_yolo_lane_s_q12_quality_gt5edgefloor_ft12_seed1_b8w0/weights/official_best.pt
+runs/gcs_lane/gcs_yolo_lane_s_q12_quality_gt5edgefloor_ft12_seed1_b8w0/weights/official_topk/
+runs/gcs_lane/gcs_yolo_lane_s_q12_quality_gt5edgefloor_ft12_seed1_b8w0/analysis_official_best_val_sweep/tusimple_official_sweep_summary.json
+runs/gcs_lane/gcs_yolo_lane_s_q12_quality_gt5edgefloor_ft12_seed1_b8w0/analysis_official_best_gt5_diag_val/gt5_rank_diagnostics_summary.json
+```
+
+Mainline or experiment:
+
+Rejected experiment. Infrastructure remains default-off. No test evidence was used.

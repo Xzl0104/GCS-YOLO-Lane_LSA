@@ -161,7 +161,7 @@ When `gcs_quality_hard_negative_from_head` is enabled, Quality Head hard negativ
 
 When `gcs_hard_negative_visible_segment` is enabled, the shared unmatched hard-negative mask uses the same longest-visible-segment support semantics as Count/decode evidence instead of the all-anchor point-valid mean. It still mines unmatched queries only; Hungarian-matched queries remain protected.
 
-These knobs remain default-off after the 2026-06-13 `gcs_yolo_lane_s_q12_gt5segq_vishn_countvis_ft12_seed1_b8w0` official-val gate; that recipe is not promoted to mainline defaults.
+These knobs remain default-off after the 2026-06-13 `gcs_yolo_lane_s_q12_gt5segq_vishn_countvis_ft12_seed1_b8w0` and `gcs_yolo_lane_s_q12_quality_gt5edgefloor_ft12_seed1_b8w0` official-val gates; neither recipe is promoted to mainline defaults.
 
 ## Experimental Loss Policy
 
