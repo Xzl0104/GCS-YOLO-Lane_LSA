@@ -1634,3 +1634,79 @@ runs/gcs_lane/gcs_yolo_lane_s_q12_quality_gt5edgefloor_ft12_seed1_b8w0/analysis_
 Mainline or experiment:
 
 Rejected experiment. Infrastructure remains default-off. No test evidence was used.
+
+## 2026-06-13: Identify K32 fixed-y official-grid representation bottleneck
+
+Decision:
+
+For the `0.97` TuSimple official Accuracy objective, stop treating another `K=32` GT5 quality/count fine-tune as the next main path. Select a separate `Q12-K56` fixed-y candidate aligned exactly to TuSimple official `h_samples=160..710 step 10` as the smallest credible next experimental direction.
+
+The current mainline contract remains unchanged:
+
+```text
+point_mode = fixed_y
+fixed_y_start = 710 / 720
+fixed_y_end = 0.25
+K = 32
+```
+
+The `K=56` path is experimental only until implemented, locally checked, and selected on official-val.
+
+Why:
+
+The integrated `gcs_integrator` conclusion is that the current `K=32` label geometry is now the higher-level bottleneck for moving from the `0.95` range toward `0.97`.
+
+The current `K=32` fixed-y official-val label oracle is:
+
+```text
+Accuracy=0.956249
+FP=0
+FN=0.003444
+```
+
+Current references are:
+
+```text
+current-code audit baseline: 0.953756
+old FT6 reference:          0.954782
+```
+
+That leaves only about `0.0015` to `0.0025` practical headroom under the current label geometry, far short of `0.97`. The 2026-06-13 `K=32` GT5 gates confirm that more pressure on quality/count inside the same contract is not enough:
+
+```text
+gcs_yolo_lane_s_q12_gt5segq_vishn_countvis_ft12_seed1_b8w0:     0.953639
+gcs_yolo_lane_s_q12_quality_gt5edgefloor_ft12_seed1_b8w0:       0.953587
+```
+
+Simulated label-oracle alternatives show that official h-sample alignment changes the ceiling:
+
+```text
+K=56 aligned to h_samples=160..710 step 10: Accuracy=0.998256
+K=64 over 710->160:                         Accuracy=0.967817
+```
+
+This suggests that exact official-grid alignment matters more than simply increasing K.
+
+Alternatives considered:
+
+- Continue another `K=32` GT5 quality/count/rescue fine-tune.
+- Sweep decode thresholds, NMS, soft-count, or rescue again.
+- Promote legacy no-count-head or older near-`0.960` rows.
+- Jump directly to remote training with a new K value.
+- First implement and validate a separate `Q12-K56` official-h-sample-aligned candidate.
+
+Tradeoff:
+
+Changing from `K=32` to `K=56` changes the label contract, output shape, memory profile, and checkpoint compatibility. Old `K=32` checkpoints and old legacy rows are not promotion evidence for the new contract. The benefit is that the next experiment tests the measured representation ceiling instead of continuing low-headroom tuning inside `K=32`.
+
+Validation evidence:
+
+The decision is based on official-val oracle and audit evidence above, plus the rejected official-val gates. The exact oracle script, commit, split artifact, and label conversion path must be recorded with the `K=56` implementation before any promotion claim.
+
+Next smallest safe action:
+
+Implement the `Q12-K56` path as an explicit experiment with a separate data YAML and label root. Run local label-oracle, dataset, model-shape, and contract checks before selecting any remote training command. Use official-val only for checkpoint and parameter selection, preserve `official_best` Top-K, and keep test final-only.
+
+Mainline or experiment:
+
+Experimental candidate. The current mainline remains `Q12-K32`; no improvement is claimed without future official-val evidence.

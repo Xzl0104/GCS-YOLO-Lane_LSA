@@ -35,7 +35,19 @@ python tools/train_gcs.py \
 
 ## Next Remote Official-Val Experiments
 
-No next remote training command is selected at this checkpoint. The matched GT5 edge Quality target floor gate has completed and is not promotable. Pause before launching another run; the next candidate needs a new hypothesis for preserving GT5 real-candidate quality without increasing GT4-to-5 false lanes.
+No next remote training command is selected at this checkpoint. Do not launch another `K=32` GT5 quality/count fine-tune as the next main path: the visible-segment hard-negative and GT5 edge Quality floor gates have both completed and are not promotable, and the `K=32` label oracle does not leave enough geometry headroom for the `0.97` objective.
+
+The next smallest safe action is local design and validation for a separate `Q12-K56` official-h-sample-aligned experimental candidate. Before remote training, verify:
+
+```text
+1. a separate data config and label root for K=56 h_samples=160..710 step 10
+2. no silent mixing with current K=32 labels or checkpoints
+3. label oracle on official-val for the new label contract
+4. model output shape and loss/decode contract checks under K=56
+5. official-val-only selection plan with official_best Top-K preservation
+```
+
+Only after those checks should a new remote CUDA training command be selected.
 
 When a new remote CUDA experiment is selected, run it from a dedicated Git clone checked out to the exact pushed commit SHA. Do not run training locally from Codex. Activate the remote CUDA environment first:
 
