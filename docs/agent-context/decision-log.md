@@ -424,10 +424,11 @@ Each sync should be a normal Git commit on the active published branch. Do not f
 
 Each archive commit must include a concise note based on the completed work. After every pushed archive commit, the assistant must give the user a sync summary covering changed files, validation performed, commit SHA, GitHub push status, and any remaining unsynced or ignored local files that matter to the requested work.
 
-The GitHub repository includes root project instructions and the allowed source/documentation folders:
+The GitHub repository includes root project instructions, root project overview, and the allowed source/documentation folders:
 
 ```text
 AGENTS.md
+README.md
 data
 gcs_tools
 scripts
@@ -448,15 +449,15 @@ Alternatives considered:
 - keep GitHub synchronization as an ad hoc manual step
 - publish the entire local workspace, including runs, outputs, archives, and checkpoints
 - track only the algorithm source folders in the published repository
-- track root `AGENTS.md` with the source so project instructions stay synchronized
+- track root `AGENTS.md` and `README.md` with the source so project instructions and overview stay synchronized
 
 Tradeoff:
 
-The local workspace is not a standard repository root, so synchronization must preserve the published-source boundary and avoid pushing generated or large local artifacts. Root `AGENTS.md` is now an explicit exception because it carries active project instructions for future agents.
+The local workspace is not a standard repository root, so synchronization must preserve the published-source boundary and avoid pushing generated or large local artifacts. Root `AGENTS.md` and `README.md` are now explicit exceptions because they carry active project instructions and handoff context for future agents and humans.
 
 Validation evidence:
 
-The initial GitHub publish was created from a clean mirror containing only the allowed folders, excluding `__pycache__` and `.pyc` files. On 2026-06-13, the workflow policy was updated to track root `AGENTS.md` and require a sync summary after every pushed archive commit.
+The initial GitHub publish was created from a clean mirror containing only the allowed folders, excluding `__pycache__` and `.pyc` files. On 2026-06-13, the workflow policy was updated to track root `AGENTS.md` and `README.md`, and to require a sync summary after every pushed archive commit.
 
 Mainline or experiment:
 

@@ -364,6 +364,7 @@ The published repository should include root project instructions plus these pro
 
 ```text
 AGENTS.md
+README.md
 data
 gcs_tools
 scripts

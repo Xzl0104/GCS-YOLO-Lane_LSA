@@ -242,7 +242,7 @@ Old or removed mechanisms may return as controlled experimental candidates when 
 
 ## Git Sync Policy
 
-`AGENTS.md` is part of the project source and must be tracked and synchronized with the GitHub branch. Do not treat it as a local-only instruction file when it contains project workflow, environment, contract, or research-policy changes.
+`AGENTS.md` and `README.md` are part of the project source and must be tracked and synchronized with the GitHub branch. Do not treat them as local-only files when they contain project workflow, environment, contract, research-policy, or handoff-summary changes.
 
 After every Git sync, report a concise sync summary to the user. The summary must include changed files, validation performed, commit SHA, push status, and any remaining unsynced or ignored local files that matter to the requested work.
 
