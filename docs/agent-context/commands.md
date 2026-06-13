@@ -100,6 +100,23 @@ python tools/train_gcs.py \
   --gcs-official-best-archive-root runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset
 ```
 
+Current K56 remote baseline monitoring state:
+
+```text
+run: gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4
+remote HEAD: 9b9769b61f8f
+formal batch: 32
+workers: 4
+GPU memory: about 17.7 GiB on RTX 4090 24GB
+status at 2026-06-14 07:22 CST: training alive at epoch 6/180, epoch 6 official-val sweep running
+official_best so far: epoch 5, official_acc=0.904071, FP=0.180624, FN=0.154040
+GT5 diagnostics so far: gt5_output5_rate=0.351351, gt5_valid_points_fail_rate=0.648649
+errors: no OOM, NaN, traceback, runtime error, or shape error found in the training log
+decision: continue monitoring; do not stop the run or launch a replacement experiment from this early official-val result
+```
+
+The epoch 5/6 official-val result is early training evidence only. It is not a promotion result, not a failure decision for the full K56 baseline, and not a reason to use test or tune postprocess settings.
+
 The recent official-val gates after the Count Head visible-segment evidence change are not promotable:
 
 ```text

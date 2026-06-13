@@ -1797,3 +1797,68 @@ An earlier conservative `batch=4 workers=4` smoke run was stopped after the user
 Mainline or experiment:
 
 Experimental candidate. The K32 mainline remains current until K56 is selected on official-val. No test evidence has been used.
+
+## 2026-06-14: Continue Q12-K56 b32 baseline after early official-val check
+
+Decision:
+
+Continue the remote K56 formal baseline:
+
+```text
+run: gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4
+batch: 32
+workers: 4
+epochs: 180
+official_best_top_k: 5
+```
+
+Do not stop it, do not replace it with a new experiment yet, and do not use test to tune anything.
+
+Why:
+
+A read-only remote check at `2026-06-14 07:22 CST` found the run alive at epoch `6/180`, using about `17.7 GiB` on the RTX 4090 24GB server. The log scan found no OOM, NaN, traceback, runtime error, or shape error.
+
+The current official-best row is early and weak:
+
+```text
+best_epoch: 5
+official_acc: 0.904071
+official_fp: 0.180624
+official_fn: 0.154040
+count_acc_3/4/5: 0.847534 / 0.909091 / 0.351351
+gt5_output5_rate: 0.351351
+gt5_count_head_under_rate: 0.0
+gt5_valid_points_fail_rate: 0.648649
+decode/k5_to_output4_rate: 0.733945
+```
+
+The ordinary validation row for epoch `6` showed continuing progress:
+
+```text
+val/precision: 0.866769
+val/recall: 0.870769
+val/f1: 0.868764
+val/decode/count_head_k: 3.96694
+val/decode/final_pred_lanes: 3.5978
+val/decode/k5_to_output4_rate: 0.962406
+```
+
+This is too early to judge the full K56 baseline. It only says the representation branch trains without NaN/shape/runtime failure and that early GT5 valid-point survival is still weak.
+
+Alternatives considered:
+
+- Stop the run because epoch 5 official-val is far below legacy references.
+- Launch a geometry or Count/Quality auxiliary experiment immediately.
+- Continue the current healthy formal baseline until enough official-val epochs exist.
+
+Tradeoff:
+
+Continuing spends server time, but preserves the first clean K56 baseline under the new label contract. Starting a new experiment from an epoch-5 failure interpretation would risk chasing early-training noise before the baseline has matured.
+
+Validation evidence:
+
+Read-only checks confirmed the command, process, log health, `results.csv`, and `official_best_summary.json`. No test evidence was used.
+
+Mainline or experiment:
+
+Experimental baseline monitoring decision. K56 is still not promoted over K32, and no official-test claim is available.
