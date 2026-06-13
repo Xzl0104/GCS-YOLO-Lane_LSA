@@ -14,6 +14,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from ultralytics.nn.modules.gcs_lane import GCSLaneHead
+from ultralytics.nn.modules.gcs_lane import CandidateAwareCountHead
 from ultralytics.utils.gcs_loss import GCSLoss
 from ultralytics.utils.gcs_postprocess import (
     apply_count_policy,
@@ -222,6 +223,32 @@ def check_count_head_meta_and_shortfall_logs() -> None:
         _assert("pred_count_logits is missing" in str(exc), "missing Count Head logits should fail loudly")
     else:
         raise AssertionError("Count Head decode must not fall back to max_det when logits are missing")
+
+
+def check_count_head_visible_segment_evidence() -> None:
+    head = CandidateAwareCountHead([16, 16, 16, 16], query_dim=16, hidden_dim=32, topq=8)
+    high = torch.logit(torch.tensor(0.95))
+    low = torch.logit(torch.tensor(0.05))
+    pred_logits = torch.full((1, 6), float(high))
+    pred_valid_logits = torch.full((1, 6, 32), float(low))
+    pred_valid_logits[0, 0:4, :] = float(high)
+    pred_valid_logits[0, 4, 20:26] = float(high)
+
+    valid_prob = pred_valid_logits.sigmoid()
+    visible_mean, visible_support, visible_points, all_anchor_mean = head._visible_segment_stats(valid_prob)
+    _assert(float(visible_points[0, 4, 0]) == 6.0, "short edge visible segment length mismatch")
+    _assert(float(visible_mean[0, 4, 0]) > 0.94, "short edge visible mean should stay high")
+    _assert(abs(float(visible_support[0, 4, 0]) - 0.5) < 1e-6, "short edge support should be 6/12")
+    _assert(float(all_anchor_mean[0, 4, 0]) < 0.23, "fixture should expose all-anchor suppression")
+
+    _, lane_quality = head._candidate_extra_features(
+        pred_logits,
+        pred_valid_logits,
+        pred_points=None,
+        pred_quality_logits=None,
+    )
+    _assert(float(lane_quality[0, 4]) > 0.45, "Count Head lane quality must use visible-segment evidence")
+    _assert(int(lane_quality.topk(k=5, dim=1).indices[0, 4]) == 4, "short edge should remain count-visible")
 
 
 def check_count_boundary_calibration() -> None:
@@ -466,6 +493,7 @@ def main() -> None:
         check_quality_targets_and_loss,
         check_count_policy,
         check_count_head_meta_and_shortfall_logs,
+        check_count_head_visible_segment_evidence,
         check_count_boundary_calibration,
         check_line_nms_order,
         check_final_min_points,

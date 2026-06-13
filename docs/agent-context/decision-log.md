@@ -970,3 +970,119 @@ The test suite includes a K=32 fixed-y case with `fixed_y_start=710/720` to veri
 Mainline or experiment:
 
 Experimental-knob behavior fix. Mainline defaults remain unchanged because `gcs_quality_hard_negative_from_head=False` and `gcs_point_valid_gt5_edge_segment=0.0` by default.
+
+---
+
+## Decision: Use a dedicated remote Git clone and minimal TuSimple test archive for server evaluation
+
+Status: current workflow policy
+
+Decision:
+
+For remote CUDA runs, use a dedicated Git clone of the published source as the working directory. If the server also has a non-Git project copy containing datasets, runs, checkpoints, or pretrained weights, keep it as a runtime artifact source and do not run `git pull` inside it or blindly overwrite it.
+
+For final TuSimple official test evaluation on the server, prepare the original TuSimple test archive under the remote Git clone's `archive/` tree. A minimal test-only archive is valid when it contains:
+
+```text
+archive/TUSimple/test_label.json
+archive/TUSimple/test_set/clips/<date>/<clip>/<frame>.jpg
+archive/TUSimple/train_set/
+```
+
+where the image set contains exactly the frames referenced by `test_label.json`. `train_set/` may be an empty placeholder for test-only evaluation because `find_tusimple_archive_root()` validates the conventional TuSimple root shape.
+
+Why:
+
+The remote server may contain a useful non-Git training directory with local datasets and historical runs, but it is not safe to use that directory as the Git synchronization target. A separate Git clone keeps source updates reproducible while preserving local runtime artifacts.
+
+`tools/eval_tusimple_official.py --split test` needs the original TuSimple `raw_file` images and official label JSON. The fixed-y converted dataset under `datasets/tusimple_fixed_y_960x544` is sufficient for training and custom GCS validation, but it is not the original TuSimple archive expected by the official metric path.
+
+Alternatives considered:
+
+- Convert the existing non-Git remote directory into a Git worktree.
+- Selectively overwrite only folders that already exist in the non-Git directory.
+- Upload the full TuSimple `test_set/clips` archive.
+- Keep only fixed-y converted test images on the server.
+
+Tradeoff:
+
+The dedicated Git clone requires linking or copying runtime artifacts such as `datasets/`, `archive/`, and pretrained weights. The minimal TuSimple test archive is much smaller than the full raw test dump, but it is sufficient only for final test evaluation over the 2,782 labeled test records; it is not a replacement for the complete original dataset archive.
+
+Validation evidence:
+
+Remote full-dataset 1-epoch smoke training completed successfully from the dedicated Git clone:
+
+```text
+run name: codex_full1ep_20260613_170533
+train images: 3263
+steps: 816/816
+exit code: 0
+```
+
+The remote minimal TuSimple test archive was verified after extraction:
+
+```text
+records: 2782
+images: 2782
+missing raw_file images: 0
+test_set size: about 591M
+```
+
+Mainline or experiment:
+
+Workflow and data-preparation policy. It does not change model behavior, training defaults, official metrics, or the rule that test is final-only after official-val candidate selection.
+
+---
+
+## Decision: Align Count Head candidate evidence with visible-segment decode semantics
+
+Status: current implementation, requires server official-val training evidence before any improvement claim
+
+Decision:
+
+`CandidateAwareCountHead` now computes its primary per-query lane quality and top4/top5 cardinality evidence with:
+
+```text
+visible_lane_quality = exist_score * visible_segment_mean_valid * visible_support_score
+visible_support_score = min(1, visible_segment_points / 12)
+```
+
+The visible segment is the longest contiguous run where point-valid probability is at least `0.5`. This same visible-lane quality drives top-query candidate selection inside the Count Head. The all-anchor valid mean is retained as an auxiliary aggregate feature, but it no longer defines the primary Count Head fifth-lane evidence.
+
+Why:
+
+Decode ranking had already moved from all-anchor mean valid to visible-segment rank because short TuSimple edge lanes can have only 5-7 reliable anchors out of `K=32`. A code review found the Count Head still used all-anchor `valid_mean` and `exist * valid_mean` for candidate evidence. That left a structural mismatch: a real short edge lane could survive decode ranking but still look weak to Count Head K selection.
+
+The observed metric failures fit this mismatch: candidate-pool shortfall and NMS were low, while GT5 Count Head underprediction and `K=5 -> output4` failures remained material.
+
+Alternatives considered:
+
+- Keep Count Head on all-anchor valid mean and only tune thresholds.
+- Add more decode rescue or soft-count policy.
+- Add new Count Head feature dimensions for visible segment evidence.
+- Replace same-width Count Head feature semantics while preserving checkpoint shape compatibility.
+
+Tradeoff:
+
+The implementation preserves Count Head module dimensions and output contracts, so existing checkpoints remain loadable. Because the semantic distribution of score features changes, old checkpoints should be fine-tuned or reselected under official-val before any metric claim. This is a root code alignment, not a proven ACC improvement by itself.
+
+Validation evidence:
+
+Local checks after the implementation:
+
+```text
+D:\miniconda3\envs\lsa_yolo\python.exe -m py_compile ultralytics/nn/modules/gcs_lane.py tests/test_gcs_count_aware.py tools/check_gcs_count_head_topk_contract.py
+D:\miniconda3\envs\lsa_yolo\python.exe -m pytest tests/test_gcs_count_aware.py -q -p no:cacheprovider --basetemp .tmp_pytest\basetemp
+D:\miniconda3\envs\lsa_yolo\python.exe scripts/verify_loss_cleanup.py
+D:\miniconda3\envs\lsa_yolo\python.exe tools/check_gcs_count_head_topk_contract.py
+D:\miniconda3\envs\lsa_yolo\python.exe tools/check_gcs_decode_meta_contract.py
+D:\miniconda3\envs\lsa_yolo\python.exe tools/check_gcs_algorithm_contract.py
+D:\miniconda3\envs\lsa_yolo\python.exe tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12.yaml --imgsz 544 960
+D:\miniconda3\envs\lsa_yolo\python.exe scripts/check_gcs_agent_setup.py
+```
+
+The new unit/contract tests build a `K=32` short-edge fixture where six contiguous high-valid anchors are suppressed by the old all-anchor mean but remain count-visible through visible-segment evidence.
+
+Mainline or experiment:
+
+Current implementation. Official-val improvement still requires the next remote training runs, starting with a clean FT6 control plus joint Count and mild segment-quality candidates.

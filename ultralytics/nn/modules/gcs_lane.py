@@ -218,6 +218,8 @@ class CandidateAwareCountHead(nn.Module):
         self.use_query_feat = bool(use_query_feat)
         self.use_score_feat = bool(use_score_feat)
         self.use_geometry_feat = bool(use_geometry_feat)
+        self.visible_valid_thr = 0.5
+        self.visible_support_points = 12.0
         self.score_extra_dim = 7
         self.geometry_extra_dim = 3
         self.cardinality_feature_names = (
@@ -286,6 +288,8 @@ class CandidateAwareCountHead(nn.Module):
         self.use_query_feat = bool(getattr(self, "use_query_feat", True))
         self.use_score_feat = bool(getattr(self, "use_score_feat", True))
         self.use_geometry_feat = bool(getattr(self, "use_geometry_feat", True))
+        self.visible_valid_thr = float(getattr(self, "visible_valid_thr", 0.5))
+        self.visible_support_points = float(getattr(self, "visible_support_points", 12.0))
         self.score_extra_dim = int(getattr(self, "score_extra_dim", 7))
         self.geometry_extra_dim = int(getattr(self, "geometry_extra_dim", 3))
         self.cardinality_feature_names = tuple(
@@ -387,6 +391,48 @@ class CandidateAwareCountHead(nn.Module):
             return torch.zeros_like(x.mean(dim=dim, keepdim=True))
         return x.std(dim=dim, unbiased=False, keepdim=True)
 
+    @staticmethod
+    def _visible_segment_stats(
+        valid_prob_full: torch.Tensor,
+        valid_thr: float = 0.5,
+        support_points: float = 12.0,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Return longest-visible-segment mean/support plus the all-anchor mean."""
+        if valid_prob_full.ndim != 3:
+            raise ValueError(f"valid_prob_full must have shape B x Q x K, got {tuple(valid_prob_full.shape)}.")
+        b, q, k = valid_prob_full.shape
+        dtype = valid_prob_full.dtype
+        device = valid_prob_full.device
+        all_anchor_mean = valid_prob_full.mean(dim=2, keepdim=True)
+        if k <= 0:
+            zeros = valid_prob_full.new_zeros((b, q, 1))
+            return zeros, zeros, zeros, all_anchor_mean
+
+        flat_prob = valid_prob_full.reshape(-1, k)
+        active = (flat_prob >= float(valid_thr)).to(dtype=dtype)
+        run_len = torch.zeros((flat_prob.shape[0],), device=device, dtype=dtype)
+        run_sum = torch.zeros_like(run_len)
+        best_len = torch.zeros_like(run_len)
+        best_sum = torch.zeros_like(run_len)
+        for i in range(k):
+            m = active[:, i]
+            run_len = (run_len + 1.0) * m
+            run_sum = (run_sum + flat_prob[:, i]) * m
+            update = (run_len > best_len) | ((run_len == best_len) & (run_sum > best_sum))
+            best_len = torch.where(update, run_len, best_len)
+            best_sum = torch.where(update, run_sum, best_sum)
+
+        visible_mean = best_sum / best_len.clamp_min(1.0)
+        visible_mean = torch.where(best_len > 0.0, visible_mean, torch.zeros_like(visible_mean))
+        support_den = max(float(support_points), 1.0)
+        visible_support = (best_len / support_den).clamp(0.0, 1.0)
+        return (
+            visible_mean.view(b, q, 1),
+            visible_support.view(b, q, 1),
+            best_len.view(b, q, 1),
+            all_anchor_mean,
+        )
+
     def _candidate_extra_features(
         self,
         pred_logits: torch.Tensor,
@@ -418,12 +464,15 @@ class CandidateAwareCountHead(nn.Module):
                     f"got {tuple(pred_valid_logits.shape)} vs B,Q={(b, q)}."
                 )
             valid_prob_full = pred_valid_logits.sigmoid().to(dtype=dtype)
-            valid_mean = valid_prob_full.mean(dim=2, keepdim=True)
+            valid_mean, valid_count_soft, _, _ = self._visible_segment_stats(
+                valid_prob_full,
+                valid_thr=float(getattr(self, "visible_valid_thr", 0.5)),
+                support_points=float(getattr(self, "visible_support_points", 12.0)),
+            )
             valid_max = valid_prob_full.max(dim=2, keepdim=True).values
-            valid_count_soft = valid_prob_full.sum(dim=2, keepdim=True) / max(float(valid_prob_full.shape[2]), 1.0)
 
         if pred_quality_logits is None:
-            quality_prob = exist_prob * valid_mean
+            quality_prob = exist_prob * valid_mean * valid_count_soft
         else:
             if pred_quality_logits.ndim == 3 and pred_quality_logits.shape[-1] == 1:
                 pred_quality_logits = pred_quality_logits.squeeze(-1)
@@ -433,7 +482,7 @@ class CandidateAwareCountHead(nn.Module):
                     f"got {tuple(pred_quality_logits.shape)} vs {(b, q)}."
                 )
             quality_prob = pred_quality_logits.sigmoid().unsqueeze(-1).to(dtype=dtype)
-        lane_quality = (exist_prob * valid_mean).clamp(0.0, 1.0)
+        lane_quality = (exist_prob * valid_mean * valid_count_soft).clamp(0.0, 1.0)
         score_extra = torch.cat(
             (exist_logit, exist_prob, valid_mean, valid_max, valid_count_soft, lane_quality, quality_prob),
             dim=-1,
@@ -478,6 +527,8 @@ class CandidateAwareCountHead(nn.Module):
 
         if pred_valid_logits is None:
             valid_mean = torch.ones((b, q), device=device, dtype=dtype)
+            visible_support = torch.ones_like(valid_mean)
+            all_anchor_mean = valid_mean
         else:
             if pred_valid_logits.ndim == 4 and pred_valid_logits.shape[-1] == 1:
                 pred_valid_logits = pred_valid_logits.squeeze(-1)
@@ -486,10 +537,18 @@ class CandidateAwareCountHead(nn.Module):
                     "pred_valid_logits must have shape B x Q x K for Count Head cardinality, "
                     f"got {tuple(pred_valid_logits.shape)} vs B,Q={(b, q)}."
                 )
-            valid_mean = pred_valid_logits.sigmoid().to(dtype=dtype).mean(dim=2)
+            valid_prob_full = pred_valid_logits.sigmoid().to(dtype=dtype)
+            valid_mean_3d, visible_support_3d, _, all_anchor_mean_3d = self._visible_segment_stats(
+                valid_prob_full,
+                valid_thr=float(getattr(self, "visible_valid_thr", 0.5)),
+                support_points=float(getattr(self, "visible_support_points", 12.0)),
+            )
+            valid_mean = valid_mean_3d.squeeze(-1)
+            visible_support = visible_support_3d.squeeze(-1)
+            all_anchor_mean = all_anchor_mean_3d.squeeze(-1)
 
         if pred_quality_logits is None:
-            quality_prob = exist_prob * valid_mean
+            quality_prob = exist_prob * valid_mean * visible_support
         else:
             if pred_quality_logits.ndim == 3 and pred_quality_logits.shape[-1] == 1:
                 pred_quality_logits = pred_quality_logits.squeeze(-1)
@@ -500,7 +559,7 @@ class CandidateAwareCountHead(nn.Module):
                 )
             quality_prob = pred_quality_logits.sigmoid().to(dtype=dtype)
 
-        lane_quality = (exist_prob * valid_mean).clamp(0.0, 1.0)
+        lane_quality = (exist_prob * valid_mean * visible_support).clamp(0.0, 1.0)
         topk = min(5, q)
         top_values = lane_quality.topk(k=topk, dim=1).values
         if topk < 5:
@@ -513,7 +572,7 @@ class CandidateAwareCountHead(nn.Module):
             (
                 exist_prob.sum(dim=1, keepdim=True) / max(float(q), 1.0),
                 lane_quality.sum(dim=1, keepdim=True) / max(float(q), 1.0),
-                valid_mean.mean(dim=1, keepdim=True),
+                all_anchor_mean.mean(dim=1, keepdim=True),
                 quality_prob.sum(dim=1, keepdim=True) / max(float(q), 1.0),
                 top4,
                 top5,

@@ -80,6 +80,15 @@ pred_count_boundary_logits: B x 2
 `pred_count_logits` is the image-level Count Head for classes count=2/3/4/5. `pred_quality_logits` is lane-level quality for training, diagnostics, and gated rescue behavior.
 `pred_count_boundary_logits` is the count>=4/count>=5 boundary calibration sub-head used by the default Count Head loss/decode path.
 
+The candidate-aware Count Head uses the same short-lane visibility semantics as decode when building count evidence:
+
+```text
+visible_lane_quality = exist_score * visible_segment_mean_valid * visible_support_score
+visible_support_score = min(1, visible_segment_points / 12)
+```
+
+`visible_segment_mean_valid` is computed on the longest contiguous segment with point-valid probability at least `0.5`. This visible-lane quality drives Count Head top-query selection and top4/top5 cardinality evidence so short but reliable TuSimple edge lanes are not structurally suppressed by the all-anchor mean. The all-anchor point-valid mean remains available as an auxiliary aggregate feature; it must not be used as the primary fifth-lane evidence.
+
 ## Loss Contract
 
 Default mainline loss items:

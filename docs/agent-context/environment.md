@@ -34,6 +34,31 @@ Quick CUDA sanity check:
 python -c "import sys, torch; print(sys.executable); print(torch.__version__); print(torch.cuda.is_available()); print(torch.version.cuda)"
 ```
 
+## Remote CUDA Server Notes
+
+When using a remote CUDA server, prefer a dedicated Git clone for the published source instead of overwriting a pre-existing non-Git training directory that may contain local datasets, runs, or checkpoints.
+
+Keep SSH hosts, usernames, ports, passwords, keys, and exact session-only server paths out of committed documentation. Treat them as operator-provided session parameters.
+
+Remote setup checks:
+
+```bash
+git pull --ff-only
+python -c "import sys, torch; print(sys.executable); print(torch.__version__); print(torch.cuda.is_available()); print(torch.version.cuda); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'NO_CUDA')"
+```
+
+On the primary Windows workstation used for this project, the preferred remote login is the local SSH config alias:
+
+```bash
+ssh gcs-ebcloud-lane
+```
+
+This alias is configured outside the repository in the user's SSH config and should authenticate by SSH key. If the alias stops working, repair the local SSH config or server `authorized_keys`; do not add plaintext passwords to repository docs.
+
+If the operator gives an environment name or shorthand path, verify the real Python executable on the server before running training or evaluation. Do not assume that `/miniconda3/...` and `$HOME/miniconda3/...` both exist.
+
+Remote datasets and large local weights should be linked or copied into the dedicated Git clone as local runtime artifacts. Do not commit generated dataset archives, checkpoints, run logs, or transferred data packages.
+
 ## Runtime Rules
 
 - Run training, validation, inference, and contract checks from the repository root after activating `lsa_yolo`.

@@ -181,6 +181,42 @@ def test_candidate_aware_count_head_shape_and_grad():
     assert valid.grad is not None
 
 
+def test_count_head_visible_segment_evidence_keeps_short_edge_lane_count_visible():
+    head = CandidateAwareCountHead([16, 16, 16, 16], query_dim=16, hidden_dim=32, topq=8)
+    high = math.log(0.95 / 0.05)
+    low = math.log(0.05 / 0.95)
+    pred_logits = torch.full((1, 6), high)
+    pred_valid_logits = torch.full((1, 6, 32), low)
+    pred_valid_logits[0, 0:4, :] = high
+    pred_valid_logits[0, 4, 20:26] = high
+    pred_valid_logits[0, 5, [1, 6, 11, 16, 21, 26]] = high
+
+    valid_prob = pred_valid_logits.sigmoid()
+    visible_mean, visible_support, visible_points, all_anchor_mean = head._visible_segment_stats(valid_prob)
+
+    assert torch.isclose(visible_points[0, 4, 0], torch.tensor(6.0))
+    assert visible_mean[0, 4, 0] > 0.94
+    assert torch.isclose(visible_support[0, 4, 0], torch.tensor(0.5))
+    assert all_anchor_mean[0, 4, 0] < 0.23
+
+    _, lane_quality = head._candidate_extra_features(
+        pred_logits,
+        pred_valid_logits,
+        pred_points=None,
+        pred_quality_logits=None,
+    )
+    old_all_anchor_quality = pred_logits.sigmoid()[0, 4] * all_anchor_mean[0, 4, 0]
+    assert lane_quality[0, 4] > 0.45
+    assert old_all_anchor_quality < 0.22
+    assert int(lane_quality.topk(k=5, dim=1).indices[0, 4]) == 4
+
+    features = head._cardinality_features(pred_logits, pred_valid_logits, pred_quality_logits=None)
+    top5_idx = head.cardinality_feature_names.index("lane_quality_top5")
+    valid_mean_idx = head.cardinality_feature_names.index("valid_mean")
+    assert features[0, top5_idx] > 0.45
+    assert features[0, valid_mean_idx] < 0.9
+
+
 def test_gcs_lane_head_count_backward_isolated_from_shared_branches():
     torch.manual_seed(2)
     head = GCSLaneHead(

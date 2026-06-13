@@ -44,6 +44,18 @@ test:  2782
 
 The official-val subset is aligned with the current validation split and must stay separate from test-driven tuning.
 
+Official TuSimple Accuracy evaluation needs the original TuSimple archive layout, not only the fixed-y converted dataset.
+
+Required test archive shape:
+
+```text
+archive/TUSimple/test_label.json
+archive/TUSimple/test_set/clips/<date>/<clip>/<frame>.jpg
+archive/TUSimple/train_set/
+```
+
+`tools/eval_tusimple_official.py --split test` resolves `raw_file` entries from `test_label.json` against this archive root. A minimal test-only archive may include only the 2,782 images referenced by `test_label.json`; it does not need the full TuSimple `test_set/clips` frame dump for final test evaluation.
+
 ## Collaboration Model
 
 Project Agents and Skills are configured under `.codex/` and `.agents/skills/`. Use read-only Agents for exploration, review, experiment analysis, documentation research, and security review. Use only one writable Agent in the main worktree unless separate worktrees and disjoint ownership are explicit.
