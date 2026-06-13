@@ -1,0 +1,10 @@
+train: ../datasets/tusimple_fixed_y_k56_960x544/images/train
+val: ../datasets/tusimple_fixed_y_k56_960x544/images/val
+test: ../datasets/tusimple_fixed_y_k56_960x544/images/test
+image_shape: [544, 960]  # H, W; TuSimple is trained as 960x544 (W x H)
+point_mode: fixed_y
+fixed_y: [0.9861111111111112, 0.2222222222222222]  # h_samples 710..160 over original H=720
+num_points: 56
+
+names:
+  0: lane
