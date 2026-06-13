@@ -6,12 +6,15 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+import torch
 import yaml
 
 from gcs_tools.label_utils import fixed_y_anchors
 from tools import check_tusimple_fixed_y_label_oracle as oracle
 from tools import rebuild_tusimple_fixed_y_k56_from_reference_split as builder
 from tools import train_gcs
+from ultralytics.models.yolo.gcs_lane.train import GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT
+from ultralytics.utils.gcs_loss import GCSLoss
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -128,3 +131,69 @@ def test_k56_label_oracle_defaults_to_official_val_gt():
     args = SimpleNamespace(label_split="val", gt_json=None, archive_root="archive")
 
     assert oracle.resolve_gt_json(args) == oracle.DEFAULT_VAL_GT_JSON
+
+
+def test_k56_gt5_edge_segment_support_targets_edge_lanes_only():
+    assert GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT == 0.0
+
+    anchors = torch.tensor(
+        fixed_y_anchors(num_points=56, y_start=710.0 / 720.0, y_end=160.0 / 720.0),
+        dtype=torch.float32,
+    )
+    lane_x = torch.tensor([0.1, 0.25, 0.4, 0.55, 0.7], dtype=torch.float32)
+    lanes = torch.zeros(5, 56, 2, dtype=torch.float32)
+    lanes[..., 0] = lane_x[:, None]
+    lanes[..., 1] = anchors[None, :]
+    valid = torch.zeros(5, 56, dtype=torch.float32)
+    visible_start, visible_end = 18, 26
+    valid[:, visible_start:visible_end] = 1.0
+    pred_points = lanes.unsqueeze(0).clone()
+    indices = [(torch.arange(5), torch.arange(5))]
+    common = {
+        "gcs_point_mode": "fixed_y",
+        "gcs_imgsz": [544, 960],
+        "gcs_gt5_edge_loss_weight": 1.0,
+        "gcs_candidate_gt5_edge_weight": 1.0,
+        "gcs_point_valid_gt5_pos_weight": 1.0,
+        "gcs_point_valid_unmatched_weight": 1.0,
+        "gcs_point_valid_gt5_edge_continuity": 0.0,
+    }
+    base = GCSLoss(model={**common, "gcs_point_valid_gt5_edge_segment": 0.0})
+    segment = GCSLoss(
+        model={
+            **common,
+            "gcs_point_valid_gt5_edge_segment": 0.5,
+            "gcs_point_valid_gt5_edge_segment_thr": 0.8,
+            "gcs_point_valid_gt5_edge_segment_min_points": 5,
+        }
+    )
+
+    edge_logits = torch.full((1, 5, 56), 4.0)
+    edge_logits[0, 0, visible_start:visible_end] = -3.0
+    edge_logits[0, 4, visible_start:visible_end] = -3.0
+    edge_logits = edge_logits.requires_grad_()
+    edge_base_loss = base.point_valid_loss(edge_logits, pred_points, [valid], indices, gt_points=[lanes])
+    edge_segment_loss = segment.point_valid_loss(edge_logits, pred_points, [valid], indices, gt_points=[lanes])
+    assert edge_segment_loss > edge_base_loss
+    edge_segment_loss.backward()
+    assert edge_logits.grad is not None
+
+    middle_logits = torch.full((1, 5, 56), 4.0)
+    middle_logits[0, 2, visible_start:visible_end] = -3.0
+    middle_base_loss = base.point_valid_loss(middle_logits, pred_points, [valid], indices, gt_points=[lanes])
+    middle_segment_loss = segment.point_valid_loss(middle_logits, pred_points, [valid], indices, gt_points=[lanes])
+    assert torch.isclose(middle_segment_loss, middle_base_loss)
+
+    lanes4 = torch.zeros(4, 56, 2, dtype=torch.float32)
+    lanes4[..., 0] = torch.tensor([0.1, 0.25, 0.55, 0.7], dtype=torch.float32)[:, None]
+    lanes4[..., 1] = anchors[None, :]
+    valid4 = torch.zeros(4, 56, dtype=torch.float32)
+    valid4[:, visible_start:visible_end] = 1.0
+    pred_points4 = lanes4.unsqueeze(0).clone()
+    indices4 = [(torch.arange(4), torch.arange(4))]
+    gt4_logits = torch.full((1, 4, 56), 4.0)
+    gt4_logits[0, 0, visible_start:visible_end] = -3.0
+    gt4_logits[0, 3, visible_start:visible_end] = -3.0
+    gt4_base_loss = base.point_valid_loss(gt4_logits, pred_points4, [valid4], indices4, gt_points=[lanes4])
+    gt4_segment_loss = segment.point_valid_loss(gt4_logits, pred_points4, [valid4], indices4, gt_points=[lanes4])
+    assert torch.isclose(gt4_segment_loss, gt4_base_loss)
