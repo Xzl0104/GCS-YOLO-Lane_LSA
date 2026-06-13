@@ -103,6 +103,35 @@ def reference_raw_file_split(reference_root: Path) -> dict[str, str]:
     return mapping
 
 
+def normalized_raw_file(value: str) -> str:
+    """Normalize TuSimple raw_file strings for split-membership checks."""
+    return str(value).replace("\\", "/").lstrip("/")
+
+
+def sample_raw_file_set(samples: list[Any]) -> set[str]:
+    """Return normalized raw_file ids for a split sample list."""
+    return {normalized_raw_file(sample.raw_file) for sample in samples}
+
+
+def assert_disjoint_raw_file_splits(split_samples: dict[str, list[Any]]) -> dict[str, Any]:
+    """Fail fast if any raw_file appears in more than one split."""
+    split_sets = {split: sample_raw_file_set(samples) for split, samples in split_samples.items()}
+    overlaps: dict[str, list[str]] = {}
+    split_names = sorted(split_sets)
+    for i, left in enumerate(split_names):
+        for right in split_names[i + 1 :]:
+            overlap = sorted(split_sets[left].intersection(split_sets[right]))
+            if overlap:
+                overlaps[f"{left}_vs_{right}"] = overlap[:10]
+    if overlaps:
+        raise ValueError(f"TuSimple split raw_file overlap detected: {overlaps}")
+    return {
+        f"{left}_vs_{right}": 0
+        for i, left in enumerate(split_names)
+        for right in split_names[i + 1 :]
+    }
+
+
 def clear_output_splits(output_root: Path, splits: tuple[str, ...]) -> dict[str, int]:
     removed: dict[str, int] = {}
     for split in splits:
@@ -188,7 +217,7 @@ def main() -> None:
     missing_reference: list[str] = []
 
     for sample in load_train_samples(archive_root):
-        raw_file = sample.raw_file.replace("\\", "/").lstrip("/")
+        raw_file = normalized_raw_file(sample.raw_file)
         split = ref_split.get(raw_file)
         if split is None:
             missing_reference.append(raw_file)
@@ -196,10 +225,18 @@ def main() -> None:
         split_samples[split].append(sample)
     if missing_reference:
         raise ValueError(f"{len(missing_reference)} train JSON samples are missing from the reference split. First: {missing_reference[0]}")
+    rebuilt_train_val = len(split_samples["train"]) + len(split_samples["val"])
+    if rebuilt_train_val != len(ref_split):
+        raise FileNotFoundError(
+            "Archive train JSON did not cover the reference train/val split: "
+            f"rebuilt={rebuilt_train_val}, reference={len(ref_split)}. "
+            "Check that archive/TUSimple/train_set contains the original TuSimple label_data_*.json files."
+        )
 
     split_samples["test"] = load_test_samples(archive_root)
     if not split_samples["test"]:
         raise FileNotFoundError(f"No TuSimple test samples found under {archive_root}")
+    split_overlap_counts = assert_disjoint_raw_file_splits(split_samples)
 
     print(f"archive_root: {archive_root}")
     print(f"reference_root: {reference_root}")
@@ -253,6 +290,7 @@ def main() -> None:
             }
             for split in ("train", "val", "test")
         },
+        "split_raw_file_overlap_counts": split_overlap_counts,
         "removed_before_rebuild": removed,
         "export_summary": export_summary,
     }

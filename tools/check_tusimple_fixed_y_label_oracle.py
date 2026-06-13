@@ -47,11 +47,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset-root", default=str(DEFAULT_DATASET_ROOT), help="Converted fixed-y dataset root.")
     parser.add_argument("--label-split", default="val", choices=("train", "val", "test"), help="labels_gcs split to read.")
     parser.add_argument("--archive-root", default="archive", help="TuSimple archive root used when --gt-json is omitted.")
-    parser.add_argument(
-        "--gt-json",
-        default=str(DEFAULT_VAL_GT_JSON),
-        help="Official TuSimple json-lines GT. Defaults to the project official-val subset.",
-    )
+    parser.add_argument("--gt-json", default=None, help="Official TuSimple json-lines GT.")
     parser.add_argument("--save-dir", default=str(DEFAULT_SAVE_DIR), help="Output directory.")
     parser.add_argument("--runtime-ms", type=float, default=1.0, help="Constant oracle run_time in ms.")
     parser.add_argument("--allow-test", action="store_true", help="Allow oracle evaluation on test labels.")
@@ -145,6 +141,12 @@ def resolve_gt_json(args: argparse.Namespace) -> Path:
     if gt_arg:
         path = Path(gt_arg)
         return path if path.is_absolute() else ROOT / path
+    if args.label_split == "val" and DEFAULT_VAL_GT_JSON.exists():
+        return DEFAULT_VAL_GT_JSON
+    if args.label_split == "test":
+        raise SystemExit("ERROR: --label-split test requires an explicit --gt-json with --allow-test.")
+    if args.label_split == "train":
+        raise SystemExit("ERROR: --label-split train requires an explicit --gt-json.")
     archive_root = find_tusimple_archive_root(args.archive_root)
     return default_tusimple_gt_json(archive_root, split=args.label_split)
 
