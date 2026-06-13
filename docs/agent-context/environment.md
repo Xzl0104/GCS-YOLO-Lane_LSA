@@ -1,6 +1,6 @@
 # Environment
 
-This file records the local Python/CUDA runtime expected by this project.
+This file records the local and remote Python/CUDA runtimes expected by this project.
 
 ## Local CUDA Conda Environment
 
@@ -80,7 +80,8 @@ Remote datasets and large local weights should be linked or copied into the dedi
 
 ## Runtime Rules
 
-- Run training, validation, inference, and contract checks from the repository root after activating `lsa_yolo`.
+- For local Codex validation, inference smoke checks, and contract checks, run from the repository root after activating `lsa_yolo`.
+- For server training, official-val evaluation, and longer CUDA experiments, connect with `ssh gcs-ebcloud-lane`, activate `ssh_lane`, and run from the dedicated remote Git clone.
 - Do not create or switch to a new Python environment unless the user explicitly asks.
 - Do not hardcode this absolute Windows path into portable source code, dataset YAML, or committed scripts unless the user explicitly requests a local-only script.
 - If a command fails because of CUDA, PyTorch, or environment mismatch, report the exact Python executable, PyTorch version, CUDA availability, and CUDA version before proposing fixes.
