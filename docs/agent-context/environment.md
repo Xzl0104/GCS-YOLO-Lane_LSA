@@ -40,6 +40,25 @@ When using a remote CUDA server, prefer a dedicated Git clone for the published 
 
 Keep SSH hosts, usernames, ports, passwords, keys, and exact session-only server paths out of committed documentation. Treat them as operator-provided session parameters.
 
+The current remote CUDA server environment is:
+
+```text
+ssh_lane
+```
+
+Preferred activation on the remote server:
+
+```bash
+source /root/miniconda3/etc/profile.d/conda.sh
+conda activate ssh_lane
+```
+
+Direct Python executable when activation is unavailable:
+
+```text
+/root/miniconda3/envs/ssh_lane/bin/python
+```
+
 Remote setup checks:
 
 ```bash
@@ -55,7 +74,7 @@ ssh gcs-ebcloud-lane
 
 This alias is configured outside the repository in the user's SSH config and should authenticate by SSH key. If the alias stops working, repair the local SSH config or server `authorized_keys`; do not add plaintext passwords to repository docs.
 
-If the operator gives an environment name or shorthand path, verify the real Python executable on the server before running training or evaluation. Do not assume that `/miniconda3/...` and `$HOME/miniconda3/...` both exist.
+If the operator changes the environment name or shorthand path, verify the real Python executable on the server before running training or evaluation. Do not assume that `/miniconda3/...` and `$HOME/miniconda3/...` both exist.
 
 Remote datasets and large local weights should be linked or copied into the dedicated Git clone as local runtime artifacts. Do not commit generated dataset archives, checkpoints, run logs, or transferred data packages.
 

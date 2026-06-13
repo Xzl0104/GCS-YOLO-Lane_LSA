@@ -37,6 +37,13 @@ python tools/train_gcs.py \
 
 Use these on the remote CUDA server after the Count Head visible-segment evidence change is pushed. Run from a dedicated Git clone checked out to the exact pushed commit SHA. Do not run these locally from Codex.
 
+Activate the remote CUDA environment first:
+
+```bash
+source /root/miniconda3/etc/profile.d/conda.sh
+conda activate ssh_lane
+```
+
 Run the clean FT6 control first. It verifies whether the prior `0.954782` short fine-tune family is reproducible under current code before comparing new candidates.
 
 ```bash
@@ -309,7 +316,7 @@ Recommended order:
 3. commit and push the validated published source to GitHub
 4. SSH to the remote server, preferably with `ssh gcs-ebcloud-lane`
 5. update the remote Git clone with `git pull --ff-only` or checkout the exact pushed commit SHA
-6. activate the remote Python/conda environment
+6. activate the remote `ssh_lane` conda environment
 7. run the training/evaluation command from the remote repository root
 8. keep TuSimple commands on `--imgsz 544 960`
 9. run official-val sweep and diagnostics on validation only
