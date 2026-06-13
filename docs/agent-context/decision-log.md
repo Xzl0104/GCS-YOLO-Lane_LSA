@@ -818,3 +818,94 @@ python scripts/check_gcs_agent_setup.py
 Mainline or experiment:
 
 Workflow support. Default behavior is unchanged at Top-K `1`; use `--gcs-official-best-top-k 3` for the next controlled GT4/GT5 fine-tune.
+
+---
+
+## Decision: Add default-off GT5 segment-quality training candidate
+
+Status: experimental candidate, default-off
+
+Decision:
+
+Add explicit training-side knobs:
+
+```text
+gcs_quality_hard_negative_from_head = False
+gcs_point_valid_gt5_edge_segment = 0.0
+gcs_point_valid_gt5_edge_segment_thr = 0.65
+gcs_point_valid_gt5_edge_segment_min_points = 5
+```
+
+`gcs_quality_hard_negative_from_head` lets `quality_loss` mine unmatched hard negatives directly from high `pred_quality_logits`, instead of relying only on the existing `pred_logits.sigmoid() * mean_valid` hard-negative mask.
+
+`gcs_point_valid_gt5_edge_segment` adds a soft longest-visible-segment support penalty for matched left/right GT5 edge lanes. It is separate from the existing adjacent-anchor continuity penalty and targets the observed `K=5` to final-output-4 failure mode.
+
+Why:
+
+The 2026-06-13 analysis of:
+
+```text
+runs/gcs_lane/gcs_yolo_lane_s_q12_cb_gt45_ft8_visrank_qhard_seed1_b8w0
+```
+
+showed the run is not promotable and does not solve the current bottleneck:
+
+```text
+best.pt official-val sweep:          official_acc=0.949357
+official_best.pt official-val sweep: official_acc=0.953179
+official_best.pt GT5 valid fail:     0.216216
+official_best.pt k5_to_output4:      0.259259
+official_best.pt gt5_output5_rate:   0.729730
+official_best.pt GT5 candidate shortfall: 0.027027
+official_best.pt GT5 NMS suppression:    0.013514
+matched/unmatched quality mean:      0.864285 / 0.748277
+```
+
+The failure is therefore not mainly threshold, candidate-pool size, or NMS. It is fifth-lane valid support after Count Head K selection plus weak Quality Head false-candidate separation.
+
+Alternatives considered:
+
+- Continue threshold, point-valid, rank-min-points, NMS, or rescue sweeps.
+- Promote the FT8 `official_best.pt` checkpoint.
+- Increase GT5 count weighting only.
+- Make Quality Head ranking or rescue stricter at decode time.
+- Add a training-side candidate that improves the signals used by the existing visible-segment rank and quality-gated rescue.
+
+Tradeoff:
+
+The new knobs preserve mainline defaults and do not change decode, official metrics, GT usage at inference, or lane fabrication rules. They add focused training pressure only when explicitly enabled. The risk is over-suppressing rare real edge candidates if matcher misses them early, or overfitting the small GT5 subset if the segment gain is too high.
+
+Validation evidence:
+
+Metric artifacts:
+
+```text
+runs/gcs_lane/gcs_yolo_lane_s_q12_cb_gt45_ft8_visrank_qhard_seed1_b8w0/analysis_best_val_sweep/tusimple_official_sweep_summary.json
+runs/gcs_lane/gcs_yolo_lane_s_q12_cb_gt45_ft8_visrank_qhard_seed1_b8w0/analysis_official_best_val_sweep/tusimple_official_sweep_summary.json
+runs/gcs_lane/gcs_yolo_lane_s_q12_cb_gt45_ft8_visrank_qhard_seed1_b8w0/analysis_best_test_official_from_val/tusimple_official_summary.json
+runs/gcs_lane/gcs_yolo_lane_s_q12_cb_gt45_ft8_visrank_qhard_seed1_b8w0/analysis_official_best_test_official_from_val/tusimple_official_summary.json
+```
+
+Test results are diagnostic/final-only and did not drive checkpoint or parameter selection:
+
+```text
+best.pt test Accuracy:          0.954517
+official_best.pt test Accuracy: 0.955443
+```
+
+Local code validation passed:
+
+```text
+python -m py_compile ultralytics/utils/gcs_loss.py tools/train_gcs.py ultralytics/models/yolo/gcs_lane/train.py ultralytics/cfg/__init__.py tests/test_gcs_count_aware.py
+python -m pytest tests/test_gcs_count_aware.py -q
+python scripts/verify_loss_cleanup.py
+python tools/check_gcs_count_head_topk_contract.py
+python tools/check_gcs_decode_meta_contract.py
+python tools/check_gcs_algorithm_contract.py
+python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12.yaml --imgsz 544 960
+python scripts/check_gcs_agent_setup.py
+```
+
+Mainline or experiment:
+
+Experiment only. Improvement claims require a fresh official-val run using the new knobs and official-best Top-K preservation. Test remains final-only after official-val selection.

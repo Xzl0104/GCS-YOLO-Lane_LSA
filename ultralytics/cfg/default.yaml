@@ -126,6 +126,7 @@ gcs_quality_dist_thr_px: 20.0 # (float) pixel threshold for quality target point
 gcs_quality_neg_weight: 0.5 # (float) relative weight for unmatched-query quality negatives
 gcs_quality_hard_negative_weight: 1.0 # (float) absolute Quality Head BCE weight for mined unmatched hard negatives
 gcs_quality_duplicate_negative_weight: 1.5 # (float) absolute Quality Head BCE weight for unmatched duplicate negatives
+gcs_quality_hard_negative_from_head: False # (bool) mine Quality Head hard negatives from high unmatched pred_quality_logits
 gcs_count_head_warmup_epochs: 5.0 # (float) linearly ramp Count Head losses over this many epochs; 0 disables warmup
 gcs_count_min_gt_points: 1 # (int) minimum visible anchors for a GT lane to count in Count Head targets
 gcs_count_cls_w2: 0.5 # (float) Count Head CE class weight for 2-lane images
@@ -163,6 +164,9 @@ gcs_gt5_edge_loss_weight: 1.15 # (float) matched left/right edge-lane loss multi
 gcs_candidate_gt5_edge_weight: 1.10 # (float) matched left/right GT5 edge-query/lane loss multiplier; 1 disables
 gcs_point_valid_gt5_edge_continuity: 0.05 # (float) point-valid continuity gain for matched left/right edge lanes on GT>=5 images; 0 disables
 gcs_point_valid_gt5_edge_continuity_thr: 0.55 # (float) adjacent point-valid probability floor for GT>=5 edge continuity
+gcs_point_valid_gt5_edge_segment: 0.0 # (float) longest-visible-segment support gain for matched GT5 edge lanes; 0 disables
+gcs_point_valid_gt5_edge_segment_thr: 0.65 # (float) point-valid probability floor for GT5 edge visible-segment support
+gcs_point_valid_gt5_edge_segment_min_points: 5 # (int) minimum GT-visible anchors required for GT5 edge segment support
 gcs_hard_loss_file: "" # (str) optional txt/json manifest for hard-edge loss weighting; independent of hard sampler
 gcs_hard_loss_lane_counts: "" # (str) optional GT lane-count filter for hard-edge loss manifest hits, e.g. "5" or "4,5"
 gcs_hard_edge_loss_weight_by_count: "4:1.15,5:1.6" # (str) per-GT-count hard-edge loss multipliers for manifest hits

@@ -47,6 +47,7 @@ class GCSLoss(nn.Module):
         quality_neg_weight: float | None = None,
         quality_hard_negative_weight: float | None = None,
         quality_duplicate_negative_weight: float | None = None,
+        quality_hard_negative_from_head: bool | str | None = None,
         exist_pos_weight: float | None = None,
         exist_focal_gamma: float | None = None,
         exist_focal_alpha: float | None = None,
@@ -65,6 +66,9 @@ class GCSLoss(nn.Module):
         candidate_gt5_edge_weight: float | None = None,
         point_valid_gt5_edge_continuity: float | None = None,
         point_valid_gt5_edge_continuity_thr: float | None = None,
+        point_valid_gt5_edge_segment: float | None = None,
+        point_valid_gt5_edge_segment_thr: float | None = None,
+        point_valid_gt5_edge_segment_min_points: int | None = None,
         hard_loss_file: str | None = None,
         hard_loss_lane_counts: str | list[int] | tuple[int, ...] | set[int] | None = None,
         hard_edge_loss_weight_by_count: str | dict[int, float] | None = None,
@@ -130,6 +134,12 @@ class GCSLoss(nn.Module):
             quality_duplicate_negative_weight
             if quality_duplicate_negative_weight is not None
             else self._arg(args, "gcs_quality_duplicate_negative_weight", 1.5)
+        )
+        self.quality_hard_negative_from_head = self._parse_bool(
+            quality_hard_negative_from_head
+            if quality_hard_negative_from_head is not None
+            else self._arg(args, "gcs_quality_hard_negative_from_head", False),
+            default=False,
         )
         self.count_head_warmup_epochs = float(
             count_head_warmup_epochs
@@ -248,6 +258,21 @@ class GCSLoss(nn.Module):
             if point_valid_gt5_edge_continuity_thr is not None
             else self._arg(args, "gcs_point_valid_gt5_edge_continuity_thr", 0.55)
         )
+        self.point_valid_gt5_edge_segment = float(
+            point_valid_gt5_edge_segment
+            if point_valid_gt5_edge_segment is not None
+            else self._arg(args, "gcs_point_valid_gt5_edge_segment", 0.0)
+        )
+        self.point_valid_gt5_edge_segment_thr = float(
+            point_valid_gt5_edge_segment_thr
+            if point_valid_gt5_edge_segment_thr is not None
+            else self._arg(args, "gcs_point_valid_gt5_edge_segment_thr", 0.65)
+        )
+        self.point_valid_gt5_edge_segment_min_points = int(
+            point_valid_gt5_edge_segment_min_points
+            if point_valid_gt5_edge_segment_min_points is not None
+            else self._arg(args, "gcs_point_valid_gt5_edge_segment_min_points", 5)
+        )
         self.hard_edge_loss_weight_by_count = self._parse_count_weight_map(
             hard_edge_loss_weight_by_count
             if hard_edge_loss_weight_by_count is not None
@@ -303,6 +328,7 @@ class GCSLoss(nn.Module):
             "gcs_point_valid_duplicate_negative_weight": self.point_valid_duplicate_negative_weight,
             "gcs_count_head_warmup_epochs": self.count_head_warmup_epochs,
             "gcs_point_valid_gt5_edge_continuity": self.point_valid_gt5_edge_continuity,
+            "gcs_point_valid_gt5_edge_segment": self.point_valid_gt5_edge_segment,
         }
         for name, value in nonnegative.items():
             if value < 0.0:
@@ -315,6 +341,7 @@ class GCSLoss(nn.Module):
             "gcs_hard_negative_quality_thr": self.hard_negative_quality_thr,
             "gcs_count_boundary_label_smoothing": self.count_boundary_label_smoothing,
             "gcs_point_valid_gt5_edge_continuity_thr": self.point_valid_gt5_edge_continuity_thr,
+            "gcs_point_valid_gt5_edge_segment_thr": self.point_valid_gt5_edge_segment_thr,
             "gcs_duplicate_iou_thr": self.duplicate_iou_thr,
         }
         for name, value in fractions.items():
@@ -344,6 +371,11 @@ class GCSLoss(nn.Module):
             raise ValueError(f"gcs_count_min_gt_points must be > 0, got {self.count_min_gt_points}.")
         if self.hard_negative_topk < 0:
             raise ValueError(f"gcs_hard_negative_topk must be >= 0, got {self.hard_negative_topk}.")
+        if self.point_valid_gt5_edge_segment_min_points <= 0:
+            raise ValueError(
+                "gcs_point_valid_gt5_edge_segment_min_points must be > 0, "
+                f"got {self.point_valid_gt5_edge_segment_min_points}."
+            )
         self.line_iou_width_px = float(
             line_iou_width_px if line_iou_width_px is not None else self._arg(args, "gcs_line_iou_width_px", 15.0)
         )
@@ -1404,6 +1436,51 @@ class GCSLoss(nn.Module):
             )
         return target_quality.detach()
 
+    @torch.no_grad()
+    def _quality_head_hard_negative_mask(
+        self,
+        pred_quality_logits: torch.Tensor,
+        neg_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        """Mine unmatched quality negatives directly from the Quality Head confidence."""
+        quality_prob = pred_quality_logits.detach().sigmoid()
+        hard_negative = neg_mask & (quality_prob > float(self.hard_negative_quality_thr))
+
+        topk = min(int(self.hard_negative_topk), int(pred_quality_logits.shape[1]))
+        if topk > 0:
+            for b in range(pred_quality_logits.shape[0]):
+                unmatched_idx = torch.nonzero(neg_mask[b], as_tuple=False).flatten()
+                if unmatched_idx.numel() == 0:
+                    continue
+                count = min(topk, int(unmatched_idx.numel()))
+                selected = quality_prob[b, unmatched_idx].topk(k=count, largest=True).indices
+                hard_negative[b, unmatched_idx[selected]] = True
+        return hard_negative.detach()
+
+    @staticmethod
+    def _longest_true_segment_bounds(mask: torch.Tensor) -> tuple[int, int]:
+        """Return [start, end) bounds for the longest contiguous true run in a 1D mask."""
+        idx = torch.nonzero(mask.detach(), as_tuple=False).flatten().tolist()
+        if not idx:
+            return 0, 0
+
+        best_start = start = int(idx[0])
+        best_len = 1
+        prev = int(idx[0])
+        cur_len = 1
+        for raw in idx[1:]:
+            cur = int(raw)
+            if cur == prev + 1:
+                cur_len += 1
+            else:
+                if cur_len > best_len:
+                    best_start, best_len = start, cur_len
+                start, cur_len = cur, 1
+            prev = cur
+        if cur_len > best_len:
+            best_start, best_len = start, cur_len
+        return best_start, best_start + best_len
+
     def quality_loss(
         self,
         pred_quality_logits: torch.Tensor | None,
@@ -1438,6 +1515,13 @@ class GCSLoss(nn.Module):
             pos_loss = self._zero_like(pred_points)
         if bool(neg_mask.any()):
             neg_weight = torch.full_like(raw_loss, float(self.quality_neg_weight))
+            if self.quality_hard_negative_from_head:
+                head_hard_negative_mask = self._quality_head_hard_negative_mask(pred_quality_logits, neg_mask)
+                hard_negative_mask = (
+                    head_hard_negative_mask
+                    if hard_negative_mask is None
+                    else (hard_negative_mask | head_hard_negative_mask)
+                )
             if hard_negative_mask is not None:
                 neg_weight = torch.where(
                     hard_negative_mask,
@@ -1530,6 +1614,7 @@ class GCSLoss(nn.Module):
         else:
             loss = loss_elem.mean()
 
+        edge_query_mask = None
         if (
             self.point_valid_gt5_edge_continuity > 0.0
             and gt_points is not None
@@ -1546,6 +1631,31 @@ class GCSLoss(nn.Module):
                 continuity_loss = (continuity_penalty[pair_mask] * pair_weight[pair_mask]).sum()
                 continuity_loss = continuity_loss / pair_weight[pair_mask].sum().clamp_min(1.0)
                 loss = loss + float(self.point_valid_gt5_edge_continuity) * continuity_loss
+
+        if self.point_valid_gt5_edge_segment > 0.0 and gt_points is not None:
+            if edge_query_mask is None:
+                edge_query_mask = self._gt5_edge_query_mask(pred_valid_logits[..., 0], gt_points, gt_valid, indices)
+            if bool(edge_query_mask.any()):
+                valid_prob = pred_valid_logits.sigmoid()
+                threshold = pred_valid_logits.new_tensor(float(self.point_valid_gt5_edge_segment_thr))
+                min_points = int(self.point_valid_gt5_edge_segment_min_points)
+                segment_loss = self._zero_like(pred_points)
+                segment_weight_sum = pred_valid_logits.new_tensor(0.0)
+                segment_count = 0
+                for b, q in torch.nonzero(edge_query_mask, as_tuple=False).tolist():
+                    start, end = self._longest_true_segment_bounds(target[b, q] > 0.5)
+                    if end - start < min_points:
+                        continue
+                    segment_prob = valid_prob[b, q, start:end]
+                    anchor_penalty = torch.relu(threshold - segment_prob).pow(2).mean()
+                    mean_penalty = torch.relu(threshold - segment_prob.mean()).pow(2)
+                    segment_weight = anchor_weight[b, q, start:end].mean().clamp_min(1e-6)
+                    segment_loss = segment_loss + 0.5 * (anchor_penalty + mean_penalty) * segment_weight
+                    segment_weight_sum = segment_weight_sum + segment_weight
+                    segment_count += 1
+                if segment_count > 0:
+                    segment_loss = segment_loss / segment_weight_sum.clamp_min(1.0)
+                    loss = loss + float(self.point_valid_gt5_edge_segment) * segment_loss
 
         if self.point_valid_neg_gain > 0.0:
             neg_anchor_mask = target < 0.5

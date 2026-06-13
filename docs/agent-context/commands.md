@@ -33,6 +33,42 @@ python tools/train_gcs.py \
 
 `official_best.pt` is selected by official-val `official_acc`. `gcs_official_best_top_k > 1` additionally preserves retained candidates under `weights/official_topk/` and records them in `official_best_summary.json`.
 
+## GT5 Segment-Quality Candidate Training
+
+Use this controlled candidate after the 2026-06-13 `gcs_yolo_lane_s_q12_cb_gt45_ft8_visrank_qhard_seed1_b8w0` analysis. It targets GT5 fifth-lane valid support and Quality Head false-positive separation. Select checkpoints and thresholds on official-val only.
+
+```bash
+python tools/train_gcs.py \
+  --model ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12.yaml \
+  --data data/tusimple_gcs_fixed_y_960x544.yaml \
+  --imgsz 544 960 \
+  --pretrained runs/gcs_lane/gcs_yolo_lane_s_q12_e180_countboundary_rankfix_balgt45_v1/weights/official_best.pt \
+  --epochs 10 \
+  --batch 8 \
+  --workers 0 \
+  --lr0 8e-5 \
+  --lrf 0.2 \
+  --cos_lr true \
+  --gcs-quality-hard-negative-from-head \
+  --gcs-quality 0.6 \
+  --gcs-quality-neg-weight 0.8 \
+  --gcs-quality-hard-negative-weight 3.0 \
+  --gcs-quality-duplicate-negative-weight 4.0 \
+  --gcs-point-valid-gt5-pos-weight 2.5 \
+  --gcs-candidate-gt5-edge-weight 1.25 \
+  --gcs-point-valid-gt5-edge-continuity 0.10 \
+  --gcs-point-valid-gt5-edge-continuity-thr 0.65 \
+  --gcs-point-valid-gt5-edge-segment 0.10 \
+  --gcs-point-valid-gt5-edge-segment-thr 0.65 \
+  --gcs-point-valid-gt5-edge-segment-min-points 5 \
+  --gcs-hard-edge-loss-terms exist,point,point_valid,line_iou,quality \
+  --gcs-official-best \
+  --gcs-official-best-period 1 \
+  --gcs-official-best-top-k 5 \
+  --gcs-official-best-gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
+  --gcs-official-best-archive-root runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset
+```
+
 ## Inference
 
 ```bash

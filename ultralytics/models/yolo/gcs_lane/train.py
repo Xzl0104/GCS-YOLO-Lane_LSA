@@ -43,6 +43,10 @@ GCS_MAINLINE_COUNT_BOUNDARY_GT5_POS_WEIGHT = 1.15
 GCS_MAINLINE_CANDIDATE_GT5_EDGE_WEIGHT = 1.10
 GCS_MAINLINE_POINT_VALID_GT5_EDGE_CONTINUITY = 0.05
 GCS_MAINLINE_POINT_VALID_GT5_EDGE_CONTINUITY_THR = 0.55
+GCS_MAINLINE_QUALITY_HARD_NEGATIVE_FROM_HEAD = False
+GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT = 0.0
+GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT_THR = 0.65
+GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT_MIN_POINTS = 5
 
 
 def _parse_number_list(value: Any, cast=float) -> list:
@@ -269,6 +273,13 @@ class GCSLaneTrainer(BaseTrainer):
         overrides.setdefault("gcs_candidate_gt5_edge_weight", GCS_MAINLINE_CANDIDATE_GT5_EDGE_WEIGHT)
         overrides.setdefault("gcs_point_valid_gt5_edge_continuity", GCS_MAINLINE_POINT_VALID_GT5_EDGE_CONTINUITY)
         overrides.setdefault("gcs_point_valid_gt5_edge_continuity_thr", GCS_MAINLINE_POINT_VALID_GT5_EDGE_CONTINUITY_THR)
+        overrides.setdefault("gcs_quality_hard_negative_from_head", GCS_MAINLINE_QUALITY_HARD_NEGATIVE_FROM_HEAD)
+        overrides.setdefault("gcs_point_valid_gt5_edge_segment", GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT)
+        overrides.setdefault("gcs_point_valid_gt5_edge_segment_thr", GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT_THR)
+        overrides.setdefault(
+            "gcs_point_valid_gt5_edge_segment_min_points",
+            GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT_MIN_POINTS,
+        )
         overrides.setdefault("gcs_hard_sampling", False)
         overrides.setdefault("gcs_hard_lane_counts", "")
         overrides.setdefault("gcs_hard_sampling_boost_by_count", "")

@@ -22,7 +22,11 @@ from ultralytics.models.yolo.gcs_lane.train import (
     GCS_MAINLINE_GT5_OVERSAMPLE_WEIGHT,
     GCS_MAINLINE_POINT_VALID_GT5_EDGE_CONTINUITY,
     GCS_MAINLINE_POINT_VALID_GT5_EDGE_CONTINUITY_THR,
+    GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT,
+    GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT_MIN_POINTS,
+    GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT_THR,
     GCS_MAINLINE_POINT_VALID_GT5_POS_WEIGHT,
+    GCS_MAINLINE_QUALITY_HARD_NEGATIVE_FROM_HEAD,
     GCS_MAINLINE_QUALITY_GAIN,
     GCS_MAINLINE_QUALITY_NEG_WEIGHT,
     GCSLaneTrainer,
@@ -199,6 +203,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gcs-quality-neg-weight", type=float, default=GCS_MAINLINE_QUALITY_NEG_WEIGHT, help="Relative weight for unmatched-query quality negatives.")
     parser.add_argument("--gcs-quality-hard-negative-weight", type=float, default=1.0)
     parser.add_argument("--gcs-quality-duplicate-negative-weight", type=float, default=1.5)
+    parser.add_argument(
+        "--gcs-quality-hard-negative-from-head",
+        action=argparse.BooleanOptionalAction,
+        default=GCS_MAINLINE_QUALITY_HARD_NEGATIVE_FROM_HEAD,
+        help="Also mine Quality Head hard negatives directly from high pred_quality_logits on unmatched queries.",
+    )
     parser.add_argument("--gcs-count-head-warmup-epochs", type=float, default=5.0, help="Linearly ramp Count Head loss over this many epochs. 0 disables warmup.")
     parser.add_argument("--gcs-count-min-gt-points", type=int, default=1, help="Minimum visible anchors for a GT lane to count in Count Head targets.")
     parser.add_argument("--gcs-count-cls-w2", type=float, default=GCS_MAINLINE_COUNT_CLS_WEIGHTS[0])
@@ -340,6 +350,24 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=GCS_MAINLINE_POINT_VALID_GT5_EDGE_CONTINUITY_THR,
         help="Minimum adjacent point-valid probability used by the GT>=5 edge continuity penalty.",
+    )
+    parser.add_argument(
+        "--gcs-point-valid-gt5-edge-segment",
+        type=float,
+        default=GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT,
+        help="GT5 edge-lane longest-visible-segment support loss gain. 0 disables.",
+    )
+    parser.add_argument(
+        "--gcs-point-valid-gt5-edge-segment-thr",
+        type=float,
+        default=GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT_THR,
+        help="Point-valid probability floor for the GT5 edge visible-segment support loss.",
+    )
+    parser.add_argument(
+        "--gcs-point-valid-gt5-edge-segment-min-points",
+        type=int,
+        default=GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT_MIN_POINTS,
+        help="Minimum GT-visible anchors required for the GT5 edge segment support loss.",
     )
     parser.add_argument(
         "--gcs-hard-loss-file",
@@ -827,6 +855,7 @@ def main() -> None:
         "gcs_quality_neg_weight": args.gcs_quality_neg_weight,
         "gcs_quality_hard_negative_weight": args.gcs_quality_hard_negative_weight,
         "gcs_quality_duplicate_negative_weight": args.gcs_quality_duplicate_negative_weight,
+        "gcs_quality_hard_negative_from_head": args.gcs_quality_hard_negative_from_head,
         "gcs_count_head_warmup_epochs": args.gcs_count_head_warmup_epochs,
         "gcs_count_min_gt_points": args.gcs_count_min_gt_points,
         "gcs_count_cls_w2": args.gcs_count_cls_w2,
@@ -864,6 +893,9 @@ def main() -> None:
         "gcs_candidate_gt5_edge_weight": args.gcs_candidate_gt5_edge_weight,
         "gcs_point_valid_gt5_edge_continuity": args.gcs_point_valid_gt5_edge_continuity,
         "gcs_point_valid_gt5_edge_continuity_thr": args.gcs_point_valid_gt5_edge_continuity_thr,
+        "gcs_point_valid_gt5_edge_segment": args.gcs_point_valid_gt5_edge_segment,
+        "gcs_point_valid_gt5_edge_segment_thr": args.gcs_point_valid_gt5_edge_segment_thr,
+        "gcs_point_valid_gt5_edge_segment_min_points": args.gcs_point_valid_gt5_edge_segment_min_points,
         "gcs_hard_loss_file": args.gcs_hard_loss_file,
         "gcs_hard_loss_lane_counts": args.gcs_hard_loss_lane_counts,
         "gcs_hard_edge_loss_weight_by_count": args.gcs_hard_edge_loss_weight_by_count,

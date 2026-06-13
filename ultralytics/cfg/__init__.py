@@ -249,6 +249,7 @@ CFG_FLOAT_KEYS = frozenset(
         "gcs_gt5_edge_loss_weight",
         "gcs_candidate_gt5_edge_weight",
         "gcs_point_valid_gt5_edge_continuity",
+        "gcs_point_valid_gt5_edge_segment",
         "gcs_point_valid_neg",
         "gcs_cost_point",
         "gcs_cost_exist",
@@ -326,6 +327,7 @@ CFG_FRACTION_KEYS = frozenset(
         "gcs_decode_rescue_candidate_point_valid_thr",
         "gcs_count_boundary_label_smoothing",
         "gcs_point_valid_gt5_edge_continuity_thr",
+        "gcs_point_valid_gt5_edge_segment_thr",
         "gcs_quality_neg_weight",
         "gcs_hard_negative_quality_thr",
         "gcs_duplicate_iou_thr",
@@ -369,6 +371,7 @@ CFG_INT_KEYS = frozenset(
         "gcs_eval_min_points",
         "gcs_count_min_gt_points",
         "gcs_hard_negative_topk",
+        "gcs_point_valid_gt5_edge_segment_min_points",
         "gcs_decode_candidate_min_points",
         "gcs_decode_rescue_candidate_min_points",
         "gcs_decode_final_min_points",
@@ -436,6 +439,7 @@ CFG_BOOL_KEYS = frozenset(
         "gcs_hard_sampling",
         "gcs_train_include_val",
         "gcs_gt5_extra_aug",
+        "gcs_quality_hard_negative_from_head",
     }
 )
 

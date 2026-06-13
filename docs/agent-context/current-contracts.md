@@ -126,6 +126,17 @@ They do not change decode, do not use GT during inference/decode, and do not fab
 
 `gcs_soft_count_decision`, `gcs_last_lane_rescue`, and `gcs_edge_last_lane_rescue` remain default-off unless selected by official-val evidence.
 
+Current default-off training-side experimental knobs:
+
+```text
+gcs_quality_hard_negative_from_head = False
+gcs_point_valid_gt5_edge_segment = 0.0
+gcs_point_valid_gt5_edge_segment_thr = 0.65
+gcs_point_valid_gt5_edge_segment_min_points = 5
+```
+
+These are intended for controlled GT5 segment-quality experiments. They do not change decode, read GT during inference, fabricate lanes, or alter official metrics.
+
 ## Experimental Loss Policy
 
 The current 7-loss setup is a default baseline, not a permanent restriction.
