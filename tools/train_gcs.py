@@ -5,6 +5,8 @@ import os
 import sys
 from pathlib import Path
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -73,6 +75,67 @@ def dataset_defaults(dataset: str) -> dict[str, Path]:
         "val_images": root / "images" / "val",
         "val_labels": root / "labels_gcs" / "val",
     }
+
+
+def resolve_data_yaml_path(value: str | Path) -> Path:
+    path = Path(value)
+    return path if path.is_absolute() else ROOT / path
+
+
+def infer_gcs_label_dir_from_image_path(image_path: str | Path) -> Path:
+    """Map an images/<split> path from a data YAML to its labels_gcs/<split> peer."""
+    path = Path(image_path)
+    parts = list(path.parts)
+    if "images" in parts:
+        idx = len(parts) - 1 - parts[::-1].index("images")
+        parts[idx] = "labels_gcs"
+        return Path(*parts)
+    return path.parent.parent / "labels_gcs" / path.name
+
+
+def is_file_like_dataset_entry(path: Path) -> bool:
+    return path.suffix.lower() in {".txt", ".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
+
+
+def infer_gcs_label_dirs_from_data(data_yaml: str | Path) -> dict[str, str]:
+    data_path = resolve_data_yaml_path(data_yaml)
+    if not data_path.exists():
+        return {}
+    data = yaml.safe_load(data_path.read_text(encoding="utf-8")) or {}
+    base = data_path.parent
+    yaml_base = data.get("path")
+    if yaml_base:
+        base_path = Path(yaml_base)
+        base = base_path if base_path.is_absolute() else data_path.parent / base_path
+
+    def resolve_entry(value: str | Path) -> Path:
+        path = Path(value)
+        return Path(os.path.abspath(path if path.is_absolute() else base / path))
+
+    def infer_entry(value: object) -> str | None:
+        if isinstance(value, (list, tuple)):
+            return None
+        if value:
+            path = resolve_entry(str(value))
+            if is_file_like_dataset_entry(path):
+                return None
+            return str(infer_gcs_label_dir_from_image_path(path))
+        return None
+
+    inferred: dict[str, str] = {}
+    for split in ("train", "val"):
+        label_dir = infer_entry(data.get(split))
+        if label_dir:
+            inferred[split] = label_dir
+    return inferred
+
+
+def choose_gcs_label_dir(explicit_label_dir: str | None, image_override: str | None, inferred_label_dir: str | None) -> str | None:
+    if explicit_label_dir:
+        return explicit_label_dir
+    if image_override:
+        return None
+    return inferred_label_dir
 
 
 def parse_args() -> argparse.Namespace:
@@ -809,6 +872,10 @@ def resolve_existing_path(value: str, *, flag: str) -> str:
 def main() -> None:
     args = parse_args()
     defaults = dataset_defaults(args.dataset)
+    data_yaml = args.data or str(defaults["data"])
+    inferred_label_dirs = infer_gcs_label_dirs_from_data(data_yaml)
+    train_gcs_labels = choose_gcs_label_dir(args.train_gcs_labels, args.train_images, inferred_label_dirs.get("train"))
+    val_gcs_labels = choose_gcs_label_dir(args.val_gcs_labels, args.val_images, inferred_label_dirs.get("val"))
     gcs_imgsz = normalize_imgsz(args.imgsz, dataset=args.dataset)
     save_period = args.save_period
     gcs_official_best_period = args.gcs_official_best_period
@@ -840,7 +907,7 @@ def main() -> None:
     overrides = {
         "task": "gcs_lane",
         "model": args.model,
-        "data": args.data or str(defaults["data"]),
+        "data": data_yaml,
         "pretrained": parse_pretrained(args.pretrained),
         "imgsz": trainer_imgsz(gcs_imgsz),
         "gcs_imgsz": list(gcs_imgsz),
@@ -880,9 +947,9 @@ def main() -> None:
         "rle": 0.0,
         "angle": 0.0,
         "train_images": args.train_images,
-        "train_gcs_labels": args.train_gcs_labels,
+        "train_gcs_labels": train_gcs_labels,
         "val_images": args.val_images,
-        "val_gcs_labels": args.val_gcs_labels,
+        "val_gcs_labels": val_gcs_labels,
         "gcs_train_include_val": args.gcs_train_include_val,
         "gcs_exist": args.gcs_exist,
         "gcs_point": args.gcs_point,

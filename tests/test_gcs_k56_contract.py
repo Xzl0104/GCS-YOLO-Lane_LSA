@@ -11,6 +11,7 @@ import yaml
 from gcs_tools.label_utils import fixed_y_anchors
 from tools import check_tusimple_fixed_y_label_oracle as oracle
 from tools import rebuild_tusimple_fixed_y_k56_from_reference_split as builder
+from tools import train_gcs
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -40,6 +41,69 @@ def test_k56_data_and_model_contract_match():
     assert head_args[4] == "fixed_y"
     assert math.isclose(float(data["fixed_y"][0]), float(head_args[5]))
     assert math.isclose(float(data["fixed_y"][1]), float(head_args[6]))
+
+
+def test_k56_train_command_infers_k56_label_dirs_from_data_yaml():
+    labels = train_gcs.infer_gcs_label_dirs_from_data(ROOT / "data" / "tusimple_gcs_fixed_y_k56_960x544.yaml")
+
+    assert labels["train"] == str(ROOT / "datasets" / "tusimple_fixed_y_k56_960x544" / "labels_gcs" / "train")
+    assert labels["val"] == str(ROOT / "datasets" / "tusimple_fixed_y_k56_960x544" / "labels_gcs" / "val")
+
+
+def test_train_command_label_inference_does_not_follow_image_symlink(tmp_path):
+    legacy_train = tmp_path / "legacy" / "images" / "train"
+    legacy_val = tmp_path / "legacy" / "images" / "val"
+    legacy_train.mkdir(parents=True)
+    legacy_val.mkdir(parents=True)
+    k56_images = tmp_path / "k56" / "images"
+    k56_images.mkdir(parents=True)
+    try:
+        (k56_images / "train").symlink_to(legacy_train, target_is_directory=True)
+        (k56_images / "val").symlink_to(legacy_val, target_is_directory=True)
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"directory symlink unavailable: {exc}")
+    data_yaml = tmp_path / "data.yaml"
+    data_yaml.write_text(
+        f"train: {k56_images / 'train'}\nval: {k56_images / 'val'}\nnames:\n  0: lane\n",
+        encoding="utf-8",
+    )
+
+    labels = train_gcs.infer_gcs_label_dirs_from_data(data_yaml)
+
+    assert labels["train"] == str(tmp_path / "k56" / "labels_gcs" / "train")
+    assert labels["val"] == str(tmp_path / "k56" / "labels_gcs" / "val")
+
+
+def test_train_command_does_not_pair_yaml_labels_with_cli_image_override():
+    assert train_gcs.choose_gcs_label_dir("explicit_labels", "override_images", "yaml_labels") == "explicit_labels"
+    assert train_gcs.choose_gcs_label_dir(None, "override_images", "yaml_labels") is None
+    assert train_gcs.choose_gcs_label_dir(None, None, "yaml_labels") == "yaml_labels"
+
+
+def test_train_command_does_not_infer_split_label_dir_for_manifest_or_list_entries(tmp_path):
+    manifest = tmp_path / "train.txt"
+    manifest.write_text("images/train/0001.jpg\n", encoding="utf-8")
+    val_images = tmp_path / "k56" / "images" / "val"
+    val_images.mkdir(parents=True)
+    data_yaml = tmp_path / "data.yaml"
+    data_yaml.write_text(
+        "\n".join(
+            [
+                f"train: {manifest}",
+                "val:",
+                f"  - {val_images}",
+                "names:",
+                "  0: lane",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    labels = train_gcs.infer_gcs_label_dirs_from_data(data_yaml)
+
+    assert "train" not in labels
+    assert "val" not in labels
 
 
 def test_k56_builder_rejects_split_raw_file_overlap():
