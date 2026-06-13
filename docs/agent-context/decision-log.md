@@ -1303,3 +1303,147 @@ The unit tests cover default-off unchanged behavior, short visible-segment unmat
 Mainline or experiment:
 
 Experiment only. Improvement claims require a fresh remote official-val run. Test remains final-only after official-val selection.
+
+---
+
+## Decision: Reject visible-segment hard-negative remote gate
+
+Status: rejected experiment, default-off infrastructure retained
+
+Decision:
+
+Do not promote:
+
+```text
+gcs_yolo_lane_s_q12_gt5segq_vishn_countvis_ft12_seed1_b8w0
+```
+
+Keep the code/config support from commit:
+
+```text
+4881bcebc16ff09a72d1f90458bc3a99296ea597
+```
+
+as default-off experimental infrastructure only:
+
+```text
+gcs_hard_negative_visible_segment = False
+gcs_hard_negative_visible_thr = 0.5
+gcs_hard_negative_visible_support_points = 12.0
+```
+
+Do not change mainline defaults, do not rerun the same recipe as the next gate, and do not use test to rescue or tune it.
+
+Why:
+
+The 12-epoch remote gate used `ssh_lane` on the remote CUDA server, trained from:
+
+```text
+runs/gcs_lane/gcs_yolo_lane_s_q12_e180_countboundary_rankfix_balgt45_v1/weights/official_best.pt
+```
+
+with visible-segment hard-negative mining, `gcs_quality_hard_negative_from_head`, mild GT5 edge segment support, `gcs_hard_negative_quality_thr=0.40`, and `gcs_hard_negative_topk=2`.
+
+Training-time official-val Top-K selected epoch 5:
+
+```text
+official_acc=0.953639
+official_fp=0.044674
+official_fn=0.036272
+```
+
+The independent official-val resweep on `weights/official_best.pt` confirmed the same best row:
+
+```text
+official_acc=0.953639
+count_acc_3=0.923767
+count_acc_4=0.863636
+count_acc_5=0.635135
+gt5_output5_rate=0.635135
+gt5_count_head_under_rate=0.121622
+gt5_valid_points_fail_rate=0.243243
+gt5_candidate_pool_shortfall_rate=0.0
+gt5_top5_suppressed_by_nms_rate=0.013514
+matched/unmatched quality mean=0.864663/0.726468
+```
+
+This does not beat the active official-val references:
+
+```text
+countboundary baseline official_best.pt: 0.954137
+old FT6 reference:                     0.954782
+```
+
+It only slightly exceeds already rejected controls:
+
+```text
+clean count-visible FT6 control: 0.953415
+adjacent Count margin gate:      0.953113
+```
+
+More importantly, it worsened the target GT5 behavior versus the clean count-visible control:
+
+```text
+clean count-visible GT5 output5: 0.824324
+visible hard-negative GT5 output5: 0.635135
+```
+
+GT5 diagnosis on `official_best.pt` showed:
+
+```text
+GT5 images: 74
+kept: 47
+quality_too_low: 17
+count_head_under_predict: 9
+valid_points_fail: 1
+candidate_pool_shortfall: 0
+rank5_score_low: 0
+GT5 NMS suppression rate: 0.013514
+valid_points_5 mean/median: 5.621622 / 6.0
+s5 mean/median: 0.218729 / 0.243419
+```
+
+The root blocker is therefore not candidate supply, rank, or NMS. It is quality-gated fifth-lane survival after Count Head K selection, with secondary Count underprediction. The hard-negative pressure creates usable matched/unmatched quality separation, but it suppresses or fails to preserve real short fifth-lane candidates enough to lose official-val.
+
+Alternatives considered:
+
+- Promote the recipe because it beats the two most recent rejected gates.
+- Continue the same recipe for more epochs.
+- Increase hard-negative or duplicate-negative pressure.
+- Use decode/test sweeps to recover the official metric.
+- Stop and document the result as non-promotable.
+
+Tradeoff:
+
+Keeping the default-off code preserves a useful controlled mechanism and tests, but the specific recipe should not become the next main path. The next idea needs a different hypothesis that preserves GT5 real-candidate quality while controlling false fifth lanes, rather than simply increasing unmatched hard-negative pressure.
+
+Validation evidence:
+
+Local validation before remote training:
+
+```text
+D:\miniconda3\envs\lsa_yolo\python.exe -m py_compile ultralytics/utils/gcs_loss.py ultralytics/models/yolo/gcs_lane/train.py tools/train_gcs.py ultralytics/cfg/__init__.py tests/test_gcs_count_aware.py
+D:\miniconda3\envs\lsa_yolo\python.exe -m pytest tests/test_gcs_count_aware.py tests/test_gcs_boundary_decode_plumbing.py -q -p no:cacheprovider --basetemp .tmp_pytest\basetemp
+D:\miniconda3\envs\lsa_yolo\python.exe scripts/verify_loss_cleanup.py
+D:\miniconda3\envs\lsa_yolo\python.exe tools/check_gcs_count_head_topk_contract.py
+D:\miniconda3\envs\lsa_yolo\python.exe tools/check_gcs_decode_meta_contract.py
+D:\miniconda3\envs\lsa_yolo\python.exe tools/check_gcs_algorithm_contract.py
+D:\miniconda3\envs\lsa_yolo\python.exe tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12.yaml --imgsz 544 960
+D:\miniconda3\envs\lsa_yolo\python.exe scripts/check_gcs_agent_setup.py
+```
+
+Remote artifacts:
+
+```text
+runs/gcs_lane/gcs_yolo_lane_s_q12_gt5segq_vishn_countvis_ft12_seed1_b8w0/args.yaml
+runs/gcs_lane/gcs_yolo_lane_s_q12_gt5segq_vishn_countvis_ft12_seed1_b8w0/results.csv
+runs/gcs_lane/gcs_yolo_lane_s_q12_gt5segq_vishn_countvis_ft12_seed1_b8w0/official_best_summary.json
+runs/gcs_lane/gcs_yolo_lane_s_q12_gt5segq_vishn_countvis_ft12_seed1_b8w0/weights/official_best.pt
+runs/gcs_lane/gcs_yolo_lane_s_q12_gt5segq_vishn_countvis_ft12_seed1_b8w0/weights/official_topk/
+runs/gcs_lane/gcs_yolo_lane_s_q12_gt5segq_vishn_countvis_ft12_seed1_b8w0/analysis_official_best_val_sweep/tusimple_official_sweep_summary.json
+runs/gcs_lane/gcs_yolo_lane_s_q12_gt5segq_vishn_countvis_ft12_seed1_b8w0/analysis_official_best_gt5_diag_val/gt5_rank_diagnostics_summary.json
+```
+
+Mainline or experiment:
+
+Rejected experiment. Infrastructure remains default-off. No test evidence was used.
