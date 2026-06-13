@@ -1447,3 +1447,80 @@ runs/gcs_lane/gcs_yolo_lane_s_q12_gt5segq_vishn_countvis_ft12_seed1_b8w0/analysi
 Mainline or experiment:
 
 Rejected experiment. Infrastructure remains default-off. No test evidence was used.
+
+## 2026-06-13: Add default-off GT5 edge Quality target floor candidate
+
+Decision:
+
+Add `gcs_quality_gt5_edge_floor` as a default-off training-side experimental knob. When the value is greater than `0.0`, matched Quality Head targets for real left/right edge lanes in GT5 images are clamped to at least that floor. Mainline defaults remain unchanged at `0.0`.
+
+Why:
+
+The current-code reliability audit found a baseline-protocol drift and a persistent GT5 fifth-lane survival bottleneck. The default-off rescue official-val sweep on:
+
+```text
+runs/gcs_lane/gcs_yolo_lane_s_q12_e180_countboundary_rankfix_balgt45_v1/weights/official_best.pt
+```
+
+selected:
+
+```text
+official_acc=0.953756
+FP=0.046006
+FN=0.036961
+artifact: runs/gcs_lane/reliability_audit_20260613_baseline_current_default_val_sweep
+```
+
+This is below the archived countboundary summary (`0.954137`) and old FT6 reference (`0.954782`). The matching GT5 diagnosis at:
+
+```text
+runs/gcs_lane/reliability_audit_20260613_baseline_current_default_gt5_diag
+```
+
+showed:
+
+```text
+GT5 images=74
+kept=49
+quality_too_low=14
+count_head_under_predict=7
+valid_points_fail=3
+candidate_pool_shortfall=1
+gt5_rank5_score_low_rate=0.0
+gt5_top5_suppressed_by_nms_rate=0.0
+```
+
+Candidate supply, visible-segment rank, and NMS are therefore not the active primary bottleneck. A floor on matched GT5 edge Quality targets directly tests whether true short edge lanes receive too-low continuous quality targets, while leaving decode and official evaluation untouched.
+
+Alternatives considered:
+
+- Continue the rejected visible-segment hard-negative recipe.
+- Re-open threshold, NMS, rescue, or soft-count decode sweeps.
+- Change Quality Head ranking or rescue gates at inference time.
+- Add a default-off training-side floor for matched GT5 edge-lane quality targets only.
+
+Tradeoff:
+
+The floor may increase GT5 retention but can also raise false fifth-lane pressure if the trained Quality Head stops separating real and spurious fifth candidates. Keeping the knob default-off and testing it as a single controlled remote gate preserves baseline reproducibility and keeps attribution clean.
+
+Validation evidence:
+
+Local checks after implementation:
+
+```text
+D:\miniconda3\envs\lsa_yolo\python.exe -m py_compile ultralytics/utils/gcs_loss.py ultralytics/models/yolo/gcs_lane/train.py tools/train_gcs.py ultralytics/cfg/__init__.py tests/test_gcs_count_aware.py
+D:\miniconda3\envs\lsa_yolo\python.exe -m pytest tests/test_gcs_count_aware.py -q --basetemp=.tmp_pytest\basetemp -o cache_dir=.tmp_pytest\cache
+D:\miniconda3\envs\lsa_yolo\python.exe -m pytest tests/test_gcs_boundary_decode_plumbing.py -q
+D:\miniconda3\envs\lsa_yolo\python.exe scripts/verify_loss_cleanup.py
+D:\miniconda3\envs\lsa_yolo\python.exe tools/check_gcs_count_head_topk_contract.py
+D:\miniconda3\envs\lsa_yolo\python.exe tools/check_gcs_decode_meta_contract.py
+D:\miniconda3\envs\lsa_yolo\python.exe tools/check_gcs_algorithm_contract.py
+D:\miniconda3\envs\lsa_yolo\python.exe tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12.yaml --imgsz 544 960
+D:\miniconda3\envs\lsa_yolo\python.exe tools/check_dataset.py
+D:\miniconda3\envs\lsa_yolo\python.exe tools/check_gcs_label_order_split.py
+D:\miniconda3\envs\lsa_yolo\python.exe scripts/check_gcs_agent_setup.py
+```
+
+Mainline or experiment:
+
+Experimental candidate. Default-off. No decode change, no official metric change, no test usage.

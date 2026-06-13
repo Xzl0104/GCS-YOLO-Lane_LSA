@@ -35,7 +35,7 @@ python tools/train_gcs.py \
 
 ## Next Remote Official-Val Experiments
 
-No next remote training command is selected at this checkpoint. The 12-epoch visible-segment hard-negative gate has completed and is not promotable. Pause before launching another training run; design the next candidate from the official-val diagnosis below.
+Next selected gate: fine-tune a default-off matched GT5 edge Quality target floor candidate. This is a training-side experiment only; it must not change decode, official evaluation, or test usage.
 
 When a new remote CUDA experiment is selected, run it from a dedicated Git clone checked out to the exact pushed commit SHA. Do not run training locally from Codex. Activate the remote CUDA environment first:
 
@@ -94,6 +94,41 @@ runs/gcs_lane/gcs_yolo_lane_s_q12_gt5segq_vishn_countvis_ft12_seed1_b8w0/analysi
 ```
 
 Do not rerun these rejected gates unless checking reproducibility. Do not use test to choose the next candidate.
+
+Current-code audit baseline before this gate:
+
+```text
+weights: runs/gcs_lane/gcs_yolo_lane_s_q12_e180_countboundary_rankfix_balgt45_v1/weights/official_best.pt
+official-val sweep: runs/gcs_lane/reliability_audit_20260613_baseline_current_default_val_sweep
+official_acc: 0.953756
+FP/FN: 0.046006 / 0.036961
+GT5 diagnosis: runs/gcs_lane/reliability_audit_20260613_baseline_current_default_gt5_diag
+GT5 kept: 49/74
+GT5 failure counts: quality_too_low=14, count_head_under_predict=7, valid_points_fail=3, candidate_pool_shortfall=1
+```
+
+Run the next candidate only from the exact pushed commit that contains `gcs_quality_gt5_edge_floor`:
+
+```bash
+python tools/train_gcs.py \
+  --model ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12.yaml \
+  --data data/tusimple_gcs_fixed_y_960x544.yaml \
+  --imgsz 544 960 \
+  --name gcs_yolo_lane_s_q12_quality_gt5edgefloor_ft12_seed1_b8w0 \
+  --pretrained runs/gcs_lane/gcs_yolo_lane_s_q12_e180_countboundary_rankfix_balgt45_v1/weights/official_best.pt \
+  --epochs 12 \
+  --batch 8 \
+  --workers 0 \
+  --seed 1 \
+  --gcs-quality-gt5-edge-floor 0.65 \
+  --gcs-official-best \
+  --gcs-official-best-period 1 \
+  --gcs-official-best-top-k 5 \
+  --gcs-official-best-gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
+  --gcs-official-best-archive-root runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset
+```
+
+After training, run an independent official-val sweep and GT5 diagnosis on `weights/official_best.pt` only. If `official_acc`, FP/FN, or GT5 retention do not beat the current-code audit baseline under the same protocol, keep the knob default-off and document the bottleneck.
 
 For every run, fetch `args.yaml`, `results.csv`, `weights/official_best_summary.json`, retained `weights/official_topk/` metadata, independent official-val sweep summaries, and GT5 diagnostics. The minimum analysis fields are `official_acc`, FP, FN, `count_acc_3/4/5`, GT3/GT4/GT5 confusion rates, `gt5_output5_rate`, `gt5_count_head_under_rate`, `gt5_valid_points_fail_rate`, candidate shortfall, GT5 NMS, `decode/k5_to_output4_rate`, rank-score failure counts, visible valid-point distributions, and matched/unmatched quality means.
 

@@ -124,6 +124,7 @@ gcs_count_sum_normalize: True # (bool) normalize count_sum_loss by GT lane count
 gcs_quality: 0.4 # (float) lane-level Quality Head BCE loss gain
 gcs_quality_dist_thr_px: 20.0 # (float) pixel threshold for quality target point-inlier score
 gcs_quality_neg_weight: 0.5 # (float) relative weight for unmatched-query quality negatives
+gcs_quality_gt5_edge_floor: 0.0 # (float) minimum matched Quality Head target for left/right GT5 edge lanes; 0 disables
 gcs_quality_hard_negative_weight: 1.0 # (float) absolute Quality Head BCE weight for mined unmatched hard negatives
 gcs_quality_duplicate_negative_weight: 1.5 # (float) absolute Quality Head BCE weight for unmatched duplicate negatives
 gcs_quality_hard_negative_from_head: False # (bool) mine Quality Head hard negatives from high unmatched pred_quality_logits

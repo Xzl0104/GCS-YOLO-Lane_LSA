@@ -28,6 +28,7 @@ from ultralytics.models.yolo.gcs_lane.train import (
     GCS_MAINLINE_POINT_VALID_GT5_POS_WEIGHT,
     GCS_MAINLINE_QUALITY_HARD_NEGATIVE_FROM_HEAD,
     GCS_MAINLINE_QUALITY_GAIN,
+    GCS_MAINLINE_QUALITY_GT5_EDGE_FLOOR,
     GCS_MAINLINE_QUALITY_NEG_WEIGHT,
     GCSLaneTrainer,
 )
@@ -201,6 +202,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gcs-quality", type=float, default=GCS_MAINLINE_QUALITY_GAIN, help="Lane-level Quality Head BCE loss gain.")
     parser.add_argument("--gcs-quality-dist-thr-px", type=float, default=20.0, help="Pixel threshold for quality target point-inlier score.")
     parser.add_argument("--gcs-quality-neg-weight", type=float, default=GCS_MAINLINE_QUALITY_NEG_WEIGHT, help="Relative weight for unmatched-query quality negatives.")
+    parser.add_argument(
+        "--gcs-quality-gt5-edge-floor",
+        type=float,
+        default=GCS_MAINLINE_QUALITY_GT5_EDGE_FLOOR,
+        help="Minimum Quality Head target for matched left/right GT5 edge lanes. 0 disables.",
+    )
     parser.add_argument("--gcs-quality-hard-negative-weight", type=float, default=1.0)
     parser.add_argument("--gcs-quality-duplicate-negative-weight", type=float, default=1.5)
     parser.add_argument(
@@ -889,6 +896,7 @@ def main() -> None:
         "gcs_quality": args.gcs_quality,
         "gcs_quality_dist_thr_px": args.gcs_quality_dist_thr_px,
         "gcs_quality_neg_weight": args.gcs_quality_neg_weight,
+        "gcs_quality_gt5_edge_floor": args.gcs_quality_gt5_edge_floor,
         "gcs_quality_hard_negative_weight": args.gcs_quality_hard_negative_weight,
         "gcs_quality_duplicate_negative_weight": args.gcs_quality_duplicate_negative_weight,
         "gcs_quality_hard_negative_from_head": args.gcs_quality_hard_negative_from_head,

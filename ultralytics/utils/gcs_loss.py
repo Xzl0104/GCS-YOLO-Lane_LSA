@@ -48,6 +48,7 @@ class GCSLoss(nn.Module):
         quality_hard_negative_weight: float | None = None,
         quality_duplicate_negative_weight: float | None = None,
         quality_hard_negative_from_head: bool | str | None = None,
+        quality_gt5_edge_floor: float | None = None,
         exist_pos_weight: float | None = None,
         exist_focal_gamma: float | None = None,
         exist_focal_alpha: float | None = None,
@@ -143,6 +144,11 @@ class GCSLoss(nn.Module):
             if quality_hard_negative_from_head is not None
             else self._arg(args, "gcs_quality_hard_negative_from_head", False),
             default=False,
+        )
+        self.quality_gt5_edge_floor = float(
+            quality_gt5_edge_floor
+            if quality_gt5_edge_floor is not None
+            else self._arg(args, "gcs_quality_gt5_edge_floor", 0.0)
         )
         self.count_head_warmup_epochs = float(
             count_head_warmup_epochs
@@ -346,6 +352,7 @@ class GCSLoss(nn.Module):
             "gcs_quality_dist_thr_px": self.quality_dist_thr_px,
             "gcs_quality_hard_negative_weight": self.quality_hard_negative_weight,
             "gcs_quality_duplicate_negative_weight": self.quality_duplicate_negative_weight,
+            "gcs_quality_gt5_edge_floor": self.quality_gt5_edge_floor,
             "gcs_hard_negative_exist_weight": self.hard_negative_exist_weight,
             "gcs_hard_negative_visible_thr": self.hard_negative_visible_thr,
             "gcs_hard_negative_visible_support_points": self.hard_negative_visible_support_points,
@@ -366,6 +373,7 @@ class GCSLoss(nn.Module):
             "gcs_exist_neg_margin": self.exist_neg_margin,
             "gcs_point_valid_neg_thr": self.point_valid_neg_thr,
             "gcs_quality_neg_weight": self.quality_neg_weight,
+            "gcs_quality_gt5_edge_floor": self.quality_gt5_edge_floor,
             "gcs_hard_negative_quality_thr": self.hard_negative_quality_thr,
             "gcs_hard_negative_visible_thr": self.hard_negative_visible_thr,
             "gcs_count_boundary_label_smoothing": self.count_boundary_label_smoothing,
@@ -1503,6 +1511,18 @@ class GCSLoss(nn.Module):
             point_score = self._quality_point_inlier_score(pred, target, valid)
             line_iou_score = self._line_iou(pred, target, valid).clamp(min=0.0, max=1.0)
             quality = (0.5 * point_score + 0.5 * line_iou_score).clamp(min=0.0, max=1.0)
+            floor = min(max(float(self.quality_gt5_edge_floor), 0.0), 1.0)
+            if floor > 0.0:
+                is_edge, lane_count = self._matched_target_edge_mask(
+                    gt_points[b],
+                    gt_valid[b],
+                    tgt_idx,
+                    device=device,
+                    dtype=dtype,
+                    min_lane_count=5,
+                )
+                if lane_count >= 5:
+                    quality = torch.where(is_edge, quality.clamp(min=floor), quality)
             target_quality[b, src_idx.to(device=target_quality.device, dtype=torch.long)] = quality.to(
                 device=target_quality.device, dtype=target_quality.dtype
             )
