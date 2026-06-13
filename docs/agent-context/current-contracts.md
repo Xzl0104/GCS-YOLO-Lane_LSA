@@ -28,6 +28,20 @@ datasets/tusimple_fixed_y_960x544
 
 The test split must not participate in training split rebuilds, threshold search, checkpoint selection, or postprocess tuning.
 
+Active experimental K56 data YAML:
+
+```text
+data/tusimple_gcs_fixed_y_k56_960x544.yaml
+```
+
+Active experimental K56 data root:
+
+```text
+datasets/tusimple_fixed_y_k56_960x544
+```
+
+The K56 dataset must be rebuilt from original TuSimple JSON and images. Do not resample existing K32 labels into K56 labels.
+
 ## Model Contract
 
 Default model:
@@ -48,6 +62,17 @@ fixed_y_start = 710 / 720 = 0.9861111111111112
 fixed_y_end = 0.25
 K = 32
 ```
+
+Active experimental K56 label mode:
+
+```text
+point_mode = fixed_y
+fixed_y_start = 710 / 720 = 0.9861111111111112
+fixed_y_end = 160 / 720 = 0.2222222222222222
+K = 56
+```
+
+The K56 anchors align exactly to TuSimple official h-samples from `710` down to `160` at step `10`, normalized by original height `720`.
 
 Expected fixed-y label fields:
 

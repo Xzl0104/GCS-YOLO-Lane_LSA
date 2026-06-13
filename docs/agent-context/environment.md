@@ -86,3 +86,26 @@ Remote datasets and large local weights should be linked or copied into the dedi
 - Do not hardcode this absolute Windows path into portable source code, dataset YAML, or committed scripts unless the user explicitly requests a local-only script.
 - If a command fails because of CUDA, PyTorch, or environment mismatch, report the exact Python executable, PyTorch version, CUDA availability, and CUDA version before proposing fixes.
 - Preserve the TuSimple input-size contract: `--imgsz 544 960`.
+
+## Hardware-Aware Training Policy
+
+The primary local workstation GPU is an RTX 4060 with 8GB VRAM. Use it for quick validation only:
+
+```text
+contract checks
+label/oracle checks
+dataset smoke checks
+model shape checks
+single-batch inference or training smoke checks
+```
+
+Do not use the local 8GB GPU for formal TuSimple algorithm training unless the user explicitly asks. Keep local smoke batches small and prefer CPU-safe contract checks when the goal is only shape or parser validation.
+
+The remote CUDA server GPU is an RTX 4090 with 24GB VRAM. Use it for formal training and official-val evaluation. For current Q12/K56 TuSimple experiments, the default remote formal-training starting point is:
+
+```text
+batch = 32
+workers = 4
+```
+
+If `batch=32` is stable and leaves a large VRAM margin, a throughput-only batch probe may be run before launching a new formal experiment. The probe must keep the same data split and `--imgsz 544 960`, must not use test for selection, and must be recorded in the run notes. Reduce batch only for OOM, NaN, loader instability, or when official-val hooks make the run unreliable.

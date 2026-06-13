@@ -34,6 +34,12 @@ Current TuSimple fixed-y data root:
 datasets/tusimple_fixed_y_960x544
 ```
 
+Active experimental K56 TuSimple data root:
+
+```text
+datasets/tusimple_fixed_y_k56_960x544
+```
+
 Current split sizes:
 
 ```text
@@ -43,6 +49,8 @@ test:  2782
 ```
 
 The official-val subset is aligned with the current validation split and must stay separate from test-driven tuning.
+
+The K56 experimental labels keep the same split sizes and align fixed-y anchors exactly to TuSimple official h-samples `710..160` at step `10`.
 
 Official TuSimple Accuracy evaluation needs the original TuSimple archive layout, not only the fixed-y converted dataset.
 

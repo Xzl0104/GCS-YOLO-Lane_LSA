@@ -420,13 +420,14 @@ After each code change, sync the validated published source to:
 https://github.com/Xzl0104/GCS-YOLO-Lane_LSA
 ```
 
-Each sync should be a normal Git commit on `main`. Do not force-push or rewrite published history, so earlier algorithm states remain recoverable by commit SHA or `git revert`.
+Each sync should be a normal Git commit on the active published branch. Do not force-push or rewrite published history, so earlier algorithm states remain recoverable by commit SHA or `git revert`.
 
-Each archive commit must include a concise note based on the completed work. After pushing the archive commit, the assistant must give the user a work summary covering changed files, validation performed, commit SHA, and GitHub sync status.
+Each archive commit must include a concise note based on the completed work. After every pushed archive commit, the assistant must give the user a sync summary covering changed files, validation performed, commit SHA, GitHub push status, and any remaining unsynced or ignored local files that matter to the requested work.
 
-The GitHub repository is limited to these folders:
+The GitHub repository includes root project instructions and the allowed source/documentation folders:
 
 ```text
+AGENTS.md
 data
 gcs_tools
 scripts
@@ -447,14 +448,15 @@ Alternatives considered:
 - keep GitHub synchronization as an ad hoc manual step
 - publish the entire local workspace, including runs, outputs, archives, and checkpoints
 - track only the algorithm source folders in the published repository
+- track root `AGENTS.md` with the source so project instructions stay synchronized
 
 Tradeoff:
 
-The local workspace is not a standard repository root, so synchronization must preserve the published-folder boundary and avoid pushing generated or large local artifacts.
+The local workspace is not a standard repository root, so synchronization must preserve the published-source boundary and avoid pushing generated or large local artifacts. Root `AGENTS.md` is now an explicit exception because it carries active project instructions for future agents.
 
 Validation evidence:
 
-The initial GitHub publish was created from a clean mirror containing only the allowed folders, excluding `__pycache__` and `.pyc` files.
+The initial GitHub publish was created from a clean mirror containing only the allowed folders, excluding `__pycache__` and `.pyc` files. On 2026-06-13, the workflow policy was updated to track root `AGENTS.md` and require a sync summary after every pushed archive commit.
 
 Mainline or experiment:
 
@@ -1639,7 +1641,7 @@ Rejected experiment. Infrastructure remains default-off. No test evidence was us
 
 Decision:
 
-For the `0.97` TuSimple official Accuracy objective, stop treating another `K=32` GT5 quality/count fine-tune as the next main path. Select a separate `Q12-K56` fixed-y candidate aligned exactly to TuSimple official `h_samples=160..710 step 10` as the smallest credible next experimental direction.
+For the `0.97` TuSimple official Accuracy objective, stop treating another `K=32` GT5 quality/count fine-tune as the next main path. Select a separate `Q12-K56` fixed-y candidate aligned exactly to the TuSimple official h-sample grid (`160..710 step 10` in official top-to-bottom order, stored as `710..160 step -10` in the model's bottom-to-top fixed-y order) as the smallest credible next experimental direction.
 
 The current mainline contract remains unchanged:
 
@@ -1681,7 +1683,7 @@ gcs_yolo_lane_s_q12_quality_gt5edgefloor_ft12_seed1_b8w0:       0.953587
 Simulated label-oracle alternatives show that official h-sample alignment changes the ceiling:
 
 ```text
-K=56 aligned to h_samples=160..710 step 10: Accuracy=0.998256
+K=56 aligned to official h-samples 160..710 step 10, stored bottom-to-top as 710..160 step -10: Accuracy=0.998256
 K=64 over 710->160:                         Accuracy=0.967817
 ```
 
@@ -1710,3 +1712,87 @@ Implement the `Q12-K56` path as an explicit experiment with a separate data YAML
 Mainline or experiment:
 
 Experimental candidate. The current mainline remains `Q12-K32`; no improvement is claimed without future official-val evidence.
+
+## 2026-06-13: Implement Q12-K56 official h-sample branch and launch remote baseline
+
+Decision:
+
+Implement the `Q12-K56` official-h-sample-aligned path as an isolated experimental branch, with separate data and model configs:
+
+```text
+data/tusimple_gcs_fixed_y_k56_960x544.yaml
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml
+```
+
+The K56 label contract is:
+
+```text
+point_mode = fixed_y
+fixed_y_start = 710 / 720 = 0.9861111111111112
+fixed_y_end = 160 / 720 = 0.2222222222222222
+K = 56
+```
+
+Labels are rebuilt from original TuSimple JSON and images into:
+
+```text
+datasets/tusimple_fixed_y_k56_960x544
+```
+
+They must not be resampled from existing K32 labels.
+
+Why:
+
+The prior K32 representation oracle (`Accuracy=0.956249`) leaves too little geometry headroom for the `0.97` objective. The rebuilt K56 official-grid labels align exactly to TuSimple official `h_samples=710..160 step -10` and raise the official-val label oracle to:
+
+```text
+Accuracy=0.998256
+FN=0.001377
+FP=-0.000689
+images=363
+```
+
+Alternatives considered:
+
+- Continue K32 Count/Quality fine-tuning.
+- Increase K without exact official-grid alignment.
+- Resample existing K32 labels into K56.
+- Build K56 from original TuSimple JSON and keep it isolated from K32.
+
+Tradeoff:
+
+K56 changes output shape and memory profile:
+
+```text
+pred_points: B x 12 x 56 x 2
+pred_valid_logits: B x 12 x 56
+```
+
+K32 checkpoints are not compatible promotion evidence for K56. Formal K56 training belongs on the remote RTX 4090 24GB server, not on the local RTX 4060 8GB workstation. The default formal remote starting point is `batch=32 workers=4`, with changes only after explicit OOM/stability or throughput evidence.
+
+Validation evidence:
+
+Local and remote K56 validation passed:
+
+```text
+python -m py_compile tools/rebuild_tusimple_fixed_y_k56_from_reference_split.py tools/check_tusimple_fixed_y_label_oracle.py tools/train_gcs.py tests/test_gcs_k56_contract.py
+python -m pytest tests/test_gcs_k56_contract.py
+python tools/check_tusimple_fixed_y_label_oracle.py --data data/tusimple_gcs_fixed_y_k56_960x544.yaml --label-split val --archive-root archive
+python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml --imgsz 544 960 --batch 1
+```
+
+Remote baseline:
+
+```text
+run: gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4
+batch: 32
+workers: 4
+official_best: enabled
+official_best_top_k: 5
+```
+
+An earlier conservative `batch=4 workers=4` smoke run was stopped after the user pointed out that the 24GB server GPU was underused. The `batch=32` run is the formal baseline path.
+
+Mainline or experiment:
+
+Experimental candidate. The K32 mainline remains current until K56 is selected on official-val. No test evidence has been used.

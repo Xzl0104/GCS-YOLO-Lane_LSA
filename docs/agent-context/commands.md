@@ -6,6 +6,13 @@ All TuSimple commands should use:
 --imgsz 544 960
 ```
 
+Use hardware-aware batch strategy:
+
+```text
+local RTX 4060 8GB: smoke/contract/oracle checks only, small batches
+remote RTX 4090 24GB: formal training/evaluation, default Q12/K56 batch=32 workers=4
+```
+
 ## Train
 
 ```bash
@@ -35,25 +42,62 @@ python tools/train_gcs.py \
 
 ## Next Remote Official-Val Experiments
 
-No next remote training command is selected at this checkpoint. Do not launch another `K=32` GT5 quality/count fine-tune as the next main path: the visible-segment hard-negative and GT5 edge Quality floor gates have both completed and are not promotable, and the `K=32` label oracle does not leave enough geometry headroom for the `0.97` objective.
+Do not launch another `K=32` GT5 quality/count fine-tune as the next main path: the visible-segment hard-negative and GT5 edge Quality floor gates have both completed and are not promotable, and the `K=32` label oracle does not leave enough geometry headroom for the `0.97` objective.
 
-The next smallest safe action is local design and validation for a separate `Q12-K56` official-h-sample-aligned experimental candidate. Before remote training, verify:
+The active next path is the separate `Q12-K56` official-h-sample-aligned experimental candidate:
 
 ```text
-1. a separate data config and label root for K=56 h_samples=160..710 step 10
-2. no silent mixing with current K=32 labels or checkpoints
-3. label oracle on official-val for the new label contract
-4. model output shape and loss/decode contract checks under K=56
-5. official-val-only selection plan with official_best Top-K preservation
+data:  data/tusimple_gcs_fixed_y_k56_960x544.yaml
+model: ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml
+root:  datasets/tusimple_fixed_y_k56_960x544
+K:     56, aligned to TuSimple h_samples 710..160 step 10
 ```
 
-Only after those checks should a new remote CUDA training command be selected.
+The K56 labels must be regenerated from original TuSimple JSON and images, not from existing K32 labels. The K56 official-val label oracle is `Accuracy=0.998256` on the 363-image official-val split.
 
 When a new remote CUDA experiment is selected, run it from a dedicated Git clone checked out to the exact pushed commit SHA. Do not run training locally from Codex. Activate the remote CUDA environment first:
 
 ```bash
 source /root/miniconda3/etc/profile.d/conda.sh
 conda activate ssh_lane
+```
+
+K56 label rebuild command:
+
+```bash
+python tools/rebuild_tusimple_fixed_y_k56_from_reference_split.py \
+  --archive-root archive \
+  --output-root datasets/tusimple_fixed_y_k56_960x544 \
+  --reference-data data/tusimple_gcs_fixed_y_960x544.yaml
+```
+
+K56 label oracle command:
+
+```bash
+python tools/check_tusimple_fixed_y_label_oracle.py \
+  --data data/tusimple_gcs_fixed_y_k56_960x544.yaml \
+  --label-split val \
+  --archive-root archive
+```
+
+K56 formal remote baseline command:
+
+```bash
+python tools/train_gcs.py \
+  --model ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml \
+  --data data/tusimple_gcs_fixed_y_k56_960x544.yaml \
+  --imgsz 544 960 \
+  --name gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4 \
+  --pretrained yolo11s-seg.pt \
+  --epochs 180 \
+  --batch 32 \
+  --workers 4 \
+  --seed 1 \
+  --gcs-official-best \
+  --gcs-official-best-period 1 \
+  --gcs-official-best-top-k 5 \
+  --gcs-official-best-gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
+  --gcs-official-best-archive-root runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset
 ```
 
 The recent official-val gates after the Count Head visible-segment evidence change are not promotable:
@@ -316,9 +360,10 @@ After any code change is implemented and the relevant local validation has passe
 https://github.com/Xzl0104/GCS-YOLO-Lane_LSA
 ```
 
-The published repository should contain only these project folders:
+The published repository should include root project instructions plus these project folders:
 
 ```text
+AGENTS.md
 data
 gcs_tools
 scripts
@@ -342,7 +387,7 @@ Archive notes and summaries:
 - treat each Git commit/push sync as a project archive point
 - write a concise commit note based on the completed work, not a generic message
 - include important validation results or remaining risk in the commit body when useful
-- after the archive is pushed, report a work summary to the user with changed files, validation, commit SHA, and GitHub sync status
+- after every archive push, report a sync summary to the user with changed files, validation, commit SHA, GitHub push status, and any remaining unsynced or ignored local files that matter to the requested work
 
 ## Remote Server Experiment Loop
 
