@@ -209,6 +209,24 @@ def parse_args() -> argparse.Namespace:
         default=GCS_MAINLINE_QUALITY_HARD_NEGATIVE_FROM_HEAD,
         help="Also mine Quality Head hard negatives directly from high pred_quality_logits on unmatched queries.",
     )
+    parser.add_argument(
+        "--gcs-hard-negative-visible-segment",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Mine unmatched hard negatives with visible-segment evidence instead of all-anchor point-valid mean.",
+    )
+    parser.add_argument(
+        "--gcs-hard-negative-visible-thr",
+        type=float,
+        default=0.5,
+        help="Point-valid probability threshold for visible-segment hard-negative mining.",
+    )
+    parser.add_argument(
+        "--gcs-hard-negative-visible-support-points",
+        type=float,
+        default=12.0,
+        help="Visible-segment length saturation for hard-negative mining support.",
+    )
     parser.add_argument("--gcs-count-head-warmup-epochs", type=float, default=5.0, help="Linearly ramp Count Head loss over this many epochs. 0 disables warmup.")
     parser.add_argument("--gcs-count-min-gt-points", type=int, default=1, help="Minimum visible anchors for a GT lane to count in Count Head targets.")
     parser.add_argument("--gcs-count-cls-w2", type=float, default=GCS_MAINLINE_COUNT_CLS_WEIGHTS[0])
@@ -874,6 +892,9 @@ def main() -> None:
         "gcs_quality_hard_negative_weight": args.gcs_quality_hard_negative_weight,
         "gcs_quality_duplicate_negative_weight": args.gcs_quality_duplicate_negative_weight,
         "gcs_quality_hard_negative_from_head": args.gcs_quality_hard_negative_from_head,
+        "gcs_hard_negative_visible_segment": args.gcs_hard_negative_visible_segment,
+        "gcs_hard_negative_visible_thr": args.gcs_hard_negative_visible_thr,
+        "gcs_hard_negative_visible_support_points": args.gcs_hard_negative_visible_support_points,
         "gcs_count_head_warmup_epochs": args.gcs_count_head_warmup_epochs,
         "gcs_count_min_gt_points": args.gcs_count_min_gt_points,
         "gcs_count_cls_w2": args.gcs_count_cls_w2,

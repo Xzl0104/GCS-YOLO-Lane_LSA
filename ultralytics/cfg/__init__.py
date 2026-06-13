@@ -196,6 +196,7 @@ CFG_FLOAT_KEYS = frozenset(
         "gcs_quality_neg_weight",
         "gcs_quality_hard_negative_weight",
         "gcs_quality_duplicate_negative_weight",
+        "gcs_hard_negative_visible_support_points",
         "gcs_count_head_warmup_epochs",
         "gcs_count_cls_w2",
         "gcs_count_cls_w3",
@@ -333,6 +334,7 @@ CFG_FRACTION_KEYS = frozenset(
         "gcs_point_valid_gt5_edge_segment_thr",
         "gcs_quality_neg_weight",
         "gcs_hard_negative_quality_thr",
+        "gcs_hard_negative_visible_thr",
         "gcs_duplicate_iou_thr",
         "gcs_quality_rescue_count5_thr",
         "gcs_quality_rescue_conf_thr",
@@ -443,6 +445,7 @@ CFG_BOOL_KEYS = frozenset(
         "gcs_train_include_val",
         "gcs_gt5_extra_aug",
         "gcs_quality_hard_negative_from_head",
+        "gcs_hard_negative_visible_segment",
     }
 )
 

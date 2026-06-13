@@ -327,6 +327,9 @@ def test_mainline_sampler_defaults_and_ratio_boost_boundaries(monkeypatch):
         == GCS_MAINLINE_POINT_VALID_GT5_EDGE_CONTINUITY_THR
     )
     assert DEFAULT_CFG_DICT["gcs_quality_hard_negative_from_head"] == GCS_MAINLINE_QUALITY_HARD_NEGATIVE_FROM_HEAD
+    assert DEFAULT_CFG_DICT["gcs_hard_negative_visible_segment"] is False
+    assert DEFAULT_CFG_DICT["gcs_hard_negative_visible_thr"] == 0.5
+    assert DEFAULT_CFG_DICT["gcs_hard_negative_visible_support_points"] == 12.0
     assert DEFAULT_CFG_DICT["gcs_point_valid_gt5_edge_segment"] == GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT
     assert DEFAULT_CFG_DICT["gcs_point_valid_gt5_edge_segment_thr"] == GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT_THR
     assert (
@@ -355,6 +358,9 @@ def test_mainline_sampler_defaults_and_ratio_boost_boundaries(monkeypatch):
     assert args.gcs_point_valid_gt5_edge_continuity == GCS_MAINLINE_POINT_VALID_GT5_EDGE_CONTINUITY
     assert args.gcs_point_valid_gt5_edge_continuity_thr == GCS_MAINLINE_POINT_VALID_GT5_EDGE_CONTINUITY_THR
     assert args.gcs_quality_hard_negative_from_head == GCS_MAINLINE_QUALITY_HARD_NEGATIVE_FROM_HEAD
+    assert args.gcs_hard_negative_visible_segment is False
+    assert args.gcs_hard_negative_visible_thr == 0.5
+    assert args.gcs_hard_negative_visible_support_points == 12.0
     assert args.gcs_point_valid_gt5_edge_segment == GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT
     assert args.gcs_point_valid_gt5_edge_segment_thr == GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT_THR
     assert args.gcs_point_valid_gt5_edge_segment_min_points == GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT_MIN_POINTS
@@ -384,6 +390,9 @@ def test_mainline_sampler_defaults_and_ratio_boost_boundaries(monkeypatch):
         == GCS_MAINLINE_POINT_VALID_GT5_EDGE_CONTINUITY_THR
     )
     assert trainer_overrides["gcs_quality_hard_negative_from_head"] == GCS_MAINLINE_QUALITY_HARD_NEGATIVE_FROM_HEAD
+    assert trainer_overrides["gcs_hard_negative_visible_segment"] is False
+    assert trainer_overrides["gcs_hard_negative_visible_thr"] == 0.5
+    assert trainer_overrides["gcs_hard_negative_visible_support_points"] == 12.0
     assert trainer_overrides["gcs_point_valid_gt5_edge_segment"] == GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT
     assert (
         trainer_overrides["gcs_point_valid_gt5_edge_segment_thr"]
@@ -413,6 +422,9 @@ def test_mainline_sampler_defaults_and_ratio_boost_boundaries(monkeypatch):
         criterion.point_valid_gt5_edge_continuity_thr, GCS_MAINLINE_POINT_VALID_GT5_EDGE_CONTINUITY_THR
     )
     assert criterion.quality_hard_negative_from_head == GCS_MAINLINE_QUALITY_HARD_NEGATIVE_FROM_HEAD
+    assert criterion.hard_negative_visible_segment is False
+    assert criterion.hard_negative_visible_thr == 0.5
+    assert criterion.hard_negative_visible_support_points == 12.0
     assert math.isclose(criterion.point_valid_gt5_edge_segment, GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT)
     assert math.isclose(
         criterion.point_valid_gt5_edge_segment_thr, GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT_THR
@@ -448,13 +460,16 @@ def test_gt5_candidate_cfg_keys_have_expected_types():
         "gcs_count_adjacent_margin_gain",
         "gcs_count_adjacent_margin_gt45_weight",
         "gcs_candidate_gt5_edge_weight",
+        "gcs_hard_negative_visible_support_points",
         "gcs_point_valid_gt5_edge_continuity",
         "gcs_point_valid_gt5_edge_segment",
     } <= CFG_FLOAT_KEYS
+    assert "gcs_hard_negative_visible_thr" in CFG_FRACTION_KEYS
     assert "gcs_point_valid_gt5_edge_continuity_thr" in CFG_FRACTION_KEYS
     assert "gcs_point_valid_gt5_edge_segment_thr" in CFG_FRACTION_KEYS
     assert "gcs_point_valid_gt5_edge_segment_min_points" in CFG_INT_KEYS
     assert "gcs_quality_hard_negative_from_head" in CFG_BOOL_KEYS
+    assert "gcs_hard_negative_visible_segment" in CFG_BOOL_KEYS
     assert "gcs_official_best_top_k" in CFG_INT_KEYS
 
 
@@ -709,6 +724,127 @@ def test_quality_head_hard_negative_from_head_ignores_matched_zero_quality_lane(
     assert torch.isclose(head_loss, base_loss)
     head_loss.backward()
     assert pred_quality_logits.grad is not None
+
+
+def test_visible_segment_hard_negative_mining_is_default_off():
+    lanes, valid = _gt_fixed_y32([0.2])
+    high = math.log(0.95 / 0.05)
+    low = math.log(0.05 / 0.95)
+    pred_logits = torch.full((1, 3), high)
+    pred_valid_logits = torch.full((1, 3, 32), low)
+    pred_valid_logits[0, 0, :] = high
+    pred_valid_logits[0, 1, 20:26] = high
+    pred_points = torch.zeros(1, 3, 32, 2)
+    pred_points[0, :, :, 1] = lanes[0, :, 1]
+    pred_points[0, 0, :, 0] = 0.2
+    pred_points[0, 1, :, 0] = 0.85
+    pred_points[0, 2, :, 0] = 0.55
+    indices = [(torch.tensor([0]), torch.tensor([0]))]
+    common = {
+        "gcs_point_mode": "fixed_y",
+        "gcs_imgsz": [544, 960],
+        "gcs_hard_negative_quality_thr": 0.4,
+        "gcs_hard_negative_topk": 0,
+    }
+    base = GCSLoss(model=common)
+    explicit_off = GCSLoss(model={**common, "gcs_hard_negative_visible_segment": False})
+
+    base_hard, _ = base.negative_query_masks(pred_logits, pred_points, pred_valid_logits, [lanes], [valid], indices)
+    off_hard, _ = explicit_off.negative_query_masks(
+        pred_logits,
+        pred_points,
+        pred_valid_logits,
+        [lanes],
+        [valid],
+        indices,
+    )
+
+    assert torch.equal(base_hard, off_hard)
+    assert base_hard.tolist() == [[False, False, False]]
+
+
+def test_visible_segment_hard_negative_mining_selects_short_unmatched_candidate():
+    lanes, valid = _gt_fixed_y32([0.2])
+    high = math.log(0.95 / 0.05)
+    low = math.log(0.05 / 0.95)
+    pred_logits = torch.full((1, 3), high)
+    pred_valid_logits = torch.full((1, 3, 32), low)
+    pred_valid_logits[0, 0, :] = high
+    pred_valid_logits[0, 1, 20:26] = high
+    pred_points = torch.zeros(1, 3, 32, 2)
+    pred_points[0, :, :, 1] = lanes[0, :, 1]
+    pred_points[0, 0, :, 0] = 0.2
+    pred_points[0, 1, :, 0] = 0.85
+    pred_points[0, 2, :, 0] = 0.55
+    indices = [(torch.tensor([0]), torch.tensor([0]))]
+    criterion = GCSLoss(
+        model={
+            "gcs_point_mode": "fixed_y",
+            "gcs_imgsz": [544, 960],
+            "gcs_hard_negative_quality_thr": 0.4,
+            "gcs_hard_negative_topk": 0,
+            "gcs_hard_negative_visible_segment": True,
+            "gcs_hard_negative_visible_thr": 0.5,
+            "gcs_hard_negative_visible_support_points": 12.0,
+        }
+    )
+
+    all_anchor_quality = pred_logits.sigmoid() * pred_valid_logits.sigmoid().mean(dim=-1)
+    visible_mean, visible_support = GCSLoss._visible_segment_mean_and_support(
+        pred_valid_logits.sigmoid(),
+        visible_thr=0.5,
+        support_points=12.0,
+    )
+    hard_negative, _ = criterion.negative_query_masks(
+        pred_logits,
+        pred_points,
+        pred_valid_logits,
+        [lanes],
+        [valid],
+        indices,
+    )
+
+    assert all_anchor_quality[0, 1] < 0.4
+    assert visible_mean[0, 1] > 0.94
+    assert torch.isclose(visible_support[0, 1], torch.tensor(0.5))
+    assert hard_negative.tolist() == [[False, True, False]]
+
+
+def test_visible_segment_hard_negative_recipe_keeps_matched_queries_protected():
+    lanes, valid = _gt_fixed_y32([0.2])
+    high = math.log(0.95 / 0.05)
+    low = math.log(0.05 / 0.95)
+    pred_logits = torch.full((1, 2), high)
+    pred_valid_logits = torch.full((1, 2, 32), low)
+    pred_valid_logits[0, 0, 20:26] = high
+    pred_valid_logits[0, 1, 20:26] = high
+    pred_points = torch.zeros(1, 2, 32, 2)
+    pred_points[0, :, :, 1] = lanes[0, :, 1]
+    pred_points[0, 0, :, 0] = 0.2
+    pred_points[0, 1, :, 0] = 0.85
+    indices = [(torch.tensor([0]), torch.tensor([0]))]
+    criterion = GCSLoss(
+        model={
+            "gcs_point_mode": "fixed_y",
+            "gcs_imgsz": [544, 960],
+            "gcs_hard_negative_quality_thr": 0.4,
+            "gcs_hard_negative_topk": 2,
+            "gcs_hard_negative_visible_segment": True,
+            "gcs_hard_negative_visible_thr": 0.5,
+            "gcs_hard_negative_visible_support_points": 12.0,
+        }
+    )
+
+    hard_negative, _ = criterion.negative_query_masks(
+        pred_logits,
+        pred_points,
+        pred_valid_logits,
+        [lanes],
+        [valid],
+        indices,
+    )
+
+    assert hard_negative.tolist() == [[False, True]]
 
 
 def test_point_valid_gt5_edge_continuity_adds_loss():

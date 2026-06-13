@@ -142,6 +142,9 @@ gcs_count_adjacent_margin = 0.2
 gcs_count_adjacent_margin_gain = 0.0
 gcs_count_adjacent_margin_gt45_weight = 1.0
 gcs_quality_hard_negative_from_head = False
+gcs_hard_negative_visible_segment = False
+gcs_hard_negative_visible_thr = 0.5
+gcs_hard_negative_visible_support_points = 12.0
 gcs_point_valid_gt5_edge_segment = 0.0
 gcs_point_valid_gt5_edge_segment_thr = 0.65
 gcs_point_valid_gt5_edge_segment_min_points = 5
@@ -149,9 +152,11 @@ gcs_point_valid_gt5_edge_segment_min_points = 5
 
 `gcs_count_adjacent_margin_gain` enables a default-off training-side margin term inside `count_cls_loss` that pushes the GT count logit above neighboring count classes. It is intended for controlled GT3/GT4/GT5 calibration experiments and does not add a new logged loss item.
 
-The `gcs_quality_hard_negative_from_head` and `gcs_point_valid_gt5_edge_segment*` knobs are intended for controlled GT5 segment-quality experiments. They do not change decode, read GT during inference, fabricate lanes, or alter official metrics.
+The `gcs_quality_hard_negative_from_head`, `gcs_hard_negative_visible_segment*`, and `gcs_point_valid_gt5_edge_segment*` knobs are intended for controlled GT5 segment-quality experiments. They do not change decode, read GT during inference, fabricate lanes, or alter official metrics.
 
 When `gcs_quality_hard_negative_from_head` is enabled, Quality Head hard negatives are mined from unmatched queries only. Hungarian-matched queries remain matched quality targets even when their current continuous quality target is `0.0`; they must not be reclassified as hard negatives.
+
+When `gcs_hard_negative_visible_segment` is enabled, the shared unmatched hard-negative mask uses the same longest-visible-segment support semantics as Count/decode evidence instead of the all-anchor point-valid mean. It still mines unmatched queries only; Hungarian-matched queries remain protected.
 
 ## Experimental Loss Policy
 

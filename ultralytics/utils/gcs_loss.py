@@ -54,6 +54,9 @@ class GCSLoss(nn.Module):
         hard_negative_quality_thr: float | None = None,
         hard_negative_topk: int | None = None,
         hard_negative_exist_weight: float | None = None,
+        hard_negative_visible_segment: bool | str | None = None,
+        hard_negative_visible_thr: float | None = None,
+        hard_negative_visible_support_points: float | None = None,
         duplicate_negative_exist_weight: float | None = None,
         duplicate_dist_thr_px: float | None = None,
         duplicate_iou_thr: float | None = None,
@@ -194,6 +197,22 @@ class GCSLoss(nn.Module):
             if hard_negative_exist_weight is not None
             else self._arg(args, "gcs_hard_negative_exist_weight", 4.0)
         )
+        self.hard_negative_visible_segment = self._parse_bool(
+            hard_negative_visible_segment
+            if hard_negative_visible_segment is not None
+            else self._arg(args, "gcs_hard_negative_visible_segment", False),
+            default=False,
+        )
+        self.hard_negative_visible_thr = float(
+            hard_negative_visible_thr
+            if hard_negative_visible_thr is not None
+            else self._arg(args, "gcs_hard_negative_visible_thr", 0.5)
+        )
+        self.hard_negative_visible_support_points = float(
+            hard_negative_visible_support_points
+            if hard_negative_visible_support_points is not None
+            else self._arg(args, "gcs_hard_negative_visible_support_points", 12.0)
+        )
         self.duplicate_negative_exist_weight = float(
             duplicate_negative_exist_weight
             if duplicate_negative_exist_weight is not None
@@ -328,6 +347,8 @@ class GCSLoss(nn.Module):
             "gcs_quality_hard_negative_weight": self.quality_hard_negative_weight,
             "gcs_quality_duplicate_negative_weight": self.quality_duplicate_negative_weight,
             "gcs_hard_negative_exist_weight": self.hard_negative_exist_weight,
+            "gcs_hard_negative_visible_thr": self.hard_negative_visible_thr,
+            "gcs_hard_negative_visible_support_points": self.hard_negative_visible_support_points,
             "gcs_duplicate_negative_exist_weight": self.duplicate_negative_exist_weight,
             "gcs_duplicate_dist_thr_px": self.duplicate_dist_thr_px,
             "gcs_point_valid_unmatched_weight": self.point_valid_unmatched_weight,
@@ -346,6 +367,7 @@ class GCSLoss(nn.Module):
             "gcs_point_valid_neg_thr": self.point_valid_neg_thr,
             "gcs_quality_neg_weight": self.quality_neg_weight,
             "gcs_hard_negative_quality_thr": self.hard_negative_quality_thr,
+            "gcs_hard_negative_visible_thr": self.hard_negative_visible_thr,
             "gcs_count_boundary_label_smoothing": self.count_boundary_label_smoothing,
             "gcs_point_valid_gt5_edge_continuity_thr": self.point_valid_gt5_edge_continuity_thr,
             "gcs_point_valid_gt5_edge_segment_thr": self.point_valid_gt5_edge_segment_thr,
@@ -383,6 +405,11 @@ class GCSLoss(nn.Module):
             raise ValueError(f"gcs_count_min_gt_points must be > 0, got {self.count_min_gt_points}.")
         if self.hard_negative_topk < 0:
             raise ValueError(f"gcs_hard_negative_topk must be >= 0, got {self.hard_negative_topk}.")
+        if self.hard_negative_visible_support_points <= 0.0:
+            raise ValueError(
+                "gcs_hard_negative_visible_support_points must be > 0, "
+                f"got {self.hard_negative_visible_support_points}."
+            )
         if self.point_valid_gt5_edge_segment_min_points <= 0:
             raise ValueError(
                 "gcs_point_valid_gt5_edge_segment_min_points must be > 0, "
@@ -1055,6 +1082,30 @@ class GCSLoss(nn.Module):
         quality = 0.6 * line_iou_quality + 0.3 * point_quality + 0.1 * valid_quality
         return quality.clamp(min=floor, max=1.0).detach()
 
+    @staticmethod
+    def _visible_segment_mean_and_support(
+        valid_prob: torch.Tensor,
+        *,
+        visible_thr: float,
+        support_points: float,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return longest-visible-segment mean valid and length support for B x Q x K probabilities."""
+        if valid_prob.ndim != 3:
+            raise ValueError(f"valid_prob must have shape B x Q x K, got {tuple(valid_prob.shape)}.")
+        bsz, queries, _ = valid_prob.shape
+        mean = torch.zeros((bsz, queries), device=valid_prob.device, dtype=valid_prob.dtype)
+        support = torch.zeros_like(mean)
+        for b in range(bsz):
+            for q in range(queries):
+                start, end = GCSLoss._longest_true_segment_bounds(valid_prob[b, q] >= float(visible_thr))
+                length = int(end - start)
+                if length <= 0:
+                    continue
+                segment = valid_prob[b, q, start:end]
+                mean[b, q] = segment.mean()
+                support[b, q] = min(1.0, float(length) / max(float(support_points), 1e-6))
+        return mean, support
+
     @torch.no_grad()
     def negative_query_masks(
         self,
@@ -1069,9 +1120,18 @@ class GCSLoss(nn.Module):
         unmatched = ~self._matched_query_mask(pred_logits, indices)
         if pred_valid_logits is None:
             valid_mean = torch.ones_like(pred_logits)
+            visible_support = torch.ones_like(pred_logits)
+        elif self.hard_negative_visible_segment:
+            valid_prob = pred_valid_logits.detach().sigmoid()
+            valid_mean, visible_support = self._visible_segment_mean_and_support(
+                valid_prob,
+                visible_thr=float(self.hard_negative_visible_thr),
+                support_points=float(self.hard_negative_visible_support_points),
+            )
         else:
             valid_mean = pred_valid_logits.detach().sigmoid().mean(dim=-1)
-        quality_pred = pred_logits.detach().sigmoid() * valid_mean
+            visible_support = torch.ones_like(pred_logits)
+        quality_pred = pred_logits.detach().sigmoid() * valid_mean * visible_support
         hard_negative = unmatched & (quality_pred > float(self.hard_negative_quality_thr))
 
         topk = min(int(self.hard_negative_topk), int(pred_logits.shape[1]))

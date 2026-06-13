@@ -1207,3 +1207,99 @@ Use official-val Top-K preservation. Defer the mild segment-quality candidate un
 Mainline or experiment:
 
 Experiment only. No improvement claim is valid until the remote gate beats the official-val references under the protected protocol.
+
+---
+
+## Decision: Reject adjacent Count margin gate and add visible-segment hard-negative mining candidate
+
+Status: experimental candidate, default-off
+
+Decision:
+
+Do not promote or continue the adjacent Count margin gate:
+
+```text
+gcs_yolo_lane_s_q12_jointcount_adjmargin_countvis_ft12_seed1_b8w0
+```
+
+Add a default-off training-side hard-negative mining option:
+
+```text
+gcs_hard_negative_visible_segment = False
+gcs_hard_negative_visible_thr = 0.5
+gcs_hard_negative_visible_support_points = 12.0
+```
+
+When enabled, the shared unmatched hard-negative mask uses:
+
+```text
+exist_score * visible_segment_mean_valid * min(1, visible_segment_points / support_points)
+```
+
+instead of `exist_score * all_anchor_mean_valid`. The mask remains unmatched-only, so Hungarian-matched queries are protected even when their current quality target is low.
+
+Why:
+
+The adjacent margin gate from commit `632634eb6` reached independent official-val:
+
+```text
+official_acc=0.953113
+official_fp=0.041736
+official_fn=0.035354
+count_acc_3=0.946188
+count_acc_4=0.818182
+count_acc_5=0.675676
+gt5_output5_rate=0.675676
+gt5_count_head_under_rate=0.108108
+gt5_valid_points_fail_rate=0.216216
+```
+
+This is below the active references:
+
+```text
+countboundary baseline official_best.pt: 0.954137
+old FT6 reference:                     0.954782
+clean count-visible FT6 control:       0.953415
+```
+
+The adjacent margin worsened GT5 `5->4` failure (`22/74`) and did not expose candidate-pool or NMS as the primary blocker:
+
+```text
+GT5 candidate_pool_shortfall_rate=0.027027
+GT5 top5_suppressed_by_nms_rate=0.0
+matched/unmatched quality mean=0.880241/0.771234
+```
+
+The remaining root issue is fifth-lane survival and false fifth-lane quality separation after Count/decode visible-segment alignment. Hard-negative mining still used all-anchor mean valid, so short visible false fifth-lane candidates could avoid the negative pressure that now matches Count/decode evidence.
+
+Alternatives considered:
+
+- Continue or strengthen adjacent Count margin.
+- Return to broad threshold, NMS, rescue, or soft-count sweeps.
+- Run the previous strong hard-negative recipe again.
+- Add a visible-segment hard-negative option and keep matched real lanes protected.
+
+Tradeoff:
+
+Visible-segment hard-negative mining is more aligned with the current Count/decode evidence, but it can increase pressure on short edge-like false positives. The next gate therefore uses mild quality and GT5 edge-segment weights, explicit `gcs_hard_negative_quality_thr=0.40`, `gcs_hard_negative_topk=2`, official-best Top-K preservation, and official-val-only selection. It does not change decode, official metrics, GT usage during inference, or the default mainline.
+
+Validation evidence:
+
+Local checks after implementation:
+
+```text
+D:\miniconda3\envs\lsa_yolo\python.exe -m py_compile ultralytics/utils/gcs_loss.py ultralytics/models/yolo/gcs_lane/train.py tools/train_gcs.py ultralytics/cfg/__init__.py tests/test_gcs_count_aware.py
+D:\miniconda3\envs\lsa_yolo\python.exe -m pytest tests/test_gcs_count_aware.py tests/test_gcs_boundary_decode_plumbing.py -q -p no:cacheprovider --basetemp .tmp_pytest\basetemp
+D:\miniconda3\envs\lsa_yolo\python.exe scripts/verify_loss_cleanup.py
+D:\miniconda3\envs\lsa_yolo\python.exe tools/check_gcs_count_head_topk_contract.py
+D:\miniconda3\envs\lsa_yolo\python.exe tools/check_gcs_decode_meta_contract.py
+D:\miniconda3\envs\lsa_yolo\python.exe tools/check_gcs_algorithm_contract.py
+D:\miniconda3\envs\lsa_yolo\python.exe tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12.yaml --imgsz 544 960
+D:\miniconda3\envs\lsa_yolo\python.exe scripts/check_gcs_agent_setup.py
+```
+
+The unit tests cover default-off unchanged behavior, short visible-segment unmatched mining, config/CLI/trainer plumbing, and matched-query protection under the intended remote recipe.
+
+Mainline or experiment:
+
+Experiment only. Improvement claims require a fresh remote official-val run. Test remains final-only after official-val selection.

@@ -127,6 +127,9 @@ gcs_quality_neg_weight: 0.5 # (float) relative weight for unmatched-query qualit
 gcs_quality_hard_negative_weight: 1.0 # (float) absolute Quality Head BCE weight for mined unmatched hard negatives
 gcs_quality_duplicate_negative_weight: 1.5 # (float) absolute Quality Head BCE weight for unmatched duplicate negatives
 gcs_quality_hard_negative_from_head: False # (bool) mine Quality Head hard negatives from high unmatched pred_quality_logits
+gcs_hard_negative_visible_segment: False # (bool) mine unmatched hard negatives with visible-segment evidence instead of all-anchor point-valid mean
+gcs_hard_negative_visible_thr: 0.5 # (float) point-valid probability threshold for visible-segment hard-negative mining
+gcs_hard_negative_visible_support_points: 12.0 # (float) visible-segment length saturation for hard-negative mining support
 gcs_count_head_warmup_epochs: 5.0 # (float) linearly ramp Count Head losses over this many epochs; 0 disables warmup
 gcs_count_min_gt_points: 1 # (int) minimum visible anchors for a GT lane to count in Count Head targets
 gcs_count_cls_w2: 0.5 # (float) Count Head CE class weight for 2-lane images
