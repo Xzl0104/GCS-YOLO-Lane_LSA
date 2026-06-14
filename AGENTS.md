@@ -144,6 +144,8 @@ gcs_hard_negative_visible_support_points = 12.0
 gcs_point_valid_gt5_edge_segment = 0.0
 gcs_point_valid_gt5_edge_segment_thr = 0.65
 gcs_point_valid_gt5_edge_segment_min_points = 5
+gcs_geometry_curvature = 0.0
+gcs_geometry_curvature_beta_px = 5.0
 ```
 
 `gcs_quality_gt5_edge_floor` is training-side only. When enabled above `0.0`, it floors the matched Quality Head target for real left/right edge lanes in GT5 images only; it does not change decode, use GT during inference, or fabricate lanes.
@@ -161,12 +163,15 @@ exist_loss
 point_loss
 point_valid_loss
 line_iou_loss
+curvature_loss
 count_cls_loss
 count_sum_loss
 quality_loss
 ```
 
-The 7-loss setup is the default baseline, not a permanent research restriction.
+The 8-loss setup is the default logging contract. `curvature_loss` is default-off unless
+`gcs_geometry_curvature > 0.0`; it is training-side only and targets fixed-y GT5 edge-lane
+geometry without changing decode, official metrics, or inference GT usage.
 
 ## Agent Coordination Rules
 

@@ -24,6 +24,7 @@ class GCSLoss(nn.Module):
         "point_loss",
         "point_valid_loss",
         "line_iou_loss",
+        "curvature_loss",
         "count_cls_loss",
         "count_sum_loss",
         "quality_loss",
@@ -40,6 +41,8 @@ class GCSLoss(nn.Module):
         lambda_count_sum: float | None = None,
         lambda_quality: float | None = None,
         line_iou_width_px: float | None = None,
+        geometry_curvature: float | None = None,
+        geometry_curvature_beta_px: float | None = None,
         count_head_warmup_epochs: float | None = None,
         count_min_gt_points: int | None = None,
         count_boundary_gt5_pos_weight: float | None = None,
@@ -107,6 +110,16 @@ class GCSLoss(nn.Module):
         )
         self.line_iou_gain = float(
             lambda_line_iou if lambda_line_iou is not None else self._arg(args, "gcs_line_iou", 0.3)
+        )
+        self.geometry_curvature_gain = float(
+            geometry_curvature
+            if geometry_curvature is not None
+            else self._arg(args, "gcs_geometry_curvature", 0.0)
+        )
+        self.geometry_curvature_beta_px = float(
+            geometry_curvature_beta_px
+            if geometry_curvature_beta_px is not None
+            else self._arg(args, "gcs_geometry_curvature_beta_px", 5.0)
         )
         self.point_mode = self._infer_point_mode(model, args)
         self.count_cls_gain = float(
@@ -349,6 +362,7 @@ class GCSLoss(nn.Module):
             "gcs_count_adjacent_margin_gain": self.count_adjacent_margin_gain,
             "gcs_count_sum": self.count_sum_gain,
             "gcs_quality": self.quality_gain,
+            "gcs_geometry_curvature": self.geometry_curvature_gain,
             "gcs_quality_dist_thr_px": self.quality_dist_thr_px,
             "gcs_quality_hard_negative_weight": self.quality_hard_negative_weight,
             "gcs_quality_duplicate_negative_weight": self.quality_duplicate_negative_weight,
@@ -428,6 +442,10 @@ class GCSLoss(nn.Module):
         )
         if self.line_iou_width_px <= 0.0:
             raise ValueError(f"gcs_line_iou_width_px must be > 0, got {self.line_iou_width_px}.")
+        if self.geometry_curvature_beta_px <= 0.0:
+            raise ValueError(
+                f"gcs_geometry_curvature_beta_px must be > 0, got {self.geometry_curvature_beta_px}."
+            )
         if self.quality_gain > 0.0 and self.quality_dist_thr_px <= 0.0:
             raise ValueError(f"gcs_quality_dist_thr_px must be > 0 when gcs_quality is enabled, got {self.quality_dist_thr_px}.")
         self.exist_quality_alpha = float(
@@ -444,12 +462,16 @@ class GCSLoss(nn.Module):
                 f"got {self.exist_quality_lane_iou_alpha}."
             )
         if self.point_mode != "fixed_y" and (
-            self.line_iou_gain > 0.0 or self.exist_quality_lane_iou_alpha > 0.0 or self.quality_gain > 0.0
+            self.line_iou_gain > 0.0
+            or self.geometry_curvature_gain > 0.0
+            or self.exist_quality_lane_iou_alpha > 0.0
+            or self.quality_gain > 0.0
         ):
             raise ValueError(
                 "Current GCS LineIoU implementation is fixed-y only because it compares horizontal strips at shared "
-                "y anchors. Set gcs_line_iou=0.0, gcs_exist_quality_lane_iou_alpha=0.0, and gcs_quality=0.0 "
-                "for free-point mode, or implement a free-point LineIoU that first resamples lanes onto common y anchors."
+                "y anchors. Set gcs_line_iou=0.0, gcs_geometry_curvature=0.0, "
+                "gcs_exist_quality_lane_iou_alpha=0.0, and gcs_quality=0.0 for free-point mode, or implement a "
+                "free-point LineIoU/curvature path that first resamples lanes onto common y anchors."
             )
         self.exist_quality_mode = str(
             exist_quality_mode
@@ -1441,6 +1463,54 @@ class GCSLoss(nn.Module):
         invalid_x_loss = torch.stack(invalid_x_losses).mean()
         return visible_loss + self.point_invalid_x_gain * invalid_x_loss
 
+    def curvature_loss(
+        self,
+        pred_points: torch.Tensor,
+        gt_points: list[torch.Tensor],
+        gt_valid: list[torch.Tensor],
+        indices: list[tuple[torch.Tensor, torch.Tensor]],
+    ) -> torch.Tensor:
+        """SmoothL1 penalty on fixed-y second-order x curvature for matched GT5 edge lanes."""
+        if not self._is_fixed_y() or pred_points.shape[2] < 3:
+            return self._zero_like(pred_points)
+
+        losses = []
+        device, dtype = pred_points.device, pred_points.dtype
+        scale_x = self._pixel_scale_for(pred_points).to(device=device, dtype=dtype)[..., 0].reshape(())
+        beta = max(float(self.geometry_curvature_beta_px), 1e-6)
+        for b, (src_idx, tgt_idx) in enumerate(indices):
+            if src_idx.numel() == 0:
+                continue
+            is_edge, lane_count = self._matched_target_edge_mask(
+                gt_points[b],
+                gt_valid[b],
+                tgt_idx,
+                device=device,
+                dtype=dtype,
+                min_lane_count=5,
+            )
+            if lane_count < 5 or not bool(is_edge.any()):
+                continue
+
+            edge_src = src_idx.to(device=device, dtype=torch.long)[is_edge]
+            edge_tgt = tgt_idx.to(device=device, dtype=torch.long)[is_edge]
+            pred = pred_points[b, edge_src]
+            target = gt_points[b].to(device=device, dtype=dtype)[edge_tgt]
+            valid = gt_valid[b].to(device=device, dtype=dtype)[edge_tgt]
+            triple_mask = (valid[:, :-2] > 0.5) & (valid[:, 1:-1] > 0.5) & (valid[:, 2:] > 0.5)
+            if not bool(triple_mask.any()):
+                continue
+
+            pred_curvature = (pred[:, 2:, 0] - 2.0 * pred[:, 1:-1, 0] + pred[:, :-2, 0]) * scale_x
+            target_curvature = (target[:, 2:, 0] - 2.0 * target[:, 1:-1, 0] + target[:, :-2, 0]) * scale_x
+            raw_loss = F.smooth_l1_loss(pred_curvature, target_curvature, beta=beta, reduction="none")
+            triple_weight = triple_mask.to(dtype=dtype)
+            lane_loss = (raw_loss * triple_weight).sum(dim=1) / triple_weight.sum(dim=1).clamp_min(1.0)
+            valid_lane = triple_mask.any(dim=1)
+            if bool(valid_lane.any()):
+                losses.append(lane_loss[valid_lane].mean())
+        return torch.stack(losses).mean() if losses else self._zero_like(pred_points)
+
     def line_iou_loss(
         self,
         pred_points: torch.Tensor,
@@ -2035,6 +2105,11 @@ class GCSLoss(nn.Module):
             if self.line_iou_gain > 0.0
             else self._zero_like(pred_points)
         )
+        curvature_loss = (
+            self.curvature_loss(pred_points, gt_points, gt_valid, indices)
+            if self.geometry_curvature_gain > 0.0
+            else self._zero_like(pred_points)
+        )
         count_cls_loss = self.count_head_loss(preds, pred_points, gt_valid)
         count_sum_loss = self.count_sum_loss(pred_logits, batch, gt_valid)
         quality_loss = (
@@ -2057,6 +2132,7 @@ class GCSLoss(nn.Module):
             + self.point_gain * point_loss
             + self.point_valid_gain * point_valid_loss
             + self.line_iou_gain * line_iou_loss
+            + self.geometry_curvature_gain * curvature_loss
             + self.count_head_warmup_factor(batch) * self.count_cls_gain * count_cls_loss
             + self.count_sum_gain * count_sum_loss
             + self.quality_gain * quality_loss
@@ -2067,6 +2143,7 @@ class GCSLoss(nn.Module):
                 point_loss.detach(),
                 point_valid_loss.detach(),
                 line_iou_loss.detach(),
+                curvature_loss.detach(),
                 count_cls_loss.detach(),
                 count_sum_loss.detach(),
                 quality_loss.detach(),

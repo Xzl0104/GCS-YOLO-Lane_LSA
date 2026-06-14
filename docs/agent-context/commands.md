@@ -144,7 +144,31 @@ diagnosis: count_acc_5=0.851351, gt5_output5_rate=0.851351, gt5_count_head_under
 decision: not promotable; simple Count/Quality fine-tuning from the K56 parent is too destructive without a more surgical change
 ```
 
-The K56 official-val evidence is a completed baseline result, not a mainline promotion and not a reason to use test or tune postprocess settings. The next useful K56 step should be a more targeted training-side geometry or Count/Quality change that preserves the epoch152 FP/FN balance before attempting another official-val gate.
+The K56 official-val evidence is a completed baseline result, not a mainline promotion and not a reason to use test or tune postprocess settings. The next useful K56 step should be a more targeted training-side geometry change that preserves the epoch152 FP/FN balance before attempting another official-val gate. The first such candidate is the default-off `gcs_geometry_curvature` auxiliary loss; it does not change decode, official metrics, or inference-time GT usage.
+
+K56 curvature auxiliary gate command:
+
+```bash
+python tools/train_gcs.py \
+  --model ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml \
+  --data data/tusimple_gcs_fixed_y_k56_960x544.yaml \
+  --imgsz 544 960 \
+  --name gcs_yolo_lane_s_q12_k56_curveaux_ft8_seed1_b32w4 \
+  --pretrained runs/gcs_lane/gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4/weights/official_best.pt \
+  --epochs 8 \
+  --batch 32 \
+  --workers 4 \
+  --seed 1 \
+  --lr0 0.0001 \
+  --lrf 0.2 \
+  --gcs-geometry-curvature 0.05 \
+  --gcs-geometry-curvature-beta-px 5.0 \
+  --gcs-official-best \
+  --gcs-official-best-period 1 \
+  --gcs-official-best-top-k 5 \
+  --gcs-official-best-gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
+  --gcs-official-best-archive-root runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset
+```
 
 The recent official-val gates after the Count Head visible-segment evidence change are not promotable:
 

@@ -118,6 +118,8 @@ gcs_point_valid: 0.5 # (float) GCS per-point visibility BCE loss gain for fixed-
 gcs_point_invalid_x: 0.05 # (float) relative pseudo-x penalty for matched invisible anchors weighted by point-valid probability
 gcs_line_iou: 0.3 # (float) GCS whole-lane LineIoU loss gain
 gcs_line_iou_width_px: 15.0 # (float) half-width in pixels used to expand lane points for LineIoU
+gcs_geometry_curvature: 0.0 # (float) fixed-y GT5 edge-lane curvature auxiliary loss gain; 0 disables
+gcs_geometry_curvature_beta_px: 5.0 # (float) SmoothL1 beta in pixels for the GT5 edge curvature auxiliary loss
 gcs_count_cls: 0.3 # (float) explicit image-level Count Head count=2/3/4/5 CE loss gain
 gcs_count_sum: 0.03 # (float) exist-count consistency loss gain for sum(sigmoid(pred_logits)) ~= GT lane count
 gcs_count_sum_normalize: True # (bool) normalize count_sum_loss by GT lane count

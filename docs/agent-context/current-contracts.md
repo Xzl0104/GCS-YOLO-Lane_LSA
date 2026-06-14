@@ -123,6 +123,7 @@ exist_loss
 point_loss
 point_valid_loss
 line_iou_loss
+curvature_loss
 count_cls_loss
 count_sum_loss
 quality_loss
@@ -149,7 +150,7 @@ gcs_gt5_oversample_weight = 1.0
 gcs_group_sampler_ratios = 2:0.01,3:0.29,4:0.42,5:0.28
 ```
 
-The GT5 candidate-quality knobs above are training-side only. They strengthen real matched query supervision inside the existing 7 loss items:
+The GT5 candidate-quality knobs above are training-side only. They strengthen real matched query supervision inside the existing logged loss items:
 
 - `gcs_count_boundary_gt5_pos_weight` weights the Count Boundary `count>=5` positive target inside `count_cls_loss`.
 - `gcs_candidate_gt5_edge_weight` weights matched left/right GT5 edge queries/lanes inside `exist_loss`, `point_loss`, `point_valid_loss`, `line_iou_loss`, and `quality_loss`; it is matched edge-query/lane weighting, not per-anchor positive-target-only weighting.
@@ -174,6 +175,8 @@ gcs_hard_negative_visible_support_points = 12.0
 gcs_point_valid_gt5_edge_segment = 0.0
 gcs_point_valid_gt5_edge_segment_thr = 0.65
 gcs_point_valid_gt5_edge_segment_min_points = 5
+gcs_geometry_curvature = 0.0
+gcs_geometry_curvature_beta_px = 5.0
 ```
 
 `gcs_count_adjacent_margin_gain` enables a default-off training-side margin term inside `count_cls_loss` that pushes the GT count logit above neighboring count classes. It is intended for controlled GT3/GT4/GT5 calibration experiments and does not add a new logged loss item.
@@ -181,6 +184,8 @@ gcs_point_valid_gt5_edge_segment_min_points = 5
 `gcs_quality_gt5_edge_floor` is a default-off training-side candidate that floors matched Quality Head targets only for real left/right edge lanes in GT5 images. It is intended to test whether true short GT5 edge lanes are being assigned quality targets too low to survive quality-gated fifth-lane decode behavior.
 
 The `gcs_quality_gt5_edge_floor`, `gcs_quality_hard_negative_from_head`, `gcs_hard_negative_visible_segment*`, and `gcs_point_valid_gt5_edge_segment*` knobs are intended for controlled GT5 quality experiments. They do not change decode, read GT during inference, fabricate lanes, or alter official metrics.
+
+`gcs_geometry_curvature` is a default-off fixed-y geometry auxiliary candidate. When enabled, it adds `curvature_loss`, a SmoothL1 penalty on second-order x curvature for Hungarian-matched left/right edge lanes in GT>=5 images only. It is training-side only and does not change decode, read GT during inference, fabricate lanes, or alter official metrics.
 
 When `gcs_quality_hard_negative_from_head` is enabled, Quality Head hard negatives are mined from unmatched queries only. Hungarian-matched queries remain matched quality targets even when their current continuous quality target is `0.0`; they must not be reclassified as hard negatives.
 
@@ -190,7 +195,7 @@ These knobs remain default-off after the 2026-06-13 `gcs_yolo_lane_s_q12_gt5segq
 
 ## Experimental Loss Policy
 
-The current 7-loss setup is a default baseline, not a permanent restriction.
+The current 8-loss logging setup is a default baseline, not a permanent restriction. `curvature_loss` is inert unless its gain is enabled.
 
 Previously removed losses or modules may be restored as controlled experimental candidates if the goal is to improve official ACC.
 

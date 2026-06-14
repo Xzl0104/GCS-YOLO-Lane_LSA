@@ -76,7 +76,7 @@ Hard policy.
 
 ---
 
-## Decision: Current 7-loss setup is the default, not a permanent restriction
+## Decision: Current explicit loss contract is the default, not a permanent restriction
 
 Status: current policy
 
@@ -89,12 +89,13 @@ exist_loss
 point_loss
 point_valid_loss
 line_iou_loss
+curvature_loss
 count_cls_loss
 count_sum_loss
 quality_loss
 ```
 
-But this does not ban old or new losses.
+`curvature_loss` is default-off unless `gcs_geometry_curvature > 0.0`. This explicit logging contract does not ban old or new losses.
 
 Why:
 
@@ -1112,7 +1113,7 @@ gcs_count_adjacent_margin_gain = 0.0
 gcs_count_adjacent_margin_gt45_weight = 1.0
 ```
 
-When enabled, the margin penalizes neighboring count logits that are too close to or above the GT count logit. It does not change model outputs, decode, official metric calculation, GT usage during inference, or the seven logged loss items.
+When enabled, the margin penalizes neighboring count logits that are too close to or above the GT count logit. It does not change model outputs, decode, official metric calculation, GT usage during inference, or the logged loss item set.
 
 Why:
 
@@ -4747,3 +4748,45 @@ Experimental baseline monitoring decision. K56 is still not promoted over K32, a
 ## 2026-06-14: Superseding K56 final state after monitor entries
 
 The historical monitoring entries above are superseded by the completed K56 baseline decision and the rejected Count/Quality fine-tune decisions recorded earlier in this file. Current state: `gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4` completed 180/180; official-val-selected epoch 152 remains the K56 reference at `official_acc=0.959315`; K56 is not promoted, not test-ready, and has no official-test claim. The next K56 step should stay validation-only and avoid rerunning the two rejected Count/Quality recipes.
+
+## 2026-06-14: Add default-off K56 GT5 edge curvature auxiliary loss
+
+Decision:
+
+Add a default-off fixed-y geometry auxiliary candidate:
+
+```text
+gcs_geometry_curvature = 0.0
+gcs_geometry_curvature_beta_px = 5.0
+loss item: curvature_loss
+```
+
+When `gcs_geometry_curvature > 0.0`, `curvature_loss` applies a SmoothL1 penalty to second-order x curvature only for Hungarian-matched left/right edge lanes in GT>=5 images. The loss is training-side only and does not change decode, official metrics, labels, test split, or inference-time GT usage.
+
+Why:
+
+The completed K56 baseline moved the representation oracle out of the way, but official-val remained at `0.959315`, only `+0.000091` over legacy. Independent GT5 diagnosis showed candidate supply, NMS, rank, and diagnostic valid-points failure were not the remaining root blocker. Two direct Count/Quality fine-tunes from the epoch152 parent regressed official-val, so the next smallest candidate should target matched lane geometry while preserving the epoch152 Count/Quality balance.
+
+Implementation:
+
+- `GCSLoss.loss_names`, trainer progress/loss names, and validator loss names now include `curvature_loss`.
+- `tools/train_gcs.py`, `ultralytics/cfg/default.yaml`, and config key allow-lists expose `gcs_geometry_curvature` and `gcs_geometry_curvature_beta_px`.
+- `tools/check_gcs_algorithm_contract.py` verifies the 8-loss contract and curvature-loss gradient.
+- `tests/test_gcs_count_aware.py` verifies default wiring and that curvature loss targets GT5 edge lanes.
+
+Validation evidence:
+
+Local checks passed:
+
+```text
+python -m py_compile ultralytics/utils/gcs_loss.py ultralytics/models/yolo/gcs_lane/train.py ultralytics/models/yolo/gcs_lane/val.py tools/train_gcs.py tools/check_gcs_algorithm_contract.py
+python -m pytest tests/test_gcs_count_aware.py -q --basetemp .tmp_pytest/curvature
+python tools/check_gcs_algorithm_contract.py
+python scripts/verify_loss_cleanup.py
+python tools/check_gcs_count_head_topk_contract.py
+python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml --imgsz 544 960 --batch 1
+```
+
+Mainline or experiment:
+
+Default-off experimental candidate. The first remote gate should fine-tune from the K56 epoch152 official-best checkpoint on official-val only, with `--gcs-geometry-curvature 0.05 --gcs-geometry-curvature-beta-px 5.0`. Do not use test unless a candidate is selected on official-val.

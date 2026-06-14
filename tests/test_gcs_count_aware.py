@@ -15,6 +15,8 @@ from ultralytics.models.yolo.gcs_lane.train import (
     GCS_MAINLINE_COUNT_BOUNDARY_GT5_POS_WEIGHT,
     GCS_MAINLINE_COUNT_BOUNDARY_LABEL_SMOOTHING,
     GCS_MAINLINE_COUNT_SUM_GAIN,
+    GCS_MAINLINE_GEOMETRY_CURVATURE_BETA_PX,
+    GCS_MAINLINE_GEOMETRY_CURVATURE_GAIN,
     GCS_MAINLINE_GROUP_SAMPLER_RATIOS,
     GCS_MAINLINE_GT5_EDGE_LOSS_WEIGHT,
     GCS_MAINLINE_GT5_OVERSAMPLE_WEIGHT,
@@ -322,6 +324,8 @@ def test_mainline_sampler_defaults_and_ratio_boost_boundaries(monkeypatch):
     assert DEFAULT_CFG_DICT["gcs_count_adjacent_margin"] == 0.2
     assert DEFAULT_CFG_DICT["gcs_count_adjacent_margin_gain"] == 0.0
     assert DEFAULT_CFG_DICT["gcs_count_adjacent_margin_gt45_weight"] == 1.0
+    assert DEFAULT_CFG_DICT["gcs_geometry_curvature"] == GCS_MAINLINE_GEOMETRY_CURVATURE_GAIN
+    assert DEFAULT_CFG_DICT["gcs_geometry_curvature_beta_px"] == GCS_MAINLINE_GEOMETRY_CURVATURE_BETA_PX
     assert DEFAULT_CFG_DICT["gcs_candidate_gt5_edge_weight"] == GCS_MAINLINE_CANDIDATE_GT5_EDGE_WEIGHT
     assert DEFAULT_CFG_DICT["gcs_point_valid_gt5_edge_continuity"] == GCS_MAINLINE_POINT_VALID_GT5_EDGE_CONTINUITY
     assert (
@@ -357,6 +361,8 @@ def test_mainline_sampler_defaults_and_ratio_boost_boundaries(monkeypatch):
     assert args.gcs_count_adjacent_margin == 0.2
     assert args.gcs_count_adjacent_margin_gain == 0.0
     assert args.gcs_count_adjacent_margin_gt45_weight == 1.0
+    assert args.gcs_geometry_curvature == GCS_MAINLINE_GEOMETRY_CURVATURE_GAIN
+    assert args.gcs_geometry_curvature_beta_px == GCS_MAINLINE_GEOMETRY_CURVATURE_BETA_PX
     assert args.gcs_candidate_gt5_edge_weight == GCS_MAINLINE_CANDIDATE_GT5_EDGE_WEIGHT
     assert args.gcs_point_valid_gt5_edge_continuity == GCS_MAINLINE_POINT_VALID_GT5_EDGE_CONTINUITY
     assert args.gcs_point_valid_gt5_edge_continuity_thr == GCS_MAINLINE_POINT_VALID_GT5_EDGE_CONTINUITY_THR
@@ -387,6 +393,8 @@ def test_mainline_sampler_defaults_and_ratio_boost_boundaries(monkeypatch):
     assert trainer_overrides["gcs_count_boundary"] == GCS_MAINLINE_COUNT_BOUNDARY_GAIN
     assert trainer_overrides["gcs_count_boundary_label_smoothing"] == GCS_MAINLINE_COUNT_BOUNDARY_LABEL_SMOOTHING
     assert trainer_overrides["gcs_count_boundary_gt5_pos_weight"] == GCS_MAINLINE_COUNT_BOUNDARY_GT5_POS_WEIGHT
+    assert trainer_overrides["gcs_geometry_curvature"] == GCS_MAINLINE_GEOMETRY_CURVATURE_GAIN
+    assert trainer_overrides["gcs_geometry_curvature_beta_px"] == GCS_MAINLINE_GEOMETRY_CURVATURE_BETA_PX
     assert trainer_overrides["gcs_candidate_gt5_edge_weight"] == GCS_MAINLINE_CANDIDATE_GT5_EDGE_WEIGHT
     assert trainer_overrides["gcs_point_valid_gt5_edge_continuity"] == GCS_MAINLINE_POINT_VALID_GT5_EDGE_CONTINUITY
     assert (
@@ -421,6 +429,8 @@ def test_mainline_sampler_defaults_and_ratio_boost_boundaries(monkeypatch):
     assert math.isclose(criterion.count_adjacent_margin, 0.2)
     assert math.isclose(criterion.count_adjacent_margin_gain, 0.0)
     assert math.isclose(criterion.count_adjacent_margin_gt45_weight, 1.0)
+    assert math.isclose(criterion.geometry_curvature_gain, GCS_MAINLINE_GEOMETRY_CURVATURE_GAIN)
+    assert math.isclose(criterion.geometry_curvature_beta_px, GCS_MAINLINE_GEOMETRY_CURVATURE_BETA_PX)
     assert math.isclose(criterion.candidate_gt5_edge_weight, GCS_MAINLINE_CANDIDATE_GT5_EDGE_WEIGHT)
     assert math.isclose(criterion.point_valid_gt5_edge_continuity, GCS_MAINLINE_POINT_VALID_GT5_EDGE_CONTINUITY)
     assert math.isclose(
@@ -449,6 +459,7 @@ def test_gcs_loss_item_names_stay_stable():
         "point_loss",
         "point_valid_loss",
         "line_iou_loss",
+        "curvature_loss",
         "count_cls_loss",
         "count_sum_loss",
         "quality_loss",
@@ -458,12 +469,40 @@ def test_gcs_loss_item_names_stay_stable():
     assert GCSLaneTrainer.progress_loss_names == expected
 
 
+def test_curvature_loss_targets_gt5_edge_lanes_only():
+    gt_lanes, gt_valid = _gt([0.1, 0.25, 0.4, 0.55, 0.7], points=6)
+    pred_points = gt_lanes.unsqueeze(0).clone()
+    pred_points[0, 0, 2, 0] += 0.04
+    pred_points.requires_grad_(True)
+    criterion = GCSLoss(
+        model={
+            "gcs_point_mode": "fixed_y",
+            "gcs_imgsz": [544, 960],
+            "gcs_geometry_curvature": 0.05,
+            "gcs_geometry_curvature_beta_px": 5.0,
+        }
+    )
+
+    loss = criterion.curvature_loss(
+        pred_points,
+        [gt_lanes],
+        [gt_valid],
+        [(torch.arange(5), torch.arange(5))],
+    )
+    assert loss > 0
+    loss.backward()
+    assert pred_points.grad[0, 0].abs().sum() > 0
+    assert pred_points.grad[0, 2].abs().sum() == 0
+
+
 def test_gt5_candidate_cfg_keys_have_expected_types():
     assert {
         "gcs_count_boundary_gt5_pos_weight",
         "gcs_count_adjacent_margin",
         "gcs_count_adjacent_margin_gain",
         "gcs_count_adjacent_margin_gt45_weight",
+        "gcs_geometry_curvature",
+        "gcs_geometry_curvature_beta_px",
         "gcs_candidate_gt5_edge_weight",
         "gcs_quality_gt5_edge_floor",
         "gcs_hard_negative_visible_support_points",

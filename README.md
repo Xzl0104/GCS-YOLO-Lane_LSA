@@ -97,11 +97,13 @@ gcs_hard_negative_visible_support_points = 12.0
 gcs_point_valid_gt5_edge_segment = 0.0
 gcs_point_valid_gt5_edge_segment_thr = 0.65
 gcs_point_valid_gt5_edge_segment_min_points = 5
+gcs_geometry_curvature = 0.0
+gcs_geometry_curvature_beta_px = 5.0
 ```
 
 When `gcs_quality_hard_negative_from_head` is enabled, Quality Head hard negatives are mined from unmatched queries only; matched queries remain matched quality targets even if their current continuous quality target is `0.0`.
 
-The visible-segment hard-negative and GT5 edge Quality floor recipes remain default-off infrastructure only. Do not rerun the same recipes as the next gate unless checking reproducibility, and do not use test to rescue or tune them.
+The visible-segment hard-negative and GT5 edge Quality floor recipes remain default-off infrastructure only. The default-off `gcs_geometry_curvature` candidate adds training-side fixed-y curvature supervision for matched GT5 edge lanes without changing decode or official metrics. Do not rerun rejected recipes as the next gate unless checking reproducibility, and do not use test to rescue or tune them.
 
 ## Environment
 

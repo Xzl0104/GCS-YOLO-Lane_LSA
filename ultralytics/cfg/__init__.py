@@ -189,6 +189,8 @@ CFG_FLOAT_KEYS = frozenset(
         "gcs_point_invalid_x",
         "gcs_line_iou",
         "gcs_line_iou_width_px",
+        "gcs_geometry_curvature",
+        "gcs_geometry_curvature_beta_px",
         "gcs_count_cls",
         "gcs_count_sum",
         "gcs_quality",

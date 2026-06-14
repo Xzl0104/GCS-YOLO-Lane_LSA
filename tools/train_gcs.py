@@ -19,6 +19,8 @@ from ultralytics.models.yolo.gcs_lane.train import (
     GCS_MAINLINE_COUNT_BOUNDARY_GT5_POS_WEIGHT,
     GCS_MAINLINE_COUNT_BOUNDARY_LABEL_SMOOTHING,
     GCS_MAINLINE_COUNT_SUM_GAIN,
+    GCS_MAINLINE_GEOMETRY_CURVATURE_BETA_PX,
+    GCS_MAINLINE_GEOMETRY_CURVATURE_GAIN,
     GCS_MAINLINE_GROUP_SAMPLER_RATIOS,
     GCS_MAINLINE_GT5_EDGE_LOSS_WEIGHT,
     GCS_MAINLINE_GT5_OVERSAMPLE_WEIGHT,
@@ -244,6 +246,18 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=15.0,
         help="Half-width in pixels used to expand lane points into horizontal strips for LineIoU.",
+    )
+    parser.add_argument(
+        "--gcs-geometry-curvature",
+        type=float,
+        default=GCS_MAINLINE_GEOMETRY_CURVATURE_GAIN,
+        help="Fixed-y GT5 edge-lane curvature auxiliary loss gain. 0 disables.",
+    )
+    parser.add_argument(
+        "--gcs-geometry-curvature-beta-px",
+        type=float,
+        default=GCS_MAINLINE_GEOMETRY_CURVATURE_BETA_PX,
+        help="SmoothL1 beta in pixels for the GT5 edge curvature auxiliary loss.",
     )
     parser.add_argument("--gcs-count-cls", type=float, default=0.3, help="Explicit Count Head count=2/3/4/5 CE loss gain.")
     parser.add_argument(
@@ -957,6 +971,8 @@ def main() -> None:
         "gcs_point_invalid_x": args.gcs_point_invalid_x,
         "gcs_line_iou": args.gcs_line_iou,
         "gcs_line_iou_width_px": args.gcs_line_iou_width_px,
+        "gcs_geometry_curvature": args.gcs_geometry_curvature,
+        "gcs_geometry_curvature_beta_px": args.gcs_geometry_curvature_beta_px,
         "gcs_count_cls": args.gcs_count_cls,
         "gcs_count_sum": args.gcs_count_sum,
         "gcs_count_sum_normalize": args.gcs_count_sum_normalize,

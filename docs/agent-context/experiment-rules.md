@@ -12,7 +12,7 @@ Do not reject an idea only because:
 
 - it appeared in an older experiment
 - it was previously removed from the mainline
-- it is not part of the current 7-loss default setup
+- it is not part of the current explicit loss contract
 - it changes the current architecture
 - it adds a new auxiliary branch
 - it adds a new training signal

@@ -51,6 +51,8 @@ GCS_MAINLINE_HARD_NEGATIVE_VISIBLE_SUPPORT_POINTS = 12.0
 GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT = 0.0
 GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT_THR = 0.65
 GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT_MIN_POINTS = 5
+GCS_MAINLINE_GEOMETRY_CURVATURE_GAIN = 0.0
+GCS_MAINLINE_GEOMETRY_CURVATURE_BETA_PX = 5.0
 
 
 def _parse_number_list(value: Any, cast=float) -> list:
@@ -219,6 +221,7 @@ class GCSLaneTrainer(BaseTrainer):
         "point_loss",
         "point_valid_loss",
         "line_iou_loss",
+        "curvature_loss",
         "count_cls_loss",
         "count_sum_loss",
         "quality_loss",
@@ -228,6 +231,7 @@ class GCSLaneTrainer(BaseTrainer):
         "point_loss",
         "point_valid_loss",
         "line_iou_loss",
+        "curvature_loss",
         "count_cls_loss",
         "count_sum_loss",
         "quality_loss",
@@ -291,6 +295,8 @@ class GCSLaneTrainer(BaseTrainer):
             "gcs_point_valid_gt5_edge_segment_min_points",
             GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT_MIN_POINTS,
         )
+        overrides.setdefault("gcs_geometry_curvature", GCS_MAINLINE_GEOMETRY_CURVATURE_GAIN)
+        overrides.setdefault("gcs_geometry_curvature_beta_px", GCS_MAINLINE_GEOMETRY_CURVATURE_BETA_PX)
         overrides.setdefault("gcs_hard_sampling", False)
         overrides.setdefault("gcs_hard_lane_counts", "")
         overrides.setdefault("gcs_hard_sampling_boost_by_count", "")

@@ -30,6 +30,7 @@ ALLOWED_LOSSES = (
     "point_loss",
     "point_valid_loss",
     "line_iou_loss",
+    "curvature_loss",
     "count_cls_loss",
     "count_sum_loss",
     "quality_loss",
@@ -74,6 +75,34 @@ def check_count_sum_loss_gradient() -> None:
     _assert(torch.isfinite(loss) and float(loss.detach()) > 0.0, "count_sum_loss must be finite and positive")
     loss.backward()
     _assert(pred_logits.grad is not None, "count_sum_loss must backpropagate to pred_logits")
+
+
+def check_curvature_loss_gradient() -> None:
+    y = torch.linspace(0.98, 0.25, 6)
+    lanes = torch.stack(
+        [torch.stack((torch.full_like(y, x), y), dim=-1) for x in (0.1, 0.25, 0.4, 0.55, 0.7)],
+        dim=0,
+    )
+    valid = torch.ones((5, 6), dtype=torch.float32)
+    pred_points = lanes.unsqueeze(0).clone()
+    pred_points[0, 0, 2, 0] += 0.04
+    pred_points.requires_grad_(True)
+    criterion = GCSLoss(
+        model={
+            "gcs_point_mode": "fixed_y",
+            "gcs_imgsz": [544, 960],
+            "gcs_geometry_curvature": 0.05,
+            "gcs_geometry_curvature_beta_px": 5.0,
+        }
+    )
+    loss = criterion.curvature_loss(pred_points, [lanes], [valid], [(torch.arange(5), torch.arange(5))])
+    _assert(torch.isfinite(loss) and float(loss.detach()) > 0.0, "curvature_loss must be finite and positive")
+    loss.backward()
+    _assert(pred_points.grad is not None, "curvature_loss must backpropagate to pred_points")
+    _assert(
+        bool(pred_points.grad[0, 0].abs().sum() > 0.0),
+        "curvature_loss must target matched GT5 edge-lane geometry",
+    )
 
 
 def check_quality_head_shape_and_gradient() -> None:
@@ -646,6 +675,7 @@ def main() -> None:
     checks = (
         check_loss_items,
         check_count_sum_loss_gradient,
+        check_curvature_loss_gradient,
         check_quality_head_shape_and_gradient,
         check_quality_targets,
         check_exist_quality_and_negative_mining,
