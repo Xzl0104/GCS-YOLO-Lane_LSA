@@ -35,7 +35,16 @@ GCS_MAINLINE_COUNT_SUM_GAIN = 0.03
 GCS_MAINLINE_QUALITY_GAIN = 0.4
 GCS_MAINLINE_QUALITY_NEG_WEIGHT = 0.5
 GCS_MAINLINE_QUALITY_GT5_EDGE_FLOOR = 0.0
+GCS_MAINLINE_QUALITY_PAIRWISE = 0.0
+GCS_MAINLINE_QUALITY_PAIRWISE_MARGIN = 0.2
+GCS_MAINLINE_FIFTHNESS = 0.0
+GCS_MAINLINE_FIFTHNESS_PAIRWISE = 0.0
+GCS_MAINLINE_FIFTHNESS_MARGIN = 0.2
+GCS_MAINLINE_FIFTHNESS_NEGATIVE_TOPK = 2
+GCS_MAINLINE_FIFTHNESS_NEGATIVE_SCORE_THR = 0.1
 GCS_MAINLINE_COUNT_CLS_WEIGHTS = (0.5, 1.2, 1.4, 1.8)
+GCS_MAINLINE_COUNT_CUMULATIVE = 0.0
+GCS_MAINLINE_COUNT_CUMULATIVE_LABEL_SMOOTHING = 0.0
 GCS_MAINLINE_POINT_VALID_GT5_POS_WEIGHT = 2.0
 GCS_MAINLINE_GT5_EDGE_LOSS_WEIGHT = 1.15
 GCS_MAINLINE_COUNT_BOUNDARY_GAIN = 0.05
@@ -272,8 +281,20 @@ class GCSLaneTrainer(BaseTrainer):
         overrides.setdefault("gcs_quality", GCS_MAINLINE_QUALITY_GAIN)
         overrides.setdefault("gcs_quality_neg_weight", GCS_MAINLINE_QUALITY_NEG_WEIGHT)
         overrides.setdefault("gcs_quality_gt5_edge_floor", GCS_MAINLINE_QUALITY_GT5_EDGE_FLOOR)
+        overrides.setdefault("gcs_quality_pairwise", GCS_MAINLINE_QUALITY_PAIRWISE)
+        overrides.setdefault("gcs_quality_pairwise_margin", GCS_MAINLINE_QUALITY_PAIRWISE_MARGIN)
+        overrides.setdefault("gcs_fifthness", GCS_MAINLINE_FIFTHNESS)
+        overrides.setdefault("gcs_fifthness_pairwise", GCS_MAINLINE_FIFTHNESS_PAIRWISE)
+        overrides.setdefault("gcs_fifthness_margin", GCS_MAINLINE_FIFTHNESS_MARGIN)
+        overrides.setdefault("gcs_fifthness_negative_topk", GCS_MAINLINE_FIFTHNESS_NEGATIVE_TOPK)
+        overrides.setdefault("gcs_fifthness_negative_score_thr", GCS_MAINLINE_FIFTHNESS_NEGATIVE_SCORE_THR)
         for idx, weight in enumerate(GCS_MAINLINE_COUNT_CLS_WEIGHTS, start=2):
             overrides.setdefault(f"gcs_count_cls_w{idx}", weight)
+        overrides.setdefault("gcs_count_cumulative", GCS_MAINLINE_COUNT_CUMULATIVE)
+        overrides.setdefault(
+            "gcs_count_cumulative_label_smoothing",
+            GCS_MAINLINE_COUNT_CUMULATIVE_LABEL_SMOOTHING,
+        )
         overrides.setdefault("gcs_point_valid_gt5_pos_weight", GCS_MAINLINE_POINT_VALID_GT5_POS_WEIGHT)
         overrides.setdefault("gcs_gt5_edge_loss_weight", GCS_MAINLINE_GT5_EDGE_LOSS_WEIGHT)
         overrides.setdefault("gcs_count_boundary", GCS_MAINLINE_COUNT_BOUNDARY_GAIN)

@@ -82,9 +82,15 @@ batch=32
 workers=4
 ```
 
-The run completed on `2026-06-14` at 180/180 epochs with no NaN, shape error, traceback, or test-split leakage found in run artifacts. Independent official-val sweep of `weights/official_best.pt` reproduced the training-time selection: epoch 152, `official_acc=0.959315`, `FP=0.045225`, `FN=0.028466`, `official_score=0.957841`, using `conf=0.005`, `point_valid_thr=0.35`, `nms_dist_px=18.0`, `max_det=5`, `min_points=6`, and `rank_min_points=none`. This exceeds the current-code K32 audit `0.953756` by `+0.005559` and legacy `0.959224` by `+0.000091`, but it is not promoted or test-ready because the margin is tiny and the 0.97 objective remains unmet. Final retained official Top-K is `152=0.959315`, `170=0.959247`, `166=0.959244`, `168=0.959217`, `165=0.959215`; ordinary val best remains epoch 142 with `val/f1=0.962083`.
+The run completed on `2026-06-14` at 180/180 epochs with no NaN, shape error, traceback, or test-split leakage found in run artifacts. Independent official-val sweep of `weights/official_best.pt` reproduced the training-time selection: epoch 152, `official_acc=0.959315`, `FP=0.045225`, `FN=0.028466`, `official_score=0.957841`, using `conf=0.005`, `point_valid_thr=0.35`, `nms_dist_px=18.0`, `max_det=5`, `min_points=6`, and `rank_min_points=none`. This exceeds the current-code K32 audit `0.953756` by `+0.005559` and legacy `0.959224` by `+0.000091`, but it is not promoted because the margin is tiny and the 0.97 objective remains unmet. Final retained official Top-K is `152=0.959315`, `170=0.959247`, `166=0.959244`, `168=0.959217`, `165=0.959215`; ordinary val best remains epoch 142 with `val/f1=0.962083`.
 
-Independent GT5 diagnosis on official-val found 63/74 GT5 images kept; remaining GT5 drops are `count_head_under_predict=5` and `quality_too_low=6`, with candidate-pool shortfall, GT5 NMS suppression, and rank-score-low all at zero. Two K56 Count/Quality fine-tune gates from the epoch152 parent were stopped early because they regressed official-val: `gcs_yolo_lane_s_q12_k56_cqcalib_ft12_seed1_b32w4` best `0.953415`, and `gcs_yolo_lane_s_q12_k56_cqcalib_lr1e4_ft8_seed1_b32w4` best `0.957787`. Do not rerun those exact recipes as the next path.
+Independent GT5 diagnosis on official-val found 63/74 GT5 images kept; remaining GT5 drops are `count_head_under_predict=5` and `quality_too_low=6`, with candidate-pool shortfall, GT5 NMS suppression, and rank-score-low all at zero. A K56 min-points official-val grid improved the best validation row to `0.959750` at `point_valid_thr=0.40`, `candidate_min_points=5`, `final_min_points=9`, and `fifth_min_points=4`, but this row is only a validation-selected postprocess candidate because `count_acc_4=0.863636` exposes GT4-to-5 false fifth-lane risk.
+
+The K56 direct Count/Quality/low-FP fine-tune gates from the epoch152 parent are not promotable: `gcs_yolo_lane_s_q12_k56_cqcalib_ft12_seed1_b32w4` best `0.953415`, `gcs_yolo_lane_s_q12_k56_cqcalib_lr1e4_ft8_seed1_b32w4` best `0.957787`, and `gcs_yolo_lane_s_q12_k56_lowfp_joint_ft8_seed1_b32w4` best `0.958999`. Do not rerun those exact recipes as the next path, and do not continue them with GT5 rescue.
+
+A new default-off K56 fifth-candidate verifier candidate is implemented as `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-fifthness-v1.yaml`. It is opt-in only: the default K32/K56 models keep the existing six-output contract, while this YAML additionally emits `pred_fifthness_logits: B x Q` and enables Count Head fifth-candidate evidence. The associated losses and calibration terms (`gcs_fifthness*`, `gcs_quality_pairwise*`, `gcs_count_cumulative*`) default to `0.0`; no official-val improvement is claimed until a remote validation run selects it.
+
+A user-requested K56 official-test audit on `2026-06-14` is diagnostic-only, not a final/promotable test claim. The tested rows were: parent default `0.959429`, parent minpoints `pv=0.40/final=9/fifth=4` `0.959131`, `cqcalib_ft12` `0.953748`, `cqcalib_lr1e4_ft8` `0.958869`, `curveaux_ft8` `0.959706`, and `lowfp_joint_ft8` `0.959401`. These numbers must not be used to choose checkpoints, thresholds, postprocess settings, losses, or promotion decisions; `curveaux_ft8` remains rejected because its official-val `0.958732` is below the K56 parent `0.959315`.
 
 Use the local RTX 4060 8GB workstation for smoke, contract, label/oracle, and model-shape checks only. Run formal training and official-val evaluation on the remote server.
 
@@ -101,6 +107,15 @@ gcs_point_valid_gt5_edge_segment_thr = 0.65
 gcs_point_valid_gt5_edge_segment_min_points = 5
 gcs_geometry_curvature = 0.0
 gcs_geometry_curvature_beta_px = 5.0
+gcs_quality_pairwise = 0.0
+gcs_quality_pairwise_margin = 0.2
+gcs_fifthness = 0.0
+gcs_fifthness_pairwise = 0.0
+gcs_fifthness_margin = 0.2
+gcs_fifthness_negative_topk = 2
+gcs_fifthness_negative_score_thr = 0.1
+gcs_count_cumulative = 0.0
+gcs_count_cumulative_label_smoothing = 0.0
 ```
 
 When `gcs_quality_hard_negative_from_head` is enabled, Quality Head hard negatives are mined from unmatched queries only; matched queries remain matched quality targets even if their current continuous quality target is `0.0`.

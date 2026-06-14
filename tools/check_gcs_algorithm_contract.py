@@ -535,6 +535,9 @@ def check_official_sweep_summary_contract() -> None:
         "nms_dist_px": 18.0,
         "max_det": 5,
         "min_points": 6,
+        "candidate_min_points": 5,
+        "final_min_points": 6,
+        "fifth_min_points": 4,
         "rank_min_points_tag": "none",
         "rank_min_points": None,
     }

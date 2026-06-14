@@ -46,12 +46,21 @@ class GCSLoss(nn.Module):
         count_head_warmup_epochs: float | None = None,
         count_min_gt_points: int | None = None,
         count_boundary_gt5_pos_weight: float | None = None,
+        count_cumulative: float | None = None,
+        count_cumulative_label_smoothing: float | None = None,
         quality_dist_thr_px: float | None = None,
         quality_neg_weight: float | None = None,
         quality_hard_negative_weight: float | None = None,
         quality_duplicate_negative_weight: float | None = None,
         quality_hard_negative_from_head: bool | str | None = None,
         quality_gt5_edge_floor: float | None = None,
+        quality_pairwise: float | None = None,
+        quality_pairwise_margin: float | None = None,
+        fifthness: float | None = None,
+        fifthness_pairwise: float | None = None,
+        fifthness_margin: float | None = None,
+        fifthness_negative_topk: int | None = None,
+        fifthness_negative_score_thr: float | None = None,
         exist_pos_weight: float | None = None,
         exist_focal_gamma: float | None = None,
         exist_focal_alpha: float | None = None,
@@ -163,6 +172,33 @@ class GCSLoss(nn.Module):
             if quality_gt5_edge_floor is not None
             else self._arg(args, "gcs_quality_gt5_edge_floor", 0.0)
         )
+        self.quality_pairwise_gain = float(
+            quality_pairwise if quality_pairwise is not None else self._arg(args, "gcs_quality_pairwise", 0.0)
+        )
+        self.quality_pairwise_margin = float(
+            quality_pairwise_margin
+            if quality_pairwise_margin is not None
+            else self._arg(args, "gcs_quality_pairwise_margin", 0.2)
+        )
+        self.fifthness_gain = float(fifthness if fifthness is not None else self._arg(args, "gcs_fifthness", 0.0))
+        self.fifthness_pairwise_gain = float(
+            fifthness_pairwise
+            if fifthness_pairwise is not None
+            else self._arg(args, "gcs_fifthness_pairwise", 0.0)
+        )
+        self.fifthness_margin = float(
+            fifthness_margin if fifthness_margin is not None else self._arg(args, "gcs_fifthness_margin", 0.2)
+        )
+        self.fifthness_negative_topk = int(
+            fifthness_negative_topk
+            if fifthness_negative_topk is not None
+            else self._arg(args, "gcs_fifthness_negative_topk", 2)
+        )
+        self.fifthness_negative_score_thr = float(
+            fifthness_negative_score_thr
+            if fifthness_negative_score_thr is not None
+            else self._arg(args, "gcs_fifthness_negative_score_thr", 0.1)
+        )
         self.count_head_warmup_epochs = float(
             count_head_warmup_epochs
             if count_head_warmup_epochs is not None
@@ -185,6 +221,14 @@ class GCSLoss(nn.Module):
             count_boundary_gt5_pos_weight
             if count_boundary_gt5_pos_weight is not None
             else self._arg(args, "gcs_count_boundary_gt5_pos_weight", 1.15)
+        )
+        self.count_cumulative_gain = float(
+            count_cumulative if count_cumulative is not None else self._arg(args, "gcs_count_cumulative", 0.0)
+        )
+        self.count_cumulative_label_smoothing = float(
+            count_cumulative_label_smoothing
+            if count_cumulative_label_smoothing is not None
+            else self._arg(args, "gcs_count_cumulative_label_smoothing", 0.0)
         )
         self.count_adjacent_margin = float(self._arg(args, "gcs_count_adjacent_margin", 0.2))
         self.count_adjacent_margin_gain = float(self._arg(args, "gcs_count_adjacent_margin_gain", 0.0))
@@ -358,10 +402,17 @@ class GCSLoss(nn.Module):
             "gcs_point_invalid_x": self.point_invalid_x_gain,
             "gcs_count_cls": self.count_cls_gain,
             "gcs_count_boundary": self.count_boundary_gain,
+            "gcs_count_cumulative": self.count_cumulative_gain,
             "gcs_count_adjacent_margin": self.count_adjacent_margin,
             "gcs_count_adjacent_margin_gain": self.count_adjacent_margin_gain,
             "gcs_count_sum": self.count_sum_gain,
             "gcs_quality": self.quality_gain,
+            "gcs_quality_pairwise": self.quality_pairwise_gain,
+            "gcs_quality_pairwise_margin": self.quality_pairwise_margin,
+            "gcs_fifthness": self.fifthness_gain,
+            "gcs_fifthness_pairwise": self.fifthness_pairwise_gain,
+            "gcs_fifthness_margin": self.fifthness_margin,
+            "gcs_fifthness_negative_score_thr": self.fifthness_negative_score_thr,
             "gcs_geometry_curvature": self.geometry_curvature_gain,
             "gcs_quality_dist_thr_px": self.quality_dist_thr_px,
             "gcs_quality_hard_negative_weight": self.quality_hard_negative_weight,
@@ -391,6 +442,8 @@ class GCSLoss(nn.Module):
             "gcs_hard_negative_quality_thr": self.hard_negative_quality_thr,
             "gcs_hard_negative_visible_thr": self.hard_negative_visible_thr,
             "gcs_count_boundary_label_smoothing": self.count_boundary_label_smoothing,
+            "gcs_count_cumulative_label_smoothing": self.count_cumulative_label_smoothing,
+            "gcs_fifthness_negative_score_thr": self.fifthness_negative_score_thr,
             "gcs_point_valid_gt5_edge_continuity_thr": self.point_valid_gt5_edge_continuity_thr,
             "gcs_point_valid_gt5_edge_segment_thr": self.point_valid_gt5_edge_segment_thr,
             "gcs_duplicate_iou_thr": self.duplicate_iou_thr,
@@ -427,6 +480,8 @@ class GCSLoss(nn.Module):
             raise ValueError(f"gcs_count_min_gt_points must be > 0, got {self.count_min_gt_points}.")
         if self.hard_negative_topk < 0:
             raise ValueError(f"gcs_hard_negative_topk must be >= 0, got {self.hard_negative_topk}.")
+        if self.fifthness_negative_topk < 0:
+            raise ValueError(f"gcs_fifthness_negative_topk must be >= 0, got {self.fifthness_negative_topk}.")
         if self.hard_negative_visible_support_points <= 0.0:
             raise ValueError(
                 "gcs_hard_negative_visible_support_points must be > 0, "
@@ -933,6 +988,7 @@ class GCSLoss(nn.Module):
         device: torch.device,
         dtype: torch.dtype,
         min_lane_count: int = 4,
+        min_lane_points: int = 2,
     ) -> tuple[torch.Tensor, int]:
         """Return matched left/right edge-lane mask and valid GT lane count for one image."""
         is_edge = torch.zeros(tgt_idx.shape[0], device=device, dtype=torch.bool)
@@ -945,7 +1001,7 @@ class GCSLoss(nn.Module):
                 "GT points/valid shapes must be N x K x 2 and N x K for edge lane weighting, "
                 f"got {tuple(points.shape)} and {tuple(valid.shape)}."
             )
-        lane_mask = valid.sum(dim=1) >= 2
+        lane_mask = valid.sum(dim=1) >= int(min_lane_points)
         lane_count = int(lane_mask.sum().item())
         if lane_count < int(min_lane_count):
             return is_edge, lane_count
@@ -966,6 +1022,8 @@ class GCSLoss(nn.Module):
         gt_points: list[torch.Tensor],
         gt_valid: list[torch.Tensor],
         indices: list[tuple[torch.Tensor, torch.Tensor]],
+        *,
+        min_lane_points: int = 2,
     ) -> torch.Tensor:
         """Return B x Q mask for matched left/right edge lanes in images with at least 5 GT lanes."""
         mask = torch.zeros_like(pred_logits, dtype=torch.bool)
@@ -980,10 +1038,125 @@ class GCSLoss(nn.Module):
                 device=device,
                 dtype=dtype,
                 min_lane_count=5,
+                min_lane_points=min_lane_points,
             )
             if lane_count >= 5:
                 mask[b, src_idx.to(device=device, dtype=torch.long)] = is_edge
         return mask
+
+    @staticmethod
+    def _lane_count_from_valid(valid: torch.Tensor, *, min_points: int = 2) -> int:
+        """Return the number of GT lanes with enough visible anchors."""
+        if valid.ndim != 2:
+            raise ValueError(f"GT lane_valid must have shape N x K, got {tuple(valid.shape)}.")
+        return int((valid.float().sum(dim=1) >= int(min_points)).sum().item())
+
+    def _query_visible_evidence(
+        self,
+        pred_logits_b: torch.Tensor,
+        pred_points_b: torch.Tensor,
+        pred_valid_logits_b: torch.Tensor | None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return per-query fifth-candidate score and mean x for one image."""
+        device, dtype = pred_points_b.device, pred_points_b.dtype
+        exist_prob = pred_logits_b.detach().sigmoid().to(device=device, dtype=dtype)
+        if pred_valid_logits_b is None:
+            valid_prob = torch.ones(pred_points_b.shape[:2], device=device, dtype=dtype)
+            visible_mean = torch.ones_like(exist_prob)
+            visible_support = torch.ones_like(exist_prob)
+        else:
+            valid_prob = pred_valid_logits_b.detach().sigmoid().to(device=device, dtype=dtype)
+            visible_mean, visible_support = self._visible_segment_mean_and_support(
+                valid_prob.unsqueeze(0),
+                visible_thr=float(self.hard_negative_visible_thr),
+                support_points=float(self.hard_negative_visible_support_points),
+            )
+            visible_mean = visible_mean.squeeze(0)
+            visible_support = visible_support.squeeze(0)
+        score = (exist_prob * visible_mean * visible_support).clamp(0.0, 1.0)
+        x = pred_points_b.detach().to(device=device, dtype=dtype).clamp(0.0, 1.0)[..., 0]
+        mean_x = (x * valid_prob).sum(dim=-1) / valid_prob.sum(dim=-1).clamp_min(1e-6)
+        return score, mean_x
+
+    @torch.no_grad()
+    def competitive_fifth_masks(
+        self,
+        pred_logits: torch.Tensor,
+        pred_points: torch.Tensor,
+        pred_valid_logits: torch.Tensor | None,
+        gt_points: list[torch.Tensor],
+        gt_valid: list[torch.Tensor],
+        indices: list[tuple[torch.Tensor, torch.Tensor]],
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return fifth-positive and competitive-unmatched masks for fifth-lane supervision."""
+        min_lane_points = int(self.count_min_gt_points)
+        positive = self._gt5_edge_query_mask(
+            pred_logits,
+            gt_points,
+            gt_valid,
+            indices,
+            min_lane_points=min_lane_points,
+        )
+        negative = torch.zeros_like(pred_logits, dtype=torch.bool)
+        matched = self._matched_query_mask(pred_logits, indices)
+        topk = int(self.fifthness_negative_topk)
+        if topk <= 0:
+            return positive.detach(), negative.detach()
+
+        device, dtype = pred_points.device, pred_points.dtype
+        score_thr = float(self.fifthness_negative_score_thr)
+        for b in range(pred_logits.shape[0]):
+            valid = gt_valid[b].detach().to(device=device, dtype=dtype)
+            points = gt_points[b].detach().to(device=device, dtype=dtype)
+            lane_mask = valid.sum(dim=1) >= min_lane_points
+            lane_count = int(lane_mask.sum().item())
+            if lane_count not in {3, 4}:
+                continue
+            unmatched_idx = torch.nonzero(~matched[b], as_tuple=False).flatten()
+            if unmatched_idx.numel() == 0 or not bool(lane_mask.any()):
+                continue
+
+            visible_den = valid.sum(dim=1).clamp_min(1.0)
+            gt_mean_x = (points[..., 0] * valid).sum(dim=1) / visible_den
+            gt_mean_x = gt_mean_x[lane_mask]
+            left, right = gt_mean_x.min(), gt_mean_x.max()
+            score, query_mean_x = self._query_visible_evidence(
+                pred_logits[b],
+                pred_points[b],
+                pred_valid_logits[b] if pred_valid_logits is not None else None,
+            )
+            outside = (query_mean_x < left) | (query_mean_x > right)
+            candidates = unmatched_idx[outside[unmatched_idx] & (score[unmatched_idx] >= score_thr)]
+            if candidates.numel() == 0:
+                continue
+            count = min(topk, int(candidates.numel()))
+            selected = score[candidates].topk(k=count, largest=True).indices
+            negative[b, candidates[selected]] = True
+        return positive.detach(), negative.detach()
+
+    def _pairwise_margin_loss(
+        self,
+        logits: torch.Tensor,
+        positive_mask: torch.Tensor,
+        negative_mask: torch.Tensor,
+        *,
+        margin: float,
+    ) -> torch.Tensor:
+        """Rank positives above selected negatives with a logit margin."""
+        losses = []
+        for b in range(logits.shape[0]):
+            pos = logits[b][positive_mask[b]]
+            neg = logits[b][negative_mask[b]]
+            if pos.numel() == 0 or neg.numel() == 0:
+                continue
+            losses.append(torch.relu(logits.new_tensor(float(margin)) - (pos[:, None] - neg[None])).mean())
+        if losses:
+            return torch.stack(losses).mean()
+        pos = logits[positive_mask]
+        neg = logits[negative_mask]
+        if pos.numel() == 0 or neg.numel() == 0:
+            return self._zero_like(logits)
+        return torch.relu(logits.new_tensor(float(margin)) - (pos[:, None] - neg[None])).mean()
 
     def _matched_target_weights(
         self,
@@ -1653,6 +1826,8 @@ class GCSLoss(nn.Module):
         hard_loss_mask: torch.Tensor | None = None,
         hard_negative_mask: torch.Tensor | None = None,
         duplicate_negative_mask: torch.Tensor | None = None,
+        fifth_positive_mask: torch.Tensor | None = None,
+        fifth_negative_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """BCE loss for lane-level geometry quality with focused negative-query weights."""
         if pred_quality_logits is None:
@@ -1702,7 +1877,19 @@ class GCSLoss(nn.Module):
             neg_loss = neg_loss / unmatched_mask.sum().clamp_min(1)
         else:
             neg_loss = self._zero_like(pred_points)
-        return pos_loss + neg_loss
+        loss = pos_loss + neg_loss
+        if (
+            self.quality_pairwise_gain > 0.0
+            and fifth_positive_mask is not None
+            and fifth_negative_mask is not None
+        ):
+            loss = loss + self.quality_pairwise_gain * self._pairwise_margin_loss(
+                pred_quality_logits,
+                fifth_positive_mask,
+                fifth_negative_mask,
+                margin=float(self.quality_pairwise_margin),
+            )
+        return loss
 
     def point_valid_loss(
         self,
@@ -1898,6 +2085,11 @@ class GCSLoss(nn.Module):
             self.count_cls_weights, device=pred_count_logits.device, dtype=torch.float32
         )
         count_loss = F.cross_entropy(pred_count_logits.float(), gt_count_cls, weight=class_weight)
+        if self.count_cumulative_gain > 0.0:
+            count_loss = count_loss + self.count_cumulative_gain * self.count_cumulative_loss(
+                pred_count_logits,
+                gt_count,
+            )
         if self.count_adjacent_margin_gain > 0.0:
             count_loss = count_loss + self.count_adjacent_margin_gain * self.count_adjacent_margin_loss(
                 pred_count_logits, gt_count_cls, gt_count
@@ -1931,6 +2123,31 @@ class GCSLoss(nn.Module):
         else:
             boundary_loss = boundary_loss_elem.mean()
         return count_loss + self.count_boundary_gain * boundary_loss
+
+    def count_cumulative_loss(self, pred_count_logits: torch.Tensor, gt_count: torch.Tensor) -> torch.Tensor:
+        """Add cumulative count>=3/4/5 supervision from the existing B x 4 Count Head logits."""
+        logits = pred_count_logits.float()
+        gt_count = gt_count.to(device=logits.device)
+        cumulative_logits = torch.stack(
+            (
+                torch.logsumexp(logits[:, 1:], dim=1) - logits[:, 0],
+                torch.logsumexp(logits[:, 2:], dim=1) - torch.logsumexp(logits[:, :2], dim=1),
+                logits[:, 3] - torch.logsumexp(logits[:, :3], dim=1),
+            ),
+            dim=1,
+        )
+        targets = torch.stack(
+            (
+                gt_count.ge(3).float(),
+                gt_count.ge(4).float(),
+                gt_count.ge(5).float(),
+            ),
+            dim=1,
+        ).to(device=logits.device, dtype=logits.dtype)
+        smoothing = min(max(float(self.count_cumulative_label_smoothing), 0.0), 1.0)
+        if smoothing > 0.0:
+            targets = targets * (1.0 - smoothing) + 0.5 * smoothing
+        return F.binary_cross_entropy_with_logits(cumulative_logits, targets)
 
     def count_adjacent_margin_loss(
         self, pred_count_logits: torch.Tensor, gt_count_cls: torch.Tensor, gt_count: torch.Tensor
@@ -1986,6 +2203,47 @@ class GCSLoss(nn.Module):
         if smoothing > 0.0:
             targets = targets * (1.0 - smoothing) + 0.5 * smoothing
         return targets.to(dtype=pred_count_boundary_logits.dtype)
+
+    def fifthness_loss(
+        self,
+        preds: dict[str, torch.Tensor],
+        pred_points: torch.Tensor,
+        fifth_positive_mask: torch.Tensor,
+        fifth_negative_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        """Train an optional fifth-candidate verifier on real GT5 edges vs false outside candidates."""
+        pred_fifthness_logits = preds.get("pred_fifthness_logits")
+        if pred_fifthness_logits is None:
+            if self.fifthness_gain > 0.0 or self.fifthness_pairwise_gain > 0.0:
+                raise ValueError(
+                    "GCS fifthness verifier loss is enabled but pred_fifthness_logits is missing. "
+                    "Use a fifthness-enabled GCSLaneHead YAML, or set gcs_fifthness=0.0 and "
+                    "gcs_fifthness_pairwise=0.0."
+                )
+            return self._zero_like(pred_points)
+        if pred_fifthness_logits.ndim == 3 and pred_fifthness_logits.shape[-1] == 1:
+            pred_fifthness_logits = pred_fifthness_logits.squeeze(-1)
+        if pred_fifthness_logits.shape != pred_points.shape[:2]:
+            raise ValueError(
+                "pred_fifthness_logits must have shape B x Q matching pred_points, "
+                f"got {tuple(pred_fifthness_logits.shape)} vs {tuple(pred_points.shape[:2])}."
+            )
+        supervised = fifth_positive_mask | fifth_negative_mask
+        if not bool(supervised.any()):
+            return self._zero_like(pred_fifthness_logits)
+
+        target = torch.zeros_like(pred_fifthness_logits)
+        target = torch.where(fifth_positive_mask, torch.ones_like(target), target)
+        raw_loss = F.binary_cross_entropy_with_logits(pred_fifthness_logits, target, reduction="none")
+        loss = raw_loss[supervised].mean() * float(self.fifthness_gain)
+        if self.fifthness_pairwise_gain > 0.0:
+            loss = loss + self.fifthness_pairwise_gain * self._pairwise_margin_loss(
+                pred_fifthness_logits,
+                fifth_positive_mask,
+                fifth_negative_mask,
+                margin=float(self.fifthness_margin),
+            )
+        return loss
 
     def count_sum_loss(
         self,
@@ -2075,6 +2333,20 @@ class GCSLoss(nn.Module):
         hard_negative_mask, duplicate_negative_mask = self.negative_query_masks(
             pred_logits, pred_points, pred_valid_logits, gt_points, gt_valid, indices
         )
+        fifth_positive_mask = fifth_negative_mask = None
+        if (
+            self.quality_pairwise_gain > 0.0
+            or self.fifthness_gain > 0.0
+            or self.fifthness_pairwise_gain > 0.0
+        ):
+            fifth_positive_mask, fifth_negative_mask = self.competitive_fifth_masks(
+                pred_logits,
+                pred_points,
+                pred_valid_logits,
+                gt_points,
+                gt_valid,
+                indices,
+            )
         hard_loss_mask = self.hard_loss_mask(batch, pred_logits.shape[0], pred_logits.device, gt_valid=gt_valid)
         exist_loss = self.exist_loss(
             pred_logits,
@@ -2112,7 +2384,7 @@ class GCSLoss(nn.Module):
         )
         count_cls_loss = self.count_head_loss(preds, pred_points, gt_valid)
         count_sum_loss = self.count_sum_loss(pred_logits, batch, gt_valid)
-        quality_loss = (
+        quality_loss_base = (
             self.quality_loss(
                 pred_quality_logits,
                 pred_points,
@@ -2122,10 +2394,21 @@ class GCSLoss(nn.Module):
                 hard_loss_mask=hard_loss_mask,
                 hard_negative_mask=hard_negative_mask,
                 duplicate_negative_mask=duplicate_negative_mask,
+                fifth_positive_mask=fifth_positive_mask,
+                fifth_negative_mask=fifth_negative_mask,
             )
             if self.quality_gain > 0.0
             else self._zero_like(pred_points)
         )
+        fifthness_aux_loss = self._zero_like(pred_points)
+        if self.fifthness_gain > 0.0 or self.fifthness_pairwise_gain > 0.0:
+            fifthness_aux_loss = self.fifthness_loss(
+                preds,
+                pred_points,
+                fifth_positive_mask,
+                fifth_negative_mask,
+            )
+        quality_loss = quality_loss_base + fifthness_aux_loss
 
         total = (
             self.exist_gain * exist_loss
@@ -2135,7 +2418,8 @@ class GCSLoss(nn.Module):
             + self.geometry_curvature_gain * curvature_loss
             + self.count_head_warmup_factor(batch) * self.count_cls_gain * count_cls_loss
             + self.count_sum_gain * count_sum_loss
-            + self.quality_gain * quality_loss
+            + self.quality_gain * quality_loss_base
+            + fifthness_aux_loss
         )
         loss_items = torch.stack(
             (

@@ -42,6 +42,16 @@ datasets/tusimple_fixed_y_k56_960x544
 
 The K56 dataset must be rebuilt from original TuSimple JSON and images. Do not resample existing K32 labels into K56 labels.
 
+Current K56 experiment status:
+
+```text
+K56 label oracle: 0.998256
+K56 parent official_best: 0.959315 at epoch 152
+K56 best val-only min-points row: 0.959750 at point_valid_thr=0.40, candidate_min_points=5, final_min_points=9, fifth_min_points=4
+```
+
+The min-points row is validation-selected and not promoted because it carries GT4-to-5 false fifth-lane risk (`count_acc_4=0.863636`). The rejected K56 gates are `gcs_yolo_lane_s_q12_k56_cqcalib_ft12_seed1_b32w4`, `gcs_yolo_lane_s_q12_k56_cqcalib_lr1e4_ft8_seed1_b32w4`, `gcs_yolo_lane_s_q12_k56_curveaux_ft8_seed1_b32w4`, and `gcs_yolo_lane_s_q12_k56_lowfp_joint_ft8_seed1_b32w4`; do not rerun those exact recipes as the next path.
+
 ## Model Contract
 
 Default model:
@@ -51,6 +61,14 @@ ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12.yaml
 ```
 
 Legacy Q=8 config is retained for historical reproduction, ablation, or controlled experimental candidates.
+
+Default-off K56 fifth-candidate verifier experiment:
+
+```text
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-fifthness-v1.yaml
+```
+
+This model YAML is opt-in and enables an optional fifthness verifier head plus Count Head fifth-candidate evidence. It is not the K56 default and has no official-val evidence yet.
 
 ## Label Contract
 
@@ -114,6 +132,14 @@ pred_count_boundary_logits: B x 2
 
 `pred_count_logits` is the image-level Count Head for classes count=2/3/4/5. `pred_quality_logits` is lane-level quality for training, diagnostics, and gated rescue behavior.
 `pred_count_boundary_logits` is the count>=4/count>=5 boundary calibration sub-head used by the default Count Head loss/decode path.
+
+The opt-in `gcs-yolo-lane-s-q12-k56-fifthness-v1.yaml` experiment may additionally emit:
+
+```text
+pred_fifthness_logits: B x Q
+```
+
+Default K32 and K56 model configs must not emit `pred_fifthness_logits`; `tools/check_model.py` treats it as optional only when the head enables `use_fifthness`.
 
 The candidate-aware Count Head uses the same short-lane visibility semantics as decode when building count evidence:
 
@@ -187,6 +213,15 @@ gcs_point_valid_gt5_edge_segment_thr = 0.65
 gcs_point_valid_gt5_edge_segment_min_points = 5
 gcs_geometry_curvature = 0.0
 gcs_geometry_curvature_beta_px = 5.0
+gcs_quality_pairwise = 0.0
+gcs_quality_pairwise_margin = 0.2
+gcs_fifthness = 0.0
+gcs_fifthness_pairwise = 0.0
+gcs_fifthness_margin = 0.2
+gcs_fifthness_negative_topk = 2
+gcs_fifthness_negative_score_thr = 0.1
+gcs_count_cumulative = 0.0
+gcs_count_cumulative_label_smoothing = 0.0
 ```
 
 `gcs_count_adjacent_margin_gain` enables a default-off training-side margin term inside `count_cls_loss` that pushes the GT count logit above neighboring count classes. It is intended for controlled GT3/GT4/GT5 calibration experiments and does not add a new logged loss item.
@@ -198,6 +233,14 @@ The `gcs_quality_gt5_edge_floor`, `gcs_quality_hard_negative_from_head`, `gcs_ha
 `gcs_geometry_curvature` is a default-off fixed-y geometry auxiliary candidate. When enabled, it adds `curvature_loss`, a SmoothL1 penalty on second-order x curvature for Hungarian-matched left/right edge lanes in GT>=5 images only. It is training-side only and does not change decode, read GT during inference, fabricate lanes, or alter official metrics.
 
 The first K56 curvature gate `gcs_yolo_lane_s_q12_k56_curveaux_ft8_seed1_b32w4` is rejected: best official-val was `0.958732`, below the K56 parent `0.959315`. Keep the infrastructure default-off and do not rerun the exact `gcs_geometry_curvature=0.05` recipe as the next path.
+
+`gcs_fifthness*` is a default-off fifth-candidate verifier objective. It supervises GT5 edge matched lanes as positives and competitive unmatched outside candidates as negatives, with an optional pairwise margin term. Its GT lane counting follows `gcs_count_min_gt_points` so K56 one-anchor short lanes stay aligned with Count Head targets. It requires a fifthness-enabled model YAML; enabling the loss against a default model is an error.
+
+`gcs_quality_pairwise*` is a default-off competitive ranking term for the existing Quality Head. It does not rewrite the current Quality target; it only adds a pairwise constraint between GT5 edge matches and competitive false fifth candidates.
+
+`gcs_count_cumulative*` is a default-off ordinal-style cumulative count>=3/count>=4/count>=5 supervision term built from the existing `pred_count_logits: B x 4`. It preserves `pred_count_logits` and `pred_count_boundary_logits` output shapes and does not add a new Count Head contract.
+
+For logging stability, these experimental terms stay folded into existing loss items instead of adding new CSV columns: count cumulative is inside `count_cls_loss`, Quality pairwise is inside `quality_loss` and is scaled by the existing `gcs_quality` gain, while fifthness is an independent auxiliary term reported through the existing `quality_loss` item. Analyze enabled runs with the exact CLI gains from `args.yaml`; do not infer subterm magnitudes from the 8-loss CSV alone.
 
 When `gcs_quality_hard_negative_from_head` is enabled, Quality Head hard negatives are mined from unmatched queries only. Hungarian-matched queries remain matched quality targets even when their current continuous quality target is `0.0`; they must not be reclassified as hard negatives.
 
@@ -279,3 +322,5 @@ The test set must not be used for threshold search, rescue parameter search, sof
 `tools/sweep_tusimple_official.py` and `tools/diagnose_gcs_gt5.py` default to `--split val` and reject `--split test`. Training-time `official_best` selection also rejects `split=test`.
 
 Test is only for one-shot final evaluation of a candidate already selected on official-val, using `tools/eval_tusimple_official.py --split test`.
+
+If the user explicitly requests extra test evaluations for audit purposes, label them diagnostic-only and do not use them to choose checkpoints, thresholds, postprocess settings, losses, model variants, or promotion. The 2026-06-14 user-requested K56 test audit is such a diagnostic-only exception; it does not create a final/promotable official-test claim for K56.

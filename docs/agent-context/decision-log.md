@@ -1411,7 +1411,7 @@ The root blocker is therefore not candidate supply, rank, or NMS. It is quality-
 
 Alternatives considered:
 
-- Promote the recipe because it beats the two most recent rejected gates.
+- Promote the recipe because it beats the two previously rejected 2026-06-13 gates.
 - Continue the same recipe for more epochs.
 - Increase hard-negative or duplicate-negative pressure.
 - Use decode/test sweeps to recover the official metric.
@@ -3233,7 +3233,7 @@ Alternatives considered:
 
 Tradeoff:
 
-Continuing uses server time, but the run is healthy and only around epoch 79/180, with recent Top-K movement. Increasing batch size mid-run would break comparability and require restarting the formal baseline. Launching a competing experiment would consume the same 24GB GPU before the first clean K56 baseline matures. If this run later plateaus below legacy, the next controlled candidate should target training-side GT5 edge visible-segment point-valid support and Count/Quality calibration from an official-val-selected K56 checkpoint, with a separate throughput-only batch probe before the next formal run if resource use should be increased.
+Continuing uses server time, but the run is healthy and only around epoch 79/180, with Top-K movement through epoch 79. Increasing batch size mid-run would break comparability and require restarting the formal baseline. Launching a competing experiment would consume the same 24GB GPU before the first clean K56 baseline matures. If this run later plateaus below legacy, the next controlled candidate should target training-side GT5 edge visible-segment point-valid support and Count/Quality calibration from an official-val-selected K56 checkpoint, with a separate throughput-only batch probe before the next formal run if resource use should be increased.
 
 Validation evidence:
 
@@ -4747,7 +4747,7 @@ Experimental baseline monitoring decision. K56 is still not promoted over K32, a
 
 ## 2026-06-14: Superseding K56 final state after monitor entries
 
-The historical monitoring entries above are superseded by the completed K56 baseline decision and the rejected Count/Quality fine-tune decisions recorded earlier in this file. Current state: `gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4` completed 180/180; official-val-selected epoch 152 remains the K56 reference at `official_acc=0.959315`; K56 is not promoted, not test-ready, and has no official-test claim. The next K56 step should stay validation-only and avoid rerunning the two rejected Count/Quality recipes.
+The historical monitoring entries above are superseded by the completed K56 baseline decision and the rejected Count/Quality fine-tune decisions recorded earlier in this file. Current state: `gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4` completed 180/180; official-val-selected epoch 152 remains the K56 reference at `official_acc=0.959315`; K56 is not promoted and has no final/promotable official-test claim. The next K56 step should stay validation-only and avoid rerunning the rejected Count/Quality, curvature, and low-FP recipes.
 
 ## 2026-06-14: Add default-off K56 GT5 edge curvature auxiliary loss
 
@@ -4930,7 +4930,7 @@ Alternatives considered:
 
 Tradeoff:
 
-K56 clearly improves representation and endpoint coverage, but the trained model is still below the `0.97` objective and only barely above the legacy official-val reference. Therefore K56 remains experimental, not test-ready, and has no official-test claim. Ultra-short or single-point lane support may be explored only as an explicit experiment; decode must not invent lanes.
+K56 clearly improves representation and endpoint coverage, but the trained model is still below the `0.97` objective and only barely above the legacy official-val reference. Therefore K56 remains experimental and has no final/promotable official-test claim. Ultra-short or single-point lane support may be explored only as an explicit experiment; decode must not invent lanes.
 
 Validation evidence:
 
@@ -4961,3 +4961,168 @@ max_det: 5
 Mainline or experiment:
 
 Experimental K56 reference and support tooling. K32 remains current mainline; test remains protected. The next safe action is an official-val K56 min-points grid plus GT3/GT4/GT5 joint low-FP analysis, not another exact rerun of the rejected K56 Count/Quality or curvature recipes.
+
+## 2026-06-14: Treat K56 min-points as val-only and reject low-FP joint fine-tune
+
+Decision:
+
+Keep the K56 parent `official_best.pt` as the current experimental reference, treat the best K56 min-points grid row as validation-only evidence, and reject the low-FP joint fine-tune:
+
+```text
+parent: gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4
+parent official_best: 0.959315
+best min-points val row: 0.959750 at point_valid_thr=0.40, candidate_min_points=5, final_min_points=9, fifth_min_points=4
+rejected low-FP run: gcs_yolo_lane_s_q12_k56_lowfp_joint_ft8_seed1_b32w4
+low-FP best official-val: 0.958999
+```
+
+Do not continue the low-FP run with GT5 rescue, and do not rerun the same low-FP recipe as the next path.
+
+Why:
+
+The K56 parent min-points grid can slightly raise official-val Accuracy, but the best row has `count_acc_4=0.863636`, exposing GT4-to-5 false fifth-lane pressure. The low-FP joint fine-tune was designed to avoid the previously rejected hard-negative and forced-GT5 path, but it still regressed official-val and worsened both FP and FN versus the parent.
+
+Validation evidence:
+
+K56 data and endpoint checks passed:
+
+```text
+K56 fixed-y check: K=56, 710/720 -> 160/720, no split overlap
+K56 label oracle: 0.998256
+endpoint audit: zero_anchor_lanes=0, one_anchor_lanes=3
+```
+
+Min-points official-val grids from the parent `official_best.pt`:
+
+```text
+first grid best: official_acc=0.959475, FP=0.043618, FN=0.027548, point_valid_thr=0.35, candidate_min_points=5, final_min_points=9, fifth_min_points=4
+pv030_040 grid best: official_acc=0.959750, FP=0.043848, FN=0.028466, point_valid_thr=0.40, candidate_min_points=5, final_min_points=9, fifth_min_points=4
+risk: count_acc_4=0.863636
+```
+
+Low-FP joint fine-tune evidence:
+
+```text
+best epoch: 1
+official_acc: 0.958999
+FP: 0.046970
+FN: 0.031910
+delta vs parent official_best 0.959315: official_acc=-0.000316, FP=+0.001745, FN=+0.003444
+post-sweep best: 0.958999
+GT5 diagnosis: kept=61/74, count_head_under_predict=8, quality_too_low=5, candidate_pool_shortfall=0, GT5 NMS suppression=0, rank5_score_low=0, valid_points_fail=0
+```
+
+Alternatives considered:
+
+- Promote the min-points row because it has the highest official-val Accuracy so far.
+- Continue the low-FP fine-tune with GT5 rescue.
+- Rerun the previously rejected `cqcalib`, `curveaux`, or low-FP recipes.
+- Use test to decide whether the min-points row or fine-tune is better.
+
+Tradeoff:
+
+Keeping the min-points row as validation-only preserves a potentially useful postprocess candidate without hiding the GT4 false-positive risk. Stopping the low-FP direction avoids spending more server time on a line that already failed the user's FP/FN gate.
+
+Mainline or experiment:
+
+Experimental K56 decision. K32 remains the mainline; K56 is not promoted.
+
+## 2026-06-14: Record user-requested diagnostic-only K56 official-test audit
+
+Decision:
+
+Record the user-requested K56 official-test results as diagnostic-only evidence. Do not use these numbers for checkpoint selection, threshold selection, min-points selection, postprocess tuning, loss tuning, model selection, or promotion.
+
+Diagnostic-only test table:
+
+| Row | Val status | Test Accuracy | FP | FN | official_score |
+| --- | --- | ---: | ---: | ---: | ---: |
+| parent default | parent official_best `0.959315` | `0.959429` | `0.033459` | `0.033609` | `0.958088` |
+| parent minpoints `pv040 final9 fifth4` | val-only candidate `0.959750` | `0.959131` | `0.032860` | `0.033968` | `0.957795` |
+| `cqcalib_ft12` | rejected official-val `0.953415` | `0.953748` | `0.038048` | `0.044213` | `0.952102` |
+| `cqcalib_lr1e4_ft8` | rejected official-val `0.957787` | `0.958869` | `0.033615` | `0.036395` | `0.957469` |
+| `curveaux_ft8` | rejected official-val `0.958732` | `0.959706` | `0.034669` | `0.034268` | `0.958327` |
+| `lowfp_joint_ft8` | rejected official-val `0.958999` | `0.959401` | `0.032758` | `0.034747` | `0.958051` |
+
+Why:
+
+The user explicitly requested test official Accuracy for the K56 parent, min-points, `cqcalib`, `curveaux`, and `lowfp_joint` rows after the validation diagnostics. That creates useful audit evidence, but it also increases leakage risk if future work treats the highest test row as a selection signal. The highest diagnostic test Accuracy is `curveaux_ft8` at `0.959706`, but `curveaux_ft8` remains rejected because its official-val `0.958732` is below the K56 parent `0.959315`.
+
+Alternatives considered:
+
+- Refuse to record the diagnostic test audit in project docs.
+- Promote `curveaux_ft8` because its diagnostic test Accuracy is highest.
+- Use test to choose between the parent default and min-points postprocess row.
+- Record the results with explicit diagnostic-only caveats.
+
+Tradeoff:
+
+Recording the results prevents future agents from re-running the same test audit, but the docs must state the protocol boundary clearly to avoid accidental test-driven selection.
+
+Validation evidence:
+
+The test audit used fixed val-selected settings and no test sweeps. The cross-check found `tusimple_official_summary.json` artifacts for all six test directories, with `config.split=test`, `imgsz=[544, 960]`, and weights pointing to the corresponding `official_best.pt`.
+
+Mainline or experiment:
+
+Diagnostic-only experiment record. It is not a final/promotable official-test claim.
+
+## 2026-06-14: Add default-off K56 fifth-candidate verifier candidate
+
+Decision:
+
+Add a default-off K56 fifth-candidate calibration candidate:
+
+```text
+model: ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-fifthness-v1.yaml
+optional output: pred_fifthness_logits: B x Q
+training knobs: gcs_fifthness*, gcs_quality_pairwise*, gcs_count_cumulative*
+```
+
+Keep the default K32 and K56 model output contracts unchanged. The new fifthness output appears only when the opt-in fifthness YAML enables it. The existing `pred_count_logits: B x 4` and `pred_count_boundary_logits: B x 2` contracts remain intact.
+
+Why:
+
+The K56 parent and min-points analyses show that candidate pool, rank, NMS, and diagnostic valid-points are not the active root bottleneck. The remaining failure pattern is Count/Quality separation around GT5 `5->4` drops and GT4/GT3 false fifth-lane pressure. Direct Count/Quality knob pushes, low-FP fine-tuning, and the first curvature auxiliary gate all regressed official-val, so the next smallest code candidate should explicitly supervise fifth-candidate trust rather than broadly increasing recall.
+
+Implementation:
+
+- Add an optional `pred_fifthness_logits` verifier head in `GCSLaneHead`.
+- Add Count Head fifth-candidate evidence, enabled only by the opt-in fifthness-v1 YAML.
+- Add default-off fifthness BCE and pairwise margin losses. Positives are GT5 edge matched lanes; negatives are competitive unmatched outside candidates.
+- Add default-off Quality Head competitive pairwise ranking without rewriting the existing Quality target.
+- Add default-off cumulative count>=3/count>=4/count>=5 supervision from the existing Count Head logits.
+- Add CLI/default config plumbing and focused tests.
+- Keep the 8-loss CSV contract stable: count cumulative folds into `count_cls_loss`, Quality pairwise folds into `quality_loss` and is scaled by `gcs_quality`, and fifthness is reported through `quality_loss` as an independent auxiliary term.
+
+Alternatives considered:
+
+- Continue min-points/postprocess selection despite GT4-to-5 risk.
+- Rerun the rejected K56 `cqcalib`, `curveaux`, or `lowfp_joint` recipes.
+- Add an x-bin/distribution head first.
+- Replace the existing Count Head output contract with a new ordinal head.
+
+Tradeoff:
+
+This adds a small optional head and several training-side losses, increasing experiment complexity and introducing new gains that must be selected on official-val. The tradeoff is accepted because the candidate is isolated behind an opt-in YAML and default-off knobs, while preserving checkpoint compatibility and the current Count Head contract.
+
+Validation evidence:
+
+Local checks passed:
+
+```text
+python -m py_compile ultralytics/nn/modules/gcs_lane.py ultralytics/utils/gcs_loss.py ultralytics/models/yolo/gcs_lane/train.py tools/train_gcs.py tools/check_model.py tools/check_gcs_algorithm_contract.py tests/test_gcs_count_aware.py
+python -m pytest tests/test_gcs_count_aware.py -q --basetemp .tmp_pytest/fifthness
+python scripts/verify_loss_cleanup.py
+python tools/check_gcs_count_head_topk_contract.py
+python tools/check_gcs_decode_meta_contract.py
+python tools/check_gcs_algorithm_contract.py
+python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml --imgsz 544 960 --batch 1
+python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-fifthness-v1.yaml --imgsz 544 960 --batch 1
+```
+
+The default K56 shape check emitted only the existing six output keys. The fifthness-v1 shape check emitted `pred_fifthness_logits` with shape `B x Q` in addition to the existing outputs.
+
+Mainline or experiment:
+
+Default-off experimental candidate. No official-val improvement is claimed yet, and test must not be used to select gains, checkpoints, thresholds, or promotion.

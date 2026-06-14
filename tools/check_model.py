@@ -78,6 +78,8 @@ def main():
         "pred_count_boundary_logits",
         "pred_quality_logits",
     }
+    if bool(getattr(head, "use_fifthness", False)):
+        expected.add("pred_fifthness_logits")
     if not isinstance(y, dict):
         raise RuntimeError(f"Expected GCSLaneHead to return a dict, got {type(y).__name__}.")
     missing = sorted(expected - set(y))
@@ -112,6 +114,11 @@ def main():
             "pred_quality_logits must have shape B x Q matching pred_points, "
             f"got {tuple(y['pred_quality_logits'].shape)} vs {tuple(y['pred_points'].shape[:2])}."
         )
+    if bool(getattr(head, "use_fifthness", False)) and y["pred_fifthness_logits"].shape != y["pred_points"].shape[:2]:
+        raise RuntimeError(
+            "pred_fifthness_logits must have shape B x Q matching pred_points when fifthness is enabled, "
+            f"got {tuple(y['pred_fifthness_logits'].shape)} vs {tuple(y['pred_points'].shape[:2])}."
+        )
     if getattr(head, "point_mode", "free") == "fixed_y":
         if int(getattr(head, "point_dims", 2)) != 1:
             raise RuntimeError("fixed_y GCSLaneHead must use point_dims=1 for x-only prediction.")
@@ -136,6 +143,7 @@ def main():
         print(f"registered GCSLaneHead: {has_head}")
         print(f"GCSLaneHead point_mode: {getattr(head, 'point_mode', None)}")
         print(f"GCSLaneHead point_dims: {getattr(head, 'point_dims', None)}")
+        print(f"GCSLaneHead use_fifthness: {getattr(head, 'use_fifthness', None)}")
 
     print(type(y))
     for k, v in y.items():

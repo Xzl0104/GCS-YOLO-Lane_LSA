@@ -137,7 +137,60 @@ independent official-val sweep: runs/gcs_lane/gcs_yolo_lane_s_q12_k56_offhs_e180
 GT5 rank-diagnosis drop attribution: runs/gcs_lane/gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4/analysis_official_best_gt5_diag_val/gt5_rank_diagnostics_summary.json, kept=63/74, count_head_under_predict=5, quality_too_low=6, candidate_pool_shortfall=0, GT5 NMS suppression=0, rank5_score_low=0, valid_points_fail=0
 diagnostic top-k notes: epoch152 exceeds the current-code K32 audit 0.953756 by +0.005559, countboundary 0.954137 by +0.005178, old FT6 0.954782 by +0.004533, prior K56 epoch127 best 0.958484 by +0.000831, epoch115 by +0.001355, and legacy 0.959224 by +0.000091. It remains below the 0.97 objective and is not promoted because the legacy margin is tiny. The remaining blocker is not representation oracle, candidate supply, rank, or NMS; it is Count/Quality separation around GT5 5->4 and false fifth-lane pressure.
 errors: final process exited; results.csv has no numeric NaN/Inf values across 180 rows; 181 run JSON files have no parse error and no numeric NaN/Inf values; a text-artifact scan of 363 files found no `--split test`, `split: test`, `split=test`, `test_label.json`, or `test_set` hits, and no `Traceback`, `RuntimeError`, `shape error`, or `shape mismatch` hits. args.yaml records split=val, gcs_official_best_split=val, imgsz=[544, 960], gcs_imgsz=[544, 960], and K56 data/model.
-decision: K56 baseline is a stronger official-val reference, but not a final-test candidate yet. Do not use test. Do not rerun the two rejected K56 Count/Quality gates below.
+decision: K56 baseline is a stronger official-val reference, but not a final/promotable test candidate. Do not use test for selection. Do not rerun the rejected K56 Count/Quality gates below.
+```
+
+K56 min-points validation-only grid result from the parent `official_best.pt`:
+
+```text
+first grid best: official_acc=0.959475, FP=0.043618, FN=0.027548, conf=0.005, point_valid_thr=0.35, nms_dist_px=18, max_det=5, candidate_min_points=5, final_min_points=9, fifth_min_points=4
+pv030_040 grid best: official_acc=0.959750, FP=0.043848, FN=0.028466, conf=0.005, point_valid_thr=0.40, nms_dist_px=18, max_det=5, candidate_min_points=5, final_min_points=9, fifth_min_points=4
+risk: count_acc_4=0.863636 on the pv030_040 best row, so treat it as a validation-only postprocess candidate with GT4-to-5 false fifth-lane risk, not a promotion decision
+```
+
+K56 fifthness-v1 default-off candidate:
+
+```text
+model: ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-fifthness-v1.yaml
+data:  data/tusimple_gcs_fixed_y_k56_960x544.yaml
+goal:  reduce both GT5 5->4 drops and GT4/GT3 false fifth-lane pressure
+```
+
+This candidate is opt-in. The YAML enables the optional `pred_fifthness_logits: B x Q` head and Count Head fifth-candidate evidence; the training losses remain default-off until non-zero gains are passed explicitly. Use official-val only for selection and do not use the diagnostic K56 test audit to choose gains.
+
+Local shape check before any remote run:
+
+```bash
+python tools/check_model.py \
+  --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-fifthness-v1.yaml \
+  --imgsz 544 960 \
+  --batch 1
+```
+
+Remote official-val training template from the K56 epoch152 parent:
+
+```bash
+python tools/train_gcs.py \
+  --model ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-fifthness-v1.yaml \
+  --data data/tusimple_gcs_fixed_y_k56_960x544.yaml \
+  --imgsz 544 960 \
+  --name gcs_yolo_lane_s_q12_k56_fifthness_v1_ft8_seed1_b32w4 \
+  --pretrained runs/gcs_lane/gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4/weights/official_best.pt \
+  --epochs 8 \
+  --batch 32 \
+  --workers 4 \
+  --seed 1 \
+  --lr0 <explicit-lr0> \
+  --lrf <explicit-lrf> \
+  --gcs-fifthness <explicit-gain> \
+  --gcs-fifthness-pairwise <explicit-gain> \
+  --gcs-quality-pairwise <explicit-gain> \
+  --gcs-count-cumulative <explicit-gain> \
+  --gcs-official-best \
+  --gcs-official-best-period 1 \
+  --gcs-official-best-top-k 5 \
+  --gcs-official-best-gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
+  --gcs-official-best-archive-root runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset
 ```
 
 Rejected K56 Count/Quality gates from the epoch152 parent:
@@ -158,9 +211,32 @@ recipe: lr0=0.0001, lrf=0.2, count_cls_w5=1.90, count_boundary_gt5_pos_weight=1.
 best official-val: epoch 1, official_acc=0.957787, FP=0.046465, FN=0.033976
 diagnosis: count_acc_5=0.851351, gt5_output5_rate=0.851351, gt5_count_head_under_rate=0.108108
 decision: not promotable; simple Count/Quality fine-tuning from the K56 parent is too destructive without a more surgical change
+
+run: gcs_yolo_lane_s_q12_k56_lowfp_joint_ft8_seed1_b32w4
+remote audit HEAD: bcc15c650169
+status: completed 8-epoch low-FP-priority fine-tune, rejected after official-val diagnosis
+recipe: lr0=0.00005, lrf=0.2, count_cls_w3/w4/w5=1.25/1.55/1.80, count_boundary_gt5_pos_weight=1.10, quality_neg_weight=0.55, duplicate-negative weights=1.75, no quality_hard_negative_from_head, no forced GT5 rescue
+best official-val: epoch 1, official_acc=0.958999, FP=0.046970, FN=0.031910
+delta vs K56 parent official_best 0.959315: official_acc=-0.000316, FP=+0.001745, FN=+0.003444
+post-sweep best: 0.958999
+GT5 diagnosis: kept=61/74, count_head_under_predict=8, quality_too_low=5, candidate_pool_shortfall=0, GT5 NMS suppression=0, rank5_score_low=0, valid_points_fail=0
+decision: not promotable; stop this low-FP direction and do not continue with GT5 rescue
 ```
 
-The K56 official-val evidence is a completed baseline result, not a mainline promotion and not a reason to use test or tune postprocess settings. The next useful K56 step should preserve the epoch152 FP/FN balance while reducing Count/Quality confusion around GT5 `5->4` drops and false fifth-lane pressure. The default-off `gcs_geometry_curvature` auxiliary loss has already been tested and rejected as a promotion candidate.
+The K56 official-val evidence is a completed baseline result, not a mainline promotion and not a reason to use test or tune postprocess settings. The next useful K56 step should preserve the epoch152 FP/FN balance while reducing Count/Quality confusion around GT5 `5->4` drops and false fifth-lane pressure. The default-off `gcs_geometry_curvature` auxiliary loss and the low-FP joint fine-tune have already been tested and rejected as promotion candidates.
+
+User-requested diagnostic-only K56 official-test audit:
+
+| Row | Val selection source | Test Accuracy | FP | FN | official_score |
+| --- | --- | ---: | ---: | ---: | ---: |
+| parent default | parent official_best `0.959315` | `0.959429` | `0.033459` | `0.033609` | `0.958088` |
+| parent minpoints `pv040 final9 fifth4` | val-only min-points row `0.959750` | `0.959131` | `0.032860` | `0.033968` | `0.957795` |
+| `cqcalib_ft12` | rejected official-val `0.953415` | `0.953748` | `0.038048` | `0.044213` | `0.952102` |
+| `cqcalib_lr1e4_ft8` | rejected official-val `0.957787` | `0.958869` | `0.033615` | `0.036395` | `0.957469` |
+| `curveaux_ft8` | rejected official-val `0.958732` | `0.959706` | `0.034669` | `0.034268` | `0.958327` |
+| `lowfp_joint_ft8` | rejected official-val `0.958999` | `0.959401` | `0.032758` | `0.034747` | `0.958051` |
+
+These test rows were run only because the user explicitly requested them after the validation diagnostics. They are diagnostic-only and must not be used for checkpoint, threshold, min-points, postprocess, loss, or model promotion choices. In particular, `curveaux_ft8` has the highest test Accuracy in this table but remains rejected because its official-val `0.958732` is below the K56 parent `0.959315`.
 
 Rejected K56 curvature auxiliary gate from the epoch152 parent:
 
@@ -203,7 +279,7 @@ python tools/train_gcs.py \
   --gcs-official-best-archive-root runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset
 ```
 
-The recent official-val gates after the Count Head visible-segment evidence change are not promotable:
+The 2026-06-13 official-val gates after the Count Head visible-segment evidence change are not promotable:
 
 ```text
 run: gcs_yolo_lane_s_q12_cb_gt45_ft6_countvis_clean_seed1_b8w0
@@ -444,6 +520,7 @@ python tools/check_gcs_algorithm_contract.py
 
 ```bash
 python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12.yaml --imgsz 544 960
+python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-fifthness-v1.yaml --imgsz 544 960 --batch 1
 ```
 
 ## Head Dependency Check

@@ -101,6 +101,14 @@ fixed_y_end = 160 / 720 = 0.2222222222222222
 K = 56
 ```
 
+Default-off K56 fifth-candidate verifier experiment:
+
+```text
+model = ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-fifthness-v1.yaml
+```
+
+This opt-in YAML may additionally emit `pred_fifthness_logits: B x Q` and enables Count Head fifth-candidate evidence. The default K32 and K56 YAMLs must not emit `pred_fifthness_logits`.
+
 The K56 labels must be regenerated from original TuSimple JSON and images, not resampled from existing K32 labels.
 
 Current K56 official-val state:
@@ -108,11 +116,12 @@ Current K56 official-val state:
 ```text
 label oracle = 0.998256
 baseline official_best = 0.959315 at epoch 152
+best val-only min-points grid = 0.959750 with point_valid_thr=0.40, candidate_min_points=5, final_min_points=9, fifth_min_points=4
 vs current-code K32 0.953756 = +0.005559
 vs legacy 0.959224 = +0.000091
 ```
 
-K56 is still experimental, not mainline-promoted, not test-ready, and has no official-test claim. The rejected K56 gates are `gcs_yolo_lane_s_q12_k56_cqcalib_ft12_seed1_b32w4`, `gcs_yolo_lane_s_q12_k56_cqcalib_lr1e4_ft8_seed1_b32w4`, and `gcs_yolo_lane_s_q12_k56_curveaux_ft8_seed1_b32w4`; do not rerun these exact recipes as the next path.
+K56 is still experimental, not mainline-promoted, and has no final/promotable official-test claim. A user-requested diagnostic-only official-test audit was run on 2026-06-14 for the K56 parent, min-points, `cqcalib`, `curveaux`, and `lowfp_joint` rows; those numbers must not be used for checkpoint, threshold, postprocess, loss, or model selection. The rejected K56 gates are `gcs_yolo_lane_s_q12_k56_cqcalib_ft12_seed1_b32w4`, `gcs_yolo_lane_s_q12_k56_cqcalib_lr1e4_ft8_seed1_b32w4`, `gcs_yolo_lane_s_q12_k56_curveaux_ft8_seed1_b32w4`, and `gcs_yolo_lane_s_q12_k56_lowfp_joint_ft8_seed1_b32w4`; do not rerun these exact recipes as the next path.
 
 The model output must include:
 
@@ -157,9 +166,20 @@ gcs_point_valid_gt5_edge_segment_thr = 0.65
 gcs_point_valid_gt5_edge_segment_min_points = 5
 gcs_geometry_curvature = 0.0
 gcs_geometry_curvature_beta_px = 5.0
+gcs_quality_pairwise = 0.0
+gcs_quality_pairwise_margin = 0.2
+gcs_fifthness = 0.0
+gcs_fifthness_pairwise = 0.0
+gcs_fifthness_margin = 0.2
+gcs_fifthness_negative_topk = 2
+gcs_fifthness_negative_score_thr = 0.1
+gcs_count_cumulative = 0.0
+gcs_count_cumulative_label_smoothing = 0.0
 ```
 
 `gcs_quality_gt5_edge_floor` is training-side only. When enabled above `0.0`, it floors the matched Quality Head target for real left/right edge lanes in GT5 images only; it does not change decode, use GT during inference, or fabricate lanes.
+
+`gcs_fifthness*`, `gcs_quality_pairwise*`, and `gcs_count_cumulative*` are default-off training-side K56 fifth-candidate calibration candidates. Fifthness positives are GT5 edge matched lanes, negatives are competitive unmatched outside candidates, Quality pairwise ranks GT5 edge matches over competitive false fifth candidates, and cumulative count supervision uses the existing `pred_count_logits: B x 4` without replacing the Count Head output contract. They do not change decode, use GT during inference, fabricate lanes, or alter official metrics.
 
 When `gcs_quality_hard_negative_from_head` is enabled, Quality Head hard negatives must be mined from unmatched queries only. Hungarian-matched queries remain matched quality targets even when their current continuous quality target is `0.0`.
 
