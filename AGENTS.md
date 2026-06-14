@@ -276,6 +276,7 @@ Use the skill name explicitly when you want that workflow to trigger reliably.
 Use official-val for checkpoint, threshold, postprocess, and parameter selection. Use test only for one-shot final evaluation of a selected candidate.
 
 Do not tune on test, use GT during inference or decode, fabricate lanes, silently change official metrics, or claim improvement without official-val evidence.
+Selection and diagnostic tools must not accept TuSimple test GT through `--split val --gt-json ...`; keep the explicit GT-source and `test_set` path guards enabled when changing official-val tooling.
 
 Old or removed mechanisms may return as controlled experimental candidates when explicit, configurable, traceable, and validated under the same protocol.
 

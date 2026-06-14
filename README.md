@@ -152,7 +152,7 @@ Remote experiment commands live in `docs/agent-context/commands.md`. Keep longer
 Official-val sweep:
 
 ```powershell
-python tools/sweep_tusimple_official.py --weights <weights.pt> --split val --imgsz 544 960
+python tools/sweep_tusimple_official.py --weights <weights.pt> --split val --gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json --archive-root runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset --imgsz 544 960
 ```
 
 K56 min-points sweep support accepts lists for `--candidate-min-points`, `--final-min-points`, and `--fifth-min-points`; use official-val only for these grids.
@@ -160,7 +160,7 @@ K56 min-points sweep support accepts lists for `--candidate-min-points`, `--fina
 GT5 diagnosis on official-val:
 
 ```powershell
-python tools/diagnose_gcs_gt5.py --weights <weights.pt> --split val --imgsz 544 960
+python tools/diagnose_gcs_gt5.py --weights <weights.pt> --split val --gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json --archive-root runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset --imgsz 544 960
 ```
 
 Final test evaluation, only after selecting the candidate on official-val:

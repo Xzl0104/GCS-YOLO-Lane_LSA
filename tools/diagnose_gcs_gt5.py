@@ -23,6 +23,7 @@ from gcs_tools.tusimple_official_eval import (  # noqa: E402
     normalize_tusimple_gt_record,
     read_tusimple_json_lines,
     tusimple_image_path,
+    validate_tusimple_selection_source,
 )
 from tools.infer_gcs import count_calibration_from_args, count_head_decode_kwargs_from_args, load_gcs_model, preprocess_image  # noqa: E402
 from ultralytics.utils.gcs_postprocess import (  # noqa: E402
@@ -136,8 +137,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--half", action="store_true", help="Use FP16 on CUDA.")
     parser.add_argument("--save-dir", default=None, help="Output directory. Defaults under the weight run.")
     args = parser.parse_args()
-    if args.split == "test":
-        raise SystemExit("GT5 diagnosis rejects --split test. Use --split val for diagnosis; reserve test for final official evaluation only.")
+    try:
+        args.split = validate_tusimple_selection_source(args.split, context="GT5 diagnosis")
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
     return args
 
 
@@ -826,6 +829,13 @@ def main() -> None:
     archive_root = find_tusimple_archive_root(args.archive_root)
     gt_path = Path(args.gt_json) if args.gt_json else default_tusimple_gt_json(archive_root, split=args.split)
     gt_records_all = read_tusimple_json_lines(gt_path)
+    validate_tusimple_selection_source(
+        args.split,
+        gt_json=gt_path,
+        gt_records=gt_records_all,
+        archive_root=archive_root,
+        context="GT5 diagnosis",
+    )
     gt5_records = [x for x in gt_records_all if len(normalize_tusimple_gt_record(x).get("lanes", [])) == 5]
     if args.max_images and args.max_images > 0:
         gt5_records = gt5_records[: int(args.max_images)]

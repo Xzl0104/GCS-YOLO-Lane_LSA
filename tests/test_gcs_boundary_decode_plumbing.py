@@ -17,6 +17,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from tools import eval_tusimple_official, sweep_tusimple_official
+from gcs_tools.tusimple_official_eval import TuSimpleOfficialLaneEval, validate_tusimple_selection_source
 from ultralytics.models.yolo.gcs_lane import train as gcs_train
 from ultralytics.models.yolo.gcs_lane.train import GCSLaneTrainer
 from ultralytics.utils.gcs_postprocess import decode_gcs_predictions
@@ -175,6 +176,10 @@ class CountBoundaryDecodePlumbingTest(unittest.TestCase):
             args.device = "cpu"
             args.half = False
             args.save_dir = str(tmp_path / "sweep")
+            (tmp_path / "test_set").mkdir()
+            train_image = tmp_path / "train_set" / "clips" / "example.jpg"
+            train_image.parent.mkdir(parents=True)
+            train_image.write_bytes(b"")
 
             boundary_logits = torch.tensor([-2.0, 3.0])
             captured = []
@@ -264,6 +269,54 @@ class CountBoundaryDecodePlumbingTest(unittest.TestCase):
         with mock.patch.object(gcs_train, "RANK", -1):
             with self.assertRaisesRegex(ValueError, "Training official_best selection"):
                 trainer._run_official_best_sweep()
+
+        trainer.args = SimpleNamespace(gcs_official_best=True, gcs_official_best_split="train")
+        with mock.patch.object(gcs_train, "RANK", -1):
+            with self.assertRaisesRegex(ValueError, "must use --split val"):
+                trainer._run_official_best_sweep()
+
+    def test_selection_source_rejects_explicit_test_gt_json(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            gt_json = Path(tmp) / "test_label.json"
+            gt_json.write_text("", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "test GT json"):
+                validate_tusimple_selection_source(
+                    "val",
+                    gt_json=gt_json,
+                    context="Unit official-val selection",
+                )
+
+    def test_selection_source_rejects_records_resolving_to_test_set(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "train_set").mkdir()
+            image = root / "test_set" / "clips" / "a" / "1" / "20.jpg"
+            image.parent.mkdir(parents=True)
+            image.write_bytes(b"")
+            records = [{"raw_file": "clips/a/1/20.jpg", "h_samples": [160, 170], "lanes": [[10, 20]]}]
+
+            with self.assertRaisesRegex(ValueError, "test_set"):
+                validate_tusimple_selection_source(
+                    "val",
+                    gt_json=root / "official_val.json",
+                    gt_records=records,
+                    archive_root=root,
+                    context="Unit official-val selection",
+                )
+
+    def test_strict_official_eval_requires_matching_raw_file_set(self):
+        gt_records = [
+            {"raw_file": "clips/a/1/20.jpg", "h_samples": [160, 170], "lanes": [[10, 20]]},
+            {"raw_file": "clips/a/2/20.jpg", "h_samples": [160, 170], "lanes": [[30, 40]]},
+        ]
+        pred_records = [
+            {"raw_file": "clips/a/1/20.jpg", "lanes": [], "run_time": 1.0},
+            {"raw_file": "clips/a/1/20.jpg", "lanes": [], "run_time": 1.0},
+        ]
+
+        with self.assertRaisesRegex(ValueError, "raw_file set does not match"):
+            TuSimpleOfficialLaneEval.bench_records(pred_records, gt_records, strict_length=True)
 
     def test_training_official_best_topk_preserves_candidates(self):
         with tempfile.TemporaryDirectory() as tmp:

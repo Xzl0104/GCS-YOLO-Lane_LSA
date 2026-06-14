@@ -321,6 +321,7 @@ The test set must not be used for threshold search, rescue parameter search, sof
 `tools/sweep_tusimple_official.py` supports validation-only grids for `candidate_min_points`, `final_min_points`, and `fifth_min_points`. K56 must retune these on official-val because 56 anchors make each point correspond to one official 10px h-sample; K32 min-points semantics do not carry over unchanged.
 
 `tools/sweep_tusimple_official.py` and `tools/diagnose_gcs_gt5.py` default to `--split val` and reject `--split test`. Training-time `official_best` selection also rejects `split=test`.
+These selection/diagnostic paths also reject conventional TuSimple test GT json paths and explicit GT records that resolve to `test_set` images, so `--split val --gt-json <test labels>` cannot be used as a test-leakage bypass. Training-time `official_best` selection is val-only; do not use train or test split for checkpoint selection.
 
 Test is only for one-shot final evaluation of a candidate already selected on official-val, using `tools/eval_tusimple_official.py --split test`.
 

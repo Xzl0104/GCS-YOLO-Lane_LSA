@@ -826,7 +826,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--gcs-official-best-gt-json", default="", help="Stratified official-val json-lines used for official_best.pt selection.")
     parser.add_argument("--gcs-official-best-archive-root", default="archive", help="Path to archive/ or archive/TUSimple.")
-    parser.add_argument("--gcs-official-best-split", default="val", choices=("train", "val", "test"))
+    parser.add_argument("--gcs-official-best-split", default="val", choices=("val",))
     parser.add_argument("--gcs-official-best-confs", default="0.005 0.01 0.015 0.02 0.03 0.05 0.08 0.10")
     parser.add_argument("--gcs-official-best-point-valid-thrs", default="0.20 0.25 0.30 0.35")
     parser.add_argument("--gcs-official-best-nms-dist-pxs", default="18.0")
@@ -972,10 +972,10 @@ def main() -> None:
             # retaining epochN.pt checkpoint files; best.pt is still the ordinary val-F1 best.
             save_period = -1
     if args.gcs_official_best:
-        from tools.sweep_tusimple_official import validate_official_sweep_split
+        from tools.sweep_tusimple_official import validate_official_best_split
 
         try:
-            args.gcs_official_best_split = validate_official_sweep_split(
+            args.gcs_official_best_split = validate_official_best_split(
                 args.gcs_official_best_split,
                 context="Training official_best selection",
             )

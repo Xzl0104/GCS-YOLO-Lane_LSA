@@ -531,10 +531,12 @@ PY
 python tools/sweep_tusimple_official.py \
   --weights <weights.pt> \
   --split val \
+  --gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
+  --archive-root runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset \
   --imgsz 544 960
 ```
 
-`tools/sweep_tusimple_official.py` defaults to validation and rejects `--split test`.
+`tools/sweep_tusimple_official.py` defaults to validation, rejects `--split test`, and rejects explicit GT records that resolve to TuSimple `test_set` images. For official-val selection, pass the 363-image official-val `--gt-json` and matching `--archive-root` explicitly.
 
 For the K56 official-h-sample branch, retune min-points on official-val because `candidate_min_points`, `final_min_points`, and `fifth_min_points` have different semantics with 56 anchors than they had with K32. Start with:
 
@@ -542,6 +544,8 @@ For the K56 official-h-sample branch, retune min-points on official-val because 
 python tools/sweep_tusimple_official.py \
   --weights runs/gcs_lane/gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4/weights/official_best.pt \
   --split val \
+  --gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
+  --archive-root runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset \
   --imgsz 544 960 \
   --confs 0.005 \
   --point-valid-thrs 0.35 \
@@ -560,10 +564,12 @@ Then resweep the best rows at `point_valid_thr=0.30/0.35/0.40`. Track joint GT3/
 python tools/diagnose_gcs_gt5.py \
   --weights <weights.pt> \
   --split val \
+  --gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
+  --archive-root runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset \
   --imgsz 544 960
 ```
 
-Use this to separate Count Head underprediction from candidate-pool shortfall, valid-points failure, NMS suppression, rank-score failure, quality-gate failure, and final-output shortfall. The tool defaults to `--split val` and rejects `--split test`; do not use test for diagnosis or tuning.
+Use this to separate Count Head underprediction from candidate-pool shortfall, valid-points failure, NMS suppression, rank-score failure, quality-gate failure, and final-output shortfall. The tool defaults to `--split val`, rejects `--split test`, and rejects explicit GT records that resolve to TuSimple `test_set` images; do not use test for diagnosis or tuning.
 
 ## Contract Checks
 

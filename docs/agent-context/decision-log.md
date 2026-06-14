@@ -5262,3 +5262,54 @@ python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12
 Mainline or experiment:
 
 Rejected experimental gate. No official-test claim is available, and test remains protected.
+
+## 2026-06-15: Harden official-val selection and prediction-json integrity guards
+
+Decision:
+
+Patch the TuSimple official-val selection and diagnosis entry points so test GT cannot be smuggled into validation workflows through an explicit `--gt-json`, and require strict `raw_file` set equality for external prediction JSON evaluation.
+
+What changed:
+
+```text
+selection/diagnosis source guard:
+- reject --split test in shared validation-selection helper
+- reject conventional TuSimple test GT json paths such as test_label.json
+- reject GT records that resolve to TuSimple test_set images when the caller claims split=val/train
+
+training official_best:
+- restrict --gcs-official-best-split to val in the CLI
+- keep a trainer-level runtime guard so programmatic args cannot select train/test
+
+external prediction JSON:
+- bench_records(strict_length=True) now requires prediction raw_file multiset == GT raw_file multiset
+- duplicate GT raw_file values are rejected in strict mode
+```
+
+Why:
+
+The previous protection rejected `--split test` for sweeps and GT5 diagnosis, but a command such as `--split val --gt-json archive/TUSimple/test_label.json` could still pass test GT into selection/diagnostic flows. Training-time `official_best` also exposed train/test choices at the CLI level, even though the project contract is official-val checkpoint selection only. External `--pred-json` evaluation also needed a stricter integrity check because equal line counts were not enough to prove the predictions covered exactly the same images as the GT records.
+
+Impact:
+
+This is a reliability and research-integrity fix. It does not change the TuSimple official metric formula, decode, model outputs, loss terms, labels, or inference-time GT usage. It makes future official-val, checkpoint-selection, and `--pred-json` evidence harder to misuse. No official-val Accuracy improvement is claimed from this patch by itself.
+
+Validation evidence:
+
+Local checks passed:
+
+```text
+D:/miniconda3/envs/lsa_yolo/python.exe -m py_compile gcs_tools/tusimple_official_eval.py tools/sweep_tusimple_official.py tools/diagnose_gcs_gt5.py tools/train_gcs.py ultralytics/models/yolo/gcs_lane/train.py tests/test_gcs_boundary_decode_plumbing.py
+D:/miniconda3/envs/lsa_yolo/python.exe -m pytest tests/test_gcs_boundary_decode_plumbing.py -q --basetemp .tmp_pytest/protocol_guard
+D:/miniconda3/envs/lsa_yolo/python.exe scripts/check_gcs_agent_setup.py
+D:/miniconda3/envs/lsa_yolo/python.exe tools/check_gcs_algorithm_contract.py
+D:/miniconda3/envs/lsa_yolo/python.exe tools/check_gcs_decode_meta_contract.py
+D:/miniconda3/envs/lsa_yolo/python.exe tools/check_gcs_count_head_topk_contract.py
+D:/miniconda3/envs/lsa_yolo/python.exe scripts/verify_loss_cleanup.py
+```
+
+The first pytest attempt with the base `D:/miniconda3/python.exe` failed because that environment has no `pytest`; it was rerun successfully with the project `lsa_yolo` environment.
+
+Mainline or experiment:
+
+Mainline reliability maintenance. Keep this guard enabled for all future official-val selection and diagnostic work. It is not an algorithm candidate and does not require a training run.

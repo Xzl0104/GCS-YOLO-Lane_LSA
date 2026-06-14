@@ -30,6 +30,7 @@ from gcs_tools.tusimple_official_eval import (  # noqa: E402
     official_metric_score,
     read_tusimple_json_lines,
     tusimple_image_path,
+    validate_tusimple_selection_source,
 )
 from tools.infer_gcs import load_gcs_model, preprocess_image, warn_max_det_mismatch  # noqa: E402
 from ultralytics.utils.gcs_postprocess import (  # noqa: E402
@@ -52,12 +53,16 @@ DEFAULT_WEIGHTS = (
 
 def validate_official_sweep_split(split: str, *, context: str = "TuSimple official sweep") -> str:
     """Reject test-set parameter search and return the normalized split."""
-    normalized = str(split).strip().lower()
-    if normalized == "test":
+    return validate_tusimple_selection_source(split, context=context)
+
+
+def validate_official_best_split(split: str, *, context: str = "Training official_best selection") -> str:
+    """Require training-time official_best checkpoint selection to use official-val."""
+    normalized = validate_official_sweep_split(split, context=context)
+    if normalized != "val":
         raise ValueError(
-            f"{context} cannot use --split test for threshold or postprocess selection. "
-            "Use --split val for sweeps, then use tools/eval_tusimple_official.py --split test "
-            "for one-shot final test evaluation."
+            f"{context} must use --split val. "
+            "Do not use train or test split for official_best checkpoint selection."
         )
     return normalized
 
@@ -902,6 +907,13 @@ def run_sweep(args: argparse.Namespace) -> dict:
     archive_root = find_tusimple_archive_root(args.archive_root)
     gt_path = Path(args.gt_json) if args.gt_json else default_tusimple_gt_json(archive_root, split=args.split)
     gt_records = read_tusimple_json_lines(gt_path)
+    validate_tusimple_selection_source(
+        args.split,
+        gt_json=gt_path,
+        gt_records=gt_records,
+        archive_root=archive_root,
+        context="TuSimple official sweep",
+    )
     if args.max_images and args.max_images > 0:
         gt_records = gt_records[: int(args.max_images)]
     imgsz = normalize_imgsz(args.imgsz, dataset=args.dataset)

@@ -1158,9 +1158,9 @@ class GCSLaneTrainer(BaseTrainer):
         """Run a TuSimple official sweep for the current checkpoint and update official_best.pt when it improves."""
         if not self._official_best_enabled() or RANK not in {-1, 0}:
             return
-        from tools.sweep_tusimple_official import run_sweep, validate_official_sweep_split
+        from tools.sweep_tusimple_official import run_sweep, validate_official_best_split
 
-        split = validate_official_sweep_split(
+        split = validate_official_best_split(
             getattr(self.args, "gcs_official_best_split", "val") or "val",
             context="Training official_best selection",
         )
