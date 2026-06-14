@@ -3949,7 +3949,7 @@ Mainline or experiment:
 
 Experimental baseline monitoring decision. K56 is still not promoted over K32, and no official-test claim is available.
 
-## 2026-06-14: Continue Q12-K56 b32 baseline after epoch 127 official-best
+## 2026-06-14: Continue Q12-K56 b32 baseline after epoch 137 Top-K monitor
 
 Decision:
 
@@ -3967,17 +3967,17 @@ Do not stop it, do not change batch mid-run, do not launch a replacement Count/Q
 
 Why:
 
-A read-only remote audit and a read-only `gcs_experiment_analyst` subagent audit on `2026-06-14` found the process alive with the intended formal K56 command: `--batch 32`, `--workers 4`, `--imgsz 544 960`, K56 data/model, `--gcs-official-best`, and `--gcs-official-best-top-k 5`. GPU memory was about `17928 / 24564 MiB`. Short utilization samples were bursty, including `0%` during one audit and `22%` during a later sample, but `results.csv`, `last.pt`, and official summaries were still updating. This is not a reason to interrupt or alter `batch=32` mid-run.
+A read-only remote audit and a read-only `gcs_experiment_analyst` subagent audit on `2026-06-14` found the process alive with the intended formal K56 command: `--batch 32`, `--workers 4`, `--imgsz 544 960`, K56 data/model, `--gcs-official-best`, and `--gcs-official-best-top-k 5`. GPU memory was about `17.9-18.6 / 24.6 GiB`. Utilization samples were bursty (`18%, 39%, 86%, 18%, 52%`, with a later `0%` sample during an interval), and `results.csv`, `last.pt`, and official summaries were still updating. This is not a reason to interrupt or alter `batch=32` mid-run.
 
-`results.csv` has an ordinary-validation row labeled epoch `132`:
+`results.csv` has an ordinary-validation row labeled epoch `138`:
 
 ```text
-val/f1: 0.957790
-val/precision: 0.955590
-val/recall: 0.960000
-val/fp: 58
-val/fn: 52
-val/decode/k5_to_output4_rate: 0.111111
+val/f1: 0.959020
+val/precision: 0.954996
+val/recall: 0.963077
+val/fp: 59
+val/fn: 48
+val/decode/k5_to_output4_rate: 0.094595
 ```
 
 The best ordinary-validation row so far by `val/f1` remains epoch `97`:
@@ -3986,7 +3986,7 @@ The best ordinary-validation row so far by `val/f1` remains epoch `97`:
 val/f1: 0.959724
 ```
 
-`official_best_summary.json` at the run root has official-val candidates through epoch `131`. The current official-best row is now epoch `127`:
+`official_best_summary.json` at the run root has official-val candidates through epoch `137`. The current official-best row remains epoch `127`:
 
 ```text
 best_epoch: 127
@@ -4007,27 +4007,27 @@ rate_5_to_4: 0.189189
 matched/unmatched quality mean: 0.903372 / 0.813948
 ```
 
-The latest retained official-val candidate is epoch `131`:
+The latest official-val candidate is epoch `137`:
 
 ```text
-official_acc: 0.958096
-official_fp: 0.047337
-official_fn: 0.031910
-count_acc_3/4/5: 0.928251 / 0.878788 / 0.810811
-gt5_output5_rate: 0.810811
-gt5_count_head_under_rate: 0.081081
-gt5_valid_points_fail_rate: 0.121622
+official_acc: 0.958429
+official_fp: 0.048577
+official_fn: 0.031680
+count_acc_3/4/5: 0.923767 / 0.878788 / 0.770270
+gt5_output5_rate: 0.770270
+gt5_count_head_under_rate: 0.094595
+gt5_valid_points_fail_rate: 0.135135
 gt5_candidate_pool_shortfall_rate: 0.000000
 gt5_top5_suppressed_by_nms_rate: 0.013514
-decode/k5_to_output4_rate: 0.135135
-rescue_precision: 0.796875
-matched/unmatched quality mean: 0.905863 / 0.816283
+decode/k5_to_output4_rate: 0.162162
+rescue_precision: 0.774194
+matched/unmatched quality mean: 0.909715 / 0.820663
 ```
 
 The retained official Top-K epochs are:
 
 ```text
-127, 128, 129, 131, 126
+127, 128, 137, 129, 134
 ```
 
 Epoch `127` refreshes K56 official-best and exceeds the current-code K32 audit (`0.953756`) by `+0.004728`, countboundary (`0.954137`) by `+0.004347`, old FT6 (`0.954782`) by `+0.003702`, prior K56 epoch83 best (`0.956905`) by `+0.001579`, and prior epoch115 best (`0.957960`) by `+0.000524`. It remains below legacy `0.959224` by `-0.000740` and below the 0.97 objective.
@@ -4040,12 +4040,12 @@ gt5_output5_rate: 0.837838
 gt5_valid_points_fail_rate: 0.108108
 ```
 
-This makes epoch127/128 useful paired evidence: epoch127 has the best official ACC and FN, while epoch128 shows the GT5-retention side of the remaining tradeoff.
+This makes epoch127/128 useful paired evidence: epoch127 has the best official ACC and FN, while epoch128 shows the GT5-retention side of the remaining tradeoff. Epoch137 entered Top-K third, but regressed GT5 output and valid-points survival versus epoch128.
 
 Alternatives considered:
 
 - Promote epoch 127 because it is the new official-best.
-- Stop at epoch 132 and run final test.
+- Stop at epoch 138 and run final test.
 - Start K56 Count/Quality calibration immediately from epoch 127.
 - Increase batch size in the middle of the in-progress run to use more GPU memory.
 - Use test to choose between Top-K checkpoints.
@@ -4053,11 +4053,11 @@ Alternatives considered:
 
 Tradeoff:
 
-Continuing uses server time, but the run is healthy, only at ordinary epoch `132/180`, and official-val just refreshed multiple Top-K candidates near legacy. Increasing batch size mid-run would break comparability and require restarting the formal baseline. Launching a competing calibration now would consume the same 24GB GPU before the first clean K56 baseline has matured. If this run later reaches a clearer plateau below legacy, the next controlled candidate should preserve epoch127 FP/FN gains while approaching epoch128 GT5 retention through training-side Count/Quality calibration from an official-val-selected K56 checkpoint.
+Continuing uses server time, but the run is healthy, only at ordinary epoch `138/180`, and official-val is still retaining multiple Top-K candidates near legacy. Increasing batch size mid-run would break comparability and require restarting the formal baseline. Launching a competing calibration now would consume the same 24GB GPU before the first clean K56 baseline has matured. If this run later reaches a clearer plateau below legacy, the next controlled candidate should preserve epoch127 FP/FN gains while approaching epoch128 GT5 retention through training-side Count/Quality calibration from an official-val-selected K56 checkpoint.
 
 Validation evidence:
 
-Read-only checks confirmed the process list, GPU memory/utilization samples, command line, `results.csv`, root `official_best_summary.json`, official-val candidates through epoch 131, retained Top-K metadata, and that `results.csv` has 132 rows with no numeric NaN/Inf values. The run has 133 JSON files with no parse error and no numeric NaN/Inf values. A scoped text-artifact scan of 267 files found no `--split test`, `split: test`, `test_label.json`, or `test_set` hits, and no `RuntimeError`, `shape error`, `shape mismatch`, or `Traceback` hits. `args.yaml` records `split=val`, `gcs_official_best_split=val`, `imgsz=[544, 960]`, `gcs_imgsz=[544, 960]`, and K56 data/model. No test evidence was used.
+Read-only checks confirmed the process list, GPU memory/utilization samples, command line, `results.csv`, root `official_best_summary.json`, official-val candidates through epoch 137, retained Top-K metadata, and that `results.csv` has 138 rows with no numeric NaN/Inf values. The run has 138 JSON files with no parse error and no numeric NaN/Inf values. A scoped text-artifact scan of 277 files found no `--split test`, `split: test`, `split=test`, `test_label.json`, or `test_set` hits, and no `RuntimeError`, `shape error`, `shape mismatch`, or `Traceback` hits. `args.yaml` records `split=val`, `gcs_official_best_split=val`, `imgsz=[544, 960]`, `gcs_imgsz=[544, 960]`, and K56 data/model. No test evidence was used.
 
 Mainline or experiment:
 
