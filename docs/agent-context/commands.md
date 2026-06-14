@@ -108,14 +108,14 @@ remote HEAD: 9b9769b61f8f
 formal batch: 32
 workers: 4
 GPU memory: about 17.5-18.2 GiB on RTX 4090 24GB
-status at 2026-06-14 10:52 CST: training alive; results.csv has ordinary-val row 62, and official_best_summary has official-val candidates through epoch 62
-ordinary val latest row: epoch=62, val/f1=0.951426, val/decode/count_head_k=3.61157, val/decode/final_pred_lanes=3.56474, val/decode/k5_to_output4_rate=0.223684, val/decode/candidate_pool_shortfall_rate=0.000000, val/decode/top5_suppressed_by_nms_rate=0.071625
-ordinary val best row so far by val/f1: epoch=58, val/f1=0.956488, val/decode/count_head_k=3.64738, val/decode/final_pred_lanes=3.57300, val/decode/k5_to_output4_rate=0.337349
+status at 2026-06-14 11:05 CST: training alive; results.csv has ordinary-val row 66, and official_best_summary has official-val candidates through epoch 65
+ordinary val latest row: epoch=66, val/f1=0.954178, val/decode/count_head_k=3.62259, val/decode/final_pred_lanes=3.57300, val/decode/k5_to_output4_rate=0.240000, val/decode/candidate_pool_shortfall_rate=0.000000, val/decode/top5_suppressed_by_nms_rate=0.057851
+ordinary val best row so far by val/f1: epoch=65, val/f1=0.957390, val/decode/count_head_k=3.62810, val/decode/final_pred_lanes=3.59504, val/decode/k5_to_output4_rate=0.162162
 official_best so far: epoch 61, official_acc=0.954807, FP=0.053489, FN=0.041093
 official_best count/GT5 diagnostics: count_acc_3/4/5=0.923767/0.878788/0.729730, gt5_output5_rate=0.729730, gt5_count_head_under_rate=0.081081, gt5_valid_points_fail_rate=0.189189, gt5_candidate_pool_shortfall_rate=0.000000, gt5_top5_suppressed_by_nms_rate=0.000000, decode/k5_to_output4_rate=0.287500, rescue_precision=0.807018, rate_4_to_5=0.045455, rate_5_to_4=0.270270
 official_top_k retained epochs: 61, 52, 58, 62, 59
-diagnostic top-k notes: epoch61 is the first K56 official-best to exceed the current-code K32 audit 0.953756, countboundary 0.954137, and old FT6 0.954782 references, but it remains below legacy 0.959224 and below the 0.97 objective. Epoch61 lowers GT4-to-5 pressure versus epoch52 but weakens GT5 output and valid-point survival. Epoch59 satisfies the diagnostic valid-points target with gt5_valid_points_fail_rate=0.094595 and gt5_output5_rate=0.837838, but official_acc is only 0.952904. Candidate supply and GT5 NMS remain non-blocking.
-errors: process is alive; results.csv has no numeric NaN/Inf values; 63 official-val JSON summaries have no numeric NaN/Inf values; official-val sweeps exist through epoch62. A text-artifact scan inside the run found no `--split test`, `split: test`, `test_label.json`, or `test_set` hits.
+diagnostic top-k notes: epoch61 is the first K56 official-best to exceed the current-code K32 audit 0.953756, countboundary 0.954137, and old FT6 0.954782 references, but it remains below legacy 0.959224 and below the 0.97 objective. Epoch65 refreshed ordinary val/f1 to 0.957390 but did not enter official Top-K; its official_acc=0.952533 with gt5_output5_rate=0.743243 and gt5_valid_points_fail_rate=0.189189. Epoch59 satisfies the diagnostic valid-points target with gt5_valid_points_fail_rate=0.094595 and gt5_output5_rate=0.837838, but official_acc is only 0.952904. Candidate supply and GT5 NMS remain non-blocking.
+errors: process is alive; results.csv has no numeric NaN/Inf values; 66 official-val JSON summaries have no numeric NaN/Inf values; official-val sweeps exist through epoch65. A text-artifact scan inside the run found no `--split test`, `split: test`, `test_label.json`, or `test_set` hits.
 decision: continue monitoring; K56 has now beaten several active official-val references but remains below legacy 0.959224 and still fails GT5 diagnostic targets. Do not promote, do not use test, and do not launch a replacement experiment while the healthy baseline is still improving.
 ```
 
