@@ -108,17 +108,18 @@ remote HEAD: 9b9769b61f8f
 formal batch: 32
 workers: 4
 GPU memory: about 17.9 GiB on RTX 4090 24GB
-status at 2026-06-14 07:54 CST: training alive around epoch 15/180; results.csv has ordinary-val row 15, and official_best_summary has official-val candidates through epoch 14
-ordinary val latest row: epoch=15, val/f1=0.910266, val/decode/count_head_k=3.83471, val/decode/final_pred_lanes=3.66391, val/decode/k5_to_output4_rate=0.534483
+status at 2026-06-14 08:07 CST: training alive around epoch 18/180; results.csv has ordinary-val row 17, and official_best_summary/official sweeps have official-val candidates through epoch 17
+ordinary val latest row: epoch=17, val/f1=0.909299, val/decode/count_head_k=3.79063, val/decode/final_pred_lanes=3.64738, val/decode/k5_to_output4_rate=0.419355
 ordinary val best row so far by val/f1: epoch=14, val/f1=0.937910, val/decode/count_head_k=3.7438, val/decode/final_pred_lanes=3.56198, val/decode/k5_to_output4_rate=0.589286
 official_best so far: epoch 14, official_acc=0.937875, FP=0.087557, FN=0.073003
 official_best count/GT5 diagnostics: count_acc_3/4/5=0.887892/0.878788/0.567568, gt5_output5_rate=0.567568, gt5_count_head_under_rate=0.000000, gt5_valid_points_fail_rate=0.432432, gt5_candidate_pool_shortfall_rate=0.000000, decode/k5_to_output4_rate=0.605263
-official_top_k retained epochs: 14, 10, 11, 8, 13
+official_top_k retained epochs: 14, 10, 11, 16, 8
+notable lower-ACC diagnostics: epoch 16 official-val had official_acc=0.932617, gt5_output5_rate=0.729730, and gt5_valid_points_fail_rate=0.216216; epoch 17 had official_acc=0.925841, FP=0.118182, FN=0.084252, count_acc_5=0.878378, gt5_output5_rate=0.878378, gt5_valid_points_fail_rate=0.121622, rescue_precision=0.594595, and GT5 5->4/5->5=9/65. Both are below epoch 14 official ACC, so do not choose them over official_best.
 errors: refined log scan found no OOM, NaN, traceback, runtime error, CUDA error, assertion, shape mismatch, or invalid shape
-decision: continue monitoring; do not stop the run, do not launch a replacement experiment yet, and do not use test. If the mature K56 baseline plateaus below legacy 0.959224 with the same GT5 valid-point/final-output collapse, prepare a controlled K56 training-side auxiliary experiment from an official-val-selected checkpoint.
+decision: continue monitoring; do not stop the run, do not launch a replacement experiment yet, and do not use test. Wait for at least epoch 20 or 30 official-val evidence before deciding whether to prepare a controlled K56 training-side auxiliary experiment from an official-val-selected checkpoint.
 ```
 
-The epoch 14 official-val evidence is still early training evidence only. It is not a promotion result, not a failure decision for the full K56 baseline, and not a reason to use test or tune postprocess settings. The stable-looking early bottleneck is GT5 valid-point/final-output survival, not Count Head underprediction or candidate-pool availability.
+The epoch 14/16/17 official-val evidence is still early training evidence only. It is not a promotion result, not a failure decision for the full K56 baseline, and not a reason to use test or tune postprocess settings. The stable-looking early bottleneck is a GT5 valid-point/output-vs-FP tradeoff, not Count Head underprediction or candidate-pool availability.
 
 The recent official-val gates after the Count Head visible-segment evidence change are not promotable:
 

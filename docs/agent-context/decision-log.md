@@ -1863,7 +1863,7 @@ Mainline or experiment:
 
 Experimental baseline monitoring decision. K56 is still not promoted over K32, and no official-test claim is available.
 
-## 2026-06-14: Continue Q12-K56 b32 baseline after epoch 14 monitor
+## 2026-06-14: Continue Q12-K56 b32 baseline after epoch 17 monitor
 
 Decision:
 
@@ -1881,15 +1881,15 @@ Do not stop it, do not launch a replacement experiment yet, and do not use test 
 
 Why:
 
-A read-only remote check at `2026-06-14 07:54 CST` found the process alive around epoch `15/180`, using about `17.9 GiB` on the RTX 4090 24GB server. The command is the intended formal K56 baseline with `--batch 32 --workers 4`, `--imgsz 544 960`, `--gcs-official-best`, and `--gcs-official-best-top-k 5`. A refined log scan found no OOM, NaN, traceback, runtime error, CUDA error, assertion, shape mismatch, or invalid shape.
+A read-only remote check at `2026-06-14 08:07 CST` found the process alive around epoch `18/180`, using about `17.9 GiB` on the RTX 4090 24GB server. The command is the intended formal K56 baseline with `--batch 32 --workers 4`, `--imgsz 544 960`, `--gcs-official-best`, and `--gcs-official-best-top-k 5`. A refined log scan found no OOM, NaN, traceback, runtime error, CUDA error, assertion, shape mismatch, size mismatch, or invalid shape.
 
-`results.csv` has an ordinary-validation row labeled epoch `15`:
+`results.csv` has an ordinary-validation row labeled epoch `17`:
 
 ```text
-val/f1: 0.910266
-val/decode/count_head_k: 3.83471
-val/decode/final_pred_lanes: 3.66391
-val/decode/k5_to_output4_rate: 0.534483
+val/f1: 0.909299
+val/decode/count_head_k: 3.79063
+val/decode/final_pred_lanes: 3.64738
+val/decode/k5_to_output4_rate: 0.419355
 ```
 
 The best ordinary-validation row so far by `val/f1` is epoch `14`:
@@ -1901,7 +1901,7 @@ val/decode/final_pred_lanes: 3.56198
 val/decode/k5_to_output4_rate: 0.589286
 ```
 
-`official_best_summary.json` has official-val candidates through epoch `14`. The current official-best row is:
+`official_best_summary.json` has official-val candidates through epoch `17`. The current official-best row is:
 
 ```text
 best_epoch: 14
@@ -1919,21 +1919,30 @@ decode/k5_to_output4_rate: 0.605263
 The retained official Top-K epochs are:
 
 ```text
-14, 10, 11, 8, 13
+14, 10, 11, 16, 8
 ```
 
-This is still early relative to a 180-epoch baseline. The run is healthy and ordinary validation is improving, but official-val remains far below the legacy `0.959224` target. The early GT5 evidence points to valid-point/final-output survival rather than candidate-pool shortfall.
+Epochs 16 and 17 are useful diagnostics but not promotion rows:
+
+```text
+epoch 16: official_acc=0.932617, gt5_output5_rate=0.729730, gt5_count_head_under_rate=0.054054, gt5_valid_points_fail_rate=0.216216
+epoch 17: official_acc=0.925841, FP=0.118182, FN=0.084252, count_acc_5=0.878378, gt5_output5_rate=0.878378, gt5_count_head_under_rate=0.000000, gt5_valid_points_fail_rate=0.121622, rescue_precision=0.594595, GT5 5->4/5->5=9/65
+```
+
+They improved GT5 output and valid-point survival relative to epoch 14, but official Accuracy was lower. This reinforces that GT5 recall alone is not enough; the selected checkpoint must improve official-val Accuracy under the same protocol.
+
+This is still early relative to a 180-epoch baseline and has not reached the planned epoch 20/30 decision point. The run is healthy, but official-val remains far below the legacy `0.959224` target. The early GT5 evidence points to valid-point/final-output survival rather than candidate-pool shortfall.
 
 Alternatives considered:
 
 - Stop the run because official-val is still below the legacy target.
 - Launch a parallel K56 auxiliary experiment immediately.
 - Use test to look for a better checkpoint or postprocess setting.
-- Continue the healthy baseline until it matures, while preparing the next controlled K56 hypothesis only if the baseline plateaus.
+- Continue the healthy baseline until at least epoch 20 or 30 official-val evidence exists, while preparing the next controlled K56 hypothesis only if the baseline plateaus.
 
 Tradeoff:
 
-Continuing uses server time, but preserves the first clean K56 baseline under the new label contract and avoids overreacting to early official-val noise. Running a second formal experiment on the same 24GB GPU would compete with the healthy baseline. If the mature K56 baseline remains below legacy with GT5 valid-point collapse, the smallest next controlled candidate should target training-side matched GT5 edge visible-segment support and Count/Quality calibration from an official-val-selected K56 checkpoint.
+Continuing uses server time, but preserves the first clean K56 baseline under the new label contract and avoids overreacting to early official-val noise. Running a second formal experiment on the same 24GB GPU would compete with the healthy baseline. If the mature K56 baseline remains below legacy with GT5 valid-point/final-output collapse, the smallest next controlled candidate should target training-side matched GT5 edge visible-segment support and Count/Quality calibration from an official-val-selected K56 checkpoint.
 
 Validation evidence:
 
