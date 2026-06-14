@@ -80,7 +80,7 @@ batch=32
 workers=4
 ```
 
-Monitoring snapshot at `2026-06-14 10:18 CST`: the run is alive with ordinary validation through epoch 53/180 and about 17.5 GiB GPU memory in use; official-val sweeps are recorded through epoch 52. Official-best is now epoch 52 with `official_acc=0.953566`, still below the current-code K32 audit `0.953756`, countboundary `0.954137`, old FT6 `0.954782`, and legacy `0.959224` references. Epoch 52 improves GT5 output (`gt5_output5_rate=0.851351`) and FN (`0.037190`), but `gt5_valid_points_fail_rate=0.135135` and `rate_4_to_5=0.075758` keep it non-promotable. K56 is not promoted and no test result is claimed.
+Monitoring snapshot at `2026-06-14 10:25 CST`: the run is alive with ordinary validation through epoch 55/180 and about 17.5 GiB GPU memory in use; official-val sweeps are recorded through epoch 54. Official-best remains epoch 52 with `official_acc=0.953566`, still below the current-code K32 audit `0.953756`, countboundary `0.954137`, old FT6 `0.954782`, and legacy `0.959224` references. Epochs 53 and 54 entered official Top-K but did not beat epoch 52, so K56 is not promoted and no test result is claimed.
 
 Use the local RTX 4060 8GB workstation for smoke, contract, label/oracle, and model-shape checks only. Run formal training and official-val evaluation on the remote server.
 

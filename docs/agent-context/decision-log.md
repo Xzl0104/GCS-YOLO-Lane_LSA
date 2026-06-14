@@ -2368,3 +2368,88 @@ Read-only checks confirmed the process list, GPU memory, command line, `results.
 Mainline or experiment:
 
 Experimental baseline monitoring decision. K56 is still not promoted over K32, and no official-test claim is available.
+
+## 2026-06-14: Continue Q12-K56 b32 baseline after official-val epoch 54 monitor
+
+Decision:
+
+Continue the remote K56 formal baseline:
+
+```text
+run: gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4
+batch: 32
+workers: 4
+epochs: 180
+official_best_top_k: 5
+```
+
+Do not stop it, do not launch a replacement experiment yet, and do not use test for checkpoint, threshold, loss, or postprocess selection.
+
+Why:
+
+A read-only remote check at `2026-06-14 10:25 CST` found the process alive, using about `17.5 GiB` on the RTX 4090 24GB server. The command is still the intended formal K56 baseline with `--batch 32 --workers 4`, `--imgsz 544 960`, `--gcs-official-best`, and `--gcs-official-best-top-k 5`.
+
+`results.csv` has an ordinary-validation row labeled epoch `55`:
+
+```text
+val/f1: 0.943657
+val/decode/count_head_k: 3.65840
+val/decode/final_pred_lanes: 3.60606
+val/decode/k5_to_output4_rate: 0.211111
+```
+
+The best ordinary-validation row so far by `val/f1` remains epoch `51`:
+
+```text
+val/f1: 0.952859
+val/decode/count_head_k: 3.61708
+val/decode/final_pred_lanes: 3.54821
+val/decode/k5_to_output4_rate: 0.333333
+```
+
+`official_best_summary.json` has official-val candidates through epoch `54`. The current official-best row remains:
+
+```text
+best_epoch: 52
+official_acc: 0.953566
+official_fp: 0.055647
+official_fn: 0.037190
+count_acc_3/4/5: 0.914798 / 0.878788 / 0.851351
+gt5_output5_rate: 0.851351
+gt5_count_head_under_rate: 0.013514
+gt5_valid_points_fail_rate: 0.135135
+gt5_candidate_pool_shortfall_rate: 0.000000
+gt5_top5_suppressed_by_nms_rate: 0.013514
+decode/k5_to_output4_rate: 0.190476
+rescue_precision: 0.779412
+rate_4_to_5: 0.075758
+rate_5_to_4: 0.148649
+```
+
+The retained official Top-K epochs are:
+
+```text
+52, 53, 43, 54, 31
+```
+
+Epochs 53 and 54 entered Top-K (`official_acc=0.952030` and `0.951580`) but did not beat epoch 52. Epoch 52 remains close to the current-code K32 audit baseline (`0.953756`) but is still below it, the countboundary baseline (`0.954137`), the old FT6 reference (`0.954782`), and the legacy `0.959224` reference. The remaining evidence still points to fifth-lane valid-point/output survival versus FP/GT4-to-5 pressure: `gt5_valid_points_fail_rate=0.135135` is above the diagnostic `0.1` target, `gt5_top5_suppressed_by_nms_rate=0.013514`, and `rate_4_to_5=0.075758`.
+
+Alternatives considered:
+
+- Stop the run because official-val remains below the legacy `0.959224` target.
+- Launch a parallel K56 auxiliary experiment immediately.
+- Promote epoch 52 because it is close to the current-code K32 audit baseline.
+- Use test to look for a better checkpoint or postprocess setting.
+- Continue the healthy baseline while official-val is still moving.
+
+Tradeoff:
+
+Continuing uses server time, but the baseline is healthy, only around epoch 55/180, and official-val has not plateaued. Starting an auxiliary experiment now would compete for the same 24GB GPU before the first clean K56 baseline matures. If this run plateaus below legacy, the smallest next controlled candidate should target weak training-side GT5 edge visible-segment point-valid support and Count/Quality calibration from an official-val-selected K56 checkpoint.
+
+Validation evidence:
+
+Read-only checks confirmed the process list, GPU memory, command line, `results.csv`, `official_best_summary.json`, official-val sweep summaries through epoch 54, retained Top-K metadata, and that `results.csv` and official-val JSON summaries contain no numeric NaN/Inf values. No test evidence was used.
+
+Mainline or experiment:
+
+Experimental baseline monitoring decision. K56 is still not promoted over K32, and no official-test claim is available.
