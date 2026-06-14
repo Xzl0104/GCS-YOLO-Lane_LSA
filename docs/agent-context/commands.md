@@ -156,7 +156,20 @@ data:  data/tusimple_gcs_fixed_y_k56_960x544.yaml
 goal:  reduce both GT5 5->4 drops and GT4/GT3 false fifth-lane pressure
 ```
 
-This candidate is opt-in. The YAML enables the optional `pred_fifthness_logits: B x Q` head and Count Head fifth-candidate evidence; the training losses remain default-off until non-zero gains are passed explicitly. Use official-val only for selection and do not use the diagnostic K56 test audit to choose gains.
+This candidate is opt-in. The YAML enables the optional `pred_fifthness_logits: B x Q` head and Count Head fifth-candidate evidence; the training losses remain default-off until non-zero gains are passed explicitly. Use official-val only for selection and do not use the diagnostic K56 test audit to choose gains. By default, fifthness negatives come from GT3/GT4 unmatched outside candidates; `--gcs-fifthness-include-gt5-negatives True` is an explicit follow-up switch for also mining GT5 same-image unmatched outside false fifth candidates.
+
+The first short gate is rejected:
+
+```text
+run: gcs_yolo_lane_s_q12_k56_fifthness_v1_ft8_seed1_b32w4
+commit: 393345a7dcb014b9e6b54d807579463a896e3a79
+status: completed 8/8 epochs on official-val only
+best official-val: epoch 5, official_acc=0.959006, FP=0.046097, FN=0.029155
+parent reference: official_acc=0.959315, FP=0.045225, FN=0.028466
+diagnosis: count_acc_4=0.848485, count_acc_5=0.878378, rate_4_to_5=0.106061, rate_5_to_4=0.121622, gt5_output5_rate=0.878378, unmatched_quality_mean=0.859536
+decision: not promotable; do not start full training from this recipe
+implementation finding: the first gate did not explicitly train same-image GT5 false outside candidates below true GT5 edge matches. Keep the original GT3/GT4 negative contract as default and test this as a new explicit switch.
+```
 
 Local shape check before any remote run:
 
@@ -184,8 +197,41 @@ python tools/train_gcs.py \
   --lrf <explicit-lrf> \
   --gcs-fifthness <explicit-gain> \
   --gcs-fifthness-pairwise <explicit-gain> \
+  --gcs-fifthness-include-gt5-negatives <True-or-False> \
   --gcs-quality-pairwise <explicit-gain> \
   --gcs-count-cumulative <explicit-gain> \
+  --gcs-official-best \
+  --gcs-official-best-period 1 \
+  --gcs-official-best-top-k 5 \
+  --gcs-official-best-gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
+  --gcs-official-best-archive-root runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset
+```
+
+Next small gate after the default-off GT5-negative switch, not full training:
+
+```bash
+python tools/train_gcs.py \
+  --model ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-fifthness-v1.yaml \
+  --data data/tusimple_gcs_fixed_y_k56_960x544.yaml \
+  --imgsz 544 960 \
+  --name gcs_yolo_lane_s_q12_k56_fifthness_gt5neg_ft8_seed1_b32w4 \
+  --pretrained runs/gcs_lane/gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4/weights/official_best.pt \
+  --epochs 8 \
+  --batch 32 \
+  --workers 4 \
+  --seed 1 \
+  --lr0 0.00005 \
+  --lrf 0.2 \
+  --gcs-fifthness 0.20 \
+  --gcs-fifthness-pairwise 0.20 \
+  --gcs-fifthness-margin 0.20 \
+  --gcs-fifthness-negative-topk 2 \
+  --gcs-fifthness-negative-score-thr 0.10 \
+  --gcs-fifthness-include-gt5-negatives True \
+  --gcs-quality-pairwise 0.15 \
+  --gcs-quality-pairwise-margin 0.20 \
+  --gcs-count-cumulative 0.03 \
+  --gcs-count-cumulative-label-smoothing 0.00 \
   --gcs-official-best \
   --gcs-official-best-period 1 \
   --gcs-official-best-top-k 5 \

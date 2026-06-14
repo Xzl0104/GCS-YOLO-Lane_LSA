@@ -134,6 +134,7 @@ gcs_fifthness_pairwise: 0.0 # (float) optional fifthness verifier pairwise ranki
 gcs_fifthness_margin: 0.2 # (float) logit margin for fifthness verifier pairwise ranking
 gcs_fifthness_negative_topk: 2 # (int) max unmatched outside candidates mined per image for fifthness negatives
 gcs_fifthness_negative_score_thr: 0.1 # (float) min exist*visible score for fifthness negative candidates
+gcs_fifthness_include_gt5_negatives: False # (bool) also mine unmatched outside candidates in GT5 images as fifthness negatives
 gcs_quality_hard_negative_weight: 1.0 # (float) absolute Quality Head BCE weight for mined unmatched hard negatives
 gcs_quality_duplicate_negative_weight: 1.5 # (float) absolute Quality Head BCE weight for unmatched duplicate negatives
 gcs_quality_hard_negative_from_head: False # (bool) mine Quality Head hard negatives from high unmatched pred_quality_logits

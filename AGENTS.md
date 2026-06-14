@@ -108,6 +108,7 @@ model = ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-fifthness-v1.yaml
 ```
 
 This opt-in YAML may additionally emit `pred_fifthness_logits: B x Q` and enables Count Head fifth-candidate evidence. The default K32 and K56 YAMLs must not emit `pred_fifthness_logits`.
+The first `gcs_yolo_lane_s_q12_k56_fifthness_v1_ft8_seed1_b32w4` short gate is rejected: best official-val was epoch 5 `0.959006`, below the K56 parent `0.959315`, with worse FP/FN and high GT4-to-5 pressure. Do not start full/e180 training from that recipe.
 
 The K56 labels must be regenerated from original TuSimple JSON and images, not resampled from existing K32 labels.
 
@@ -173,13 +174,14 @@ gcs_fifthness_pairwise = 0.0
 gcs_fifthness_margin = 0.2
 gcs_fifthness_negative_topk = 2
 gcs_fifthness_negative_score_thr = 0.1
+gcs_fifthness_include_gt5_negatives = False
 gcs_count_cumulative = 0.0
 gcs_count_cumulative_label_smoothing = 0.0
 ```
 
 `gcs_quality_gt5_edge_floor` is training-side only. When enabled above `0.0`, it floors the matched Quality Head target for real left/right edge lanes in GT5 images only; it does not change decode, use GT during inference, or fabricate lanes.
 
-`gcs_fifthness*`, `gcs_quality_pairwise*`, and `gcs_count_cumulative*` are default-off training-side K56 fifth-candidate calibration candidates. Fifthness positives are GT5 edge matched lanes, negatives are competitive unmatched outside candidates, Quality pairwise ranks GT5 edge matches over competitive false fifth candidates, and cumulative count supervision uses the existing `pred_count_logits: B x 4` without replacing the Count Head output contract. They do not change decode, use GT during inference, fabricate lanes, or alter official metrics.
+`gcs_fifthness*`, `gcs_quality_pairwise*`, and `gcs_count_cumulative*` are default-off training-side K56 fifth-candidate calibration candidates. Fifthness positives are GT5 edge matched lanes, negatives are competitive unmatched outside candidates, Quality pairwise ranks GT5 edge matches over competitive false fifth candidates, and cumulative count supervision uses the existing `pred_count_logits: B x 4` without replacing the Count Head output contract. By default, fifthness negatives are mined from GT3/GT4 images; `gcs_fifthness_include_gt5_negatives` is a default-off follow-up switch that also mines GT5 same-image unmatched outside candidates. They do not change decode, use GT during inference, fabricate lanes, or alter official metrics.
 
 When `gcs_quality_hard_negative_from_head` is enabled, Quality Head hard negatives must be mined from unmatched queries only. Hungarian-matched queries remain matched quality targets even when their current continuous quality target is `0.0`.
 

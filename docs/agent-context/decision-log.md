@@ -5126,3 +5126,70 @@ The default K56 shape check emitted only the existing six output keys. The fifth
 Mainline or experiment:
 
 Default-off experimental candidate. No official-val improvement is claimed yet, and test must not be used to select gains, checkpoints, thresholds, or promotion.
+
+## 2026-06-15: Reject first K56 fifthness-v1 gate and add explicit GT5-negative switch
+
+Decision:
+
+Reject the first K56 fifth-candidate verifier short gate:
+
+```text
+run: gcs_yolo_lane_s_q12_k56_fifthness_v1_ft8_seed1_b32w4
+parent: gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4/weights/official_best.pt
+epochs: 8
+best official-val: epoch 5, official_acc=0.959006
+FP/FN: 0.046097 / 0.029155
+parent official-val: 0.959315, FP=0.045225, FN=0.028466
+```
+
+Add a new default-off training-side switch:
+
+```text
+gcs_fifthness_include_gt5_negatives = False
+```
+
+The original v1 contract remains the default: fifthness negatives are mined from GT3/GT4 unmatched outside candidates. When the new switch is explicitly enabled, the same negative mining also applies to GT5 images, so same-image unmatched outside false fifth candidates can be ranked below true GT5 edge matched lanes.
+
+Why:
+
+The first gate did not beat the K56 parent and did not satisfy the intended joint objective of reducing both GT5 `5->4` and GT4 false fifth pressure. Later epochs improved GT5 retention but still raised false fifth pressure:
+
+```text
+epoch5: official_acc=0.959006, count_acc_4=0.848485, count_acc_5=0.878378, rate_4_to_5=0.106061, rate_5_to_4=0.121622, unmatched_quality_mean=0.859536
+epoch6: official_acc=0.958693, count_acc_5=0.918919, rate_5_to_4=0.081081, rate_4_to_5=0.106061
+epoch8: official_acc=0.957313, FP=0.048990, FN=0.032140
+```
+
+Code review found that the original v1 negative mining intentionally limited fifthness negatives to GT3/GT4 images. This matches the first stated contract, but it means Quality/Fifthness pairwise supervision often does not directly compare a true GT5 edge match against a same-image unmatched outside false fifth candidate. Given the official-val failure mode, testing that additional same-image negative pressure is a smaller and more traceable next step than increasing broad negative weights or starting full training.
+
+Alternatives considered:
+
+- Start a full/e180 fifthness-v1 training run from the first recipe.
+- Silently change v1 default negative mining to include GT5 images.
+- Revert the fifthness candidate entirely.
+- Add an explicit default-off switch and run a short official-val gate.
+
+Tradeoff:
+
+The new switch adds one experiment knob. It preserves the original default contract and checkpoint compatibility, but requires another official-val gate before any improvement claim. It does not change decode, official metrics, labels, inference-time GT usage, or the default K32/K56 model output contract.
+
+Validation evidence:
+
+Local checks after the switch:
+
+```text
+python -m py_compile ultralytics/utils/gcs_loss.py ultralytics/models/yolo/gcs_lane/train.py tools/train_gcs.py tests/test_gcs_count_aware.py ultralytics/cfg/__init__.py
+python -m pytest tests/test_gcs_count_aware.py -q --basetemp .tmp_pytest/fifthness_switch_full
+python tools/check_gcs_algorithm_contract.py
+python scripts/verify_loss_cleanup.py
+python tools/check_gcs_count_head_topk_contract.py
+python tools/check_gcs_decode_meta_contract.py
+python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml --imgsz 544 960 --batch 1
+python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-fifthness-v1.yaml --imgsz 544 960 --batch 1
+```
+
+The default K56 shape check still emits only the existing six output keys; fifthness-v1 emits `pred_fifthness_logits: B x Q` in addition to the existing outputs. New tests cover the default head no-fifthness contract, the missing-head error when fifthness loss is enabled, the original GT3/GT4 negative default, and the explicit GT5-negative switch.
+
+Mainline or experiment:
+
+Rejected experimental gate plus default-off follow-up experiment. No official-test claim is available, and test must not be used for selecting this switch or its gains.

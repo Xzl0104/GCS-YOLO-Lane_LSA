@@ -19,6 +19,7 @@ from ultralytics.models.yolo.gcs_lane.train import (
     GCS_MAINLINE_COUNT_SUM_GAIN,
     GCS_MAINLINE_FIFTHNESS,
     GCS_MAINLINE_FIFTHNESS_MARGIN,
+    GCS_MAINLINE_FIFTHNESS_INCLUDE_GT5_NEGATIVES,
     GCS_MAINLINE_FIFTHNESS_NEGATIVE_SCORE_THR,
     GCS_MAINLINE_FIFTHNESS_NEGATIVE_TOPK,
     GCS_MAINLINE_FIFTHNESS_PAIRWISE,
@@ -285,6 +286,30 @@ def test_gcs_lane_head_optional_fifthness_output_shape():
     assert head.count_head.use_fifth_candidate_evidence is True
 
 
+def test_gcs_lane_head_default_has_no_fifthness_output():
+    torch.manual_seed(13)
+    head = GCSLaneHead(
+        c1=16,
+        num_queries=6,
+        num_points=8,
+        num_decoder_layers=1,
+        nhead=4,
+        point_mode="fixed_y",
+    )
+    head.min_spatial_tokens = 0
+    feats = [
+        torch.randn(1, 16, 8, 16),
+        torch.randn(1, 16, 4, 8),
+        torch.randn(1, 16, 3, 4),
+        torch.randn(1, 16, 2, 3),
+    ]
+    out = head(feats)
+    assert "pred_fifthness_logits" not in out
+    assert out["pred_count_logits"].shape == (1, 4)
+    assert out["pred_count_boundary_logits"].shape == (1, 2)
+    assert head.count_head.use_fifth_candidate_evidence is False
+
+
 def test_gcs_lane_head_count_backward_isolated_from_shared_branches():
     torch.manual_seed(2)
     head = GCSLaneHead(
@@ -387,6 +412,7 @@ def test_mainline_sampler_defaults_and_ratio_boost_boundaries(monkeypatch):
     assert math.isclose(
         DEFAULT_CFG_DICT["gcs_fifthness_negative_score_thr"], GCS_MAINLINE_FIFTHNESS_NEGATIVE_SCORE_THR
     )
+    assert DEFAULT_CFG_DICT["gcs_fifthness_include_gt5_negatives"] is GCS_MAINLINE_FIFTHNESS_INCLUDE_GT5_NEGATIVES
     assert tuple(DEFAULT_CFG_DICT[f"gcs_count_cls_w{i}"] for i in range(2, 6)) == GCS_MAINLINE_COUNT_CLS_WEIGHTS
     assert math.isclose(DEFAULT_CFG_DICT["gcs_count_cumulative"], GCS_MAINLINE_COUNT_CUMULATIVE)
     assert math.isclose(
@@ -438,6 +464,7 @@ def test_mainline_sampler_defaults_and_ratio_boost_boundaries(monkeypatch):
     assert math.isclose(args.gcs_fifthness_margin, GCS_MAINLINE_FIFTHNESS_MARGIN)
     assert args.gcs_fifthness_negative_topk == GCS_MAINLINE_FIFTHNESS_NEGATIVE_TOPK
     assert math.isclose(args.gcs_fifthness_negative_score_thr, GCS_MAINLINE_FIFTHNESS_NEGATIVE_SCORE_THR)
+    assert args.gcs_fifthness_include_gt5_negatives is GCS_MAINLINE_FIFTHNESS_INCLUDE_GT5_NEGATIVES
     assert tuple(getattr(args, f"gcs_count_cls_w{i}") for i in range(2, 6)) == GCS_MAINLINE_COUNT_CLS_WEIGHTS
     assert math.isclose(args.gcs_count_cumulative, GCS_MAINLINE_COUNT_CUMULATIVE)
     assert math.isclose(args.gcs_count_cumulative_label_smoothing, GCS_MAINLINE_COUNT_CUMULATIVE_LABEL_SMOOTHING)
@@ -482,6 +509,7 @@ def test_mainline_sampler_defaults_and_ratio_boost_boundaries(monkeypatch):
     assert math.isclose(
         trainer_overrides["gcs_fifthness_negative_score_thr"], GCS_MAINLINE_FIFTHNESS_NEGATIVE_SCORE_THR
     )
+    assert trainer_overrides["gcs_fifthness_include_gt5_negatives"] is GCS_MAINLINE_FIFTHNESS_INCLUDE_GT5_NEGATIVES
     assert tuple(trainer_overrides[f"gcs_count_cls_w{i}"] for i in range(2, 6)) == GCS_MAINLINE_COUNT_CLS_WEIGHTS
     assert math.isclose(trainer_overrides["gcs_count_cumulative"], GCS_MAINLINE_COUNT_CUMULATIVE)
     assert math.isclose(
@@ -529,6 +557,7 @@ def test_mainline_sampler_defaults_and_ratio_boost_boundaries(monkeypatch):
     assert math.isclose(criterion.fifthness_margin, GCS_MAINLINE_FIFTHNESS_MARGIN)
     assert criterion.fifthness_negative_topk == GCS_MAINLINE_FIFTHNESS_NEGATIVE_TOPK
     assert math.isclose(criterion.fifthness_negative_score_thr, GCS_MAINLINE_FIFTHNESS_NEGATIVE_SCORE_THR)
+    assert criterion.fifthness_include_gt5_negatives is GCS_MAINLINE_FIFTHNESS_INCLUDE_GT5_NEGATIVES
     assert criterion.count_cls_weights == GCS_MAINLINE_COUNT_CLS_WEIGHTS
     assert math.isclose(criterion.count_cumulative_gain, GCS_MAINLINE_COUNT_CUMULATIVE)
     assert math.isclose(
@@ -604,6 +633,8 @@ def test_train_gcs_main_forwards_fifthness_cli_overrides(monkeypatch):
             "3",
             "--gcs-fifthness-negative-score-thr",
             "0.2",
+            "--gcs-fifthness-include-gt5-negatives",
+            "True",
             "--gcs-count-cumulative",
             "0.15",
             "--gcs-count-cumulative-label-smoothing",
@@ -622,6 +653,7 @@ def test_train_gcs_main_forwards_fifthness_cli_overrides(monkeypatch):
     assert math.isclose(captured["gcs_fifthness_margin"], 0.55)
     assert captured["gcs_fifthness_negative_topk"] == 3
     assert math.isclose(captured["gcs_fifthness_negative_score_thr"], 0.2)
+    assert captured["gcs_fifthness_include_gt5_negatives"] is True
     assert math.isclose(captured["gcs_count_cumulative"], 0.15)
     assert math.isclose(captured["gcs_count_cumulative_label_smoothing"], 0.05)
 
@@ -691,6 +723,7 @@ def test_gt5_candidate_cfg_keys_have_expected_types():
     assert "gcs_count_cumulative_label_smoothing" in CFG_FRACTION_KEYS
     assert "gcs_fifthness_negative_score_thr" in CFG_FRACTION_KEYS
     assert "gcs_fifthness_negative_topk" in CFG_INT_KEYS
+    assert "gcs_fifthness_include_gt5_negatives" in CFG_BOOL_KEYS
     assert "gcs_hard_negative_visible_thr" in CFG_FRACTION_KEYS
     assert "gcs_quality_gt5_edge_floor" in CFG_FRACTION_KEYS
     assert "gcs_point_valid_gt5_edge_continuity_thr" in CFG_FRACTION_KEYS
@@ -794,6 +827,65 @@ def test_fifthness_targets_gt5_edges_and_gt4_false_fifth_candidates():
     assert pred_fifthness_logits.grad is not None
     assert pred_fifthness_logits.grad[0, 0] < 0
     assert pred_fifthness_logits.grad[1, 4] > 0
+
+
+def test_fifthness_can_include_gt5_unmatched_outside_candidates():
+    lanes, valid = _gt([0.1, 0.25, 0.4, 0.55, 0.7])
+    y = lanes[0, :, 1]
+    false_right = torch.stack((torch.full_like(y, 0.92), y), dim=-1)
+    pred_points = torch.zeros(1, 6, 6, 2)
+    pred_points[0, :5] = lanes
+    pred_points[0, 5] = false_right
+    high = math.log(0.95 / 0.05)
+    pred_logits = torch.full((1, 6), high)
+    pred_valid_logits = torch.full((1, 6, 6), high)
+    indices = [(torch.arange(5), torch.arange(5))]
+    criterion = GCSLoss(
+        model={
+            "gcs_point_mode": "fixed_y",
+            "gcs_imgsz": [544, 960],
+            "gcs_fifthness": 1.0,
+            "gcs_fifthness_pairwise": 1.0,
+            "gcs_fifthness_negative_topk": 1,
+            "gcs_fifthness_negative_score_thr": 0.1,
+            "gcs_fifthness_include_gt5_negatives": True,
+        }
+    )
+
+    pos_mask, neg_mask = criterion.competitive_fifth_masks(
+        pred_logits,
+        pred_points,
+        pred_valid_logits,
+        [lanes],
+        [valid],
+        indices,
+    )
+    assert bool(pos_mask[0, 0]) and bool(pos_mask[0, 4])
+    assert bool(neg_mask[0, 5])
+
+    pred_fifthness_logits = torch.tensor([[0.0, -4.0, -4.0, -4.0, 0.0, 4.0]], requires_grad=True)
+    loss = criterion.fifthness_loss(
+        {"pred_fifthness_logits": pred_fifthness_logits},
+        pred_points,
+        pos_mask,
+        neg_mask,
+    )
+    loss.backward()
+    assert pred_fifthness_logits.grad is not None
+    assert pred_fifthness_logits.grad[0, 0] < 0
+    assert pred_fifthness_logits.grad[0, 5] > 0
+
+
+def test_fifthness_loss_requires_enabled_head_when_gain_is_on():
+    criterion = GCSLoss(model={"gcs_point_mode": "fixed_y", "gcs_imgsz": [544, 960], "gcs_fifthness": 1.0})
+    pred_points = torch.zeros(1, 2, 6, 2)
+    pos_mask = torch.zeros(1, 2, dtype=torch.bool)
+    neg_mask = torch.zeros(1, 2, dtype=torch.bool)
+    pos_mask[0, 0] = True
+    neg_mask[0, 1] = True
+
+    with pytest.raises(ValueError, match="pred_fifthness_logits is missing"):
+        criterion.fifthness_loss({}, pred_points, pos_mask, neg_mask)
 
 
 def test_fifthness_uses_count_min_gt_points_for_k56_short_lanes():

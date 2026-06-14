@@ -459,6 +459,7 @@ CFG_BOOL_KEYS = frozenset(
         "gcs_gt5_extra_aug",
         "gcs_quality_hard_negative_from_head",
         "gcs_hard_negative_visible_segment",
+        "gcs_fifthness_include_gt5_negatives",
     }
 )
 

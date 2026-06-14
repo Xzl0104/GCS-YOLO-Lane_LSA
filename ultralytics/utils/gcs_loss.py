@@ -61,6 +61,7 @@ class GCSLoss(nn.Module):
         fifthness_margin: float | None = None,
         fifthness_negative_topk: int | None = None,
         fifthness_negative_score_thr: float | None = None,
+        fifthness_include_gt5_negatives: bool | str | None = None,
         exist_pos_weight: float | None = None,
         exist_focal_gamma: float | None = None,
         exist_focal_alpha: float | None = None,
@@ -198,6 +199,12 @@ class GCSLoss(nn.Module):
             fifthness_negative_score_thr
             if fifthness_negative_score_thr is not None
             else self._arg(args, "gcs_fifthness_negative_score_thr", 0.1)
+        )
+        self.fifthness_include_gt5_negatives = self._parse_bool(
+            fifthness_include_gt5_negatives
+            if fifthness_include_gt5_negatives is not None
+            else self._arg(args, "gcs_fifthness_include_gt5_negatives", False),
+            default=False,
         )
         self.count_head_warmup_epochs = float(
             count_head_warmup_epochs
@@ -1110,7 +1117,10 @@ class GCSLoss(nn.Module):
             points = gt_points[b].detach().to(device=device, dtype=dtype)
             lane_mask = valid.sum(dim=1) >= min_lane_points
             lane_count = int(lane_mask.sum().item())
-            if lane_count not in {3, 4}:
+            allowed_counts = {3, 4}
+            if self.fifthness_include_gt5_negatives:
+                allowed_counts.add(5)
+            if lane_count not in allowed_counts:
                 continue
             unmatched_idx = torch.nonzero(~matched[b], as_tuple=False).flatten()
             if unmatched_idx.numel() == 0 or not bool(lane_mask.any()):

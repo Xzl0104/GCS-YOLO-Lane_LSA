@@ -23,6 +23,7 @@ from ultralytics.models.yolo.gcs_lane.train import (
     GCS_MAINLINE_COUNT_SUM_GAIN,
     GCS_MAINLINE_FIFTHNESS,
     GCS_MAINLINE_FIFTHNESS_MARGIN,
+    GCS_MAINLINE_FIFTHNESS_INCLUDE_GT5_NEGATIVES,
     GCS_MAINLINE_FIFTHNESS_NEGATIVE_SCORE_THR,
     GCS_MAINLINE_FIFTHNESS_NEGATIVE_TOPK,
     GCS_MAINLINE_FIFTHNESS_PAIRWISE,
@@ -328,13 +329,21 @@ def parse_args() -> argparse.Namespace:
         "--gcs-fifthness-negative-topk",
         type=int,
         default=GCS_MAINLINE_FIFTHNESS_NEGATIVE_TOPK,
-        help="Maximum unmatched outside candidates mined per GT3/GT4/GT5 image for fifthness negatives.",
+        help="Maximum unmatched outside candidates mined per GT3/GT4 image, and per GT5 image when explicitly enabled.",
     )
     parser.add_argument(
         "--gcs-fifthness-negative-score-thr",
         type=float,
         default=GCS_MAINLINE_FIFTHNESS_NEGATIVE_SCORE_THR,
         help="Minimum exist*visible-segment support score for a false fifthness negative candidate.",
+    )
+    parser.add_argument(
+        "--gcs-fifthness-include-gt5-negatives",
+        type=str2bool,
+        nargs="?",
+        const=True,
+        default=GCS_MAINLINE_FIFTHNESS_INCLUDE_GT5_NEGATIVES,
+        help="Also mine unmatched outside candidates in GT5 images as false fifthness negatives.",
     )
     parser.add_argument("--gcs-quality-hard-negative-weight", type=float, default=1.0)
     parser.add_argument("--gcs-quality-duplicate-negative-weight", type=float, default=1.5)
@@ -1050,6 +1059,7 @@ def main() -> None:
         "gcs_fifthness_margin": args.gcs_fifthness_margin,
         "gcs_fifthness_negative_topk": args.gcs_fifthness_negative_topk,
         "gcs_fifthness_negative_score_thr": args.gcs_fifthness_negative_score_thr,
+        "gcs_fifthness_include_gt5_negatives": args.gcs_fifthness_include_gt5_negatives,
         "gcs_quality_hard_negative_weight": args.gcs_quality_hard_negative_weight,
         "gcs_quality_duplicate_negative_weight": args.gcs_quality_duplicate_negative_weight,
         "gcs_quality_hard_negative_from_head": args.gcs_quality_hard_negative_from_head,

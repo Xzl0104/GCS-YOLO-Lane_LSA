@@ -68,7 +68,7 @@ Default-off K56 fifth-candidate verifier experiment:
 ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-fifthness-v1.yaml
 ```
 
-This model YAML is opt-in and enables an optional fifthness verifier head plus Count Head fifth-candidate evidence. It is not the K56 default and has no official-val evidence yet.
+This model YAML is opt-in and enables an optional fifthness verifier head plus Count Head fifth-candidate evidence. It is not the K56 default. The first `gcs_yolo_lane_s_q12_k56_fifthness_v1_ft8_seed1_b32w4` short gate is rejected: best official-val was epoch 5 `0.959006`, below the K56 parent `0.959315`, with worse FP/FN and high GT4-to-5 pressure.
 
 ## Label Contract
 
@@ -220,6 +220,7 @@ gcs_fifthness_pairwise = 0.0
 gcs_fifthness_margin = 0.2
 gcs_fifthness_negative_topk = 2
 gcs_fifthness_negative_score_thr = 0.1
+gcs_fifthness_include_gt5_negatives = False
 gcs_count_cumulative = 0.0
 gcs_count_cumulative_label_smoothing = 0.0
 ```
@@ -234,7 +235,7 @@ The `gcs_quality_gt5_edge_floor`, `gcs_quality_hard_negative_from_head`, `gcs_ha
 
 The first K56 curvature gate `gcs_yolo_lane_s_q12_k56_curveaux_ft8_seed1_b32w4` is rejected: best official-val was `0.958732`, below the K56 parent `0.959315`. Keep the infrastructure default-off and do not rerun the exact `gcs_geometry_curvature=0.05` recipe as the next path.
 
-`gcs_fifthness*` is a default-off fifth-candidate verifier objective. It supervises GT5 edge matched lanes as positives and competitive unmatched outside candidates as negatives, with an optional pairwise margin term. Its GT lane counting follows `gcs_count_min_gt_points` so K56 one-anchor short lanes stay aligned with Count Head targets. It requires a fifthness-enabled model YAML; enabling the loss against a default model is an error.
+`gcs_fifthness*` is a default-off fifth-candidate verifier objective. It supervises GT5 edge matched lanes as positives and competitive unmatched outside candidates as negatives, with an optional pairwise margin term. By default, competitive fifthness negatives are mined from GT3/GT4 images. The additional `gcs_fifthness_include_gt5_negatives` switch is default-off and, when enabled, also mines unmatched outside candidates in GT5 images so same-image false fifth candidates are explicitly ranked below true GT5 edge matches. Its GT lane counting follows `gcs_count_min_gt_points` so K56 one-anchor short lanes stay aligned with Count Head targets. It requires a fifthness-enabled model YAML; enabling the loss against a default model is an error.
 
 `gcs_quality_pairwise*` is a default-off competitive ranking term for the existing Quality Head. It does not rewrite the current Quality target; it only adds a pairwise constraint between GT5 edge matches and competitive false fifth candidates.
 

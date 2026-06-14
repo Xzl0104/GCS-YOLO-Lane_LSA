@@ -42,6 +42,7 @@ GCS_MAINLINE_FIFTHNESS_PAIRWISE = 0.0
 GCS_MAINLINE_FIFTHNESS_MARGIN = 0.2
 GCS_MAINLINE_FIFTHNESS_NEGATIVE_TOPK = 2
 GCS_MAINLINE_FIFTHNESS_NEGATIVE_SCORE_THR = 0.1
+GCS_MAINLINE_FIFTHNESS_INCLUDE_GT5_NEGATIVES = False
 GCS_MAINLINE_COUNT_CLS_WEIGHTS = (0.5, 1.2, 1.4, 1.8)
 GCS_MAINLINE_COUNT_CUMULATIVE = 0.0
 GCS_MAINLINE_COUNT_CUMULATIVE_LABEL_SMOOTHING = 0.0
@@ -288,6 +289,7 @@ class GCSLaneTrainer(BaseTrainer):
         overrides.setdefault("gcs_fifthness_margin", GCS_MAINLINE_FIFTHNESS_MARGIN)
         overrides.setdefault("gcs_fifthness_negative_topk", GCS_MAINLINE_FIFTHNESS_NEGATIVE_TOPK)
         overrides.setdefault("gcs_fifthness_negative_score_thr", GCS_MAINLINE_FIFTHNESS_NEGATIVE_SCORE_THR)
+        overrides.setdefault("gcs_fifthness_include_gt5_negatives", GCS_MAINLINE_FIFTHNESS_INCLUDE_GT5_NEGATIVES)
         for idx, weight in enumerate(GCS_MAINLINE_COUNT_CLS_WEIGHTS, start=2):
             overrides.setdefault(f"gcs_count_cls_w{idx}", weight)
         overrides.setdefault("gcs_count_cumulative", GCS_MAINLINE_COUNT_CUMULATIVE)

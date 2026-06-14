@@ -88,7 +88,9 @@ Independent GT5 diagnosis on official-val found 63/74 GT5 images kept; remaining
 
 The K56 direct Count/Quality/low-FP fine-tune gates from the epoch152 parent are not promotable: `gcs_yolo_lane_s_q12_k56_cqcalib_ft12_seed1_b32w4` best `0.953415`, `gcs_yolo_lane_s_q12_k56_cqcalib_lr1e4_ft8_seed1_b32w4` best `0.957787`, and `gcs_yolo_lane_s_q12_k56_lowfp_joint_ft8_seed1_b32w4` best `0.958999`. Do not rerun those exact recipes as the next path, and do not continue them with GT5 rescue.
 
-A new default-off K56 fifth-candidate verifier candidate is implemented as `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-fifthness-v1.yaml`. It is opt-in only: the default K32/K56 models keep the existing six-output contract, while this YAML additionally emits `pred_fifthness_logits: B x Q` and enables Count Head fifth-candidate evidence. The associated losses and calibration terms (`gcs_fifthness*`, `gcs_quality_pairwise*`, `gcs_count_cumulative*`) default to `0.0`; no official-val improvement is claimed until a remote validation run selects it.
+A default-off K56 fifth-candidate verifier candidate is implemented as `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-fifthness-v1.yaml`. It is opt-in only: the default K32/K56 models keep the existing six-output contract, while this YAML additionally emits `pred_fifthness_logits: B x Q` and enables Count Head fifth-candidate evidence. The associated losses and calibration terms (`gcs_fifthness*`, `gcs_quality_pairwise*`, `gcs_count_cumulative*`) default to `0.0`.
+
+The first short fifthness-v1 gate `gcs_yolo_lane_s_q12_k56_fifthness_v1_ft8_seed1_b32w4` is rejected: best official-val was `0.959006`, below the K56 parent `0.959315`, with worse FP/FN and high GT4-to-5 pressure. The follow-up `gcs_fifthness_include_gt5_negatives` switch is default-off and explicitly tests whether adding GT5 same-image unmatched outside negatives helps rank false fifth candidates below real GT5 edges.
 
 A user-requested K56 official-test audit on `2026-06-14` is diagnostic-only, not a final/promotable test claim. The tested rows were: parent default `0.959429`, parent minpoints `pv=0.40/final=9/fifth=4` `0.959131`, `cqcalib_ft12` `0.953748`, `cqcalib_lr1e4_ft8` `0.958869`, `curveaux_ft8` `0.959706`, and `lowfp_joint_ft8` `0.959401`. These numbers must not be used to choose checkpoints, thresholds, postprocess settings, losses, or promotion decisions; `curveaux_ft8` remains rejected because its official-val `0.958732` is below the K56 parent `0.959315`.
 
@@ -114,6 +116,7 @@ gcs_fifthness_pairwise = 0.0
 gcs_fifthness_margin = 0.2
 gcs_fifthness_negative_topk = 2
 gcs_fifthness_negative_score_thr = 0.1
+gcs_fifthness_include_gt5_negatives = False
 gcs_count_cumulative = 0.0
 gcs_count_cumulative_label_smoothing = 0.0
 ```
