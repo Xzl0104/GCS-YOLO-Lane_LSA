@@ -68,7 +68,7 @@ Default-off K56 fifth-candidate verifier experiment:
 ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-fifthness-v1.yaml
 ```
 
-This model YAML is opt-in and enables an optional fifthness verifier head plus Count Head fifth-candidate evidence. It is not the K56 default. The first `gcs_yolo_lane_s_q12_k56_fifthness_v1_ft8_seed1_b32w4` short gate is rejected: best official-val was epoch 5 `0.959006`, below the K56 parent `0.959315`, with worse FP/FN and high GT4-to-5 pressure.
+This model YAML is opt-in and enables an optional fifthness verifier head plus Count Head fifth-candidate evidence. It is not the K56 default. The first `gcs_yolo_lane_s_q12_k56_fifthness_v1_ft8_seed1_b32w4` short gate is rejected: best official-val was epoch 5 `0.959006`, below the K56 parent `0.959315`, with worse FP/FN and high GT4-to-5 pressure. The follow-up `gcs_yolo_lane_s_q12_k56_fifthness_gt5neg_ft8_seed1_b32w4` gate is also not promotable: best official-val was epoch 6 `0.959319`, only `+0.000004` over parent, but FP worsened to `0.047429` and `rate_4_to_5` rose to `0.121212`.
 
 ## Label Contract
 

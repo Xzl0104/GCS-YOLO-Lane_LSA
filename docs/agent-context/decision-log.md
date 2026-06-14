@@ -5193,3 +5193,72 @@ The default K56 shape check still emits only the existing six output keys; fifth
 Mainline or experiment:
 
 Rejected experimental gate plus default-off follow-up experiment. No official-test claim is available, and test must not be used for selecting this switch or its gains.
+
+## 2026-06-15: Reject K56 fifthness GT5-negative follow-up gate
+
+Decision:
+
+Do not promote or full-train the explicit GT5-negative follow-up recipe:
+
+```text
+run: gcs_yolo_lane_s_q12_k56_fifthness_gt5neg_ft8_seed1_b32w4
+commit: 9a81d76b00535a6966840e808f08f13889ffdf95
+parent: gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4/weights/official_best.pt
+epochs: 8
+switch: gcs_fifthness_include_gt5_negatives=True
+best official-val: epoch 6, official_acc=0.959319
+FP/FN: 0.047429 / 0.027089
+parent official-val: 0.959315, FP=0.045225, FN=0.028466
+```
+
+Why:
+
+The best official-val Accuracy is only `+0.000004` above the K56 parent, which is not meaningful under this protocol, and it fails the user's joint objective of reducing both GT5 `5->4` and GT4 false fifth pressure. The recipe improved GT5 retention but increased false fifth pressure:
+
+```text
+epoch6: count_acc_4=0.833333, count_acc_5=0.932432, rate_4_to_5=0.121212, rate_5_to_4=0.067568, gt5_output5_rate=0.932432
+epoch5: gt5_output5_rate=0.945946, rate_5_to_4=0.054054, gt5_valid_points_fail_rate=0.0, FP=0.049495
+```
+
+Compared with the first fifthness-v1 gate, the same-image GT5 negative switch reduced early unmatched quality (`epoch1 unmatched_quality_mean=0.802650` vs first gate epoch1 `0.818281` and first-gate best epoch5 `0.859536`), but the downstream Count/Quality balance still shifted toward too many fifth lanes in GT4 scenes.
+
+Alternatives considered:
+
+- Treat epoch6 as promotable because its Accuracy is numerically above parent.
+- Start full/e180 training from epoch6.
+- Sweep test or use the diagnostic test table to decide.
+- Reject this recipe and look for a lower-FP fifth-candidate calibration path.
+
+Tradeoff:
+
+Rejecting the recipe may discard a tiny validation ACC uptick, but it preserves the actual target: clean official-val improvement with acceptable FP/FN and no GT4-to-5 regression. The GT5-negative switch remains available as default-off infrastructure, but this exact gain recipe should not be repeated as the next main path.
+
+Validation evidence:
+
+Remote evidence:
+
+```text
+run path: /root/GCS-YOLO-Lane_LSA_codex/runs/gcs_lane/gcs_yolo_lane_s_q12_k56_fifthness_gt5neg_ft8_seed1_b32w4
+results.csv rows: 8
+numeric NaN/Inf scan: 0 bad values
+GPU status after completion: idle
+selection split: official-val only
+```
+
+Local validation for the commit used by this run passed before launch:
+
+```text
+python -m py_compile ultralytics/utils/gcs_loss.py ultralytics/models/yolo/gcs_lane/train.py tools/train_gcs.py tests/test_gcs_count_aware.py ultralytics/cfg/__init__.py
+python -m pytest tests/test_gcs_count_aware.py -q --basetemp .tmp_pytest/fifthness_switch_final
+python scripts/verify_loss_cleanup.py
+python scripts/check_gcs_agent_setup.py
+python tools/check_gcs_algorithm_contract.py
+python tools/check_gcs_count_head_topk_contract.py
+python tools/check_gcs_decode_meta_contract.py
+python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml --imgsz 544 960 --batch 1
+python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-fifthness-v1.yaml --imgsz 544 960 --batch 1
+```
+
+Mainline or experiment:
+
+Rejected experimental gate. No official-test claim is available, and test remains protected.

@@ -109,6 +109,7 @@ model = ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-fifthness-v1.yaml
 
 This opt-in YAML may additionally emit `pred_fifthness_logits: B x Q` and enables Count Head fifth-candidate evidence. The default K32 and K56 YAMLs must not emit `pred_fifthness_logits`.
 The first `gcs_yolo_lane_s_q12_k56_fifthness_v1_ft8_seed1_b32w4` short gate is rejected: best official-val was epoch 5 `0.959006`, below the K56 parent `0.959315`, with worse FP/FN and high GT4-to-5 pressure. Do not start full/e180 training from that recipe.
+The follow-up `gcs_yolo_lane_s_q12_k56_fifthness_gt5neg_ft8_seed1_b32w4` gate is also not promotable: best official-val was epoch 6 `0.959319`, only `+0.000004` over the parent, but FP worsened to `0.047429` and `rate_4_to_5` rose to `0.121212`. Do not treat this as a full-training candidate.
 
 The K56 labels must be regenerated from original TuSimple JSON and images, not resampled from existing K32 labels.
 

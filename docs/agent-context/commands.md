@@ -207,7 +207,19 @@ python tools/train_gcs.py \
   --gcs-official-best-archive-root runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset
 ```
 
-Next small gate after the default-off GT5-negative switch, not full training:
+The GT5-negative switch follow-up gate is rejected:
+
+```text
+run: gcs_yolo_lane_s_q12_k56_fifthness_gt5neg_ft8_seed1_b32w4
+commit: 9a81d76b00535a6966840e808f08f13889ffdf95
+status: completed 8/8 epochs on official-val only
+best official-val: epoch 6, official_acc=0.959319, FP=0.047429, FN=0.027089
+parent reference: official_acc=0.959315, FP=0.045225, FN=0.028466
+diagnosis: count_acc_4=0.833333, count_acc_5=0.932432, rate_4_to_5=0.121212, rate_5_to_4=0.067568, gt5_output5_rate=0.932432, gt5_valid_points_fail_rate=0.013514
+decision: not promotable; the tiny ACC delta is not meaningful because FP and GT4-to-5 pressure worsened
+```
+
+Command retained for reproducibility only:
 
 ```bash
 python tools/train_gcs.py \
