@@ -187,6 +187,8 @@ The `gcs_quality_gt5_edge_floor`, `gcs_quality_hard_negative_from_head`, `gcs_ha
 
 `gcs_geometry_curvature` is a default-off fixed-y geometry auxiliary candidate. When enabled, it adds `curvature_loss`, a SmoothL1 penalty on second-order x curvature for Hungarian-matched left/right edge lanes in GT>=5 images only. It is training-side only and does not change decode, read GT during inference, fabricate lanes, or alter official metrics.
 
+The first K56 curvature gate `gcs_yolo_lane_s_q12_k56_curveaux_ft8_seed1_b32w4` is rejected: best official-val was `0.958732`, below the K56 parent `0.959315`. Keep the infrastructure default-off and do not rerun the exact `gcs_geometry_curvature=0.05` recipe as the next path.
+
 When `gcs_quality_hard_negative_from_head` is enabled, Quality Head hard negatives are mined from unmatched queries only. Hungarian-matched queries remain matched quality targets even when their current continuous quality target is `0.0`; they must not be reclassified as hard negatives.
 
 When `gcs_hard_negative_visible_segment` is enabled, the shared unmatched hard-negative mask uses the same longest-visible-segment support semantics as Count/decode evidence instead of the all-anchor point-valid mean. It still mines unmatched queries only; Hungarian-matched queries remain protected.

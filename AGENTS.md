@@ -103,6 +103,17 @@ K = 56
 
 The K56 labels must be regenerated from original TuSimple JSON and images, not resampled from existing K32 labels.
 
+Current K56 official-val state:
+
+```text
+label oracle = 0.998256
+baseline official_best = 0.959315 at epoch 152
+vs current-code K32 0.953756 = +0.005559
+vs legacy 0.959224 = +0.000091
+```
+
+K56 is still experimental, not mainline-promoted, not test-ready, and has no official-test claim. The rejected K56 gates are `gcs_yolo_lane_s_q12_k56_cqcalib_ft12_seed1_b32w4`, `gcs_yolo_lane_s_q12_k56_cqcalib_lr1e4_ft8_seed1_b32w4`, and `gcs_yolo_lane_s_q12_k56_curveaux_ft8_seed1_b32w4`; do not rerun these exact recipes as the next path.
+
 The model output must include:
 
 ```text
