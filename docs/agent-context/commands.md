@@ -107,14 +107,15 @@ run: gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4
 remote HEAD: 9b9769b61f8f
 formal batch: 32
 workers: 4
-GPU memory: about 17.9 GiB on RTX 4090 24GB
-status at 2026-06-14 09:03 CST: training alive; results.csv has ordinary-val row 32, and official_best_summary has official-val candidates through epoch 31
-ordinary val latest row: epoch=32, val/f1=0.946636, val/decode/count_head_k=3.60055, val/decode/final_pred_lanes=3.54270, val/decode/k5_to_output4_rate=0.276316
-ordinary val best row so far by val/f1: epoch=31, val/f1=0.950366, val/decode/count_head_k=3.64738, val/decode/final_pred_lanes=3.57851, val/decode/k5_to_output4_rate=0.297619
+GPU memory: about 18.2 GiB on RTX 4090 24GB
+status at 2026-06-14 09:40 CST: training alive; results.csv has ordinary-val row 42, and official_best_summary has official-val candidates through epoch 42
+ordinary val latest row: epoch=42, val/f1=0.948062, val/decode/count_head_k=3.57851, val/decode/final_pred_lanes=3.52617, val/decode/k5_to_output4_rate=0.287879
+ordinary val best row so far by val/f1: epoch=39, val/f1=0.951650, val/decode/count_head_k=3.65014, val/decode/final_pred_lanes=3.59780, val/decode/k5_to_output4_rate=0.215909
 official_best so far: epoch 31, official_acc=0.951526, FP=0.057208, FN=0.048439
 official_best count/GT5 diagnostics: count_acc_3/4/5=0.928251/0.848485/0.729730, gt5_output5_rate=0.729730, gt5_count_head_under_rate=0.027027, gt5_valid_points_fail_rate=0.243243, gt5_candidate_pool_shortfall_rate=0.000000, decode/k5_to_output4_rate=0.297619, rescue_precision=0.881356
-official_top_k retained epochs: 31, 28, 29, 23, 27
-errors: process is alive and log keyword scan found no OOM, NaN, traceback, runtime error, CUDA error, assertion, shape mismatch, size mismatch, or invalid shape
+official_top_k retained epochs: 31, 42, 41, 38, 28
+diagnostic top-k notes: epoch42 is rank2 with official_acc=0.950743, FP=0.057438, FN=0.051423; epoch38 has high gt5_output5_rate=0.905405 and low gt5_valid_points_fail_rate=0.081081, but official_acc=0.948920 with FP=0.077273 and rate_4_to_5=0.136364, so it is diagnostic only
+errors: process is alive; results.csv has no NaN/Inf values; official-val sweeps exist through epoch42. No test evidence has been used.
 decision: continue monitoring; K56 has improved materially but remains below the legacy 0.959224 reference. Do not promote, do not use test, and do not launch a replacement experiment while the healthy baseline is still improving.
 ```
 
@@ -408,7 +409,7 @@ Archive notes and summaries:
 - treat each Git commit/push sync as a project archive point
 - write a concise commit note based on the completed work, not a generic message
 - include important validation results or remaining risk in the commit body when useful
-- after every archive push, report a sync summary to the user with changed files, validation, commit SHA, GitHub push status, and any remaining unsynced or ignored local files that matter to the requested work
+- after every archive push, report a sync summary to the user with changed files, validation performed, commit SHA, GitHub push status, and any remaining unsynced or ignored local files that matter to the requested work
 
 PR handoff:
 

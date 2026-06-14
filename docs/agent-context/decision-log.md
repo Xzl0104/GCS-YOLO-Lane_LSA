@@ -2120,3 +2120,86 @@ Read-only checks confirmed the process list, GPU memory, command line, `results.
 Mainline or experiment:
 
 Experimental baseline monitoring decision. K56 is still not promoted over K32, and no official-test claim is available.
+
+## 2026-06-14: Continue Q12-K56 b32 baseline after epoch 42 monitor
+
+Decision:
+
+Continue the remote K56 formal baseline:
+
+```text
+run: gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4
+batch: 32
+workers: 4
+epochs: 180
+official_best_top_k: 5
+```
+
+Do not stop it, do not launch a replacement experiment yet, and do not use test for checkpoint, threshold, loss, or postprocess selection.
+
+Why:
+
+A read-only remote check at `2026-06-14 09:40 CST` found the process alive, using about `18.2 GiB` on the RTX 4090 24GB server. The command is still the intended formal K56 baseline with `--batch 32 --workers 4`, `--imgsz 544 960`, `--gcs-official-best`, and `--gcs-official-best-top-k 5`.
+
+`results.csv` has an ordinary-validation row labeled epoch `42`:
+
+```text
+val/f1: 0.948062
+val/decode/count_head_k: 3.57851
+val/decode/final_pred_lanes: 3.52617
+val/decode/k5_to_output4_rate: 0.287879
+```
+
+The best ordinary-validation row so far by `val/f1` is epoch `39`:
+
+```text
+val/f1: 0.951650
+val/decode/count_head_k: 3.65014
+val/decode/final_pred_lanes: 3.59780
+val/decode/k5_to_output4_rate: 0.215909
+```
+
+`official_best_summary.json` has official-val candidates through epoch `42`. The current official-best row remains:
+
+```text
+best_epoch: 31
+official_acc: 0.951526
+official_fp: 0.057208
+official_fn: 0.048439
+count_acc_3/4/5: 0.928251 / 0.848485 / 0.729730
+gt5_output5_rate: 0.729730
+gt5_count_head_under_rate: 0.027027
+gt5_valid_points_fail_rate: 0.243243
+gt5_candidate_pool_shortfall_rate: 0.000000
+decode/k5_to_output4_rate: 0.297619
+rescue_precision: 0.881356
+rate_4_to_5: 0.060606
+```
+
+The retained official Top-K epochs are:
+
+```text
+31, 42, 41, 38, 28
+```
+
+Epoch 42 is now rank 2 (`official_acc=0.950743`, `FP=0.057438`, `FN=0.051423`) but still does not beat epoch 31. Epoch 38 remains diagnostically useful because it improved GT5 output (`gt5_output5_rate=0.905405`, `gt5_valid_points_fail_rate=0.081081`), but it is not promotable because it increased FP (`0.077273`) and GT4-to-5 pressure (`rate_4_to_5=0.136364`) while official Accuracy stayed at `0.948920`.
+
+Alternatives considered:
+
+- Stop the run because official-val is still below the legacy `0.959224` target.
+- Launch a parallel K56 auxiliary experiment immediately.
+- Promote epoch 38 because its GT5 output is high.
+- Use test to look for a better checkpoint or postprocess setting.
+- Continue the healthy baseline while official-val is still moving.
+
+Tradeoff:
+
+Continuing uses server time, but the baseline is healthy and still has later Top-K movement. Launching a replacement now would compete for the same 24GB GPU and risks overreacting to a GT5-recall diagnostic that does not improve official Accuracy. If this run plateaus below legacy, the smallest next controlled candidate should target weak training-side GT5 edge visible-segment point-valid support and Count/Quality calibration from an official-val-selected K56 checkpoint.
+
+Validation evidence:
+
+Read-only checks confirmed the process list, GPU memory, command line, `results.csv`, `official_best_summary.json`, official-val sweep summaries through epoch 42, retained Top-K metadata, and that `results.csv` contains no NaN/Inf values. No test evidence was used.
+
+Mainline or experiment:
+
+Experimental baseline monitoring decision. K56 is still not promoted over K32, and no official-test claim is available.
