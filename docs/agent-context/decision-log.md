@@ -376,7 +376,7 @@ The conservative defaults reduce GT5-specific over-concentration while preservin
 
 Validation evidence:
 
-Latest local validation for the training-side GT5 candidate-quality update:
+Local validation recorded for the training-side GT5 candidate-quality update:
 
 ```text
 python -m py_compile ultralytics/utils/gcs_loss.py ultralytics/models/yolo/gcs_lane/train.py tools/train_gcs.py tests/test_gcs_count_aware.py
@@ -1858,6 +1858,86 @@ Continuing spends server time, but preserves the first clean K56 baseline under 
 Validation evidence:
 
 Read-only checks confirmed the command, process, log health, `results.csv`, and `official_best_summary.json`. No test evidence was used.
+
+Mainline or experiment:
+
+Experimental baseline monitoring decision. K56 is still not promoted over K32, and no official-test claim is available.
+
+## 2026-06-14: Continue Q12-K56 b32 baseline after epoch 14 monitor
+
+Decision:
+
+Continue the remote K56 formal baseline:
+
+```text
+run: gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4
+batch: 32
+workers: 4
+epochs: 180
+official_best_top_k: 5
+```
+
+Do not stop it, do not launch a replacement experiment yet, and do not use test for checkpoint, threshold, loss, or postprocess selection.
+
+Why:
+
+A read-only remote check at `2026-06-14 07:54 CST` found the process alive around epoch `15/180`, using about `17.9 GiB` on the RTX 4090 24GB server. The command is the intended formal K56 baseline with `--batch 32 --workers 4`, `--imgsz 544 960`, `--gcs-official-best`, and `--gcs-official-best-top-k 5`. A refined log scan found no OOM, NaN, traceback, runtime error, CUDA error, assertion, shape mismatch, or invalid shape.
+
+`results.csv` has an ordinary-validation row labeled epoch `15`:
+
+```text
+val/f1: 0.910266
+val/decode/count_head_k: 3.83471
+val/decode/final_pred_lanes: 3.66391
+val/decode/k5_to_output4_rate: 0.534483
+```
+
+The best ordinary-validation row so far by `val/f1` is epoch `14`:
+
+```text
+val/f1: 0.937910
+val/decode/count_head_k: 3.7438
+val/decode/final_pred_lanes: 3.56198
+val/decode/k5_to_output4_rate: 0.589286
+```
+
+`official_best_summary.json` has official-val candidates through epoch `14`. The current official-best row is:
+
+```text
+best_epoch: 14
+official_acc: 0.937875
+official_fp: 0.087557
+official_fn: 0.073003
+count_acc_3/4/5: 0.887892 / 0.878788 / 0.567568
+gt5_output5_rate: 0.567568
+gt5_count_head_under_rate: 0.000000
+gt5_valid_points_fail_rate: 0.432432
+gt5_candidate_pool_shortfall_rate: 0.000000
+decode/k5_to_output4_rate: 0.605263
+```
+
+The retained official Top-K epochs are:
+
+```text
+14, 10, 11, 8, 13
+```
+
+This is still early relative to a 180-epoch baseline. The run is healthy and ordinary validation is improving, but official-val remains far below the legacy `0.959224` target. The early GT5 evidence points to valid-point/final-output survival rather than candidate-pool shortfall.
+
+Alternatives considered:
+
+- Stop the run because official-val is still below the legacy target.
+- Launch a parallel K56 auxiliary experiment immediately.
+- Use test to look for a better checkpoint or postprocess setting.
+- Continue the healthy baseline until it matures, while preparing the next controlled K56 hypothesis only if the baseline plateaus.
+
+Tradeoff:
+
+Continuing uses server time, but preserves the first clean K56 baseline under the new label contract and avoids overreacting to early official-val noise. Running a second formal experiment on the same 24GB GPU would compete with the healthy baseline. If the mature K56 baseline remains below legacy with GT5 valid-point collapse, the smallest next controlled candidate should target training-side matched GT5 edge visible-segment support and Count/Quality calibration from an official-val-selected K56 checkpoint.
+
+Validation evidence:
+
+Read-only checks confirmed the process list, GPU memory, command line, `results.csv`, `official_best_summary.json`, retained Top-K metadata, and log health. No test evidence was used.
 
 Mainline or experiment:
 

@@ -80,6 +80,8 @@ batch=32
 workers=4
 ```
 
+Monitoring snapshot at `2026-06-14 07:54 CST`: the run is alive around epoch 15/180 with about 17.9 GiB GPU memory in use; official-best is epoch 14 with `official_acc=0.937875`, so K56 is not promoted and no test result is claimed.
+
 Use the local RTX 4060 8GB workstation for smoke, contract, label/oracle, and model-shape checks only. Run formal training and official-val evaluation on the remote server.
 
 Default-off training knobs remain available for controlled experiments:
