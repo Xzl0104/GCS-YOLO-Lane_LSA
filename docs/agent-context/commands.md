@@ -410,6 +410,12 @@ Archive notes and summaries:
 - include important validation results or remaining risk in the commit body when useful
 - after every archive push, report a sync summary to the user with changed files, validation, commit SHA, GitHub push status, and any remaining unsynced or ignored local files that matter to the requested work
 
+PR handoff:
+
+- PR creation is separate from Git sync; do not claim a PR was opened just because a branch was pushed.
+- If `gh` is unavailable or unauthenticated, report PR creation as blocked.
+- When PR creation is blocked, include the branch name, pushed commit SHA, intended base branch if known, and a GitHub manual PR URL such as `https://github.com/Xzl0104/GCS-YOLO-Lane_LSA/pull/new/<branch>`.
+
 ## Remote Server Experiment Loop
 
 Use this loop when local Codex changes need to be trained or evaluated on a remote CUDA server.
