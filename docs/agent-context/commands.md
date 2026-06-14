@@ -108,15 +108,15 @@ remote HEAD: 9b9769b61f8f
 formal batch: 32
 workers: 4
 GPU memory: about 17.5-18.2 GiB on RTX 4090 24GB
-status at 2026-06-14 10:39 CST: training alive; results.csv has ordinary-val row 58, and official_best_summary has official-val candidates through epoch 58
-ordinary val latest row: epoch=58, val/f1=0.956488, val/decode/count_head_k=3.64738, val/decode/final_pred_lanes=3.57300, val/decode/k5_to_output4_rate=0.337349
+status at 2026-06-14 10:52 CST: training alive; results.csv has ordinary-val row 62, and official_best_summary has official-val candidates through epoch 62
+ordinary val latest row: epoch=62, val/f1=0.951426, val/decode/count_head_k=3.61157, val/decode/final_pred_lanes=3.56474, val/decode/k5_to_output4_rate=0.223684, val/decode/candidate_pool_shortfall_rate=0.000000, val/decode/top5_suppressed_by_nms_rate=0.071625
 ordinary val best row so far by val/f1: epoch=58, val/f1=0.956488, val/decode/count_head_k=3.64738, val/decode/final_pred_lanes=3.57300, val/decode/k5_to_output4_rate=0.337349
-official_best so far: epoch 52, official_acc=0.953566, FP=0.055647, FN=0.037190
-official_best count/GT5 diagnostics: count_acc_3/4/5=0.914798/0.878788/0.851351, gt5_output5_rate=0.851351, gt5_count_head_under_rate=0.013514, gt5_valid_points_fail_rate=0.135135, gt5_candidate_pool_shortfall_rate=0.000000, gt5_top5_suppressed_by_nms_rate=0.013514, decode/k5_to_output4_rate=0.190476, rescue_precision=0.779412, rate_4_to_5=0.075758
-official_top_k retained epochs: 52, 58, 57, 53, 43
-diagnostic top-k notes: epoch52 materially improves official_acc versus epoch43 and is close to the current-code K32 audit baseline, but it remains below current-code K32 audit 0.953756, countboundary 0.954137, old FT6 0.954782, and legacy 0.959224 references. Epoch58 nearly ties epoch52 with official_acc=0.953458 and lower FP=0.048898, but it worsens GT5 output to gt5_output5_rate=0.702703 and gt5_valid_points_fail_rate=0.270270. Epoch57 reaches gt5_output5_rate=0.891892 and gt5_valid_points_fail_rate=0.108108, but official_acc is only 0.952369 because FP rises to 0.065243 and rate_4_to_5 rises to 0.121212.
-errors: process is alive; results.csv has no numeric NaN/Inf values; 59 official-val JSON summaries have no numeric NaN/Inf values; official-val sweeps exist through epoch58. A text-artifact scan inside the run found no `--split test`, `split: test`, `test_label.json`, or `test_set` hits.
-decision: continue monitoring; K56 has improved materially but remains below the active references. Do not promote, do not use test, and do not launch a replacement experiment while the healthy baseline is still improving.
+official_best so far: epoch 61, official_acc=0.954807, FP=0.053489, FN=0.041093
+official_best count/GT5 diagnostics: count_acc_3/4/5=0.923767/0.878788/0.729730, gt5_output5_rate=0.729730, gt5_count_head_under_rate=0.081081, gt5_valid_points_fail_rate=0.189189, gt5_candidate_pool_shortfall_rate=0.000000, gt5_top5_suppressed_by_nms_rate=0.000000, decode/k5_to_output4_rate=0.287500, rescue_precision=0.807018, rate_4_to_5=0.045455, rate_5_to_4=0.270270
+official_top_k retained epochs: 61, 52, 58, 62, 59
+diagnostic top-k notes: epoch61 is the first K56 official-best to exceed the current-code K32 audit 0.953756, countboundary 0.954137, and old FT6 0.954782 references, but it remains below legacy 0.959224 and below the 0.97 objective. Epoch61 lowers GT4-to-5 pressure versus epoch52 but weakens GT5 output and valid-point survival. Epoch59 satisfies the diagnostic valid-points target with gt5_valid_points_fail_rate=0.094595 and gt5_output5_rate=0.837838, but official_acc is only 0.952904. Candidate supply and GT5 NMS remain non-blocking.
+errors: process is alive; results.csv has no numeric NaN/Inf values; 63 official-val JSON summaries have no numeric NaN/Inf values; official-val sweeps exist through epoch62. A text-artifact scan inside the run found no `--split test`, `split: test`, `test_label.json`, or `test_set` hits.
+decision: continue monitoring; K56 has now beaten several active official-val references but remains below legacy 0.959224 and still fails GT5 diagnostic targets. Do not promote, do not use test, and do not launch a replacement experiment while the healthy baseline is still improving.
 ```
 
 The K56 official-val evidence is still baseline-monitoring evidence only. It is not a promotion result, not a failure decision for the full K56 baseline, and not a reason to use test or tune postprocess settings. The stable-looking bottleneck is a GT5 valid-point/output-vs-FP tradeoff, not Count Head underprediction or candidate-pool availability.
