@@ -1863,6 +1863,202 @@ Mainline or experiment:
 
 Experimental baseline monitoring decision. K56 is still not promoted over K32, and no official-test claim is available.
 
+## 2026-06-14: Complete Q12-K56 b32 baseline and keep test protected
+
+Decision:
+
+Treat the completed K56 run as the current K56 official-val reference, but do not promote K56 to mainline and do not run official test yet:
+
+```text
+run: gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4
+epochs: 180
+batch: 32
+workers: 4
+training HEAD: 9b9769b61f8f
+final audit branch HEAD: 655c116
+```
+
+Why:
+
+The run completed naturally on the remote RTX 4090 24GB server. Final audit found no live process, GPU idle, and `results.csv` complete through epoch `180`.
+
+The run root `official_best_summary.json` selected epoch `152`:
+
+```text
+official_acc: 0.959315
+official_fp: 0.045225
+official_fn: 0.028466
+official_score: 0.957841
+count_acc_3/4/5: 0.928251 / 0.878788 / 0.851351
+gt5_output5_rate: 0.851351
+gt5_count_head_under_rate: 0.067568
+gt5_valid_points_fail_rate: 0.081081
+gt5_candidate_pool_shortfall_rate: 0.000000
+gt5_top5_suppressed_by_nms_rate: 0.000000
+decode/k5_to_output4_rate: 0.105263
+rescue_precision: 0.779412
+matched/unmatched quality mean: 0.913939 / 0.831922
+```
+
+The `gt5_valid_points_fail_rate=0.081081` value above is the run-summary/decode aggregate from `official_best_summary.json`. It is intentionally kept separate from the independent GT5 rank-diagnosis drop-attribution field below.
+
+Independent official-val sweep of `weights/official_best.pt` at:
+
+```text
+runs/gcs_lane/gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4/analysis_official_best_val_sweep/tusimple_official_sweep_summary.json
+```
+
+reproduced the same best row over 64 validation-only decode combinations:
+
+```text
+conf: 0.005
+point_valid_thr: 0.35
+nms_dist_px: 18.0
+max_det: 5
+min_points: 6
+rank_min_points: none
+official_acc: 0.959315
+```
+
+The final retained official Top-K is:
+
+```text
+152=0.959315
+170=0.959247
+166=0.959244
+168=0.959217
+165=0.959215
+```
+
+The latest epoch `180` candidate reached `official_acc=0.959087`, below epoch `152`, and ordinary val best remains epoch `142` with `val/f1=0.962083`; ordinary `best.pt` is not the official selector.
+
+Epoch `152` is a useful K56 official-val reference:
+
+```text
+vs current-code K32 audit 0.953756: +0.005559
+vs countboundary 0.954137: +0.005178
+vs old FT6 0.954782: +0.004533
+vs prior K56 epoch127 0.958484: +0.000831
+vs prior K56 epoch115 0.957960: +0.001355
+vs legacy 0.959224: +0.000091
+```
+
+It remains below the `0.97` objective and exceeds legacy by only `+0.000091`, so it is not a final-test candidate.
+
+Independent GT5 diagnosis at:
+
+```text
+runs/gcs_lane/gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4/analysis_official_best_gt5_diag_val/gt5_rank_diagnostics_summary.json
+```
+
+localized the remaining GT5 failures:
+
+```text
+images: 74
+kept: 63
+gt5_output_drop_reason_counts:
+  count_head_under_predict: 5
+  quality_too_low: 6
+gt5_candidate_pool_shortfall_rate: 0.000000
+gt5_top5_suppressed_by_nms_rate: 0.000000
+gt5_rank5_score_low_rate: 0.000000
+diagnostic_drop_attribution_valid_points_fail: 0
+```
+
+Alternatives considered:
+
+- Promote K56 and run official test because it slightly exceeds legacy on official-val.
+- Select ordinary `best.pt` because epoch `142` has the best ordinary `val/f1`.
+- Tune thresholds or rescue settings on test.
+- Use the final epoch 180 candidate because it is later.
+- Keep K56 as the current official-val reference and continue research on validation only.
+
+Tradeoff:
+
+Holding back test preserves final-test credibility. The cost is that no official-test claim exists yet for K56, even though the label oracle and official-val baseline are stronger than K32.
+
+Validation evidence:
+
+Read-only checks found `results.csv` has 180 rows with no numeric NaN/Inf values. The run has 181 JSON files with no parse error and no numeric NaN/Inf values. A scoped text-artifact scan of 363 files found no `--split test`, `split: test`, `split=test`, `test_label.json`, or `test_set` hits, and no `RuntimeError`, `shape error`, `shape mismatch`, or `Traceback` hits. `args.yaml` records `split=val`, `gcs_official_best_split=val`, `imgsz=[544, 960]`, `gcs_imgsz=[544, 960]`, and K56 data/model. No test evidence was used.
+
+Mainline or experiment:
+
+Experimental K56 baseline reference. K56 is still not promoted to mainline and no official-test claim is available.
+
+## 2026-06-14: Reject simple K56 Count/Quality fine-tunes from epoch152 parent
+
+Decision:
+
+Stop and reject two K56 Count/Quality calibration gates launched from:
+
+```text
+runs/gcs_lane/gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4/weights/official_best.pt
+```
+
+Do not rerun either exact recipe as the next path.
+
+Why:
+
+The completed K56 baseline diagnosis showed remaining GT5 drops from count-under and quality-too-low, so two training-side Count/Quality gates were tried on official-val only. Both regressed sharply before completing their planned epochs.
+
+Rejected aggressive gate:
+
+```text
+run: gcs_yolo_lane_s_q12_k56_cqcalib_ft12_seed1_b32w4
+commit: 655c116
+planned epochs: 12
+stopped after: epoch 5
+batch/workers: 32/4
+recipe: lr0=0.0005 default, count_cls_w3/w4/w5=1.30/1.50/1.95,
+        count_boundary_gt5_pos_weight=1.20, quality_neg_weight=0.60,
+        quality_hard_negative_from_head=True,
+        hard_negative_visible_segment=True,
+        candidate_gt5_edge_weight=1.15
+best official-val: epoch 2, official_acc=0.953415, FP=0.052479, FN=0.042011
+count_acc_3/4/5: 0.941704 / 0.939394 / 0.689189
+gt5_output5_rate: 0.689189
+gt5_count_head_under_rate: 0.270270
+```
+
+Rejected conservative low-LR gate:
+
+```text
+run: gcs_yolo_lane_s_q12_k56_cqcalib_lr1e4_ft8_seed1_b32w4
+commit: 655c116
+planned epochs: 8
+stopped after: epoch 4
+batch/workers: 32/4
+recipe: lr0=0.0001, lrf=0.2, count_cls_w5=1.90,
+        count_boundary_gt5_pos_weight=1.20, quality_neg_weight=0.55,
+        quality_hard_negative_from_head=True,
+        candidate_gt5_edge_weight=1.15
+best official-val: epoch 1, official_acc=0.957787, FP=0.046465, FN=0.033976
+count_acc_3/4/5: 0.928251 / 0.878788 / 0.851351
+gt5_output5_rate: 0.851351
+gt5_count_head_under_rate: 0.108108
+```
+
+Alternatives considered:
+
+- Let each fine-tune run to completion despite early official-val regression.
+- Tune on test to rescue a degraded fine-tune.
+- Try a larger batch mid-gate to improve GPU usage.
+- Stop early and preserve the run artifacts as rejected official-val gates.
+
+Tradeoff:
+
+Early stopping saved the RTX 4090 for better experiments but leaves these gates incomplete by epoch count. That is acceptable because official-val already showed a large regression relative to the K56 parent `0.959315`, and neither gate was eligible for test or promotion.
+
+Validation evidence:
+
+Both gates used K56 data/model, `--imgsz 544 960`, `batch=32`, `workers=4`, `gcs_official_best_split=val`, and Top-K preservation. GPU memory stayed in the expected 17.7-18.6 GiB range and no NaN, shape error, or traceback was observed before stopping. After stopping, the GPU was idle and no matching training process remained. No test evidence was used.
+
+Mainline or experiment:
+
+Rejected K56 experimental gates. The next K56 experiment should be more surgical than simple Count/Quality knob pushes, likely adding or isolating training-side geometry/calibration behavior while preserving the epoch152 FP/FN balance.
+
+Historical note: the K56 monitor entries below were written while `gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4` was still running. They are retained as time-stamped audit history and are superseded by the completed-baseline and rejected-gate decisions above.
+
 ## 2026-06-14: Continue Q12-K56 b32 baseline after epoch 17 monitor
 
 Decision:
@@ -4547,3 +4743,7 @@ Read-only checks confirmed the process list, GPU memory/utilization samples, com
 Mainline or experiment:
 
 Experimental baseline monitoring decision. K56 is still not promoted over K32, and no official-test claim is available.
+
+## 2026-06-14: Superseding K56 final state after monitor entries
+
+The historical monitoring entries above are superseded by the completed K56 baseline decision and the rejected Count/Quality fine-tune decisions recorded earlier in this file. Current state: `gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4` completed 180/180; official-val-selected epoch 152 remains the K56 reference at `official_acc=0.959315`; K56 is not promoted, not test-ready, and has no official-test claim. The next K56 step should stay validation-only and avoid rerunning the two rejected Count/Quality recipes.

@@ -44,7 +44,7 @@ python tools/train_gcs.py \
 
 Do not launch another `K=32` GT5 quality/count fine-tune as the next main path: the visible-segment hard-negative and GT5 edge Quality floor gates have both completed and are not promotable, and the `K=32` label oracle does not leave enough geometry headroom for the `0.97` objective.
 
-The active next path is the separate `Q12-K56` official-h-sample-aligned experimental candidate:
+The current experimental K56 family/reference is the separate `Q12-K56` official-h-sample-aligned candidate:
 
 ```text
 data:  data/tusimple_gcs_fixed_y_k56_960x544.yaml
@@ -100,28 +100,51 @@ python tools/train_gcs.py \
   --gcs-official-best-archive-root runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset
 ```
 
-Current K56 remote baseline monitoring state:
+Completed K56 remote baseline state:
 
 ```text
 run: gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4
-remote HEAD: 9b9769b61f8f
+remote training HEAD: 9b9769b61f8f
+remote final audit branch HEAD: 655c116
 formal batch: 32
 workers: 4
-GPU memory: about 17.9-18.6 GiB / 24.6 GiB on RTX 4090 24GB
-GPU utilization samples at 2026-06-14 epoch160 audit ranged from low/bursty to high utilization; `ps`, `results.csv`, and checkpoint updates confirm the healthy batch=32 run is still alive, so do not alter batch mid-run
-status at 2026-06-14 epoch160 audit: training alive with ordinary-val row 160/180; root official_best_summary has official-val candidates through epoch 160
-ordinary val latest row: epoch=160, val/f1=0.957822, precision=0.954893, recall=0.960769, fp=59, fn=51, val/decode/k5_to_output4_rate=0.105263
-ordinary val best row so far by val/f1: epoch=142, val/f1=0.962083, precision=0.958047, recall=0.966154, fp=55, fn=44
-official_best so far: epoch 152, official_acc=0.959315, FP=0.045225, FN=0.028466
+GPU memory during training: about 17.6-18.6 GiB / 24.6 GiB on RTX 4090 24GB
+status at 2026-06-14 final audit: training completed naturally, process exited, GPU idle, results.csv has 180 rows
+ordinary val final row: epoch=180, val/f1=0.955190, precision=0.951182, recall=0.959231, fp=64, fn=53, val/decode/k5_to_output4_rate=0.080000
+ordinary val best row by val/f1: epoch=142, val/f1=0.962083, precision=0.958047, recall=0.966154, fp=55, fn=44, val/decode/k5_to_output4_rate=0.067568
+official_best: epoch 152, official_acc=0.959315, FP=0.045225, FN=0.028466
 official_best count/GT5 diagnostics: count_acc_3/4/5=0.928251/0.878788/0.851351, gt5_output5_rate=0.851351, gt5_count_head_under_rate=0.067568, gt5_valid_points_fail_rate=0.081081, gt5_candidate_pool_shortfall_rate=0.000000, gt5_top5_suppressed_by_nms_rate=0.000000, decode/k5_to_output4_rate=0.105263, rescue_precision=0.779412, rate_3_to_4=0.071749, rate_4_to_5=0.075758, rate_5_to_4=0.148649, matched/unmatched_quality_mean=0.913939/0.831922
-official_top_k retained epochs and ACC: 152=0.959315, 154=0.959211, 140=0.959200, 153=0.959190, 155=0.959165
-latest official-val candidate: epoch=160, official_acc=0.959138, FP=0.043618, FN=0.027548, count_acc_3/4/5=0.932735/0.878788/0.851351, gt5_output5_rate=0.851351, gt5_count_head_under_rate=0.067568, gt5_valid_points_fail_rate=0.081081, gt5_candidate_pool_shortfall_rate=0.000000, gt5_top5_suppressed_by_nms_rate=0.000000, decode/k5_to_output4_rate=0.093333, rescue_precision=0.808824, matched/unmatched_quality_mean=0.917138/0.836530
-diagnostic top-k notes: epoch152 is the new K56 official-best and exceeds the current-code K32 audit 0.953756 by +0.005559, countboundary 0.954137 by +0.005178, old FT6 0.954782 by +0.004533, prior K56 epoch127 best 0.958484 by +0.000831, epoch115 by +0.001355, and legacy 0.959224 by +0.000091. It remains below the 0.97 objective and is not promoted because the run is still active and the legacy margin is small. Epoch142 remains the best ordinary-val row. Epoch152/154/155 improve GT5 output/count5 retention (`gt5_output5_rate=0.851351`, `count_acc_5=0.851351`) while holding candidate shortfall and GT5 NMS at zero. The next K56 candidate, if needed after completion or a stable plateau, should preserve epoch152 FP/FN gains while reducing GT5 `5->4` and GT3/GT4 over-output through training-side Count/Quality calibration from an official-val-selected K56 checkpoint.
-errors: process is alive; results.csv has no numeric NaN/Inf values across 160 rows; 160 run JSON files have no parse error and no numeric NaN/Inf values; official-val candidates exist through epoch160. A text-artifact scan of 321 run files found no `--split test`, `split: test`, `split=test`, `test_label.json`, or `test_set` hits, and no `Traceback`, `RuntimeError`, `shape error`, or `shape mismatch` hits. args.yaml records split=val, gcs_official_best_split=val, imgsz=[544, 960], gcs_imgsz=[544, 960], and K56 data/model. Note that the active summary is at run root `official_best_summary.json`; `weights/official_best_summary.json` is absent while `weights/official_best.pt` exists.
-decision: continue monitoring to epoch 180; K56 now slightly exceeds legacy 0.959224 on official-val, but the run is incomplete and the margin is only +0.000091. Do not promote, do not use test, and do not launch a replacement Count/Quality calibration while the first clean baseline is still running. Keep batch=32 for this in-progress run; before a future formal run, a throughput-only batch probe may be used to better utilize the RTX 4090 24GB server without changing the official-val protocol.
+note: the run-summary `gt5_valid_points_fail_rate=0.081081` above is an official_best/decode aggregate; the independent GT5 rank-diagnosis drop attribution below reports `valid_points_fail=0`, so keep the two diagnostic scopes distinct.
+official_top_k retained epochs and ACC: 152=0.959315, 170=0.959247, 166=0.959244, 168=0.959217, 165=0.959215
+latest official-val candidate: epoch=180, official_acc=0.959087, FP=0.048072, FN=0.030762, count_acc_3/4/5=0.928251/0.893939/0.864865, gt5_output5_rate=0.864865, gt5_count_head_under_rate=0.067568, gt5_valid_points_fail_rate=0.067568, gt5_candidate_pool_shortfall_rate=0.000000, gt5_top5_suppressed_by_nms_rate=0.000000, decode/k5_to_output4_rate=0.093333, matched/unmatched_quality_mean=0.923615/0.818245
+independent official-val sweep: runs/gcs_lane/gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4/analysis_official_best_val_sweep/tusimple_official_sweep_summary.json, 64 val combinations, best reproduces epoch152 official_acc=0.959315 at conf=0.005, point_valid_thr=0.35, nms_dist_px=18.0, max_det=5, min_points=6, rank_min_points=none
+GT5 rank-diagnosis drop attribution: runs/gcs_lane/gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4/analysis_official_best_gt5_diag_val/gt5_rank_diagnostics_summary.json, kept=63/74, count_head_under_predict=5, quality_too_low=6, candidate_pool_shortfall=0, GT5 NMS suppression=0, rank5_score_low=0, valid_points_fail=0
+diagnostic top-k notes: epoch152 exceeds the current-code K32 audit 0.953756 by +0.005559, countboundary 0.954137 by +0.005178, old FT6 0.954782 by +0.004533, prior K56 epoch127 best 0.958484 by +0.000831, epoch115 by +0.001355, and legacy 0.959224 by +0.000091. It remains below the 0.97 objective and is not promoted because the legacy margin is tiny. The remaining blocker is not representation oracle, candidate supply, rank, or NMS; it is Count/Quality separation around GT5 5->4 and false fifth-lane pressure.
+errors: final process exited; results.csv has no numeric NaN/Inf values across 180 rows; 181 run JSON files have no parse error and no numeric NaN/Inf values; a text-artifact scan of 363 files found no `--split test`, `split: test`, `split=test`, `test_label.json`, or `test_set` hits, and no `Traceback`, `RuntimeError`, `shape error`, or `shape mismatch` hits. args.yaml records split=val, gcs_official_best_split=val, imgsz=[544, 960], gcs_imgsz=[544, 960], and K56 data/model.
+decision: K56 baseline is a stronger official-val reference, but not a final-test candidate yet. Do not use test. Do not rerun the two rejected K56 Count/Quality gates below.
 ```
 
-The K56 official-val evidence is still baseline-monitoring evidence only. It is not a promotion result, not a failure decision for the full K56 baseline, and not a reason to use test or tune postprocess settings. The stable-looking bottleneck is a GT5 valid-point/output-vs-FP tradeoff, not Count Head underprediction or candidate-pool availability.
+Rejected K56 Count/Quality gates from the epoch152 parent:
+
+```text
+run: gcs_yolo_lane_s_q12_k56_cqcalib_ft12_seed1_b32w4
+commit: 655c116
+status: stopped early after epoch 5 because official-val regressed
+recipe: lr0=0.0005 default, count_cls_w3/w4/w5=1.30/1.50/1.95, count_boundary_gt5_pos_weight=1.20, quality_neg_weight=0.60, quality_hard_negative_from_head=True, hard_negative_visible_segment=True, candidate_gt5_edge_weight=1.15
+best official-val: epoch 2, official_acc=0.953415, FP=0.052479, FN=0.042011
+diagnosis: count_acc_5=0.689189, gt5_output5_rate=0.689189, gt5_count_head_under_rate=0.270270
+decision: not promotable; do not rerun this aggressive recipe
+
+run: gcs_yolo_lane_s_q12_k56_cqcalib_lr1e4_ft8_seed1_b32w4
+commit: 655c116
+status: stopped early after epoch 4 because official-val stayed below parent
+recipe: lr0=0.0001, lrf=0.2, count_cls_w5=1.90, count_boundary_gt5_pos_weight=1.20, quality_neg_weight=0.55, quality_hard_negative_from_head=True, candidate_gt5_edge_weight=1.15
+best official-val: epoch 1, official_acc=0.957787, FP=0.046465, FN=0.033976
+diagnosis: count_acc_5=0.851351, gt5_output5_rate=0.851351, gt5_count_head_under_rate=0.108108
+decision: not promotable; simple Count/Quality fine-tuning from the K56 parent is too destructive without a more surgical change
+```
+
+The K56 official-val evidence is a completed baseline result, not a mainline promotion and not a reason to use test or tune postprocess settings. The next useful K56 step should be a more targeted training-side geometry or Count/Quality change that preserves the epoch152 FP/FN balance before attempting another official-val gate.
 
 The recent official-val gates after the Count Head visible-segment evidence change are not promotable:
 

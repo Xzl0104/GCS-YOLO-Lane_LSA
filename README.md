@@ -61,7 +61,7 @@ They reached independent official-val `0.953639` and `0.953587`, below the activ
 
 For the `0.97` objective, the higher-level bottleneck is now the current `K=32` fixed-y representation and official-grid alignment. The official-val label oracle for the current `K=32` fixed-y contract is only `Accuracy=0.956249`, `FP=0`, `FN=0.003444`, leaving too little headroom over the current-code audit baseline `0.953756`.
 
-The active next path is a separate `Q12-K56` official-h-sample-aligned experimental candidate:
+The current experimental K56 family/reference is a separate `Q12-K56` official-h-sample-aligned candidate:
 
 ```text
 model: ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml
@@ -72,7 +72,7 @@ K:     56, fixed-y anchors aligned to TuSimple h_samples 710..160 step 10
 
 K56 labels are regenerated from original TuSimple JSON and images, not resampled from K32 labels. The K56 official-val label oracle is `Accuracy=0.998256`, `FN=0.001377`, `FP=-0.000689` on the 363-image official-val split. The current mainline remains `K=32`; do not silently mix `K=56` labels with existing `K=32` data or checkpoints.
 
-The formal K56 baseline is running on the remote RTX 4090 24GB server as:
+The completed formal K56 baseline ran on the remote RTX 4090 24GB server as:
 
 ```text
 gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4
@@ -80,7 +80,9 @@ batch=32
 workers=4
 ```
 
-Monitoring snapshot at `2026-06-14` after ordinary epoch 160 and official-val candidate epoch 160: the run is alive. GPU memory is about 17.9-18.6 GiB of 24.6 GiB, so the current `batch=32` server run should not be interrupted or changed mid-run. Official-best remains epoch 152 with `official_acc=0.959315`, above the current-code K32 audit `0.953756` by `+0.005559`, prior K56 epoch127 best `0.958484` by `+0.000831`, and legacy `0.959224` by `+0.000091`. Epoch 142 remains the best ordinary-val row so far (`val/f1=0.962083`), while epoch160 latest ordinary row is `val/f1=0.957822`; epoch160 official-val candidate is `0.959138`. Retained official Top-K is `152, 154, 140, 153, 155`. This is a useful K56 milestone, but K56 is not promoted and no test result is claimed because the run is still `160/180` and the legacy margin is small. Continue the healthy `batch=32` run to completion; do not launch Count/Quality calibration or final test until official-val selection is stable after the baseline completes.
+The run completed on `2026-06-14` at 180/180 epochs with no NaN, shape error, traceback, or test-split leakage found in run artifacts. Independent official-val sweep of `weights/official_best.pt` reproduced the training-time selection: epoch 152, `official_acc=0.959315`, `FP=0.045225`, `FN=0.028466`, `official_score=0.957841`, using `conf=0.005`, `point_valid_thr=0.35`, `nms_dist_px=18.0`, `max_det=5`, `min_points=6`, and `rank_min_points=none`. This exceeds the current-code K32 audit `0.953756` by `+0.005559` and legacy `0.959224` by `+0.000091`, but it is not promoted or test-ready because the margin is tiny and the 0.97 objective remains unmet. Final retained official Top-K is `152=0.959315`, `170=0.959247`, `166=0.959244`, `168=0.959217`, `165=0.959215`; ordinary val best remains epoch 142 with `val/f1=0.962083`.
+
+Independent GT5 diagnosis on official-val found 63/74 GT5 images kept; remaining GT5 drops are `count_head_under_predict=5` and `quality_too_low=6`, with candidate-pool shortfall, GT5 NMS suppression, and rank-score-low all at zero. Two K56 Count/Quality fine-tune gates from the epoch152 parent were stopped early because they regressed official-val: `gcs_yolo_lane_s_q12_k56_cqcalib_ft12_seed1_b32w4` best `0.953415`, and `gcs_yolo_lane_s_q12_k56_cqcalib_lr1e4_ft8_seed1_b32w4` best `0.957787`. Do not rerun those exact recipes as the next path.
 
 Use the local RTX 4060 8GB workstation for smoke, contract, label/oracle, and model-shape checks only. Run formal training and official-val evaluation on the remote server.
 
