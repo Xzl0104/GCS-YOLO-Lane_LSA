@@ -3132,3 +3132,92 @@ Read-only checks confirmed the process list, GPU memory, command line, `results.
 Mainline or experiment:
 
 Experimental baseline monitoring decision. K56 is still not promoted over K32, and no official-test claim is available.
+
+## 2026-06-14: Continue Q12-K56 b32 baseline after epoch 83 official-best
+
+Decision:
+
+Continue the remote K56 formal baseline:
+
+```text
+run: gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4
+batch: 32
+workers: 4
+epochs: 180
+official_best_top_k: 5
+```
+
+Do not stop it, do not launch a replacement experiment yet, do not promote K56 yet, and do not use test for checkpoint, threshold, loss, or postprocess selection.
+
+Why:
+
+A read-only `gcs_experiment_analyst` subagent audit at `2026-06-14 12:19 CST` found the process alive around epoch `88/180`. The command is still the intended formal K56 baseline with `--batch 32 --workers 4`, `--imgsz 544 960`, `--gcs-official-best`, and `--gcs-official-best-top-k 5`. GPU memory was about `17928 / 24564 MiB` on the RTX 4090 24GB server. Five utilization samples were `0%, 3%, 0%, 22%, 0%`; treat them as point-in-time utilization, not a reason to interrupt the healthy in-progress run.
+
+`results.csv` has an ordinary-validation row labeled epoch `88`:
+
+```text
+val/f1: 0.955888
+val/precision: 0.953328
+val/recall: 0.958462
+val/decode/count_head_k: 3.64463
+val/decode/final_pred_lanes: 3.60055
+val/decode/k5_to_output4_rate: 0.207792
+```
+
+The best ordinary-validation row so far by `val/f1` remains epoch `73`:
+
+```text
+val/f1: 0.959693
+val/precision: 0.957854
+val/recall: 0.961538
+```
+
+`official_best_summary.json` has official-val candidates through epoch `87`. The current official-best row is now epoch `83`:
+
+```text
+best_epoch: 83
+official_acc: 0.956905
+official_fp: 0.042149
+official_fn: 0.031680
+count_acc_3/4/5: 0.941704 / 0.909091 / 0.810811
+gt5_output5_rate: 0.810811
+gt5_count_head_under_rate: 0.094595
+gt5_valid_points_fail_rate: 0.108108
+gt5_candidate_pool_shortfall_rate: 0.000000
+gt5_top5_suppressed_by_nms_rate: 0.000000
+decode/k5_to_output4_rate: 0.186667
+rescue_precision: 0.852459
+rate_3_to_4: 0.058296
+rate_4_to_5: 0.030303
+rate_5_to_4: 0.189189
+matched/unmatched quality mean: 0.874704 / 0.782380
+```
+
+The retained official Top-K epochs are:
+
+```text
+83, 85, 84, 87, 82
+```
+
+Epoch `83` refreshes K56 official-best and exceeds the current-code K32 audit (`0.953756`) by `+0.003149`, countboundary (`0.954137`) by `+0.002768`, and old FT6 (`0.954782`) by `+0.002123`. It remains below legacy `0.959224` by `-0.002319` and below the 0.97 objective. The gain over epoch `82` is `+0.001613` official ACC and comes with lower FP/FN, but GT5 output drops from epoch `82` (`0.891892`) to `0.810811`, and `gt5_valid_points_fail_rate=0.108108` remains slightly above the diagnostic `0.1` line. Candidate supply and GT5 NMS remain non-dominant.
+
+Alternatives considered:
+
+- Promote epoch 83 because it is the new official-best.
+- Stop at epoch 83 and run final test.
+- Increase batch size in the middle of the in-progress run to use more GPU memory.
+- Launch a parallel K56 auxiliary experiment immediately.
+- Use test to choose between Top-K checkpoints.
+- Continue the healthy baseline while official-val is still active.
+
+Tradeoff:
+
+Continuing uses server time, but the run is healthy, only around epoch `88/180`, and official-val just refreshed the best checkpoint. Increasing batch size mid-run would break comparability and require restarting the formal baseline. Launching a competing experiment would consume the same 24GB GPU before the first clean K56 baseline matures. If this run later plateaus below legacy, the next controlled candidate should preserve epoch-83 low FP/FN while recovering higher GT5 output through training-side Count/Quality calibration from an official-val-selected K56 checkpoint.
+
+Validation evidence:
+
+Read-only checks confirmed the process list, GPU memory, command line, `results.csv`, root `official_best_summary.json`, official-val candidates through epoch 87, retained Top-K metadata, and that `results.csv` plus 88 run JSON files contain no numeric NaN/Inf values. A scoped text-artifact scan inside the run found no `--split test`, `split: test`, `test_label.json`, or `test_set` hits. `args.yaml` records `split=val` and `gcs_official_best_split=val`. No test evidence was used.
+
+Mainline or experiment:
+
+Experimental baseline monitoring decision. K56 is still not promoted over K32, and no official-test claim is available.
