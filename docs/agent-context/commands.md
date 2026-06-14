@@ -144,9 +144,26 @@ diagnosis: count_acc_5=0.851351, gt5_output5_rate=0.851351, gt5_count_head_under
 decision: not promotable; simple Count/Quality fine-tuning from the K56 parent is too destructive without a more surgical change
 ```
 
-The K56 official-val evidence is a completed baseline result, not a mainline promotion and not a reason to use test or tune postprocess settings. The next useful K56 step should be a more targeted training-side geometry change that preserves the epoch152 FP/FN balance before attempting another official-val gate. The first such candidate is the default-off `gcs_geometry_curvature` auxiliary loss; it does not change decode, official metrics, or inference-time GT usage.
+The K56 official-val evidence is a completed baseline result, not a mainline promotion and not a reason to use test or tune postprocess settings. The next useful K56 step should preserve the epoch152 FP/FN balance while reducing Count/Quality confusion around GT5 `5->4` drops and false fifth-lane pressure. The default-off `gcs_geometry_curvature` auxiliary loss has already been tested and rejected as a promotion candidate.
 
-K56 curvature auxiliary gate command:
+Rejected K56 curvature auxiliary gate from the epoch152 parent:
+
+```text
+run: gcs_yolo_lane_s_q12_k56_curveaux_ft8_seed1_b32w4
+commit: 82e832904637980ac69d890d63269bd9310296ef
+status: stopped after epoch 4 because official-val stayed below parent
+recipe: lr0=0.0001, lrf=0.2, gcs_geometry_curvature=0.05, gcs_geometry_curvature_beta_px=5.0
+official-val by epoch: 1=0.957947, 2=0.956361, 3=0.958569, 4=0.958732
+best official-val: epoch 4, official_acc=0.958732, FP=0.048439, FN=0.030992
+parent reference: K56 epoch152 official_best official_acc=0.959315
+delta vs parent: -0.000583
+independent official-val sweep: runs/gcs_lane/gcs_yolo_lane_s_q12_k56_curveaux_ft8_seed1_b32w4/analysis_official_best_val_sweep/tusimple_official_sweep_summary.json, best reproduces epoch4 official_acc=0.958732 at conf=0.005, point_valid_thr=0.30, nms_dist_px=18.0, max_det=5, min_points=6, rank_min_points=none
+GT5 diagnosis: runs/gcs_lane/gcs_yolo_lane_s_q12_k56_curveaux_ft8_seed1_b32w4/analysis_official_best_gt5_diag_val/gt5_rank_diagnostics_summary.json, kept=61/74, count_head_under_predict=9, quality_too_low=2, unknown_shortfall=2, candidate_pool_shortfall=0, GT5 NMS suppression=0, rank5_score_low=0, valid_points_fail=0
+audit: results.csv has 4 rows and no numeric NaN/Inf; log/artifact scan found no Traceback, RuntimeError, shape error, shape mismatch, CUDA OOM, or test-split leakage keywords
+decision: not promotable; do not rerun this exact curvature recipe as the next path
+```
+
+Command retained for reproducibility only:
 
 ```bash
 python tools/train_gcs.py \

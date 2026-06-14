@@ -103,7 +103,7 @@ gcs_geometry_curvature_beta_px = 5.0
 
 When `gcs_quality_hard_negative_from_head` is enabled, Quality Head hard negatives are mined from unmatched queries only; matched queries remain matched quality targets even if their current continuous quality target is `0.0`.
 
-The visible-segment hard-negative and GT5 edge Quality floor recipes remain default-off infrastructure only. The default-off `gcs_geometry_curvature` candidate adds training-side fixed-y curvature supervision for matched GT5 edge lanes without changing decode or official metrics. Do not rerun rejected recipes as the next gate unless checking reproducibility, and do not use test to rescue or tune them.
+The visible-segment hard-negative, GT5 edge Quality floor, and GT5 edge curvature recipes remain default-off infrastructure only. The first K56 curvature gate `gcs_yolo_lane_s_q12_k56_curveaux_ft8_seed1_b32w4` reached best official-val `0.958732`, below the K56 parent `0.959315`, so it is not promotable and should not be rerun as the next gate unless checking reproducibility. Do not use test to rescue or tune rejected recipes.
 
 ## Environment
 

@@ -4789,4 +4789,89 @@ python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12
 
 Mainline or experiment:
 
-Default-off experimental candidate. The first remote gate should fine-tune from the K56 epoch152 official-best checkpoint on official-val only, with `--gcs-geometry-curvature 0.05 --gcs-geometry-curvature-beta-px 5.0`. Do not use test unless a candidate is selected on official-val.
+Default-off experimental candidate. The first remote gate fine-tuned from the K56 epoch152 official-best checkpoint on official-val only, with `--gcs-geometry-curvature 0.05 --gcs-geometry-curvature-beta-px 5.0`; its rejection is recorded in the following decision. Do not use test unless a candidate is selected on official-val.
+
+## 2026-06-14: Reject Q12-K56 GT5 edge curvature auxiliary gate
+
+Decision:
+
+Do not promote the first K56 curvature auxiliary recipe:
+
+```text
+run: gcs_yolo_lane_s_q12_k56_curveaux_ft8_seed1_b32w4
+parent: gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4/weights/official_best.pt
+gcs_geometry_curvature: 0.05
+gcs_geometry_curvature_beta_px: 5.0
+epochs completed before stop: 4
+```
+
+Keep `gcs_geometry_curvature` default-off. Do not rerun this exact recipe as the next path, and do not use test to rescue or tune it.
+
+Why:
+
+The candidate regressed official-val versus the K56 epoch152 parent. Training-time official-val and the independent official-val resweep both selected epoch 4:
+
+```text
+epoch1 official_acc: 0.957947
+epoch2 official_acc: 0.956361
+epoch3 official_acc: 0.958569
+epoch4 official_acc: 0.958732
+parent official_acc: 0.959315
+delta vs parent: -0.000583
+```
+
+The independent best row was:
+
+```text
+official_acc: 0.958732
+FP: 0.048439
+FN: 0.030992
+conf: 0.005
+point_valid_thr: 0.30
+nms_dist_px: 18.0
+max_det: 5
+min_points: 6
+rank_min_points: none
+```
+
+GT5 diagnosis on official-val did not show a geometry/candidate-supply win large enough to offset the ACC drop:
+
+```text
+kept: 61/74
+count_head_under_predict: 9
+quality_too_low: 2
+unknown_shortfall: 2
+candidate_pool_shortfall: 0
+GT5 NMS suppression: 0
+rank5_score_low: 0
+valid_points_fail: 0
+```
+
+Alternatives considered:
+
+- Continue the 8-epoch curveaux fine-tune despite four official-val points below parent.
+- Promote the best curveaux epoch because it still exceeds the current-code K32 audit.
+- Use test to decide whether the regression is real.
+- Keep the default-off curvature implementation but reject this exact recipe.
+
+Tradeoff:
+
+Stopping early saves remote GPU time and protects the official-val protocol, but leaves open the possibility that a different geometry auxiliary weight, schedule, or target could behave differently. That possibility is experimental only; the completed evidence says this `0.05` recipe does not improve the K56 baseline. The remaining K56 bottleneck is still Count/Quality separation around GT5 `5->4` and false fifth-lane pressure, not label representation, candidate supply, rank, NMS, or a simple second-order curvature penalty.
+
+Validation evidence:
+
+Remote validation-only artifacts:
+
+```text
+runs/gcs_lane/gcs_yolo_lane_s_q12_k56_curveaux_ft8_seed1_b32w4/args.yaml
+runs/gcs_lane/gcs_yolo_lane_s_q12_k56_curveaux_ft8_seed1_b32w4/results.csv
+runs/gcs_lane/gcs_yolo_lane_s_q12_k56_curveaux_ft8_seed1_b32w4/official_best_summary.json
+runs/gcs_lane/gcs_yolo_lane_s_q12_k56_curveaux_ft8_seed1_b32w4/analysis_official_best_val_sweep/tusimple_official_sweep_summary.json
+runs/gcs_lane/gcs_yolo_lane_s_q12_k56_curveaux_ft8_seed1_b32w4/analysis_official_best_gt5_diag_val/gt5_rank_diagnostics_summary.json
+```
+
+Audit checks found `results.csv` had 4 rows with no numeric NaN/Inf values. The remote log/artifact scan found no `Traceback`, `RuntimeError`, `shape error`, `shape mismatch`, `CUDA out of memory`, `nan/NaN`, or test-split leakage keywords. Local documentation sync used the fetched lightweight artifacts under ignored `runs/` paths; no run artifacts are part of the source commit.
+
+Mainline or experiment:
+
+Rejected experimental gate. Infrastructure remains default-off; no official-test claim is available.
