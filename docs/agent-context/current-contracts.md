@@ -74,6 +74,16 @@ K = 56
 
 The K56 anchors align exactly to TuSimple official h-samples from `710` down to `160` at step `10`, normalized by original height `720`.
 
+Exact K56 label artifacts should pass:
+
+```bash
+python tools/check_gcs_label_order_split.py \
+  --dataset-root datasets/tusimple_fixed_y_k56_960x544 \
+  --expect-fixed-y 56,710/720,160/720
+```
+
+This check validates the fixed-y anchor contract directly; it is not a substitute for rebuilding labels from raw TuSimple JSON/images.
+
 Expected fixed-y label fields:
 
 ```text
@@ -263,6 +273,8 @@ These are diagnostics unless explicitly promoted into a controlled experimental 
 ## Test Protection Contract
 
 The test set must not be used for threshold search, rescue parameter search, soft-count search, rank-min-points search, final/fifth min-points search, NMS distance search, checkpoint selection, model design iteration, or loss-weight tuning.
+
+`tools/sweep_tusimple_official.py` supports validation-only grids for `candidate_min_points`, `final_min_points`, and `fifth_min_points`. K56 must retune these on official-val because 56 anchors make each point correspond to one official 10px h-sample; K32 min-points semantics do not carry over unchanged.
 
 `tools/sweep_tusimple_official.py` and `tools/diagnose_gcs_gt5.py` default to `--split val` and reject `--split test`. Training-time `official_best` selection also rejects `split=test`.
 

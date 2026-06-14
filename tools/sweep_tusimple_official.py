@@ -121,7 +121,13 @@ def parse_args() -> argparse.Namespace:
     count_head_group.add_argument("--no-count-head-decode", dest="use_count_head_decode", action="store_false", help="Disable Count Head K and use max-det rank selection.")
     parser.set_defaults(use_count_head_decode=True)
     parser.add_argument("--count-head-temp", type=float, default=1.0, help="Temperature for Count Head count=2/3/4/5 softmax.")
-    parser.add_argument("--candidate-min-points", type=int, default=5, help="Relaxed candidate-pool visible-anchor floor before final Top-K.")
+    parser.add_argument(
+        "--candidate-min-points",
+        nargs="+",
+        type=int,
+        default=[5],
+        help="Relaxed candidate-pool visible-anchor floor values before final Top-K.",
+    )
     rescue_group = parser.add_mutually_exclusive_group()
     rescue_group.add_argument("--enable-rescue-candidate-pool", dest="enable_rescue_candidate_pool", action="store_true", help="Use weaker real-query candidates only when Count Head K exceeds the normal candidate pool.")
     rescue_group.add_argument("--no-enable-rescue-candidate-pool", dest="enable_rescue_candidate_pool", action="store_false", help="Disable the weaker rescue candidate pool.")
@@ -129,8 +135,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rescue-candidate-conf", type=float, default=0.005, help="Rescue candidate-pool existence threshold for Count Head Top-K decode.")
     parser.add_argument("--rescue-candidate-point-valid-thr", type=float, default=0.08, help="Rescue candidate-pool point-valid threshold for Count Head Top-K decode.")
     parser.add_argument("--rescue-candidate-min-points", type=int, default=4, help="Rescue candidate-pool visible-anchor floor before final Top-K.")
-    parser.add_argument("--final-min-points", type=int, default=6, help="Final visible-anchor floor for selected ranks 1-4.")
-    parser.add_argument("--fifth-min-points", type=int, default=5, help="Final visible-anchor floor for selected rank 5.")
+    parser.add_argument(
+        "--final-min-points",
+        nargs="+",
+        type=int,
+        default=[6],
+        help="Final visible-anchor floor values for selected ranks 1-4.",
+    )
+    parser.add_argument(
+        "--fifth-min-points",
+        nargs="+",
+        type=int,
+        default=[5],
+        help="Final visible-anchor floor values for selected rank 5.",
+    )
     parser.add_argument("--line-nms-min-overlap", type=int, default=6, help="Minimum shared visible anchors for lane-NMS duplicate suppression.")
     parser.add_argument("--line-nms-rescue-dist-px", type=float, default=30.0, help="Duplicate distance used when rescuing lanes from pre-NMS candidates.")
     parser.add_argument("--quality-rescue-5th", action=argparse.BooleanOptionalAction, default=True, help="Enable quality-gated fifth-lane rescue when pred_quality_logits are present.")
@@ -327,6 +345,20 @@ def _fmt_int_values_for_path(name: str, values: list[int]) -> str:
     return f"{name}{values[0]}-{values[-1]}x{len(values)}"
 
 
+def _int_values(value: int | list[int] | tuple[int, ...], *, name: str) -> list[int]:
+    """Normalize scalar-or-list integer CLI/config values."""
+    if isinstance(value, (list, tuple)):
+        values = [int(x) for x in value]
+    else:
+        values = [int(value)]
+    if not values:
+        raise ValueError(f"{name} must include at least one value.")
+    bad = [x for x in values if int(x) <= 0]
+    if bad:
+        raise ValueError(f"{name} values must be positive, got {bad}.")
+    return values
+
+
 def parse_rank_min_points(value: str | dict | None) -> dict[int, int] | None:
     """Parse rank min_points overrides like '5:5' or '1-4:6,5:5'."""
     if value is None:
@@ -379,10 +411,22 @@ def resolve_save_dir(
     max_images: int,
     min_points: list[int],
     rank_min_points: list[str],
+    candidate_min_points: int | list[int] | tuple[int, ...] = 5,
+    final_min_points: int | list[int] | tuple[int, ...] = 6,
+    fifth_min_points: int | list[int] | tuple[int, ...] = 5,
 ) -> Path:
     if save_dir is not None and str(save_dir).strip():
         return Path(save_dir)
     tag = f"official_sweep_{split}_{_fmt_int_values_for_path('minp', min_points)}"
+    cand_values = _int_values(candidate_min_points, name="candidate_min_points")
+    final_values = _int_values(final_min_points, name="final_min_points")
+    fifth_values = _int_values(fifth_min_points, name="fifth_min_points")
+    if cand_values != [5] or final_values != [6] or fifth_values != [5]:
+        tag += (
+            f"_{_fmt_int_values_for_path('candp', cand_values)}"
+            f"_{_fmt_int_values_for_path('finalp', final_values)}"
+            f"_{_fmt_int_values_for_path('fifthp', fifth_values)}"
+        )
     rank_tags = sorted({_rank_min_points_tag(parse_rank_min_points(x)) for x in rank_min_points})
     if rank_tags != ["none"]:
         tag += f"_rankmin{len(rank_tags)}"
@@ -394,9 +438,18 @@ def resolve_save_dir(
     return ROOT / "runs" / "gcs_lane" / "tusimple_official_sweep" / Path(weights).stem / tag
 
 
+def _scalar_or_list(values: list[int]) -> int | list[int]:
+    """Keep old single-value JSON shape while preserving grid configs."""
+    values = [int(x) for x in values]
+    return values[0] if len(values) == 1 else values
+
+
 def sweep_combinations(args: argparse.Namespace) -> list[dict]:
     combos = []
     rank_min_points_options = [parse_rank_min_points(x) for x in args.rank_min_points]
+    candidate_min_points_options = _int_values(args.candidate_min_points, name="candidate_min_points")
+    final_min_points_options = _int_values(args.final_min_points, name="final_min_points")
+    fifth_min_points_options = _int_values(args.fifth_min_points, name="fifth_min_points")
     for (
         conf,
         pvalid,
@@ -404,6 +457,9 @@ def sweep_combinations(args: argparse.Namespace) -> list[dict]:
         max_det,
         min_points,
         rank_min_points,
+        candidate_min_points,
+        final_min_points,
+        fifth_min_points,
         last_lane_pvalid,
         last_lane_min_points,
         last_lane_mean_valid,
@@ -416,6 +472,9 @@ def sweep_combinations(args: argparse.Namespace) -> list[dict]:
         args.max_dets,
         args.min_points,
         rank_min_points_options,
+        candidate_min_points_options,
+        final_min_points_options,
+        fifth_min_points_options,
         args.last_lane_rescue_point_valid_thrs,
         args.last_lane_rescue_min_points,
         args.last_lane_rescue_mean_valid_thrs,
@@ -431,6 +490,9 @@ def sweep_combinations(args: argparse.Namespace) -> list[dict]:
                 "min_points": int(min_points),
                 "rank_min_points": rank_min_points,
                 "rank_min_points_tag": _rank_min_points_tag(rank_min_points),
+                "candidate_min_points": int(candidate_min_points),
+                "final_min_points": int(final_min_points),
+                "fifth_min_points": int(fifth_min_points),
                 "last_lane_rescue_point_valid_thr": float(last_lane_pvalid),
                 "last_lane_rescue_min_points": int(last_lane_min_points),
                 "last_lane_rescue_mean_valid_thr": float(last_lane_mean_valid),
@@ -704,6 +766,9 @@ def summarize_state(
         "max_det": int(combo["max_det"]),
         "min_points": int(combo["min_points"]),
         "rank_min_points": combo["rank_min_points_tag"],
+        "candidate_min_points": int(combo["candidate_min_points"]),
+        "final_min_points": int(combo["final_min_points"]),
+        "fifth_min_points": int(combo["fifth_min_points"]),
         "official_acc": round(official_acc, 6),
         "official_fp": round(official_fp, 6),
         "official_fn": round(official_fn, 6),
@@ -899,13 +964,13 @@ def run_sweep(args: argparse.Namespace) -> dict:
                 dataset_name="tusimple",
                 candidate_score_thr=combo["conf"],
                 candidate_point_valid_thr=combo["point_valid_thr"],
-                candidate_min_points=int(args.candidate_min_points),
+                candidate_min_points=int(combo["candidate_min_points"]),
                 enable_rescue_candidate_pool=bool(args.enable_rescue_candidate_pool),
                 rescue_candidate_score_thr=float(args.rescue_candidate_conf),
                 rescue_candidate_point_valid_thr=float(args.rescue_candidate_point_valid_thr),
                 rescue_candidate_min_points=int(args.rescue_candidate_min_points),
-                final_min_points=int(args.final_min_points),
-                fifth_min_points=int(args.fifth_min_points),
+                final_min_points=int(combo["final_min_points"]),
+                fifth_min_points=int(combo["fifth_min_points"]),
                 line_nms_min_overlap=int(args.line_nms_min_overlap),
                 line_nms_rescue_dist_px=float(args.line_nms_rescue_dist_px),
                 quality_rescue_5th=bool(args.quality_rescue_5th),
@@ -985,6 +1050,9 @@ def run_sweep(args: argparse.Namespace) -> dict:
         args.max_images,
         args.min_points,
         args.rank_min_points,
+        args.candidate_min_points,
+        args.final_min_points,
+        args.fifth_min_points,
     )
     save_dir.mkdir(parents=True, exist_ok=True)
 
@@ -996,6 +1064,9 @@ def run_sweep(args: argparse.Namespace) -> dict:
         "max_det",
         "min_points",
         "rank_min_points",
+        "candidate_min_points",
+        "final_min_points",
+        "fifth_min_points",
         "official_acc",
         "official_fp",
         "official_fn",
@@ -1080,13 +1151,15 @@ def run_sweep(args: argparse.Namespace) -> dict:
             "count_policy": "count_head_topk_no_rule_calibration",
             "use_count_head_decode": bool(args.use_count_head_decode),
             "count_head_temperature": float(args.count_head_temp),
-            "candidate_min_points": int(args.candidate_min_points),
+            "candidate_min_points": _scalar_or_list(
+                _int_values(args.candidate_min_points, name="candidate_min_points")
+            ),
             "enable_rescue_candidate_pool": bool(args.enable_rescue_candidate_pool),
             "rescue_candidate_conf": float(args.rescue_candidate_conf),
             "rescue_candidate_point_valid_thr": float(args.rescue_candidate_point_valid_thr),
             "rescue_candidate_min_points": int(args.rescue_candidate_min_points),
-            "final_min_points": int(args.final_min_points),
-            "fifth_min_points": int(args.fifth_min_points),
+            "final_min_points": _scalar_or_list(_int_values(args.final_min_points, name="final_min_points")),
+            "fifth_min_points": _scalar_or_list(_int_values(args.fifth_min_points, name="fifth_min_points")),
             "line_nms_min_overlap": int(args.line_nms_min_overlap),
             "line_nms_rescue_dist_px": float(args.line_nms_rescue_dist_px),
             "quality_rescue_5th": bool(args.quality_rescue_5th),

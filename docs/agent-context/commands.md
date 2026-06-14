@@ -80,6 +80,22 @@ python tools/check_tusimple_fixed_y_label_oracle.py \
   --archive-root archive
 ```
 
+K56 exact fixed-y artifact check:
+
+```bash
+python tools/check_gcs_label_order_split.py \
+  --dataset-root datasets/tusimple_fixed_y_k56_960x544 \
+  --expect-fixed-y 56,710/720,160/720
+```
+
+Raw TuSimple h-sample endpoint audit:
+
+```bash
+python tools/analyze_tusimple_hsample_endpoints.py \
+  --gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
+  --split val
+```
+
 K56 formal remote baseline command:
 
 ```bash
@@ -385,6 +401,24 @@ python tools/sweep_tusimple_official.py \
 ```
 
 `tools/sweep_tusimple_official.py` defaults to validation and rejects `--split test`.
+
+For the K56 official-h-sample branch, retune min-points on official-val because `candidate_min_points`, `final_min_points`, and `fifth_min_points` have different semantics with 56 anchors than they had with K32. Start with:
+
+```bash
+python tools/sweep_tusimple_official.py \
+  --weights runs/gcs_lane/gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4/weights/official_best.pt \
+  --split val \
+  --imgsz 544 960 \
+  --confs 0.005 \
+  --point-valid-thrs 0.35 \
+  --nms-dist-pxs 18 \
+  --max-dets 5 \
+  --candidate-min-points 5 6 7 \
+  --final-min-points 6 7 8 9 \
+  --fifth-min-points 4 5 6 7
+```
+
+Then resweep the best rows at `point_valid_thr=0.30/0.35/0.40`. Track joint GT3/GT4/GT5 metrics, especially official ACC, FP/FN, `count_acc_3/4/5`, `rate_4_to_5`, `rate_5_to_4`, `gt5_output5_rate`, Count Head underprediction, valid-points failure, candidate shortfall, GT5 NMS, and matched/unmatched quality means.
 
 ## GT5 Official-Val Diagnosis
 

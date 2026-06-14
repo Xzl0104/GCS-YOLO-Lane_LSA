@@ -4875,3 +4875,89 @@ Audit checks found `results.csv` had 4 rows with no numeric NaN/Inf values. The 
 Mainline or experiment:
 
 Rejected experimental gate. Infrastructure remains default-off; no official-test claim is available.
+
+## 2026-06-14: Complete Q12-K56 official h-sample tooling and endpoint audit
+
+Decision:
+
+Keep Q12-K56 official-h-sample alignment as the active experimental reference, not mainline. Treat the new sweep, validator, and endpoint-audit tooling as support infrastructure for validation-only K56 work:
+
+```text
+model: ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml
+data: data/tusimple_gcs_fixed_y_k56_960x544.yaml
+fixed_y: K=56, 710/720 -> 160/720
+builder: tools/rebuild_tusimple_fixed_y_k56_from_reference_split.py
+validator: tools/check_gcs_label_order_split.py --expect-fixed-y 56,710/720,160/720
+endpoint audit: tools/analyze_tusimple_hsample_endpoints.py
+```
+
+Why:
+
+The K56 branch fixes the representation mismatch more directly than further K32 threshold, NMS, or GT5-only Quality floor sweeps. Its labels align one fixed-y point to each official 10px TuSimple h-sample from `710` to `160`, and the labels are rebuilt from raw TuSimple JSON/images instead of resampling K32 labels that already lost endpoint information.
+
+Raw official-val h-sample audit evidence:
+
+```text
+records: 363
+lanes: 1303
+ultra-short lanes with 1-3 valid h_samples: 6
+K32 zero-anchor lanes: 20
+K32 one-anchor lanes: 582
+K56 zero-anchor lanes: 0
+K56 one-anchor lanes: 3
+K56 endpoint loss: none in this audit
+```
+
+K56 trained-model evidence:
+
+```text
+K56 label oracle: Accuracy=0.998256
+K56 baseline official_best: epoch 152
+official_acc: 0.959315
+FP: 0.045225
+FN: 0.028466
+vs current-code K32 0.953756: +0.005559
+vs legacy 0.959224: +0.000091
+```
+
+Alternatives considered:
+
+- Continue K32-only threshold, NMS, or rescue sweeps.
+- Resample existing K32 labels into K56.
+- Promote K56 immediately because it slightly exceeds the legacy official-val reference.
+- Add implicit single-point or ultra-short lane fabrication in decode.
+- Treat GT5 fifth-lane rescue as the only main path.
+
+Tradeoff:
+
+K56 clearly improves representation and endpoint coverage, but the trained model is still below the `0.97` objective and only barely above the legacy official-val reference. Therefore K56 remains experimental, not test-ready, and has no official-test claim. Ultra-short or single-point lane support may be explored only as an explicit experiment; decode must not invent lanes.
+
+Validation evidence:
+
+Local checks passed for the K56 tooling update:
+
+```text
+python -m pytest tests/test_gcs_boundary_decode_plumbing.py tests/test_gcs_k56_contract.py -q
+python tools/check_gcs_label_order_split.py --dataset-root datasets/tusimple_fixed_y_k56_960x544 --expect-fixed-y 56,710/720,160/720
+python tools/check_tusimple_fixed_y_label_oracle.py --dataset-root datasets/tusimple_fixed_y_k56_960x544 --label-split val --archive-root archive
+python tools/check_gcs_decode_meta_contract.py
+python tools/check_gcs_count_head_topk_contract.py
+python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml --imgsz 544 960 --batch 1
+python scripts/check_gcs_agent_setup.py
+```
+
+The K56 min-points sweep now records `candidate_min_points`, `final_min_points`, and `fifth_min_points` per row/config. These grids are validation-only selection parameters. Start from:
+
+```text
+candidate_min_points: 5, 6, 7
+final_min_points: 6, 7, 8, 9
+fifth_min_points: 4, 5, 6, 7
+point_valid_thr: first 0.35, then best rows at 0.30/0.35/0.40
+conf: 0.005
+nms_dist_px: 18
+max_det: 5
+```
+
+Mainline or experiment:
+
+Experimental K56 reference and support tooling. K32 remains current mainline; test remains protected. The next safe action is an official-val K56 min-points grid plus GT3/GT4/GT5 joint low-FP analysis, not another exact rerun of the rejected K56 Count/Quality or curvature recipes.

@@ -72,6 +72,8 @@ K:     56, fixed-y anchors aligned to TuSimple h_samples 710..160 step 10
 
 K56 labels are regenerated from original TuSimple JSON and images, not resampled from K32 labels. The K56 official-val label oracle is `Accuracy=0.998256`, `FN=0.001377`, `FP=-0.000689` on the 363-image official-val split. The current mainline remains `K=32`; do not silently mix `K=56` labels with existing `K=32` data or checkpoints.
 
+The raw official-val h-sample endpoint audit found 363 records, 1303 lanes, and 6 lanes with only 1-3 valid official h-samples. K32 had 20 zero-anchor lanes and 582 one-anchor lanes; K56 had 0 zero-anchor lanes, 3 one-anchor lanes, and no endpoint loss in the audit. Use `tools/analyze_tusimple_hsample_endpoints.py` for this raw-data audit and `tools/check_gcs_label_order_split.py --expect-fixed-y 56,710/720,160/720` for exact K56 artifact validation.
+
 The completed formal K56 baseline ran on the remote RTX 4090 24GB server as:
 
 ```text
@@ -134,6 +136,8 @@ Official-val sweep:
 ```powershell
 python tools/sweep_tusimple_official.py --weights <weights.pt> --split val --imgsz 544 960
 ```
+
+K56 min-points sweep support accepts lists for `--candidate-min-points`, `--final-min-points`, and `--fifth-min-points`; use official-val only for these grids.
 
 GT5 diagnosis on official-val:
 

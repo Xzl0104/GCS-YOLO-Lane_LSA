@@ -15,10 +15,12 @@ The model is expected to output lane instances as ordered 2D point sequences, no
 - TuSimple official eval: `tools/eval_tusimple_official.py`
 - Official sweep: `tools/sweep_tusimple_official.py`
 - GT5 diagnosis: `tools/diagnose_gcs_gt5.py`
+- TuSimple h-sample endpoint audit: `tools/analyze_tusimple_hsample_endpoints.py`
 - Loss cleanup check: `scripts/verify_loss_cleanup.py`
 - Count/decode contract check: `tools/check_gcs_count_head_topk_contract.py`
 - Decode meta check: `tools/check_gcs_decode_meta_contract.py`
 - Algorithm contract check: `tools/check_gcs_algorithm_contract.py`
+- Label split/order/fixed-y contract check: `tools/check_gcs_label_order_split.py`
 
 ## Current Default Direction
 
@@ -51,6 +53,8 @@ test:  2782
 The official-val subset is aligned with the current validation split and must stay separate from test-driven tuning.
 
 The K56 experimental labels keep the same split sizes and align fixed-y anchors exactly to TuSimple official h-samples `710..160` at step `10`.
+
+Use `tools/check_gcs_label_order_split.py --expect-fixed-y 56,710/720,160/720` to verify exact K56 fixed-y artifacts. Use `tools/analyze_tusimple_hsample_endpoints.py` to audit raw TuSimple h-sample endpoint and ultra-short-lane coverage before changing label or decode semantics.
 
 Official TuSimple Accuracy evaluation needs the original TuSimple archive layout, not only the fixed-y converted dataset.
 

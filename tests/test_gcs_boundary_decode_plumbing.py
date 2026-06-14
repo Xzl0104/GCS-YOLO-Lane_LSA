@@ -207,6 +207,54 @@ class CountBoundaryDecodePlumbingTest(unittest.TestCase):
             self.assertEqual(len(captured), 1)
             self.assertTrue(torch.equal(captured[0], boundary_logits))
 
+    def test_official_sweep_expands_k56_min_points_grid(self):
+        args = SimpleNamespace(
+            confs=[0.005],
+            point_valid_thrs=[0.35],
+            nms_dist_pxs=[18.0],
+            max_dets=[5],
+            min_points=[6],
+            rank_min_points=["none"],
+            candidate_min_points=[5, 6],
+            final_min_points=[6, 7],
+            fifth_min_points=[4, 5],
+            last_lane_rescue_point_valid_thrs=[0.08],
+            last_lane_rescue_min_points=[4],
+            last_lane_rescue_mean_valid_thrs=[0.40],
+            last_lane_rescue_quality_thrs=[0.50],
+            last_lane_rescue_dist_pxs=[24.0],
+        )
+
+        combos = sweep_tusimple_official.sweep_combinations(args)
+
+        self.assertEqual(len(combos), 8)
+        self.assertEqual({c["candidate_min_points"] for c in combos}, {5, 6})
+        self.assertEqual({c["final_min_points"] for c in combos}, {6, 7})
+        self.assertEqual({c["fifth_min_points"] for c in combos}, {4, 5})
+
+    def test_official_sweep_row_records_min_points_grid_values(self):
+        combo = {
+            "conf": 0.005,
+            "point_valid_thr": 0.35,
+            "nms_dist_px": 18.0,
+            "max_det": 5,
+            "min_points": 6,
+            "rank_min_points_tag": "none",
+            "rank_min_points": None,
+            "candidate_min_points": 7,
+            "final_min_points": 8,
+            "fifth_min_points": 4,
+        }
+        state = sweep_tusimple_official.empty_state()
+        state["images"] = 1
+        state["accuracy_sum"] = 1.0
+
+        row = sweep_tusimple_official.summarize_state(combo, state)
+
+        self.assertEqual(row["candidate_min_points"], 7)
+        self.assertEqual(row["final_min_points"], 8)
+        self.assertEqual(row["fifth_min_points"], 4)
+
     def test_official_sweep_and_training_reject_test_selection(self):
         with self.assertRaisesRegex(ValueError, "tools/eval_tusimple_official.py --split test"):
             sweep_tusimple_official.validate_official_sweep_split("test")

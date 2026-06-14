@@ -11,6 +11,8 @@ import yaml
 
 from gcs_tools.label_utils import fixed_y_anchors
 from tools import check_tusimple_fixed_y_label_oracle as oracle
+from tools import analyze_tusimple_hsample_endpoints as endpoint_analysis
+from tools import check_gcs_label_order_split as label_split_check
 from tools import rebuild_tusimple_fixed_y_k56_from_reference_split as builder
 from tools import train_gcs
 from ultralytics.models.yolo.gcs_lane.train import GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT
@@ -25,6 +27,14 @@ def test_k56_fixed_y_anchors_match_tusimple_official_h_samples():
     expected = [y / 720.0 for y in range(710, 159, -10)]
     assert anchors.shape == (56,)
     assert len(expected) == 56
+    assert np.allclose(anchors, expected, rtol=0.0, atol=1e-7)
+
+
+def test_label_split_checker_parses_exact_k56_fixed_y_contract():
+    anchors = label_split_check.parse_expected_fixed_y("56,710/720,160/720")
+    expected = fixed_y_anchors(num_points=56, y_start=710.0 / 720.0, y_end=160.0 / 720.0)
+
+    assert anchors is not None
     assert np.allclose(anchors, expected, rtol=0.0, atol=1e-7)
 
 
@@ -131,6 +141,33 @@ def test_k56_label_oracle_defaults_to_official_val_gt():
     args = SimpleNamespace(label_split="val", gt_json=None, archive_root="archive")
 
     assert oracle.resolve_gt_json(args) == oracle.DEFAULT_VAL_GT_JSON
+
+
+def test_hsample_endpoint_analysis_counts_ultra_short_and_anchor_hits():
+    records = [
+        {
+            "raw_file": "clips/a/1/20.jpg",
+            "h_samples": [160, 170, 180, 190, 200, 210],
+            "lanes": [
+                [-2, -2, 10, 11, -2, -2],
+                [20, -2, -2, -2, -2, -2],
+            ],
+        }
+    ]
+
+    summary = endpoint_analysis.analyze_records(
+        records,
+        k32_start=710.0 / 720.0,
+        k32_end=180.0 / 720.0,
+        k56_start=710.0 / 720.0,
+        k56_end=160.0 / 720.0,
+    )
+
+    assert summary["lanes"] == 2
+    assert summary["ultra_short_lanes_1_to_3_h_samples"] == 2
+    assert summary["k32"]["zero_anchor_lanes"] == 1
+    assert summary["k56"]["one_anchor_lanes"] == 1
+    assert summary["ultra_short_examples"][0]["raw_file"] == "clips/a/1/20.jpg"
 
 
 def test_k56_gt5_edge_segment_support_targets_edge_lanes_only():
