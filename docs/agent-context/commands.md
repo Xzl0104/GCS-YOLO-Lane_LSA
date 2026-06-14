@@ -107,15 +107,15 @@ run: gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4
 remote HEAD: 9b9769b61f8f
 formal batch: 32
 workers: 4
-GPU memory: about 17.5 GiB on RTX 4090 24GB
-status at 2026-06-14 10:25 CST: training alive; results.csv has ordinary-val row 55, and official_best_summary has official-val candidates through epoch 54
-ordinary val latest row: epoch=55, val/f1=0.943657, val/decode/count_head_k=3.65840, val/decode/final_pred_lanes=3.60606, val/decode/k5_to_output4_rate=0.211111
-ordinary val best row so far by val/f1: epoch=51, val/f1=0.952859, val/decode/count_head_k=3.61708, val/decode/final_pred_lanes=3.54821, val/decode/k5_to_output4_rate=0.333333
+GPU memory: about 17.5-18.2 GiB on RTX 4090 24GB
+status at 2026-06-14 10:39 CST: training alive; results.csv has ordinary-val row 58, and official_best_summary has official-val candidates through epoch 58
+ordinary val latest row: epoch=58, val/f1=0.956488, val/decode/count_head_k=3.64738, val/decode/final_pred_lanes=3.57300, val/decode/k5_to_output4_rate=0.337349
+ordinary val best row so far by val/f1: epoch=58, val/f1=0.956488, val/decode/count_head_k=3.64738, val/decode/final_pred_lanes=3.57300, val/decode/k5_to_output4_rate=0.337349
 official_best so far: epoch 52, official_acc=0.953566, FP=0.055647, FN=0.037190
 official_best count/GT5 diagnostics: count_acc_3/4/5=0.914798/0.878788/0.851351, gt5_output5_rate=0.851351, gt5_count_head_under_rate=0.013514, gt5_valid_points_fail_rate=0.135135, gt5_candidate_pool_shortfall_rate=0.000000, gt5_top5_suppressed_by_nms_rate=0.013514, decode/k5_to_output4_rate=0.190476, rescue_precision=0.779412, rate_4_to_5=0.075758
-official_top_k retained epochs: 52, 53, 43, 54, 31
-diagnostic top-k notes: epoch52 materially improves official_acc versus epoch43 and is close to the current-code K32 audit baseline, but it remains below current-code K32 audit 0.953756, countboundary 0.954137, old FT6 0.954782, and legacy 0.959224 references. Epoch53 official_acc=0.952030 and epoch54 official_acc=0.951580 entered Top-K but did not beat epoch52.
-errors: process is alive; results.csv and official-val sweep JSON have no numeric NaN/Inf values; official-val sweeps exist through epoch54. No test evidence has been used.
+official_top_k retained epochs: 52, 58, 57, 53, 43
+diagnostic top-k notes: epoch52 materially improves official_acc versus epoch43 and is close to the current-code K32 audit baseline, but it remains below current-code K32 audit 0.953756, countboundary 0.954137, old FT6 0.954782, and legacy 0.959224 references. Epoch58 nearly ties epoch52 with official_acc=0.953458 and lower FP=0.048898, but it worsens GT5 output to gt5_output5_rate=0.702703 and gt5_valid_points_fail_rate=0.270270. Epoch57 reaches gt5_output5_rate=0.891892 and gt5_valid_points_fail_rate=0.108108, but official_acc is only 0.952369 because FP rises to 0.065243 and rate_4_to_5 rises to 0.121212.
+errors: process is alive; results.csv has no numeric NaN/Inf values; 59 official-val JSON summaries have no numeric NaN/Inf values; official-val sweeps exist through epoch58. A text-artifact scan inside the run found no `--split test`, `split: test`, `test_label.json`, or `test_set` hits.
 decision: continue monitoring; K56 has improved materially but remains below the active references. Do not promote, do not use test, and do not launch a replacement experiment while the healthy baseline is still improving.
 ```
 
