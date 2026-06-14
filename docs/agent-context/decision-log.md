@@ -1778,7 +1778,7 @@ Local and remote K56 validation passed:
 ```text
 python -m py_compile tools/rebuild_tusimple_fixed_y_k56_from_reference_split.py tools/check_tusimple_fixed_y_label_oracle.py tools/train_gcs.py tests/test_gcs_k56_contract.py
 python -m pytest tests/test_gcs_k56_contract.py
-python tools/check_tusimple_fixed_y_label_oracle.py --data data/tusimple_gcs_fixed_y_k56_960x544.yaml --label-split val --archive-root archive
+python tools/check_tusimple_fixed_y_label_oracle.py --dataset-root datasets/tusimple_fixed_y_k56_960x544 --label-split val --archive-root archive
 python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml --imgsz 544 960 --batch 1
 ```
 
@@ -1947,6 +1947,93 @@ Continuing uses server time, but preserves the first clean K56 baseline under th
 Validation evidence:
 
 Read-only checks confirmed the process list, GPU memory, command line, `results.csv`, `official_best_summary.json`, retained Top-K metadata, and log health. No test evidence was used.
+
+Mainline or experiment:
+
+Experimental baseline monitoring decision. K56 is still not promoted over K32, and no official-test claim is available.
+
+## 2026-06-14: Continue Q12-K56 b32 baseline after epoch 24 monitor
+
+Decision:
+
+Continue the remote K56 formal baseline:
+
+```text
+run: gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4
+batch: 32
+workers: 4
+epochs: 180
+official_best_top_k: 5
+```
+
+Do not stop it, do not launch a replacement experiment yet, and do not use test for checkpoint, threshold, loss, or postprocess selection. Wait for at least epoch 30 official-val evidence before deciding whether to prepare a controlled K56 training-side auxiliary experiment from an official-val-selected K56 checkpoint.
+
+Why:
+
+A read-only remote check at `2026-06-14 08:34 CST` found the process alive around epoch `24/180`, using about `17.9 GiB` on the RTX 4090 24GB server. The command is still the intended formal K56 baseline with `--batch 32 --workers 4`, `--imgsz 544 960`, `--gcs-official-best`, and `--gcs-official-best-top-k 5`. Log scanning found no OOM, NaN, traceback, runtime error, CUDA error, assertion, shape mismatch, size mismatch, or invalid shape.
+
+`results.csv` has an ordinary-validation row labeled epoch `24`:
+
+```text
+val/f1: 0.924196
+val/decode/count_head_k: 3.76584
+val/decode/final_pred_lanes: 3.61433
+val/decode/k5_to_output4_rate: 0.486726
+```
+
+The best ordinary-validation row so far by `val/f1` remains epoch `14`:
+
+```text
+val/f1: 0.937910
+val/decode/count_head_k: 3.7438
+val/decode/final_pred_lanes: 3.56198
+val/decode/k5_to_output4_rate: 0.589286
+```
+
+`official_best_summary.json` has official-val candidates through epoch `23`. The current official-best row is:
+
+```text
+best_epoch: 23
+official_acc: 0.944138
+official_fp: 0.084343
+official_fn: 0.065197
+count_acc_3/4/5: 0.878924 / 0.893939 / 0.662162
+gt5_output5_rate: 0.662162
+gt5_count_head_under_rate: 0.000000
+gt5_valid_points_fail_rate: 0.337838
+gt5_candidate_pool_shortfall_rate: 0.000000
+decode/k5_to_output4_rate: 0.470588
+```
+
+The retained official Top-K epochs are:
+
+```text
+23, 20, 14, 22, 21
+```
+
+Epochs 17 and 21 remain useful diagnostics but not promotion rows:
+
+```text
+epoch 17: official_acc=0.925841, count_acc_5=0.878378, gt5_output5_rate=0.878378, gt5_valid_points_fail_rate=0.121622, rescue_precision=0.594595, GT5 5->4/5->5=9/65
+epoch 21: official_acc=0.934618, FP=0.081175, FN=0.069559, count_acc_5=0.797297, gt5_output5_rate=0.797297, gt5_valid_points_fail_rate=0.202703, rescue_precision=0.734375
+```
+
+They improved GT5 output and valid-point survival relative to official-best but still lowered official Accuracy. This reinforces that GT5 recall alone is not enough; the selected checkpoint must improve official-val Accuracy under the same protocol.
+
+Alternatives considered:
+
+- Stop the run because official-val is still far below the legacy `0.959224` target.
+- Launch a parallel K56 auxiliary experiment immediately.
+- Use test to look for a better checkpoint or postprocess setting.
+- Continue the healthy baseline to at least epoch 30 official-val evidence.
+
+Tradeoff:
+
+Continuing uses server time, but preserves the first clean K56 baseline under the new label contract and avoids overreacting to early official-val noise. Running a second formal experiment on the same 24GB GPU would compete with the healthy baseline. If the mature K56 baseline remains below legacy with this GT5 valid-point/output-vs-FP tradeoff, the smallest next controlled candidate should target training-side matched GT5 edge visible-segment support and Count/Quality calibration from an official-val-selected K56 checkpoint.
+
+Validation evidence:
+
+Read-only checks confirmed the process list, GPU memory, command line, `results.csv`, `official_best_summary.json`, retained Top-K metadata, official-val sweep summaries through epoch 21, and log health. No test evidence was used.
 
 Mainline or experiment:
 
