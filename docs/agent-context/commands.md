@@ -108,18 +108,17 @@ remote HEAD: 9b9769b61f8f
 formal batch: 32
 workers: 4
 GPU memory: about 17.9 GiB on RTX 4090 24GB
-status at 2026-06-14 08:34 CST: training alive around epoch 24/180; results.csv has ordinary-val row 24, and official_best_summary/official sweeps have official-val candidates through epoch 23
-ordinary val latest row: epoch=24, val/f1=0.924196, val/decode/count_head_k=3.76584, val/decode/final_pred_lanes=3.61433, val/decode/k5_to_output4_rate=0.486726
-ordinary val best row so far by val/f1: epoch=14, val/f1=0.937910, val/decode/count_head_k=3.7438, val/decode/final_pred_lanes=3.56198, val/decode/k5_to_output4_rate=0.589286
-official_best so far: epoch 23, official_acc=0.944138, FP=0.084343, FN=0.065197
-official_best count/GT5 diagnostics: count_acc_3/4/5=0.878924/0.893939/0.662162, gt5_output5_rate=0.662162, gt5_count_head_under_rate=0.000000, gt5_valid_points_fail_rate=0.337838, gt5_candidate_pool_shortfall_rate=0.000000, decode/k5_to_output4_rate=0.470588
-official_top_k retained epochs: 23, 20, 14, 22, 21
-notable lower-ACC diagnostics: epoch 17 official-val had official_acc=0.925841, count_acc_5=0.878378, gt5_output5_rate=0.878378, gt5_valid_points_fail_rate=0.121622, rescue_precision=0.594595, and GT5 5->4/5->5=9/65; epoch 21 had official_acc=0.934618, FP=0.081175, FN=0.069559, count_acc_5=0.797297, gt5_output5_rate=0.797297, gt5_valid_points_fail_rate=0.202703, rescue_precision=0.734375. Both improve GT5 survival relative to official_best but stay lower in official Accuracy.
-errors: refined log scan found no OOM, NaN, traceback, runtime error, CUDA error, assertion, shape mismatch, or invalid shape
-decision: continue monitoring; do not stop the run, do not launch a replacement experiment yet, and do not use test. Wait for at least epoch 30 official-val evidence before deciding whether to prepare a controlled K56 training-side auxiliary experiment from an official-val-selected checkpoint.
+status at 2026-06-14 09:03 CST: training alive; results.csv has ordinary-val row 32, and official_best_summary has official-val candidates through epoch 31
+ordinary val latest row: epoch=32, val/f1=0.946636, val/decode/count_head_k=3.60055, val/decode/final_pred_lanes=3.54270, val/decode/k5_to_output4_rate=0.276316
+ordinary val best row so far by val/f1: epoch=31, val/f1=0.950366, val/decode/count_head_k=3.64738, val/decode/final_pred_lanes=3.57851, val/decode/k5_to_output4_rate=0.297619
+official_best so far: epoch 31, official_acc=0.951526, FP=0.057208, FN=0.048439
+official_best count/GT5 diagnostics: count_acc_3/4/5=0.928251/0.848485/0.729730, gt5_output5_rate=0.729730, gt5_count_head_under_rate=0.027027, gt5_valid_points_fail_rate=0.243243, gt5_candidate_pool_shortfall_rate=0.000000, decode/k5_to_output4_rate=0.297619, rescue_precision=0.881356
+official_top_k retained epochs: 31, 28, 29, 23, 27
+errors: process is alive and log keyword scan found no OOM, NaN, traceback, runtime error, CUDA error, assertion, shape mismatch, size mismatch, or invalid shape
+decision: continue monitoring; K56 has improved materially but remains below the legacy 0.959224 reference. Do not promote, do not use test, and do not launch a replacement experiment while the healthy baseline is still improving.
 ```
 
-The epoch 14/17/20/21/23 official-val evidence is still early training evidence only. It is not a promotion result, not a failure decision for the full K56 baseline, and not a reason to use test or tune postprocess settings. The stable-looking early bottleneck is a GT5 valid-point/output-vs-FP tradeoff, not Count Head underprediction or candidate-pool availability.
+The K56 official-val evidence is still baseline-monitoring evidence only. It is not a promotion result, not a failure decision for the full K56 baseline, and not a reason to use test or tune postprocess settings. The stable-looking bottleneck is a GT5 valid-point/output-vs-FP tradeoff, not Count Head underprediction or candidate-pool availability.
 
 The recent official-val gates after the Count Head visible-segment evidence change are not promotable:
 
