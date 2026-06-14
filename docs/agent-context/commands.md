@@ -480,10 +480,25 @@ python tools/eval_tusimple_official.py \
   --weights <weights.pt> \
   --archive-root archive \
   --split test \
+  --selection-summary <official-val-selection-summary.json> \
   --imgsz 544 960
 ```
 
-Use this only once for the final checkpoint and postprocess configuration selected on official-val. Do not iterate on its result.
+Use this only once for the final checkpoint and postprocess configuration selected on official-val. Do not iterate on its result. `--selection-summary` must point to the official-val selection artifact that chose the checkpoint and postprocess row, such as `runs/gcs_lane/<run>/official_best_summary.json` or `runs/gcs_lane/<run>/analysis_official_best_val_sweep/tusimple_official_sweep_summary.json`. The command rejects final-test parameters that do not match the selected official-val row.
+
+For an explicitly user-requested test audit that is not promotable final evidence, mark it permanently as diagnostic-only:
+
+```bash
+python tools/eval_tusimple_official.py \
+  --weights <weights.pt> \
+  --archive-root archive \
+  --split test \
+  --diagnostic-only-test \
+  --diagnostic-reason "user-requested audit; not for checkpoint/threshold/model selection" \
+  --imgsz 544 960
+```
+
+Diagnostic-only test output must not be used for checkpoint, threshold, postprocess, loss, model, or promotion decisions.
 
 The command needs original TuSimple test archive files, not only the fixed-y converted dataset. The minimum archive shape is:
 

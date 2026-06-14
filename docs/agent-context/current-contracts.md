@@ -323,6 +323,6 @@ The test set must not be used for threshold search, rescue parameter search, sof
 `tools/sweep_tusimple_official.py` and `tools/diagnose_gcs_gt5.py` default to `--split val` and reject `--split test`. Training-time `official_best` selection also rejects `split=test`.
 These selection/diagnostic paths also reject conventional TuSimple test GT json paths and explicit GT records that resolve to `test_set` images, so `--split val --gt-json <test labels>` cannot be used as a test-leakage bypass. Training-time `official_best` selection is val-only; do not use train or test split for checkpoint selection.
 
-Test is only for one-shot final evaluation of a candidate already selected on official-val, using `tools/eval_tusimple_official.py --split test`.
+Test is only for one-shot final evaluation of a candidate already selected on official-val, using `tools/eval_tusimple_official.py --split test --selection-summary <official-val-summary>`. The final-test command must prove the weights and postprocess parameters match the selected official-val row. Extra user-requested test audits must pass `--diagnostic-only-test`, and their outputs are marked `diagnostic_only_test=true` and `not_for_selection=true`.
 
 If the user explicitly requests extra test evaluations for audit purposes, label them diagnostic-only and do not use them to choose checkpoints, thresholds, postprocess settings, losses, model variants, or promotion. The 2026-06-14 user-requested K56 test audit is such a diagnostic-only exception; it does not create a final/promotable official-test claim for K56.

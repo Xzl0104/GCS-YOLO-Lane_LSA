@@ -5313,3 +5313,47 @@ The first pytest attempt with the base `D:/miniconda3/python.exe` failed because
 Mainline or experiment:
 
 Mainline reliability maintenance. Keep this guard enabled for all future official-val selection and diagnostic work. It is not an algorithm candidate and does not require a training run.
+
+## 2026-06-15: Require official-val provenance for final test evaluation
+
+Decision:
+
+Harden `tools/eval_tusimple_official.py --split test` so final test evaluation requires proof that the checkpoint and postprocess settings were selected on official-val. Extra user-requested test audits remain possible only with an explicit diagnostic-only flag.
+
+What changed:
+
+```text
+final test guard:
+- --split test now requires --selection-summary unless --diagnostic-only-test is passed
+- --selection-summary accepts training official_best_summary.json and tusimple_official_sweep_summary.json
+- final-test parameters are checked against the selected official-val best row
+- non-diagnostic final test rejects max_images caps
+
+diagnostic-only audits:
+- --diagnostic-only-test allows user-requested test audits without promotion semantics
+- output summary records diagnostic_only_test=true and not_for_selection=true
+- optional --diagnostic-reason is preserved in the protocol block
+```
+
+Why:
+
+The previous official eval entry point exposed checkpoint, confidence, point-valid, NMS, min-points, Count Head, rescue, and soft-count knobs directly on `--split test`. That made it too easy to repeatedly probe test with different postprocess settings even though project policy says test is only for one-shot final evaluation of a candidate already selected on official-val.
+
+Impact:
+
+This is a reliability and research-integrity fix. It does not change the TuSimple official metric formula, model inference, decode defaults, loss, labels, or existing official-val selection behavior. It changes only the test-entry protocol: promotable final test evidence must now carry official-val selection provenance, while diagnostic test evidence is labeled as non-selection evidence in machine-readable output.
+
+Validation evidence:
+
+Local checks passed:
+
+```text
+D:/miniconda3/envs/lsa_yolo/python.exe -m py_compile tools/eval_tusimple_official.py tests/test_gcs_boundary_decode_plumbing.py
+D:/miniconda3/envs/lsa_yolo/python.exe -m pytest tests/test_gcs_boundary_decode_plumbing.py -q --basetemp .tmp_pytest/final_test_guard
+```
+
+The new tests cover missing selection summary rejection, diagnostic-only allowance, valid training `official_best_summary.json`, valid sweep `tusimple_official_sweep_summary.json`, parameter mismatch rejection, and diagnostic-only output marking.
+
+Mainline or experiment:
+
+Mainline reliability maintenance. No official-val Accuracy improvement is claimed from this guard by itself, and no test result was run or used for selection.

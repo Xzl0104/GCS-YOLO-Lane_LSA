@@ -166,8 +166,10 @@ python tools/diagnose_gcs_gt5.py --weights <weights.pt> --split val --gt-json ru
 Final test evaluation, only after selecting the candidate on official-val:
 
 ```powershell
-python tools/eval_tusimple_official.py --weights <weights.pt> --split test --imgsz 544 960
+python tools/eval_tusimple_official.py --weights <weights.pt> --split test --selection-summary <official-val-selection-summary.json> --imgsz 544 960
 ```
+
+Extra test audits must use `--diagnostic-only-test`; those results are not valid for selection or promotion.
 
 ## Validation
 

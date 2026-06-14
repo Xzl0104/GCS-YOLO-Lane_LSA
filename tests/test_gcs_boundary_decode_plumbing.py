@@ -154,6 +154,305 @@ class CountBoundaryDecodePlumbingTest(unittest.TestCase):
             self.assertEqual(len(captured), 1)
             self.assertTrue(torch.equal(captured[0], boundary_logits))
 
+    def test_final_test_requires_selection_summary_or_diagnostic_flag(self):
+        with self.assertRaisesRegex(ValueError, "requires --selection-summary"):
+            eval_tusimple_official.validate_test_evaluation_protocol(
+                split="test",
+                selection_summary=None,
+                diagnostic_only_test=False,
+                weights="fake.pt",
+                pred_json=None,
+                conf=0.005,
+                point_valid_thr=0.35,
+                nms_dist_px=18.0,
+                max_det=5,
+                min_points=6,
+                max_images=0,
+                rank_min_points=None,
+                use_count_head_decode=True,
+                count_head_temperature=1.0,
+                candidate_score_thr=0.05,
+                candidate_point_valid_thr=0.20,
+                candidate_min_points=5,
+                enable_rescue_candidate_pool=True,
+                rescue_candidate_score_thr=0.005,
+                rescue_candidate_point_valid_thr=0.08,
+                rescue_candidate_min_points=4,
+                final_min_points=6,
+                fifth_min_points=5,
+            )
+
+        info = eval_tusimple_official.validate_test_evaluation_protocol(
+            split="test",
+            selection_summary=None,
+            diagnostic_only_test=True,
+            diagnostic_reason="unit audit",
+            weights="fake.pt",
+            pred_json=None,
+            conf=0.005,
+            point_valid_thr=0.35,
+            nms_dist_px=18.0,
+            max_det=5,
+            min_points=6,
+            max_images=5,
+            rank_min_points=None,
+            use_count_head_decode=True,
+            count_head_temperature=1.0,
+            candidate_score_thr=0.05,
+            candidate_point_valid_thr=0.20,
+            candidate_min_points=5,
+            enable_rescue_candidate_pool=True,
+            rescue_candidate_score_thr=0.005,
+            rescue_candidate_point_valid_thr=0.08,
+            rescue_candidate_min_points=4,
+            final_min_points=6,
+            fifth_min_points=5,
+        )
+        self.assertTrue(info["diagnostic_only_test"])
+        self.assertTrue(info["not_for_selection"])
+
+    def test_final_test_accepts_official_best_selection_summary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            weights = tmp_path / "weights" / "official_best.pt"
+            weights.parent.mkdir()
+            weights.write_bytes(b"fake")
+            summary = tmp_path / "official_best_summary.json"
+            summary.write_text(
+                json.dumps(
+                    {
+                        "best_epoch": 3,
+                        "best_fitness": 0.95,
+                        "best": {
+                            "official_acc": 0.95,
+                            "images": 363,
+                            "conf": 0.005,
+                            "point_valid_thr": 0.35,
+                            "nms_dist_px": 18.0,
+                            "max_det": 5,
+                            "min_points": 6,
+                            "rank_min_points": "none",
+                        },
+                        "selector": {
+                            "metric": "official_acc",
+                            "gt_json": "runs/gcs_lane/official_val/labels/val.json",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            info = eval_tusimple_official.validate_test_evaluation_protocol(
+                split="test",
+                selection_summary=summary,
+                diagnostic_only_test=False,
+                weights=weights,
+                pred_json=None,
+                conf=0.005,
+                point_valid_thr=0.35,
+                nms_dist_px=18.0,
+                max_det=5,
+                min_points=6,
+                max_images=0,
+                rank_min_points=None,
+                use_count_head_decode=True,
+                count_head_temperature=1.0,
+                candidate_score_thr=0.05,
+                candidate_point_valid_thr=0.20,
+                candidate_min_points=5,
+                enable_rescue_candidate_pool=True,
+                rescue_candidate_score_thr=0.005,
+                rescue_candidate_point_valid_thr=0.08,
+                rescue_candidate_min_points=4,
+                final_min_points=6,
+                fifth_min_points=5,
+            )
+            self.assertEqual(info["mode"], "final")
+            self.assertTrue(info["selection_summary_validated"])
+
+            summary.write_text(
+                json.dumps(
+                    {
+                        "best": {"official_acc": 0.95, "images": 363},
+                        "selector": {"metric": "official_acc"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "best_epoch"):
+                eval_tusimple_official.validate_test_evaluation_protocol(
+                    split="test",
+                    selection_summary=summary,
+                    diagnostic_only_test=False,
+                    weights=weights,
+                    pred_json=None,
+                    conf=0.005,
+                    point_valid_thr=0.35,
+                    nms_dist_px=18.0,
+                    max_det=5,
+                    min_points=6,
+                    max_images=0,
+                    rank_min_points=None,
+                    use_count_head_decode=True,
+                    count_head_temperature=1.0,
+                    candidate_score_thr=0.05,
+                    candidate_point_valid_thr=0.20,
+                    candidate_min_points=5,
+                    enable_rescue_candidate_pool=True,
+                    rescue_candidate_score_thr=0.005,
+                    rescue_candidate_point_valid_thr=0.08,
+                    rescue_candidate_min_points=4,
+                    final_min_points=6,
+                    fifth_min_points=5,
+                )
+
+            summary.write_text(
+                json.dumps(
+                    {
+                        "best_epoch": 3,
+                        "best_fitness": 0.95,
+                        "best": {
+                            "official_acc": 0.95,
+                            "images": 363,
+                            "conf": 0.005,
+                            "point_valid_thr": 0.35,
+                            "nms_dist_px": 18.0,
+                            "max_det": 5,
+                            "min_points": 6,
+                            "rank_min_points": "none",
+                        },
+                        "selector": {
+                            "metric": "official_acc",
+                            "gt_json": "runs/gcs_lane/official_val/labels/val.json",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "conf"):
+                eval_tusimple_official.validate_test_evaluation_protocol(
+                    split="test",
+                    selection_summary=summary,
+                    diagnostic_only_test=False,
+                    weights=weights,
+                    pred_json=None,
+                    conf=0.01,
+                    point_valid_thr=0.35,
+                    nms_dist_px=18.0,
+                    max_det=5,
+                    min_points=6,
+                    max_images=0,
+                    rank_min_points=None,
+                    use_count_head_decode=True,
+                    count_head_temperature=1.0,
+                    candidate_score_thr=0.05,
+                    candidate_point_valid_thr=0.20,
+                    candidate_min_points=5,
+                    enable_rescue_candidate_pool=True,
+                    rescue_candidate_score_thr=0.005,
+                    rescue_candidate_point_valid_thr=0.08,
+                    rescue_candidate_min_points=4,
+                    final_min_points=6,
+                    fifth_min_points=5,
+                )
+
+    def test_final_test_accepts_sweep_selection_summary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            weights = tmp_path / "run" / "weights" / "official_best.pt"
+            weights.parent.mkdir(parents=True)
+            weights.write_bytes(b"fake")
+            summary = tmp_path / "sweep_summary.json"
+            summary.write_text(
+                json.dumps(
+                    {
+                        "best": {
+                            "official_acc": 0.95,
+                            "images": 363,
+                            "conf": 0.005,
+                            "point_valid_thr": 0.35,
+                            "nms_dist_px": 18.0,
+                            "max_det": 5,
+                            "min_points": 6,
+                            "rank_min_points": "none",
+                            "candidate_min_points": 5,
+                            "final_min_points": 6,
+                            "fifth_min_points": 5,
+                        },
+                        "config": {
+                            "split": "val",
+                            "gt_json": "runs/gcs_lane/official_val/labels/val.json",
+                            "weights": str(weights),
+                            "imgsz": [544, 960],
+                            "max_images": 0,
+                            "use_count_head_decode": True,
+                            "count_head_temperature": 1.0,
+                            "candidate_score_thr": 0.05,
+                            "candidate_point_valid_thr": 0.20,
+                            "rescue_candidate_conf": 0.005,
+                            "rescue_candidate_point_valid_thr": 0.08,
+                            "rescue_candidate_min_points": 4,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            info = eval_tusimple_official.validate_test_evaluation_protocol(
+                split="test",
+                selection_summary=summary,
+                diagnostic_only_test=False,
+                weights=weights,
+                pred_json=None,
+                conf=0.005,
+                point_valid_thr=0.35,
+                nms_dist_px=18.0,
+                max_det=5,
+                min_points=6,
+                max_images=0,
+                rank_min_points=None,
+                use_count_head_decode=True,
+                count_head_temperature=1.0,
+                candidate_score_thr=0.05,
+                candidate_point_valid_thr=0.20,
+                candidate_min_points=5,
+                enable_rescue_candidate_pool=True,
+                rescue_candidate_score_thr=0.005,
+                rescue_candidate_point_valid_thr=0.08,
+                rescue_candidate_min_points=4,
+                final_min_points=6,
+                fifth_min_points=5,
+            )
+            self.assertEqual(info["selection_summary_type"], "official_sweep_summary")
+
+    def test_diagnostic_test_eval_marks_output_not_for_selection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            archive = tmp_path / "archive"
+            (archive / "train_set").mkdir(parents=True)
+            (archive / "test_set").mkdir()
+            gt = {
+                "raw_file": "clips/a/1/20.jpg",
+                "h_samples": [160, 170],
+                "lanes": [[10, 20]],
+            }
+            pred = {"raw_file": gt["raw_file"], "lanes": [[10, 20]], "run_time": 1.0}
+            (archive / "test_label.json").write_text(json.dumps(gt) + "\n", encoding="utf-8")
+            pred_json = tmp_path / "pred.json"
+            pred_json.write_text(json.dumps(pred) + "\n", encoding="utf-8")
+            output = eval_tusimple_official.evaluate_tusimple_official(
+                archive_root=archive,
+                split="test",
+                pred_json=pred_json,
+                diagnostic_only_test=True,
+                diagnostic_reason="unit audit",
+                imgsz=(544, 960),
+                save_dir=tmp_path / "out",
+                warmup=0,
+            )
+            self.assertTrue(output["summary"]["diagnostic_only_test"])
+            self.assertTrue(output["summary"]["not_for_selection"])
+            self.assertTrue(output["protocol"]["diagnostic_only_test"])
+
     def test_official_sweep_defaults_to_val_and_forwards_count_boundary_logits(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
