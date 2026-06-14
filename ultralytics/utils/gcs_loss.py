@@ -798,7 +798,7 @@ class GCSLoss(nn.Module):
                 raise ValueError(
                     f"Tensor gt_valid must have shape B x N x K with B={batch_size}, got {tuple(gt_valid.shape)}."
                 )
-            lane_counts = (gt_valid.detach().to(device=device).float().sum(dim=-1) >= 2).sum(dim=-1)
+            lane_counts = self._lane_count_from_valid(gt_valid.detach().to(device=device))
         elif isinstance(gt_valid, (list, tuple)):
             if len(gt_valid) != batch_size:
                 raise ValueError(f"gt_valid must contain one tensor per image, got {len(gt_valid)} vs B={batch_size}.")
@@ -807,7 +807,7 @@ class GCSLoss(nn.Module):
                 valid = torch.as_tensor(valid, device=device)
                 if valid.ndim != 2:
                     raise ValueError(f"Each GT lane_valid must have shape N x K, got {tuple(valid.shape)}.")
-                counts.append((valid.float().sum(dim=-1) >= 2).sum())
+                counts.append(self._lane_count_from_valid(valid))
             lane_counts = torch.stack(counts) if counts else torch.empty(0, device=device, dtype=torch.long)
         else:
             raise TypeError(f"gt_valid must be a tensor, list, or tuple, got {type(gt_valid).__name__}.")
@@ -1051,12 +1051,12 @@ class GCSLoss(nn.Module):
                 mask[b, src_idx.to(device=device, dtype=torch.long)] = is_edge
         return mask
 
-    @staticmethod
-    def _lane_count_from_valid(valid: torch.Tensor, *, min_points: int = 2) -> int:
-        """Return the number of GT lanes with enough visible anchors."""
-        if valid.ndim != 2:
-            raise ValueError(f"GT lane_valid must have shape N x K, got {tuple(valid.shape)}.")
-        return int((valid.float().sum(dim=1) >= int(min_points)).sum().item())
+    def _lane_count_from_valid(self, valid: torch.Tensor, *, min_points: int | None = None) -> torch.Tensor:
+        """Count GT lanes with the configured visible-anchor floor."""
+        if valid.ndim < 2:
+            raise ValueError(f"GT lane_valid must have at least N x K dims, got {tuple(valid.shape)}.")
+        floor = int(self.count_min_gt_points if min_points is None else min_points)
+        return (valid.float().sum(dim=-1) >= floor).sum(dim=-1)
 
     def _query_visible_evidence(
         self,
@@ -1921,9 +1921,7 @@ class GCSLoss(nn.Module):
         gt5_image_mask = torch.zeros(pred_valid_logits.shape[0], device=pred_valid_logits.device, dtype=torch.bool)
         edge_weight = torch.ones_like(pred_valid_logits)
         for b, (src_idx, tgt_idx) in enumerate(indices):
-            lane_count = int(
-                (gt_valid[b].detach().to(device=target.device).float().sum(dim=1) >= 2).sum().item()
-            )
+            lane_count = int(self._lane_count_from_valid(gt_valid[b].detach().to(device=target.device)).item())
             if lane_count >= 5:
                 gt5_image_mask[b] = True
             if src_idx.numel() == 0:
@@ -2036,7 +2034,7 @@ class GCSLoss(nn.Module):
             valid = valid.detach().to(device=pred_logits.device)
             if valid.ndim != 2:
                 raise ValueError(f"GT lane_valid must have shape N x K, got {tuple(valid.shape)}.")
-            counts.append(int((valid.float().sum(dim=1) >= 2).sum().item()))
+            counts.append(int(self._lane_count_from_valid(valid).item()))
         if len(counts) != pred_logits.shape[0]:
             raise ValueError(f"gt_valid must contain one tensor per image, got {len(counts)} vs B={pred_logits.shape[0]}.")
         target = pred_logits.new_tensor(counts, dtype=pred_logits.dtype)
@@ -2065,7 +2063,7 @@ class GCSLoss(nn.Module):
             valid = valid.detach().to(device=pred_count_logits.device)
             if valid.ndim != 2:
                 raise ValueError(f"GT lane_valid must have shape N x K, got {tuple(valid.shape)}.")
-            counts.append(int((valid.float().sum(dim=1) >= int(self.count_min_gt_points)).sum().item()))
+            counts.append(int(self._lane_count_from_valid(valid).item()))
         if len(counts) != pred_count_logits.shape[0]:
             raise ValueError(
                 f"gt_valid must contain one tensor per image, got {len(counts)} vs B={pred_count_logits.shape[0]}."
@@ -2201,7 +2199,7 @@ class GCSLoss(nn.Module):
             valid = valid.detach().to(device=pred_count_boundary_logits.device)
             if valid.ndim != 2:
                 raise ValueError(f"GT lane_valid must have shape N x K, got {tuple(valid.shape)}.")
-            counts.append(int((valid.float().sum(dim=1) >= int(self.count_min_gt_points)).sum().item()))
+            counts.append(int(self._lane_count_from_valid(valid).item()))
         if len(counts) != pred_count_boundary_logits.shape[0]:
             raise ValueError(
                 "gt_valid must contain one tensor per image, "

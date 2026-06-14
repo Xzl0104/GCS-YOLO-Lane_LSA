@@ -915,6 +915,50 @@ def test_fifthness_uses_count_min_gt_points_for_k56_short_lanes():
     assert not bool(neg_mask.any())
 
 
+def test_count_targets_use_count_min_gt_points_consistently_for_single_anchor_lane():
+    _, valid = _gt([0.1, 0.25, 0.4, 0.55, 0.7])
+    valid[-1, 1:] = 0.0
+    pred_logits = torch.zeros(1, 5)
+    pred_count_logits = torch.zeros(1, 4)
+
+    count_single = GCSLoss(model={"gcs_point_mode": "fixed_y", "gcs_imgsz": [544, 960], "gcs_count_min_gt_points": 1})
+    count_double = GCSLoss(model={"gcs_point_mode": "fixed_y", "gcs_imgsz": [544, 960], "gcs_count_min_gt_points": 2})
+
+    assert count_single.target_lane_count(pred_logits, {"num_lanes": torch.tensor([5])}, [valid]).item() == 5
+    gt_count, gt_count_cls, gt_count_raw = count_single.count_head_targets(pred_count_logits, [valid])
+    assert gt_count.item() == 5
+    assert gt_count_cls.item() == 3
+    assert gt_count_raw.item() == 5
+
+    assert count_double.target_lane_count(pred_logits, {}, [valid]).item() == 4
+    gt_count, gt_count_cls, gt_count_raw = count_double.count_head_targets(pred_count_logits, [valid])
+    assert gt_count.item() == 4
+    assert gt_count_cls.item() == 2
+    assert gt_count_raw.item() == 4
+
+
+def test_point_valid_gt5_boost_uses_count_min_gt_points_for_single_anchor_lane():
+    _, valid = _gt([0.1, 0.25, 0.4, 0.55, 0.7])
+    valid[-1, 1:] = 0.0
+    pred_valid_logits = torch.zeros(1, 5, 6)
+    pred_points = torch.zeros(1, 5, 6, 2)
+    indices = [(torch.arange(5), torch.arange(5))]
+    common = {
+        "gcs_point_mode": "fixed_y",
+        "gcs_imgsz": [544, 960],
+        "gcs_point_valid_gt5_pos_weight": 2.0,
+        "gcs_point_valid_unmatched_weight": 1.0,
+    }
+
+    count_single = GCSLoss(model={**common, "gcs_count_min_gt_points": 1})
+    count_double = GCSLoss(model={**common, "gcs_count_min_gt_points": 2})
+
+    single_loss = count_single.point_valid_loss(pred_valid_logits, pred_points, [valid], indices)
+    double_loss = count_double.point_valid_loss(pred_valid_logits, pred_points, [valid], indices)
+
+    assert single_loss > double_loss
+
+
 def test_count_adjacent_margin_is_default_off_for_count_loss():
     _, valid = _gt([0.1, 0.25, 0.4, 0.55, 0.7])
     pred_count_logits = torch.tensor([[0.0, 0.0, 2.0, 1.7]], requires_grad=True)

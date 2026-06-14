@@ -5357,3 +5357,57 @@ The new tests cover missing selection summary rejection, diagnostic-only allowan
 Mainline or experiment:
 
 Mainline reliability maintenance. No official-val Accuracy improvement is claimed from this guard by itself, and no test result was run or used for selection.
+
+## 2026-06-15: Unify loss-side GT lane counting around `gcs_count_min_gt_points`
+
+Decision:
+
+Make loss-side lane-count semantics use the configured visible-anchor floor consistently. The shared helper now feeds:
+
+```text
+Count Sum target
+Count Head CE target
+Count Boundary target
+hard-loss lane-count filters
+GT5 point-valid positive boosting
+fifthness / competitive fifth masks
+```
+
+Why:
+
+The reliability audit found a contract drift around K56 ultra-short lanes. `gcs_count_min_gt_points` defaults to `1`, and fifthness/count-head paths already treated it as the authoritative count floor in some places, but other loss paths still hard-coded `>=2`. On a synthetic image with four normal lanes plus one one-anchor lane, this could make Count Head CE see GT5 while Count Sum or GT5 point-valid weighting behaved as GT4.
+
+Evidence:
+
+The raw official-val endpoint audit has 1303 raw lanes, while current generated K56 official-val labels have 1300 lanes. The three-lane gap is the K56 one-anchor lane set. Current label generation, `GCSLaneDataset` normalization, label-oracle conversion, and TuSimple prediction conversion still require at least two valid anchors per lane.
+
+What changed:
+
+`ultralytics/utils/gcs_loss.py` now centralizes lane counting in `_lane_count_from_valid()` and uses it in all loss-side count decisions listed above. `tests/test_gcs_count_aware.py` adds synthetic coverage proving that `gcs_count_min_gt_points=1` treats a one-anchor fifth lane as GT5, while `gcs_count_min_gt_points=2` treats the same sample as GT4; it also proves GT5 point-valid boosting follows the same floor.
+
+Validation evidence:
+
+```text
+D:/miniconda3/envs/lsa_yolo/python.exe -m py_compile ultralytics/utils/gcs_loss.py tests/test_gcs_count_aware.py
+D:/miniconda3/envs/lsa_yolo/python.exe -m pytest tests/test_gcs_count_aware.py -q --basetemp .tmp_pytest/count_min_consistency_rerun
+D:/miniconda3/envs/lsa_yolo/python.exe -m pytest tests/test_gcs_k56_contract.py -q --basetemp .tmp_pytest/k56_count_min_consistency
+D:/miniconda3/envs/lsa_yolo/python.exe tools/check_gcs_algorithm_contract.py
+D:/miniconda3/envs/lsa_yolo/python.exe tools/check_gcs_count_head_topk_contract.py
+D:/miniconda3/envs/lsa_yolo/python.exe tools/check_gcs_decode_meta_contract.py
+D:/miniconda3/envs/lsa_yolo/python.exe tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml --imgsz 544 960 --batch 1
+D:/miniconda3/envs/lsa_yolo/python.exe tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-fifthness-v1.yaml --imgsz 544 960 --batch 1
+D:/miniconda3/envs/lsa_yolo/python.exe scripts/verify_loss_cleanup.py
+D:/miniconda3/envs/lsa_yolo/python.exe scripts/check_gcs_agent_setup.py
+```
+
+Impact:
+
+This is a training-side reliability fix. It does not change official metric logic, inference, decode, generated labels, or current K56 official-val selection. Because current K56 labels and official prediction conversion still drop one-anchor lanes, this change by itself is not expected to alter current K56 official-val results and is not a reason to launch full/e180 training.
+
+Remaining work:
+
+Full one-anchor support remains a separate explicit experiment. It would need coordinated changes to label generation, dataset loading, label-oracle conversion, prediction-to-TuSimple conversion, postprocess min-point policy, and official-val oracle checks before any training or promotion claim.
+
+Mainline or experiment:
+
+Mainline reliability maintenance plus future-experiment groundwork. No official-val Accuracy improvement is claimed from this patch by itself.
