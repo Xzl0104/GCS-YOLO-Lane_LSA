@@ -80,7 +80,7 @@ batch=32
 workers=4
 ```
 
-Monitoring snapshot at `2026-06-14 09:40 CST`: the run is alive with ordinary validation through epoch 42/180 and about 18.2 GiB GPU memory in use; official-best is still epoch 31 with `official_acc=0.951526`, below the legacy `0.959224` reference. Epoch 42 entered official Top-K at rank 2 with `official_acc=0.950743`, and epoch 38 remains a useful diagnostic high-GT5 point (`gt5_output5_rate=0.905405`) but is not promotable because FP (`0.077273`) and GT4-to-5 pressure (`rate_4_to_5=0.136364`) are high. K56 is not promoted and no test result is claimed.
+Monitoring snapshot at `2026-06-14 10:05 CST`: the run is alive with ordinary validation through epoch 49/180 and about 17.5 GiB GPU memory in use; official-val sweeps are recorded through epoch 48. Official-best is epoch 43 with `official_acc=0.951958`, still below the legacy `0.959224` reference. Epoch 48 entered official Top-K at rank 5 with `official_acc=0.950146` and stronger GT5 output (`gt5_output5_rate=0.837838`), but it is not promotable because official Accuracy is lower and GT4-to-5 pressure rose (`rate_4_to_5=0.090909`). K56 is not promoted and no test result is claimed.
 
 Use the local RTX 4060 8GB workstation for smoke, contract, label/oracle, and model-shape checks only. Run formal training and official-val evaluation on the remote server.
 

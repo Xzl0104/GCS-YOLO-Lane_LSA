@@ -107,15 +107,15 @@ run: gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4
 remote HEAD: 9b9769b61f8f
 formal batch: 32
 workers: 4
-GPU memory: about 18.2 GiB on RTX 4090 24GB
-status at 2026-06-14 09:40 CST: training alive; results.csv has ordinary-val row 42, and official_best_summary has official-val candidates through epoch 42
-ordinary val latest row: epoch=42, val/f1=0.948062, val/decode/count_head_k=3.57851, val/decode/final_pred_lanes=3.52617, val/decode/k5_to_output4_rate=0.287879
+GPU memory: about 17.5 GiB on RTX 4090 24GB
+status at 2026-06-14 10:05 CST: training alive; results.csv has ordinary-val row 49, and official_best_summary has official-val candidates through epoch 48
+ordinary val latest row: epoch=49, val/f1=0.951210, val/decode/count_head_k=3.62810, val/decode/final_pred_lanes=3.58953, val/decode/k5_to_output4_rate=0.186667
 ordinary val best row so far by val/f1: epoch=39, val/f1=0.951650, val/decode/count_head_k=3.65014, val/decode/final_pred_lanes=3.59780, val/decode/k5_to_output4_rate=0.215909
-official_best so far: epoch 31, official_acc=0.951526, FP=0.057208, FN=0.048439
-official_best count/GT5 diagnostics: count_acc_3/4/5=0.928251/0.848485/0.729730, gt5_output5_rate=0.729730, gt5_count_head_under_rate=0.027027, gt5_valid_points_fail_rate=0.243243, gt5_candidate_pool_shortfall_rate=0.000000, decode/k5_to_output4_rate=0.297619, rescue_precision=0.881356
-official_top_k retained epochs: 31, 42, 41, 38, 28
-diagnostic top-k notes: epoch42 is rank2 with official_acc=0.950743, FP=0.057438, FN=0.051423; epoch38 has high gt5_output5_rate=0.905405 and low gt5_valid_points_fail_rate=0.081081, but official_acc=0.948920 with FP=0.077273 and rate_4_to_5=0.136364, so it is diagnostic only
-errors: process is alive; results.csv has no NaN/Inf values; official-val sweeps exist through epoch42. No test evidence has been used.
+official_best so far: epoch 43, official_acc=0.951958, FP=0.067264, FN=0.047521
+official_best count/GT5 diagnostics: count_acc_3/4/5=0.901345/0.878788/0.824324, gt5_output5_rate=0.824324, gt5_count_head_under_rate=0.013514, gt5_valid_points_fail_rate=0.162162, gt5_candidate_pool_shortfall_rate=0.000000, decode/k5_to_output4_rate=0.244186, rescue_precision=0.800000
+official_top_k retained epochs: 43, 31, 42, 44, 48
+diagnostic top-k notes: epoch48 is rank5 with official_acc=0.950146, FP=0.057943, FN=0.042470, gt5_output5_rate=0.837838, and gt5_valid_points_fail_rate=0.135135, but official_acc is below epoch43 and rate_4_to_5=0.090909; epoch38 remains high-GT5 diagnostic only with official_acc=0.948920, FP=0.077273, and rate_4_to_5=0.136364
+errors: process is alive; results.csv has no NaN/Inf values; official-val sweeps exist through epoch48. No test evidence has been used.
 decision: continue monitoring; K56 has improved materially but remains below the legacy 0.959224 reference. Do not promote, do not use test, and do not launch a replacement experiment while the healthy baseline is still improving.
 ```
 
