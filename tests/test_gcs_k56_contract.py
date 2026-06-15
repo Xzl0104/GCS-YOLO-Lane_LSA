@@ -257,6 +257,130 @@ def test_current_k56_array_builder_drops_one_point_lanes():
     assert int(arrays["num_lanes"][0]) == 0
 
 
+def test_one_anchor_impact_oracle_adds_only_selected_short_lanes():
+    h_samples = list(range(160, 711, 10))
+    single = [-2] * len(h_samples)
+    single[3] = 100
+    double = [-2] * len(h_samples)
+    double[3] = 200
+    double[4] = 205
+    records = [
+        {
+            "raw_file": "clips/a/1/20.jpg",
+            "h_samples": h_samples,
+            "lanes": [single, double],
+        }
+    ]
+    predictions = [{"raw_file": "clips/a/1/20.jpg", "lanes": [double], "run_time": 1.0}]
+
+    updated, stats = oracle.add_one_anchor_gt_lanes_to_predictions(
+        predictions,
+        records,
+    )
+
+    assert stats["total_added_lanes"] == 1
+    assert stats["images_with_added_lanes"] == 1
+    assert updated[0]["lanes"] == [double, single]
+
+    current_result, _ = TuSimpleOfficialLaneEval.bench_records(predictions, records)
+    updated_result, _ = TuSimpleOfficialLaneEval.bench_records(updated, records)
+    assert updated_result.as_dict()["Accuracy"] > current_result.as_dict()["Accuracy"]
+
+    empty_records = [
+        {
+            "raw_file": "clips/a/2/20.jpg",
+            "h_samples": h_samples,
+            "lanes": [single],
+        }
+    ]
+    empty_predictions = [{"raw_file": "clips/a/2/20.jpg", "lanes": [], "run_time": 1.0}]
+    empty_updated, _ = oracle.add_one_anchor_gt_lanes_to_predictions(empty_predictions, empty_records)
+    empty_current_result, _ = TuSimpleOfficialLaneEval.bench_records(empty_predictions, empty_records)
+    empty_updated_result, _ = TuSimpleOfficialLaneEval.bench_records(empty_updated, empty_records)
+    assert empty_updated_result.as_dict()["FN"] < empty_current_result.as_dict()["FN"]
+
+
+def test_one_anchor_impact_exact_gt_predictions_are_official_oracle():
+    h_samples = list(range(160, 711, 10))
+    single = [-2] * len(h_samples)
+    single[3] = 100
+    double = [-2] * len(h_samples)
+    double[3] = 200
+    double[4] = 205
+    records = [
+        {
+            "raw_file": "clips/a/1/20.jpg",
+            "h_samples": h_samples,
+            "lanes": [single, double],
+        }
+    ]
+
+    metric, _ = TuSimpleOfficialLaneEval.bench_records(
+        oracle.exact_gt_predictions(records),
+        records,
+    )
+
+    assert metric.as_dict() == {"Accuracy": 1.0, "FP": 0.0, "FN": 0.0, "images": 1}
+
+
+def test_one_anchor_impact_diagnostic_is_val_only(tmp_path):
+    gt_json = tmp_path / "val.json"
+    gt_json.write_text("", encoding="utf-8")
+    args = SimpleNamespace(
+        label_split="test",
+        allow_test=True,
+        diagnose_one_anchor_impact=True,
+        dataset_root="datasets/tusimple_fixed_y_k56_960x544",
+        gt_json=str(gt_json),
+        archive_root="archive",
+        save_dir=str(tmp_path),
+        runtime_ms=1.0,
+    )
+
+    with pytest.raises(SystemExit, match="official-val-only"):
+        oracle.validate_one_anchor_diagnostic_args(args)
+
+    test_gt_json = tmp_path / "test_label.json"
+    test_gt_json.write_text("", encoding="utf-8")
+    args.label_split = "val"
+    args.gt_json = str(test_gt_json)
+    with pytest.raises(ValueError, match="test GT json"):
+        oracle.validate_one_anchor_diagnostic_args(args)
+
+
+def test_one_anchor_impact_diagnostic_rejects_renamed_test_records(tmp_path):
+    archive = tmp_path / "archive"
+    (archive / "train_set").mkdir(parents=True)
+    image = archive / "test_set" / "clips" / "a" / "1" / "20.jpg"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(b"")
+    gt_json = tmp_path / "renamed_val.json"
+    gt_json.write_text("", encoding="utf-8")
+    args = SimpleNamespace(
+        label_split="val",
+        allow_test=False,
+        diagnose_one_anchor_impact=True,
+        dataset_root="datasets/tusimple_fixed_y_k56_960x544",
+        gt_json=str(gt_json),
+        archive_root=str(archive),
+        save_dir=str(tmp_path),
+        runtime_ms=1.0,
+    )
+
+    with pytest.raises(ValueError, match="test_set"):
+        oracle.validate_one_anchor_diagnostic_records(
+            args,
+            gt_json=gt_json,
+            gt_records=[
+                {
+                    "raw_file": "clips/a/1/20.jpg",
+                    "h_samples": [160, 170],
+                    "lanes": [[10, 20]],
+                }
+            ],
+        )
+
+
 def test_k56_gt5_edge_segment_support_targets_edge_lanes_only():
     assert GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT == 0.0
 

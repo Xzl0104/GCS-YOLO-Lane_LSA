@@ -80,6 +80,20 @@ python tools/check_tusimple_fixed_y_label_oracle.py \
   --archive-root archive
 ```
 
+K56 one-anchor official-val impact diagnostic:
+
+```bash
+python tools/check_tusimple_fixed_y_label_oracle.py \
+  --dataset-root datasets/tusimple_fixed_y_k56_960x544 \
+  --label-split val \
+  --archive-root archive \
+  --diagnose-one-anchor-impact \
+  --save-dir runs/gcs_lane/tusimple_fixed_y_k56_label_oracle_val_one_anchor_diag
+```
+
+This diagnostic is GT-assisted and official-val-only. It appends exact raw one-anchor GT lanes to a copy of the current K56 label-oracle predictions to quantify the representation/export upper bound. It is not model evidence, must not be run on test, and must not be used for checkpoint, threshold, postprocess, loss, or promotion choices.
+The GT-assisted prediction artifact is named `one_anchor_gt_assisted_not_for_selection_predictions.json` and is written with a matching `one_anchor_gt_assisted_not_for_selection_protocol.json` sidecar.
+
 K56 exact fixed-y artifact check:
 
 ```bash

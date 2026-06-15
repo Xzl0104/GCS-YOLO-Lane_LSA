@@ -5453,3 +5453,62 @@ Full one-anchor support remains a default-off experiment. It should start with a
 Mainline or experiment:
 
 Mainline reliability coverage plus future-experiment guardrail. No official-val Accuracy improvement is claimed from this patch by itself.
+
+## 2026-06-15: Add official-val one-anchor impact diagnostic to K56 label oracle
+
+Decision:
+
+Add a default-off diagnostic flag to the existing K56 label-oracle tool:
+
+```text
+tools/check_tusimple_fixed_y_label_oracle.py --diagnose-one-anchor-impact
+```
+
+The flag keeps the normal label oracle unchanged, then creates a GT-assisted prediction copy that appends exact raw one-anchor GT lanes and scores both versions with the same TuSimple official evaluator. The output is marked:
+
+```text
+gt_assisted = true
+official_val_only = true
+not_for_selection = true
+```
+
+The GT-assisted prediction file is named `one_anchor_gt_assisted_not_for_selection_predictions.json` and is accompanied by `one_anchor_gt_assisted_not_for_selection_protocol.json`, so the raw TuSimple JSON-lines artifact is not left looking like normal model output.
+
+Why:
+
+The one-anchor gap is real, but the official evaluator's invalid-position dominance means degenerate one-point predictions can become misleading matches. The project needed a strict official-val-only upper-bound diagnostic before deciding whether a full one-anchor data/decode contract is worth implementing.
+
+Validation evidence:
+
+Local checks passed:
+
+```text
+D:/miniconda3/envs/lsa_yolo/python.exe -m py_compile tools/check_tusimple_fixed_y_label_oracle.py tests/test_gcs_k56_contract.py
+D:/miniconda3/envs/lsa_yolo/python.exe -m pytest tests/test_gcs_k56_contract.py -q -p no:cacheprovider --basetemp .tmp_pytest/k56_one_anchor_impact_reviewfix
+```
+
+The pytest run passed with `19 passed, 1 skipped`.
+
+The official-val-only diagnostic command:
+
+```text
+D:/miniconda3/envs/lsa_yolo/python.exe tools/check_tusimple_fixed_y_label_oracle.py --dataset-root datasets/tusimple_fixed_y_k56_960x544 --label-split val --archive-root archive --diagnose-one-anchor-impact --save-dir runs/gcs_lane/tusimple_fixed_y_k56_label_oracle_val_one_anchor_diag_reviewfix
+```
+
+reported:
+
+```text
+current_label_oracle_metric: Accuracy=0.998256, FP=-0.000689, FN=0.001377
+plus_exact_one_anchor_gt_metric: Accuracy=0.998758, FP=0.0, FN=0.0
+delta_plus_minus_current: Accuracy=+0.000502, FP=+0.000689, FN=-0.001377
+added one-anchor lanes: 3 lanes in 3 official-val images
+raw_gt_exact_metric: Accuracy=1.0, FP=0.0, FN=0.0
+```
+
+Impact:
+
+This is a reliability and experiment-planning diagnostic. It does not change labels, training, inference, decode, official metric logic, model outputs, or current official-val model scores. It does not justify a full/e180 training run by itself because the measured oracle headroom is only about `+0.0005` official-val Accuracy.
+
+Mainline or experiment:
+
+Mainline diagnostic guardrail. Any future one-anchor implementation remains a separate default-off data/decode experiment and must include guards against degenerate one-point false positives before training.
