@@ -4747,3 +4747,85 @@ Experimental baseline monitoring decision. K56 is still not promoted over K32, a
 ## 2026-06-14: Superseding K56 final state after monitor entries
 
 The historical monitoring entries above are superseded by the completed K56 baseline decision and the rejected Count/Quality fine-tune decisions recorded earlier in this file. Current state: `gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4` completed 180/180; official-val-selected epoch 152 remains the K56 reference at `official_acc=0.959315`; K56 is not promoted, not test-ready, and has no official-test claim. The next K56 step should stay validation-only and avoid rerunning the two rejected Count/Quality recipes.
+
+## 2026-06-16: Reject K56 Top-K EMA-state average as a promotion candidate
+
+Decision:
+
+Do not promote the K56 Top-K EMA-state average and do not expand into random averaging-recipe search.
+
+The evaluated sidecar checkpoint is:
+
+```text
+runs/gcs_lane/gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4/weights/swa_ema_topk/top5_equal_epochs152_165_166_168_170.pt
+```
+
+It equal-averages the retained `ema.state_dict()` floating tensors from the five official-val Top-K checkpoints:
+
+```text
+epoch0152_acc0p959315.pt
+epoch0165_acc0p959215.pt
+epoch0166_acc0p959244.pt
+epoch0168_acc0p959217.pt
+epoch0170_acc0p959247.pt
+```
+
+This is a validation-only post-hoc EMA-state average, not a new training EMA, and it does not change decode, GT use, official metric calculation, data split, or test usage.
+
+Why:
+
+The same 64-combo official-val sweep used for the epoch152 independent audit selected the same decode row:
+
+```text
+conf=0.005
+point_valid_thr=0.35
+nms_dist_px=18.0
+max_det=5
+min_points=6
+rank_min_points=none
+```
+
+But the averaged checkpoint did not reach the requested objective:
+
+```text
+epoch152 official_best: official_acc=0.959315, FP=0.045225, FN=0.028466, rate_4_to_5=0.075758
+Top-K EMA-state avg:    official_acc=0.959068, FP=0.044858, FN=0.028237, rate_4_to_5=0.060606
+```
+
+It satisfied the guardrail that `rate_4_to_5` must not rise, and it improved several diagnostics:
+
+```text
+count_acc_3/4/5:      0.928251/0.878788/0.851351 -> 0.932735/0.893939/0.878378
+gt5_output5_rate:     0.851351 -> 0.878378
+rate_5_to_4:          0.148649 -> 0.121622
+GT5 kept:             63/74 -> 65/74
+quality_too_low:      6 -> 4
+rescue_precision:     0.779412 -> 0.797101
+```
+
+The key failure is that official Accuracy dropped by `0.000247` and remained below `0.9600`. The result supports the hypothesis that retained K56 Top-K checkpoints differ in Count/Quality jitter, but simple equal EMA-state averaging is not enough.
+
+Alternatives considered:
+
+- promote the average because it improves GT5 retention and lowers `rate_4_to_5`
+- evaluate the already materialized late4 average as another recipe
+- try weighted/top3/top4/BN-buffer averaging variants
+- use test artifacts in the run directory to choose an average
+
+Tradeoff:
+
+Stopping here avoids turning a cheap smoothing check into another validation-search rabbit hole. The late4 artifact can remain as an inert sidecar, but it is not selected evidence. If averaging is revisited, it needs a predeclared official-val-only hypothesis rather than recipe mining.
+
+Validation evidence:
+
+```text
+manifest: runs/gcs_lane/gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4/weights/swa_ema_topk/manifest.json
+official-val sweep: runs/gcs_lane/gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4/analysis_swa_ema_top5_val_sweep/tusimple_official_sweep_summary.json
+GT5 diagnosis: runs/gcs_lane/gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4/analysis_swa_ema_top5_gt5_diag_val/gt5_rank_diagnostics_summary.json
+```
+
+No test metric was used. The run stayed on `--split val` and `--imgsz 544 960`.
+
+Mainline or experiment:
+
+Diagnostic-only experiment. K56 epoch152 remains the official-val reference, and K56 remains not test-ready.
