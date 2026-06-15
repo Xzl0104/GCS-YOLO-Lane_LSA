@@ -21,7 +21,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--manifest", required=True, help="Input txt/json hard-sample manifest.")
     parser.add_argument(
         "--dataset-root",
-        default="datasets/tusimple_fixed_y_k56_960x544",
+        default="datasets/tusimple_fixed_y_960x544",
         help="Dataset root containing labels_gcs/<split>.",
     )
     parser.add_argument(

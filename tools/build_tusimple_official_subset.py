@@ -20,7 +20,7 @@ from gcs_tools.tusimple_official_eval import (  # noqa: E402
     read_tusimple_json_lines,
 )
 
-DEFAULT_DATASET_ROOT = ROOT / "datasets" / "tusimple_fixed_y_k56_960x544"
+DEFAULT_DATASET_ROOT = ROOT / "datasets" / "tusimple_fixed_y_960x544"
 DEFAULT_OUTPUT = ROOT / "runs" / "gcs_lane" / "tusimple_official_trainval_500_test_ratio_seed20260529.json"
 
 

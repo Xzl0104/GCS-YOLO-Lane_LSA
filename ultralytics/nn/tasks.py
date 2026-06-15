@@ -558,7 +558,7 @@ class DetectionModel(BaseModel):
 class GCSLaneModel(DetectionModel):
     """Structured lane detection model with a query-based GCS lane head."""
 
-    def __init__(self, cfg="gcs-yolo-lane-s-q12-k56.yaml", ch=3, nc=None, verbose=True):
+    def __init__(self, cfg="gcs-yolo-lane-s-q12.yaml", ch=3, nc=None, verbose=True):
         """Initialize GCS-YOLO-Lane as its own task, not as ordinary object detection."""
         super().__init__(cfg=cfg, ch=ch, nc=nc, verbose=verbose)
         self.task = "gcs_lane"
@@ -1619,7 +1619,7 @@ def _assert_current_gcs_checkpoint_model(model: torch.nn.Module, weight) -> None
         raise RuntimeError(
             f"GCS checkpoint {weight} was saved with an obsolete fixed-y GCSLaneHead: missing {missing_by_head}. "
             "Delete this checkpoint from the current experiment path and retrain with the current "
-            "ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml. Legacy fixed-y heads are intentionally unsupported."
+            "ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12.yaml. Legacy fixed-y heads are intentionally unsupported."
         )
 
 
@@ -1924,7 +1924,7 @@ def guess_model_scale(model_path):
     if match:
         return match.group(2)
 
-    # Custom GCS model names such as gcs-yolo-lane-s-q12-k56.yaml still encode the scale as a suffix.
+    # Custom model names such as gcs-yolo-lane-s.yaml still encode the scale as a suffix.
     match = re.search(r"(?:^|[-_])([nslmx])(?:[-_]|$)", stem)
     return match.group(1) if match else ""
 

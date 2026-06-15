@@ -4,8 +4,6 @@ import cv2
 import numpy as np
 
 TUSIMPLE_OFFICIAL_BOTTOM_Y_NORM = 710.0 / 720.0
-TUSIMPLE_OFFICIAL_TOP_Y_NORM = 160.0 / 720.0
-TUSIMPLE_OFFICIAL_NUM_POINTS = 56
 
 
 def _is_valid_number(value: float) -> bool:
@@ -39,10 +37,7 @@ def remove_duplicate_y(points: list[tuple[float, float]]) -> list[tuple[float, f
     return out
 
 
-def resample_polyline(
-    points: list[tuple[float, float]],
-    num_points: int = TUSIMPLE_OFFICIAL_NUM_POINTS,
-) -> tuple[np.ndarray, np.ndarray]:
+def resample_polyline(points: list[tuple[float, float]], num_points: int = 32) -> tuple[np.ndarray, np.ndarray]:
     """Resample a bottom-to-top polyline to a fixed number of points."""
     if num_points <= 0:
         raise ValueError(f"num_points must be positive, got {num_points}")
@@ -73,11 +68,7 @@ def resample_polyline(
     return sampled, valid
 
 
-def fixed_y_anchors(
-    num_points: int = TUSIMPLE_OFFICIAL_NUM_POINTS,
-    y_start: float = TUSIMPLE_OFFICIAL_BOTTOM_Y_NORM,
-    y_end: float = TUSIMPLE_OFFICIAL_TOP_Y_NORM,
-) -> np.ndarray:
+def fixed_y_anchors(num_points: int = 32, y_start: float = TUSIMPLE_OFFICIAL_BOTTOM_Y_NORM, y_end: float = 0.25) -> np.ndarray:
     """Return bottom-to-top normalized y anchors for fixed-y x-only lane labels."""
     if num_points <= 0:
         raise ValueError(f"num_points must be positive, got {num_points}")
@@ -90,9 +81,9 @@ def sample_polyline_fixed_y(
     points: list[tuple[float, float]],
     img_h: int,
     img_w: int,
-    num_points: int = TUSIMPLE_OFFICIAL_NUM_POINTS,
+    num_points: int = 32,
     y_start: float = TUSIMPLE_OFFICIAL_BOTTOM_Y_NORM,
-    y_end: float = TUSIMPLE_OFFICIAL_TOP_Y_NORM,
+    y_end: float = 0.25,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Sample one lane at fixed normalized y anchors and predict only x at those anchors.
 

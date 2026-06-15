@@ -21,7 +21,7 @@ from ultralytics.utils.gcs_shape import DATASET_IMAGE_SHAPES, normalize_imgsz, s
 def dataset_defaults(dataset: str) -> dict[str, Path]:
     """Return conventional paths for a converted GCS dataset."""
     name = dataset.lower()
-    root = ROOT / "datasets" / ("tusimple_fixed_y_k56_960x544" if name == "tusimple" else name)
+    root = ROOT / "datasets" / ("tusimple_fixed_y_960x544" if name == "tusimple" else name)
     return {
         "image_dir": root / "images" / "train",
         "label_dir": root / "labels_gcs" / "train",

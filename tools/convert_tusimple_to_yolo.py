@@ -28,7 +28,7 @@ from ultralytics.utils.gcs_shape import DATASET_IMAGE_SHAPES, normalize_imgsz, s
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Convert TuSimple lane labels to YOLO segmentation format.")
     parser.add_argument("--archive-root", default="archive/TUSimple", help="TuSimple root or archive directory.")
-    parser.add_argument("--output-root", default="datasets/tusimple_fixed_y_k56_960x544", help="Converted dataset root.")
+    parser.add_argument("--output-root", default="datasets/tusimple_fixed_y_960x544", help="Converted dataset root.")
     parser.add_argument(
         "--dataset",
         default="tusimple",

@@ -35,12 +35,6 @@ GCS_MAINLINE_COUNT_SUM_GAIN = 0.03
 GCS_MAINLINE_QUALITY_GAIN = 0.4
 GCS_MAINLINE_QUALITY_NEG_WEIGHT = 0.5
 GCS_MAINLINE_QUALITY_GT5_EDGE_FLOOR = 0.0
-GCS_MAINLINE_FIFTHNESS = 0.0
-GCS_MAINLINE_FIFTHNESS_PAIRWISE = 0.0
-GCS_MAINLINE_FIFTHNESS_MARGIN = 0.2
-GCS_MAINLINE_FIFTHNESS_NEGATIVE_TOPK = 2
-GCS_MAINLINE_FIFTHNESS_NEGATIVE_SCORE_THR = 0.1
-GCS_MAINLINE_FIFTHNESS_INCLUDE_GT5_NEGATIVES = False
 GCS_MAINLINE_COUNT_CLS_WEIGHTS = (0.5, 1.2, 1.4, 1.8)
 GCS_MAINLINE_POINT_VALID_GT5_POS_WEIGHT = 2.0
 GCS_MAINLINE_GT5_EDGE_LOSS_WEIGHT = 1.15
@@ -57,11 +51,6 @@ GCS_MAINLINE_HARD_NEGATIVE_VISIBLE_SUPPORT_POINTS = 12.0
 GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT = 0.0
 GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT_THR = 0.65
 GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT_MIN_POINTS = 5
-GCS_MAINLINE_GEOMETRY_CURVATURE_GAIN = 0.0
-GCS_MAINLINE_GEOMETRY_CURVATURE_BETA_PX = 5.0
-GCS_MAINLINE_XLOC_CLS = 0.0
-GCS_MAINLINE_XLOC_OFFSET = 0.0
-GCS_MAINLINE_XLOC_OFFSET_BETA_PX = 3.0
 
 
 def _parse_number_list(value: Any, cast=float) -> list:
@@ -230,7 +219,6 @@ class GCSLaneTrainer(BaseTrainer):
         "point_loss",
         "point_valid_loss",
         "line_iou_loss",
-        "curvature_loss",
         "count_cls_loss",
         "count_sum_loss",
         "quality_loss",
@@ -240,7 +228,6 @@ class GCSLaneTrainer(BaseTrainer):
         "point_loss",
         "point_valid_loss",
         "line_iou_loss",
-        "curvature_loss",
         "count_cls_loss",
         "count_sum_loss",
         "quality_loss",
@@ -265,8 +252,8 @@ class GCSLaneTrainer(BaseTrainer):
         """Initialize the GCS lane trainer."""
         overrides = dict(overrides or {})
         overrides["task"] = "gcs_lane"
-        overrides.setdefault("model", str(ROOT / "cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml"))
-        overrides.setdefault("data", str(ROOT.parent / "data/tusimple_gcs_fixed_y_k56_960x544.yaml"))
+        overrides.setdefault("model", str(ROOT / "cfg/models/gcs/gcs-yolo-lane-s-q12.yaml"))
+        overrides.setdefault("data", str(ROOT.parent / "data/tusimple_gcs_fixed_y_960x544.yaml"))
         # The current main GCS config uses 12 lane queries. Four-image mosaic can still raise TuSimple GT lanes
         # above the query budget, so keep mosaic off unless requested.
         overrides.setdefault("mosaic", 0.0)
@@ -281,15 +268,6 @@ class GCSLaneTrainer(BaseTrainer):
         overrides.setdefault("gcs_quality", GCS_MAINLINE_QUALITY_GAIN)
         overrides.setdefault("gcs_quality_neg_weight", GCS_MAINLINE_QUALITY_NEG_WEIGHT)
         overrides.setdefault("gcs_quality_gt5_edge_floor", GCS_MAINLINE_QUALITY_GT5_EDGE_FLOOR)
-        overrides.setdefault("gcs_fifthness", GCS_MAINLINE_FIFTHNESS)
-        overrides.setdefault("gcs_fifthness_pairwise", GCS_MAINLINE_FIFTHNESS_PAIRWISE)
-        overrides.setdefault("gcs_fifthness_margin", GCS_MAINLINE_FIFTHNESS_MARGIN)
-        overrides.setdefault("gcs_fifthness_negative_topk", GCS_MAINLINE_FIFTHNESS_NEGATIVE_TOPK)
-        overrides.setdefault("gcs_fifthness_negative_score_thr", GCS_MAINLINE_FIFTHNESS_NEGATIVE_SCORE_THR)
-        overrides.setdefault("gcs_fifthness_include_gt5_negatives", GCS_MAINLINE_FIFTHNESS_INCLUDE_GT5_NEGATIVES)
-        overrides.setdefault("gcs_use_fifthness_decode", False)
-        overrides.setdefault("gcs_fifthness_decode_thr", 0.0)
-        overrides.setdefault("gcs_fifthness_decode_rank_weight", 1.0)
         for idx, weight in enumerate(GCS_MAINLINE_COUNT_CLS_WEIGHTS, start=2):
             overrides.setdefault(f"gcs_count_cls_w{idx}", weight)
         overrides.setdefault("gcs_point_valid_gt5_pos_weight", GCS_MAINLINE_POINT_VALID_GT5_POS_WEIGHT)
@@ -313,11 +291,6 @@ class GCSLaneTrainer(BaseTrainer):
             "gcs_point_valid_gt5_edge_segment_min_points",
             GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT_MIN_POINTS,
         )
-        overrides.setdefault("gcs_geometry_curvature", GCS_MAINLINE_GEOMETRY_CURVATURE_GAIN)
-        overrides.setdefault("gcs_geometry_curvature_beta_px", GCS_MAINLINE_GEOMETRY_CURVATURE_BETA_PX)
-        overrides.setdefault("gcs_xloc_cls", GCS_MAINLINE_XLOC_CLS)
-        overrides.setdefault("gcs_xloc_offset", GCS_MAINLINE_XLOC_OFFSET)
-        overrides.setdefault("gcs_xloc_offset_beta_px", GCS_MAINLINE_XLOC_OFFSET_BETA_PX)
         overrides.setdefault("gcs_hard_sampling", False)
         overrides.setdefault("gcs_hard_lane_counts", "")
         overrides.setdefault("gcs_hard_sampling_boost_by_count", "")
@@ -999,7 +972,7 @@ class GCSLaneTrainer(BaseTrainer):
         if not loadable:
             LOGGER.warning(
                 "No pretrained tensors were transferred. Check that the weight file is a YOLO11/YOLO11-seg "
-                "checkpoint with the same scale as the GCS YAML, e.g. yolo11s-seg.pt for gcs-yolo-lane-s-q12-k56.yaml."
+                "checkpoint with the same scale as the GCS YAML, e.g. yolo11s-seg.pt for gcs-yolo-lane-s-q12.yaml."
             )
 
     def get_validator(self):
@@ -1156,9 +1129,9 @@ class GCSLaneTrainer(BaseTrainer):
         """Run a TuSimple official sweep for the current checkpoint and update official_best.pt when it improves."""
         if not self._official_best_enabled() or RANK not in {-1, 0}:
             return
-        from tools.sweep_tusimple_official import run_sweep, validate_official_best_split
+        from tools.sweep_tusimple_official import run_sweep, validate_official_sweep_split
 
-        split = validate_official_best_split(
+        split = validate_official_sweep_split(
             getattr(self.args, "gcs_official_best_split", "val") or "val",
             context="Training official_best selection",
         )
@@ -1211,13 +1184,6 @@ class GCSLaneTrainer(BaseTrainer):
             rescue_candidate_min_points=int(getattr(self.args, "gcs_decode_rescue_candidate_min_points", 4) or 4),
             final_min_points=int(getattr(self.args, "gcs_decode_final_min_points", 6) or 6),
             fifth_min_points=int(getattr(self.args, "gcs_decode_fifth_min_points", 5) or 5),
-            use_fifthness_decode=bool(getattr(self.args, "gcs_use_fifthness_decode", False)),
-            fifthness_decode_thr=float(getattr(self.args, "gcs_fifthness_decode_thr", 0.0) or 0.0),
-            fifthness_decode_rank_weight=(
-                1.0
-                if getattr(self.args, "gcs_fifthness_decode_rank_weight", 1.0) is None
-                else float(getattr(self.args, "gcs_fifthness_decode_rank_weight", 1.0))
-            ),
             line_nms_min_overlap=int(getattr(self.args, "gcs_line_nms_min_overlap", 6) or 6),
             line_nms_rescue_dist_px=float(getattr(self.args, "gcs_line_nms_rescue_dist_px", 30.0) or 0.0),
             quality_rescue_5th=bool(getattr(self.args, "gcs_quality_rescue_5th", True)),

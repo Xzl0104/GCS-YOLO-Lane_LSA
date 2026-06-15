@@ -5,7 +5,6 @@ import json
 import os
 import sys
 from collections import Counter
-from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +24,7 @@ REQUIRED_KEYS = ("lanes", "lane_valid", "num_lanes")
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Check GCS label point order and TuSimple split grouping.")
-    parser.add_argument("--dataset-root", default="datasets/tusimple_fixed_y_k56_960x544", help="Converted dataset root.")
+    parser.add_argument("--dataset-root", default="datasets/tusimple_fixed_y_960x544", help="Converted dataset root.")
     parser.add_argument("--dataset", default="tusimple", choices=sorted(DATASET_IMAGE_SHAPES))
     parser.add_argument("--splits", nargs="+", default=["train", "val", "test"], help="Splits to inspect.")
     parser.add_argument(
@@ -42,38 +41,8 @@ def parse_args() -> argparse.Namespace:
         help="Maximum labels per split for point-order checks. 0 checks every label.",
     )
     parser.add_argument("--eps", type=float, default=1e-6, help="Tolerance for descending-y point order.")
-    parser.add_argument(
-        "--expect-fixed-y",
-        default="",
-        help="Optional exact fixed-y contract as num_points,start,end, e.g. 56,710/720,160/720.",
-    )
     parser.add_argument("--save-dir", default="runs/gcs_lane/label_split_check", help="Directory for summary.json.")
     return parser.parse_args()
-
-
-def _parse_float_expr(text: str) -> float:
-    text = str(text).strip()
-    if "/" in text:
-        return float(Fraction(text))
-    return float(text)
-
-
-def parse_expected_fixed_y(value: str) -> np.ndarray | None:
-    """Parse an exact fixed-y contract string into expected anchors."""
-    text = str(value or "").strip()
-    if not text:
-        return None
-    parts = [x.strip() for x in text.replace(";", ",").split(",") if x.strip()]
-    if len(parts) != 3:
-        raise ValueError("--expect-fixed-y must be formatted as num_points,start,end")
-    num_points = int(parts[0])
-    if num_points <= 0:
-        raise ValueError(f"num_points must be positive, got {num_points}")
-    start = _parse_float_expr(parts[1])
-    end = _parse_float_expr(parts[2])
-    if not (0.0 <= end < start <= 1.0):
-        raise ValueError(f"expected 0 <= end < start <= 1, got start={start}, end={end}")
-    return np.linspace(start, end, num_points, dtype=np.float32)
 
 
 def _jsonable(value: Any) -> Any:
@@ -114,7 +83,6 @@ def check_label(
     label_path: Path,
     expected_imgsz: tuple[int, int],
     eps: float,
-    expected_fixed_y: np.ndarray | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], list[str]]:
     with np.load(label_path, allow_pickle=False) as data:
         missing = [key for key in REQUIRED_KEYS if key not in data]
@@ -154,14 +122,6 @@ def check_label(
             errors.append(f"fixed_y shape {fixed_y.shape} != ({lanes.shape[1]},)")
         elif not np.all(np.diff(fixed_y) < 0.0):
             errors.append("fixed_y anchors are not strictly descending")
-        elif expected_fixed_y is not None:
-            if fixed_y.shape != expected_fixed_y.shape:
-                errors.append(f"fixed_y shape {fixed_y.shape} != expected {expected_fixed_y.shape}")
-            elif not np.allclose(fixed_y, expected_fixed_y, rtol=0.0, atol=max(float(eps), 1e-7)):
-                max_err = float(np.max(np.abs(fixed_y - expected_fixed_y)))
-                errors.append(f"fixed_y anchors differ from expected contract, max_err={max_err:.8f}")
-    elif expected_fixed_y is not None:
-        errors.append(f"expected fixed_y labels, got point_mode={point_mode!r}")
 
     if lanes.ndim == 3 and lane_valid.shape == lanes.shape[:2]:
         for lane_idx, lane in enumerate(lanes):
@@ -201,7 +161,6 @@ def inspect_split(
     expected_imgsz: tuple[int, int],
     max_order_files: int,
     eps: float,
-    expected_fixed_y: np.ndarray | None = None,
 ) -> dict[str, Any]:
     label_dir = dataset_root / "labels_gcs" / split
     labels = sorted(label_dir.glob("*.npz"))
@@ -220,7 +179,6 @@ def inspect_split(
             label,
             expected_imgsz=expected_imgsz,
             eps=eps,
-            expected_fixed_y=expected_fixed_y,
         )
         if errors:
             file_errors.append({"label": str(label), "errors": errors})
@@ -258,7 +216,6 @@ def main() -> None:
     args = parse_args()
     dataset_root = ROOT / args.dataset_root if not Path(args.dataset_root).is_absolute() else Path(args.dataset_root)
     expected_imgsz = normalize_imgsz(args.imgsz, dataset=args.dataset)
-    expected_fixed_y = parse_expected_fixed_y(args.expect_fixed_y)
     save_dir = ROOT / args.save_dir if not Path(args.save_dir).is_absolute() else Path(args.save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
 
@@ -271,7 +228,6 @@ def main() -> None:
             expected_imgsz=expected_imgsz,
             max_order_files=args.max_order_files,
             eps=args.eps,
-            expected_fixed_y=expected_fixed_y,
         )
         group_sets[split] = set(summary.pop("_groups"))
         split_summaries[split] = summary
@@ -290,7 +246,6 @@ def main() -> None:
         "dataset_root": str(dataset_root),
         "expected_imgsz_hw": list(expected_imgsz),
         "expected_shape": shape_str(expected_imgsz),
-        "expected_fixed_y": None if expected_fixed_y is None else expected_fixed_y.tolist(),
         "splits": split_summaries,
         "group_leakage": leakage,
     }

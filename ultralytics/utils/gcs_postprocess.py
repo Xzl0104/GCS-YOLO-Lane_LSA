@@ -293,39 +293,6 @@ def _lane_rank_score(lane: dict) -> float:
     return float(lane.get("rank_score", _lane_exist_score(lane)))
 
 
-def _lane_fifthness_score(lane: dict) -> float | None:
-    """Return optional fifth-candidate verifier probability for one decoded lane."""
-    if "fifthness_score" not in lane:
-        return None
-    try:
-        return float(lane["fifthness_score"])
-    except (TypeError, ValueError):
-        return None
-
-
-def _lane_fifthness_rank_score(lane: dict, rank_weight: float = 1.0) -> float:
-    """Rank a fifth-lane candidate by base evidence and optional fifthness probability."""
-    base = _lane_rank_score(lane)
-    fifthness = _lane_fifthness_score(lane)
-    weight = max(float(rank_weight), 0.0)
-    if fifthness is None or weight <= 0.0:
-        return base
-    fifthness = max(min(float(fifthness), 1.0), 1e-6)
-    return float(base * (fifthness**weight))
-
-
-def _fifthness_gate_reason(lane: dict, enabled: bool, threshold: float) -> str | None:
-    """Return a fifthness rejection reason, or None when the candidate is accepted."""
-    if not enabled:
-        return None
-    fifthness = _lane_fifthness_score(lane)
-    if fifthness is None:
-        return "missing_fifthness"
-    if fifthness < float(threshold):
-        return "fifthness_too_low"
-    return None
-
-
 def _normalize_rank_min_points(rank_min_points: Mapping[int, int] | None) -> dict[int, int] | None:
     """Normalize optional per-selected-rank min_points overrides."""
     if not rank_min_points:
@@ -719,22 +686,11 @@ def _select_topk_with_final_constraints(
     *,
     rank_min_points: Mapping[int, int] | None = None,
     fifth_min_points: int | None = None,
-    use_fifthness_decode: bool = False,
-    fifthness_decode_thr: float = 0.0,
-    fifthness_decode_rank_weight: float = 1.0,
 ) -> list[dict]:
     """Select rank-score Top-K lanes while enforcing final per-selected-rank visible-point floors."""
     selected: list[dict] = []
-    remaining = sorted(lanes, key=_lane_rank_score, reverse=True)
-    while remaining and len(selected) < int(target_count):
+    for lane in sorted(lanes, key=_lane_rank_score, reverse=True):
         selected_rank = len(selected) + 1
-        if bool(use_fifthness_decode) and selected_rank >= 5:
-            remaining = sorted(
-                remaining,
-                key=lambda item: _lane_fifthness_rank_score(item, fifthness_decode_rank_weight),
-                reverse=True,
-            )
-        lane = remaining.pop(0)
         required = _required_min_points_for_rank(
             selected_rank,
             default_min_points,
@@ -743,17 +699,12 @@ def _select_topk_with_final_constraints(
         )
         if int(lane.get("valid_count", 0)) < int(required):
             continue
-        if selected_rank >= 5 and _fifthness_gate_reason(lane, use_fifthness_decode, fifthness_decode_thr):
-            continue
         lane = dict(lane)
         lane["rank_selection_rank"] = int(selected_rank)
         lane["rank_min_points_required"] = int(required)
-        if bool(use_fifthness_decode) and selected_rank >= 5:
-            lane["fifthness_decode_selected"] = True
-            lane["fifthness_rank_score"] = float(
-                _lane_fifthness_rank_score(lane, fifthness_decode_rank_weight)
-            )
         selected.append(lane)
+        if len(selected) >= int(target_count):
+            break
     return selected
 
 
@@ -768,24 +719,13 @@ def _rescue_missing_lanes(
     fifth_min_points: int | None = None,
     rescue_dist_px: float = 0.0,
     min_overlap: int = 6,
-    use_fifthness_decode: bool = False,
-    fifthness_decode_thr: float = 0.0,
-    fifthness_decode_rank_weight: float = 1.0,
 ) -> list[dict]:
     """Fill a Count Head Top-K shortfall from pre-NMS candidates without fabricating lanes."""
     if len(selected) >= int(target_count):
         return selected
     selected_queries = {int(x.get("query", -1)) for x in selected}
     out = list(selected)
-    remaining = sorted(pre_nms_candidates, key=_lane_rank_score, reverse=True)
-    while remaining and len(out) < int(target_count):
-        if bool(use_fifthness_decode) and len(out) + 1 >= 5:
-            remaining = sorted(
-                remaining,
-                key=lambda item: _lane_fifthness_rank_score(item, fifthness_decode_rank_weight),
-                reverse=True,
-            )
-        lane = remaining.pop(0)
+    for lane in sorted(pre_nms_candidates, key=_lane_rank_score, reverse=True):
         if int(lane.get("query", -1)) in selected_queries:
             continue
         selected_rank = len(out) + 1
@@ -797,8 +737,6 @@ def _rescue_missing_lanes(
         )
         if int(lane.get("valid_count", 0)) < int(required):
             continue
-        if selected_rank >= 5 and _fifthness_gate_reason(lane, use_fifthness_decode, fifthness_decode_thr):
-            continue
         if image_shape is not None and any(
             _lanes_too_close(lane, kept, image_shape, rescue_dist_px, min_overlap) for kept in out
         ):
@@ -808,13 +746,10 @@ def _rescue_missing_lanes(
         lane["rank_min_points_required"] = int(required)
         lane["count_head_rescue"] = True
         lane["source"] = "rescue_refill"
-        if bool(use_fifthness_decode) and selected_rank >= 5:
-            lane["fifthness_decode_selected"] = True
-            lane["fifthness_rank_score"] = float(
-                _lane_fifthness_rank_score(lane, fifthness_decode_rank_weight)
-            )
         out.append(lane)
         selected_queries.add(int(lane.get("query", -1)))
+        if len(out) >= int(target_count):
+            break
     return out
 
 
@@ -829,9 +764,6 @@ def count_aware_refill(
     fifth_min_points: int | None = None,
     rescue_dist_px: float = 0.0,
     min_overlap: int = 6,
-    use_fifthness_decode: bool = False,
-    fifthness_decode_thr: float = 0.0,
-    fifthness_decode_rank_weight: float = 1.0,
 ) -> list[dict]:
     """Public Count Head refill helper that only reuses real pre-NMS candidates."""
     return _rescue_missing_lanes(
@@ -844,9 +776,6 @@ def count_aware_refill(
         fifth_min_points=fifth_min_points,
         rescue_dist_px=rescue_dist_px,
         min_overlap=min_overlap,
-        use_fifthness_decode=use_fifthness_decode,
-        fifthness_decode_thr=fifthness_decode_thr,
-        fifthness_decode_rank_weight=fifthness_decode_rank_weight,
     )
 
 
@@ -951,15 +880,11 @@ def _find_edge_rescue_candidate(
     edge_outside_gap_px: float = 28.0,
     edge_dist_px: float = 24.0,
     min_overlap: int = 6,
-    use_fifthness_decode: bool = False,
-    fifthness_decode_thr: float = 0.0,
-    fifthness_decode_rank_weight: float = 1.0,
 ) -> tuple[dict | None, dict]:
     """Select the best outside-left/right real-query candidate for edge rescue."""
     meta = {
         "edge_last_lane_rescue_reason": "no_candidate",
         "edge_last_lane_rescue_candidate_quality": None,
-        "edge_last_lane_rescue_candidate_fifthness": None,
         "edge_last_lane_rescue_candidate_valid_points": None,
         "edge_last_lane_rescue_candidate_min_dist": None,
         "edge_last_lane_rescue_candidate_side": None,
@@ -991,10 +916,6 @@ def _find_edge_rescue_candidate(
         meta["edge_last_lane_rescue_candidate_valid_points"] = int(lane.get("valid_count", 0))
         quality_score = lane.get("quality_score")
         meta["edge_last_lane_rescue_candidate_quality"] = None if quality_score is None else float(quality_score)
-        fifthness_score = _lane_fifthness_score(lane)
-        meta["edge_last_lane_rescue_candidate_fifthness"] = (
-            None if fifthness_score is None else float(fifthness_score)
-        )
         if float(lane.get("exist_score", lane.get("score", 0.0))) < float(edge_conf_thr):
             meta["edge_last_lane_rescue_reason"] = "conf_low"
             continue
@@ -1010,10 +931,6 @@ def _find_edge_rescue_candidate(
         if quality_score is not None and float(quality_score) < float(edge_quality_thr):
             meta["edge_last_lane_rescue_reason"] = "quality_too_low"
             continue
-        fifthness_reason = _fifthness_gate_reason(lane, use_fifthness_decode, fifthness_decode_thr)
-        if fifthness_reason is not None:
-            meta["edge_last_lane_rescue_reason"] = fifthness_reason
-            continue
         min_dist = _lane_min_distance_to_selected(lane, selected, image_shape, min_overlap)
         meta["edge_last_lane_rescue_candidate_min_dist"] = None if not np.isfinite(min_dist) else float(min_dist)
         if min_dist < float(edge_dist_px):
@@ -1028,11 +945,6 @@ def _find_edge_rescue_candidate(
             + 0.10 * min(float(outside_gap or 0.0) / 120.0, 1.0)
             + 0.03 * min(float(lane.get("valid_count", 0)) / 8.0, 1.0)
         )
-        if bool(use_fifthness_decode):
-            edge_score = edge_score * (
-                max(float(fifthness_score if fifthness_score is not None else 0.0), 1e-6)
-                ** max(float(fifthness_decode_rank_weight), 0.0)
-            )
         if side == "left":
             edge_score += 0.01
         lane["edge_rescue_score"] = float(edge_score)
@@ -1046,9 +958,6 @@ def _find_edge_rescue_candidate(
     meta["edge_last_lane_rescue_reason"] = "candidate_found"
     meta["edge_last_lane_rescue_candidate_quality"] = (
         None if best.get("quality_score") is None else float(best.get("quality_score"))
-    )
-    meta["edge_last_lane_rescue_candidate_fifthness"] = (
-        None if best.get("fifthness_score") is None else float(best.get("fifthness_score"))
     )
     meta["edge_last_lane_rescue_candidate_valid_points"] = int(best.get("valid_count", 0))
     meta["edge_last_lane_rescue_candidate_min_dist"] = best.get("edge_rescue_min_dist")
@@ -1071,9 +980,6 @@ def _edge_last_lane_rescue(
     edge_outside_gap_px: float = 28.0,
     edge_dist_px: float = 24.0,
     min_overlap: int = 6,
-    use_fifthness_decode: bool = False,
-    fifthness_decode_thr: float = 0.0,
-    fifthness_decode_rank_weight: float = 1.0,
 ) -> tuple[list[dict], dict]:
     """Prioritize rescuing an outside-left/right lane from real model candidates only."""
     target_count = int(target_count)
@@ -1082,7 +988,6 @@ def _edge_last_lane_rescue(
         "edge_last_lane_rescue_success_count": 0,
         "edge_last_lane_rescue_reason": "not_attempted",
         "edge_last_lane_rescue_candidate_quality": None,
-        "edge_last_lane_rescue_candidate_fifthness": None,
         "edge_last_lane_rescue_candidate_valid_points": None,
         "edge_last_lane_rescue_candidate_min_dist": None,
         "edge_last_lane_rescue_candidate_side": None,
@@ -1110,9 +1015,6 @@ def _edge_last_lane_rescue(
             edge_outside_gap_px=float(edge_outside_gap_px),
             edge_dist_px=float(edge_dist_px),
             min_overlap=int(min_overlap),
-            use_fifthness_decode=bool(use_fifthness_decode and len(out) + 1 >= 5),
-            fifthness_decode_thr=float(fifthness_decode_thr),
-            fifthness_decode_rank_weight=float(fifthness_decode_rank_weight),
         )
         meta.update(picked_meta)
         if picked is None:
@@ -1125,20 +1027,12 @@ def _edge_last_lane_rescue(
         picked["last_lane_rescue"] = True
         picked["edge_last_lane_rescue"] = True
         picked["source"] = "edge_last_lane_rescue"
-        if bool(use_fifthness_decode) and selected_rank >= 5:
-            picked["fifthness_decode_selected"] = True
-            picked["fifthness_rank_score"] = float(
-                _lane_fifthness_rank_score(picked, fifthness_decode_rank_weight)
-            )
         out.append(picked)
         selected_queries.add(int(picked.get("query", -1)))
         meta["edge_last_lane_rescue_success_count"] = int(meta["edge_last_lane_rescue_success_count"]) + 1
         meta["edge_last_lane_rescue_reason"] = "rescued"
         meta["edge_last_lane_rescue_candidate_quality"] = (
             None if picked.get("quality_score") is None else float(picked.get("quality_score"))
-        )
-        meta["edge_last_lane_rescue_candidate_fifthness"] = (
-            None if picked.get("fifthness_score") is None else float(picked.get("fifthness_score"))
         )
         meta["edge_last_lane_rescue_candidate_valid_points"] = int(picked.get("valid_count", 0))
         meta["edge_last_lane_rescue_candidate_min_dist"] = picked.get("edge_rescue_min_dist")
@@ -1164,9 +1058,6 @@ def _edge_count4_to5_upgrade_eligible(
     edge_outside_gap_px: float = 28.0,
     edge_dist_px: float = 24.0,
     min_overlap: int = 6,
-    use_fifthness_decode: bool = False,
-    fifthness_decode_thr: float = 0.0,
-    fifthness_decode_rank_weight: float = 1.0,
 ) -> tuple[bool, dict]:
     """Allow only Count Head K=4 -> effective K=5 when a valid outside-edge candidate exists."""
     meta = {
@@ -1178,7 +1069,6 @@ def _edge_count4_to5_upgrade_eligible(
         "edge_count4_to5_candidate_side": None,
         "edge_count4_to5_candidate_valid_points": None,
         "edge_count4_to5_candidate_quality": None,
-        "edge_count4_to5_candidate_fifthness": None,
         "edge_count4_to5_candidate_min_dist": None,
     }
     if not enabled:
@@ -1213,16 +1103,12 @@ def _edge_count4_to5_upgrade_eligible(
         edge_outside_gap_px=float(edge_outside_gap_px),
         edge_dist_px=float(edge_dist_px),
         min_overlap=int(min_overlap),
-        use_fifthness_decode=bool(use_fifthness_decode),
-        fifthness_decode_thr=float(fifthness_decode_thr),
-        fifthness_decode_rank_weight=float(fifthness_decode_rank_weight),
     )
     if picked is None:
         meta["edge_count4_to5_upgrade_reason"] = picked_meta.get("edge_last_lane_rescue_reason", "no_valid_edge_candidate")
         meta["edge_count4_to5_candidate_side"] = picked_meta.get("edge_last_lane_rescue_candidate_side")
         meta["edge_count4_to5_candidate_valid_points"] = picked_meta.get("edge_last_lane_rescue_candidate_valid_points")
         meta["edge_count4_to5_candidate_quality"] = picked_meta.get("edge_last_lane_rescue_candidate_quality")
-        meta["edge_count4_to5_candidate_fifthness"] = picked_meta.get("edge_last_lane_rescue_candidate_fifthness")
         meta["edge_count4_to5_candidate_min_dist"] = picked_meta.get("edge_last_lane_rescue_candidate_min_dist")
         return False, meta
     meta["edge_count4_to5_upgrade"] = True
@@ -1230,9 +1116,6 @@ def _edge_count4_to5_upgrade_eligible(
     meta["edge_count4_to5_candidate_side"] = picked.get("edge_rescue_side")
     meta["edge_count4_to5_candidate_valid_points"] = int(picked.get("valid_count", 0))
     meta["edge_count4_to5_candidate_quality"] = None if picked.get("quality_score") is None else float(picked.get("quality_score"))
-    meta["edge_count4_to5_candidate_fifthness"] = (
-        None if picked.get("fifthness_score") is None else float(picked.get("fifthness_score"))
-    )
     meta["edge_count4_to5_candidate_min_dist"] = picked.get("edge_rescue_min_dist")
     return True, meta
 
@@ -1249,9 +1132,6 @@ def _last_required_lane_rescue(
     rescue_min_points: int = 4,
     rescue_dist_px: float = 24.0,
     min_overlap: int = 6,
-    use_fifthness_decode: bool = False,
-    fifthness_decode_thr: float = 0.0,
-    fifthness_decode_rank_weight: float = 1.0,
 ) -> tuple[list[dict], dict]:
     """Fill the final required lane for high-count policies using only a gated weak candidate pool."""
     target_count = int(target_count)
@@ -1260,7 +1140,6 @@ def _last_required_lane_rescue(
         "last_lane_rescue_success_count": 0,
         "last_lane_rescue_reason": "not_attempted",
         "last_lane_rescue_candidate_quality": None,
-        "last_lane_rescue_candidate_fifthness": None,
         "last_lane_rescue_candidate_valid_points": None,
         "last_lane_rescue_candidate_min_dist": None,
     }
@@ -1275,30 +1154,13 @@ def _last_required_lane_rescue(
     selected_queries = {int(x.get("query", -1)) for x in selected}
     out = list(selected)
     saw_candidate = False
-    remaining = sorted(rescue_candidates, key=_lane_rank_score, reverse=True)
-    while remaining and len(out) < target_count:
-        if bool(use_fifthness_decode) and len(out) + 1 >= 5:
-            remaining = sorted(
-                remaining,
-                key=lambda item: _lane_fifthness_rank_score(item, fifthness_decode_rank_weight),
-                reverse=True,
-            )
-        lane = remaining.pop(0)
+    for lane in sorted(rescue_candidates, key=_lane_rank_score, reverse=True):
         if int(lane.get("query", -1)) in selected_queries:
             continue
         saw_candidate = True
         meta["last_lane_rescue_candidate_valid_points"] = int(lane.get("valid_count", 0))
         quality_score = lane.get("quality_score")
         meta["last_lane_rescue_candidate_quality"] = None if quality_score is None else float(quality_score)
-        fifthness_score = _lane_fifthness_score(lane)
-        meta["last_lane_rescue_candidate_fifthness"] = (
-            None if fifthness_score is None else float(fifthness_score)
-        )
-        selected_rank = len(out) + 1
-        fifthness_reason = _fifthness_gate_reason(lane, use_fifthness_decode and selected_rank >= 5, fifthness_decode_thr)
-        if fifthness_reason is not None:
-            meta["last_lane_rescue_reason"] = fifthness_reason
-            continue
         if float(lane.get("exist_score", lane.get("score", 0.0))) < float(rescue_conf_thr):
             meta["last_lane_rescue_reason"] = "conf_low"
             continue
@@ -1323,6 +1185,7 @@ def _last_required_lane_rescue(
                 meta["last_lane_rescue_reason"] = "distance_too_close"
                 continue
 
+        selected_rank = len(out) + 1
         lane = dict(lane)
         lane["rank_selection_rank"] = int(selected_rank)
         lane["rank_min_points_required"] = int(rescue_min_points)
@@ -1330,21 +1193,15 @@ def _last_required_lane_rescue(
         lane["last_lane_rescue"] = True
         lane["last_lane_rescue_min_dist"] = None if not np.isfinite(min_dist) else float(min_dist)
         lane["source"] = "last_lane_rescue"
-        if bool(use_fifthness_decode) and selected_rank >= 5:
-            lane["fifthness_decode_selected"] = True
-            lane["fifthness_rank_score"] = float(
-                _lane_fifthness_rank_score(lane, fifthness_decode_rank_weight)
-            )
         out.append(lane)
         selected_queries.add(int(lane.get("query", -1)))
         meta["last_lane_rescue_success_count"] = int(meta["last_lane_rescue_success_count"]) + 1
         meta["last_lane_rescue_reason"] = "rescued"
         meta["last_lane_rescue_candidate_quality"] = None if quality_score is None else float(quality_score)
-        meta["last_lane_rescue_candidate_fifthness"] = (
-            None if fifthness_score is None else float(fifthness_score)
-        )
         meta["last_lane_rescue_candidate_valid_points"] = int(lane.get("valid_count", 0))
         meta["last_lane_rescue_candidate_min_dist"] = None if not np.isfinite(min_dist) else float(min_dist)
+        if len(out) >= target_count:
+            break
 
     if not saw_candidate:
         meta["last_lane_rescue_reason"] = "no_candidate"
@@ -1366,9 +1223,6 @@ def _quality_gated_rescue_5th(
     rescue_min_points: int = 5,
     rescue_dist_px: float = 24.0,
     min_overlap: int = 6,
-    use_fifthness_decode: bool = False,
-    fifthness_decode_thr: float = 0.0,
-    fifthness_decode_rank_weight: float = 1.0,
 ) -> tuple[list[dict], dict]:
     """Conservatively add a fifth lane only when Count Head and lane quality agree."""
     meta = {
@@ -1376,7 +1230,6 @@ def _quality_gated_rescue_5th(
         "rescue_success": False,
         "rescue_reason": "not_attempted",
         "rescue_candidate_quality": None,
-        "rescue_candidate_fifthness": None,
         "rescue_candidate_valid_points": None,
         "rescue_candidate_min_dist": None,
     }
@@ -1396,24 +1249,13 @@ def _quality_gated_rescue_5th(
     meta["rescue_attempted"] = True
     selected_queries = {int(x.get("query", -1)) for x in selected}
     saw_candidate = False
-    sort_key = (
-        (lambda item: _lane_fifthness_rank_score(item, fifthness_decode_rank_weight))
-        if bool(use_fifthness_decode)
-        else _lane_rank_score
-    )
-    for lane in sorted(pre_nms_candidates, key=sort_key, reverse=True):
+    for lane in sorted(pre_nms_candidates, key=_lane_rank_score, reverse=True):
         if int(lane.get("query", -1)) in selected_queries:
             continue
         saw_candidate = True
         quality_score = lane.get("quality_score")
         meta["rescue_candidate_quality"] = None if quality_score is None else float(quality_score)
-        fifthness_score = _lane_fifthness_score(lane)
-        meta["rescue_candidate_fifthness"] = None if fifthness_score is None else float(fifthness_score)
         meta["rescue_candidate_valid_points"] = int(lane.get("valid_count", 0))
-        fifthness_reason = _fifthness_gate_reason(lane, use_fifthness_decode, fifthness_decode_thr)
-        if fifthness_reason is not None:
-            meta["rescue_reason"] = fifthness_reason
-            continue
         if quality_score is None:
             meta["rescue_reason"] = "missing_quality"
             continue
@@ -1443,15 +1285,9 @@ def _quality_gated_rescue_5th(
         lane["quality_rescue_5th"] = True
         lane["quality_rescue_count5_prob"] = count5_prob
         lane["quality_rescue_min_dist"] = None if not np.isfinite(min_dist) else float(min_dist)
-        if bool(use_fifthness_decode):
-            lane["fifthness_decode_selected"] = True
-            lane["fifthness_rank_score"] = float(
-                _lane_fifthness_rank_score(lane, fifthness_decode_rank_weight)
-            )
         meta["rescue_success"] = True
         meta["rescue_reason"] = "rescued"
         meta["rescue_candidate_quality"] = float(quality_score)
-        meta["rescue_candidate_fifthness"] = None if fifthness_score is None else float(fifthness_score)
         meta["rescue_candidate_valid_points"] = int(lane.get("valid_count", 0))
         meta["rescue_candidate_min_dist"] = None if not np.isfinite(min_dist) else float(min_dist)
         return [*selected, lane], meta
@@ -1555,7 +1391,6 @@ def _build_lane_candidates(
     scores: torch.Tensor,
     point_valid_scores: torch.Tensor | None,
     quality_scores: torch.Tensor | None,
-    fifthness_scores: torch.Tensor | None,
     query_indices: torch.Tensor,
     image_shape: tuple[int, int] | None,
     score_thr: float,
@@ -1578,7 +1413,6 @@ def _build_lane_candidates(
         lane_points = points[raw_idx][order_i]
         valid_scores_i = point_valid_scores[raw_idx][order_i] if point_valid_scores is not None else None
         quality_score_i = float(quality_scores[raw_idx]) if quality_scores is not None else None
-        fifthness_score_i = float(fifthness_scores[raw_idx]) if fifthness_scores is not None else None
         exist_score = float(scores[raw_idx])
         rank_quality = _lane_rank_quality(
             lane_points,
@@ -1617,9 +1451,6 @@ def _build_lane_candidates(
         if rank_quality["quality_score"] is not None:
             item["quality_score"] = float(rank_quality["quality_score"])
             item["quality_head_score"] = float(rank_quality["quality_score"])
-        if fifthness_score_i is not None:
-            item["fifthness_score"] = float(np.clip(fifthness_score_i, 0.0, 1.0))
-            item["fifthness_head_score"] = float(np.clip(fifthness_score_i, 0.0, 1.0))
         visible_mask = None
         if point_valid_scores is not None:
             visible_mask_t = rank_quality["visible_mask"]
@@ -1690,7 +1521,6 @@ def decode_gcs_predictions(
     pred_count_logits: torch.Tensor | None = None,
     pred_count_boundary_logits: torch.Tensor | None = None,
     pred_quality_logits: torch.Tensor | None = None,
-    pred_fifthness_logits: torch.Tensor | None = None,
     image_shape: tuple[int, int] | None = None,
     score_thr: float = 0.5,
     point_valid_thr: float = 0.5,
@@ -1748,9 +1578,6 @@ def decode_gcs_predictions(
     soft_count_prior_weight: float = 0.5,
     soft_count_duplicate_penalty: float = 1.0,
     soft_count_invalid_penalty: float = 1.0,
-    use_fifthness_decode: bool = False,
-    fifthness_decode_thr: float = 0.0,
-    fifthness_decode_rank_weight: float = 1.0,
     return_meta: bool = False,
 ) -> list[dict] | tuple[list[dict], dict]:
     """Decode ``pred_points`` and ``pred_logits`` into ordered lane point sequences.
@@ -1765,8 +1592,6 @@ def decode_gcs_predictions(
         pred_count_boundary_logits: Optional count>=4/count>=5 logits used only to calibrate image-level K.
         pred_quality_logits: Optional Q lane-quality logits retained for diagnostics and quality-gated rescue.
             Top-K ranking uses ``exist * visible_segment_mean_valid * visible_support_score``.
-        pred_fifthness_logits: Optional Q fifth-candidate verifier logits. These are ignored unless
-            ``use_fifthness_decode`` is enabled.
         image_shape: Optional original image shape as (height, width). If provided, pixel points are added.
         score_thr: Existence probability threshold.
         point_valid_thr: Per-point visibility probability threshold.
@@ -1809,11 +1634,6 @@ def decode_gcs_predictions(
             was disabled by the caller. Ordinary ``last_lane_rescue`` also tries this edge branch first.
         enable_soft_count_decision: If True, adjacent close Count Head probabilities are re-scored by candidate
             quality, duplicate risk, and invalid/short-candidate penalties before final K selection.
-        use_fifthness_decode: If True, use ``pred_fifthness_logits`` only for the selected fifth lane.
-            Ranks 1-4 keep the default ``exist_visibility`` ordering.
-        fifthness_decode_thr: Minimum fifthness probability required for a fifth-lane candidate when
-            ``use_fifthness_decode`` is enabled.
-        fifthness_decode_rank_weight: Exponent applied to fifthness probability in the fifth-lane rank score.
         return_meta: If True, return ``(lanes, decode_meta)`` for sweep/diagnostic aggregation.
 
     Returns:
@@ -1847,32 +1667,11 @@ def decode_gcs_predictions(
                 "pred_quality_logits must have shape Q matching pred_points, "
                 f"got {tuple(pred_quality_logits.shape)} vs Q={pred_points.shape[0]}."
             )
-    if pred_fifthness_logits is not None:
-        if pred_fifthness_logits.ndim == 2 and pred_fifthness_logits.shape[-1] == 1:
-            pred_fifthness_logits = pred_fifthness_logits.squeeze(-1)
-        if pred_fifthness_logits.ndim != 1 or pred_fifthness_logits.shape[0] != pred_points.shape[0]:
-            raise ValueError(
-                "pred_fifthness_logits must have shape Q matching pred_points, "
-                f"got {tuple(pred_fifthness_logits.shape)} vs Q={pred_points.shape[0]}."
-            )
-    if bool(use_fifthness_decode) and pred_fifthness_logits is None:
-        raise ValueError("use_fifthness_decode=True requires pred_fifthness_logits.")
-    if not (0.0 <= float(fifthness_decode_thr) <= 1.0):
-        raise ValueError(f"fifthness_decode_thr must be in [0, 1], got {fifthness_decode_thr}.")
-    if float(fifthness_decode_rank_weight) < 0.0:
-        raise ValueError(
-            f"fifthness_decode_rank_weight must be >= 0, got {fifthness_decode_rank_weight}."
-        )
 
     points = pred_points.detach().float().cpu().clamp(0.0, 1.0)
     scores = pred_logits.detach().float().cpu().sigmoid()
     point_valid_scores = pred_valid_logits.detach().float().cpu().sigmoid() if pred_valid_logits is not None else None
     quality_scores = pred_quality_logits.detach().float().cpu().sigmoid() if pred_quality_logits is not None else None
-    fifthness_scores = (
-        pred_fifthness_logits.detach().float().cpu().sigmoid()
-        if pred_fifthness_logits is not None
-        else None
-    )
     query_indices = torch.arange(points.shape[0], dtype=torch.long)
     rank_min_points_cfg = _normalize_rank_min_points(rank_min_points)
     count_head_active = bool(use_count_head_decode)
@@ -2037,7 +1836,6 @@ def decode_gcs_predictions(
         "top5_candidate_index_before_nms": None,
         "top5_candidate_score_before_nms": None,
         "top5_candidate_quality_before_nms": None,
-        "top5_candidate_fifthness_before_nms": None,
         "top5_candidate_valid_points_before_nms": None,
         "top5_suppressed_by_nms": False,
         "candidate_count_after_nms": 0,
@@ -2045,14 +1843,6 @@ def decode_gcs_predictions(
         "quality_rank_active": True,
         "quality_rank_source": "exist_visibility",
         "quality_head_available": bool(quality_scores is not None),
-        "fifthness_head_available": bool(fifthness_scores is not None),
-        "fifthness_decode_enabled": bool(use_fifthness_decode),
-        "fifthness_decode_thr": float(fifthness_decode_thr),
-        "fifthness_decode_rank_weight": float(fifthness_decode_rank_weight),
-        "fifthness_selected_fifth_query": None,
-        "fifthness_selected_fifth_score": None,
-        "fifthness_selected_fifth_rank_score": None,
-        "fifthness_selected_fifth_gate_pass": None,
         "quality_rescue_5th_enabled": bool(quality_scores is not None and quality_rescue_5th),
         "last_lane_rescue_enabled": bool(last_lane_rescue),
         "last_lane_rescue_min_policy_count": int(last_lane_rescue_min_policy_count_i),
@@ -2082,13 +1872,11 @@ def decode_gcs_predictions(
         "edge_count4_to5_candidate_side": None,
         "edge_count4_to5_candidate_valid_points": None,
         "edge_count4_to5_candidate_quality": None,
-        "edge_count4_to5_candidate_fifthness": None,
         "edge_count4_to5_candidate_min_dist": None,
         "edge_last_lane_rescue_attempt_count": 0,
         "edge_last_lane_rescue_success_count": 0,
         "edge_last_lane_rescue_reason": "not_attempted",
         "edge_last_lane_rescue_candidate_quality": None,
-        "edge_last_lane_rescue_candidate_fifthness": None,
         "edge_last_lane_rescue_candidate_valid_points": None,
         "edge_last_lane_rescue_candidate_min_dist": None,
         "edge_last_lane_rescue_candidate_side": None,
@@ -2105,14 +1893,12 @@ def decode_gcs_predictions(
         "rescue_success": False,
         "rescue_reason": "not_attempted",
         "rescue_candidate_quality": None,
-        "rescue_candidate_fifthness": None,
         "rescue_candidate_valid_points": None,
         "rescue_candidate_min_dist": None,
         "last_lane_rescue_attempt_count": 0,
         "last_lane_rescue_success_count": 0,
         "last_lane_rescue_reason": "not_attempted",
         "last_lane_rescue_candidate_quality": None,
-        "last_lane_rescue_candidate_fifthness": None,
         "last_lane_rescue_candidate_valid_points": None,
         "last_lane_rescue_candidate_min_dist": None,
     }
@@ -2130,7 +1916,6 @@ def decode_gcs_predictions(
         scores,
         point_valid_scores,
         quality_scores,
-        fifthness_scores,
         query_indices,
         image_shape,
         score_thr=candidate_score_thr_i,
@@ -2143,7 +1928,6 @@ def decode_gcs_predictions(
             scores,
             point_valid_scores,
             quality_scores,
-            fifthness_scores,
             query_indices,
             image_shape,
             score_thr=rescue_candidate_score_thr_i,
@@ -2159,7 +1943,6 @@ def decode_gcs_predictions(
             scores,
             point_valid_scores,
             quality_scores,
-            fifthness_scores,
             query_indices,
             image_shape,
             score_thr=last_lane_rescue_conf_thr_i,
@@ -2175,7 +1958,6 @@ def decode_gcs_predictions(
             scores,
             point_valid_scores,
             quality_scores,
-            fifthness_scores,
             query_indices,
             image_shape,
             score_thr=float(edge_rescue_conf_thr),
@@ -2226,9 +2008,6 @@ def decode_gcs_predictions(
                 "top5_candidate_score_before_nms": float(_lane_rank_score(top5)),
                 "top5_candidate_quality_before_nms": (
                     None if top5.get("quality_score") is None else float(top5.get("quality_score"))
-                ),
-                "top5_candidate_fifthness_before_nms": (
-                    None if top5.get("fifthness_score") is None else float(top5.get("fifthness_score"))
                 ),
                 "top5_candidate_valid_points_before_nms": int(top5.get("valid_count", 0)),
             }
@@ -2320,7 +2099,6 @@ def decode_gcs_predictions(
             default_min_points=final_min_points_i,
             rank_min_points=rank_min_points_cfg,
             fifth_min_points=fifth_min_points_i,
-            use_fifthness_decode=False,
         )
         edge_upgrade_ok, edge_upgrade_meta = _edge_count4_to5_upgrade_eligible(
             selected=edge_upgrade_base,
@@ -2336,9 +2114,6 @@ def decode_gcs_predictions(
             edge_outside_gap_px=float(edge_rescue_outside_gap_px),
             edge_dist_px=float(edge_rescue_dist_px),
             min_overlap=line_nms_min_overlap_i,
-            use_fifthness_decode=bool(use_fifthness_decode),
-            fifthness_decode_thr=float(fifthness_decode_thr),
-            fifthness_decode_rank_weight=float(fifthness_decode_rank_weight),
         )
         decode_meta.update(edge_upgrade_meta)
         if edge_upgrade_ok:
@@ -2366,9 +2141,6 @@ def decode_gcs_predictions(
         default_min_points=final_min_points_i,
         rank_min_points=rank_min_points_cfg,
         fifth_min_points=fifth_min_points_i,
-        use_fifthness_decode=bool(use_fifthness_decode),
-        fifthness_decode_thr=float(fifthness_decode_thr),
-        fifthness_decode_rank_weight=float(fifthness_decode_rank_weight),
     )
     if len(lanes) < base_target_count:
         if edge_last_lane_rescue_active and base_target_count >= edge_rescue_min_policy_count_i:
@@ -2385,9 +2157,6 @@ def decode_gcs_predictions(
                 edge_outside_gap_px=float(edge_rescue_outside_gap_px),
                 edge_dist_px=float(edge_rescue_dist_px),
                 min_overlap=line_nms_min_overlap_i,
-                use_fifthness_decode=bool(use_fifthness_decode),
-                fifthness_decode_thr=float(fifthness_decode_thr),
-                fifthness_decode_rank_weight=float(fifthness_decode_rank_weight),
             )
             decode_meta.update(edge_lane_meta)
         if len(lanes) < base_target_count and bool(last_lane_rescue) and base_target_count >= last_lane_rescue_min_policy_count_i:
@@ -2403,9 +2172,6 @@ def decode_gcs_predictions(
                 rescue_min_points=last_lane_rescue_min_points_i,
                 rescue_dist_px=float(last_lane_rescue_dist_px),
                 min_overlap=line_nms_min_overlap_i,
-                use_fifthness_decode=bool(use_fifthness_decode),
-                fifthness_decode_thr=float(fifthness_decode_thr),
-                fifthness_decode_rank_weight=float(fifthness_decode_rank_weight),
             )
             decode_meta.update(last_lane_meta)
         if len(lanes) < base_target_count and not bool(last_lane_rescue):
@@ -2419,9 +2185,6 @@ def decode_gcs_predictions(
                 fifth_min_points=fifth_min_points_i,
                 rescue_dist_px=rescue_dist,
                 min_overlap=line_nms_min_overlap_i,
-                use_fifthness_decode=bool(use_fifthness_decode),
-                fifthness_decode_thr=float(fifthness_decode_thr),
-                fifthness_decode_rank_weight=float(fifthness_decode_rank_weight),
             )
     if quality_rescue_active:
         decode_meta["quality_rescue_attempt_count"] = int(len(lanes) == 4)
@@ -2438,9 +2201,6 @@ def decode_gcs_predictions(
             rescue_min_points=int(quality_rescue_min_points),
             rescue_dist_px=float(quality_rescue_dist_px),
             min_overlap=line_nms_min_overlap_i,
-            use_fifthness_decode=bool(use_fifthness_decode),
-            fifthness_decode_thr=float(fifthness_decode_thr),
-            fifthness_decode_rank_weight=float(fifthness_decode_rank_weight),
         )
         decode_meta["quality_rescue_success_count"] = int(len(lanes) > before_quality_rescue)
         decode_meta.update(rescue_meta)
@@ -2462,9 +2222,6 @@ def decode_gcs_predictions(
                 edge_outside_gap_px=float(edge_rescue_outside_gap_px),
                 edge_dist_px=float(edge_rescue_dist_px),
                 min_overlap=line_nms_min_overlap_i,
-                use_fifthness_decode=bool(use_fifthness_decode),
-                fifthness_decode_thr=float(fifthness_decode_thr),
-                fifthness_decode_rank_weight=float(fifthness_decode_rank_weight),
             )
             decode_meta.update(edge_lane_meta)
         if len(lanes) < policy_target_count and bool(last_lane_rescue) and policy_target_count >= last_lane_rescue_min_policy_count_i:
@@ -2480,9 +2237,6 @@ def decode_gcs_predictions(
                 rescue_min_points=last_lane_rescue_min_points_i,
                 rescue_dist_px=float(last_lane_rescue_dist_px),
                 min_overlap=line_nms_min_overlap_i,
-                use_fifthness_decode=bool(use_fifthness_decode),
-                fifthness_decode_thr=float(fifthness_decode_thr),
-                fifthness_decode_rank_weight=float(fifthness_decode_rank_weight),
             )
             decode_meta.update(last_lane_meta)
         if len(lanes) < policy_target_count and not bool(last_lane_rescue):
@@ -2496,9 +2250,6 @@ def decode_gcs_predictions(
                 fifth_min_points=fifth_min_points_i,
                 rescue_dist_px=rescue_dist,
                 min_overlap=line_nms_min_overlap_i,
-                use_fifthness_decode=bool(use_fifthness_decode),
-                fifthness_decode_thr=float(fifthness_decode_thr),
-                fifthness_decode_rank_weight=float(fifthness_decode_rank_weight),
             )
     quality_rescue_fallback_active = bool(
         quality_rescue_available
@@ -2521,9 +2272,6 @@ def decode_gcs_predictions(
             rescue_min_points=int(quality_rescue_min_points),
             rescue_dist_px=float(quality_rescue_dist_px),
             min_overlap=line_nms_min_overlap_i,
-            use_fifthness_decode=bool(use_fifthness_decode),
-            fifthness_decode_thr=float(fifthness_decode_thr),
-            fifthness_decode_rank_weight=float(fifthness_decode_rank_weight),
         )
         decode_meta["quality_rescue_attempt_count"] = int(decode_meta.get("quality_rescue_attempt_count", 0)) + int(
             before_quality_rescue == 4
@@ -2538,25 +2286,6 @@ def decode_gcs_predictions(
     decode_meta["edge_last_lane_rescue_active"] = bool(edge_last_lane_rescue_active)
     effective_policy_count = int(decode_meta.get("effective_policy_count", policy_target_count))
     decode_meta["count_head_shortfall"] = int(max(0, effective_policy_count - len(lanes)))
-    selected_fifth = None
-    for lane in lanes:
-        if int(lane.get("rank_selection_rank", 0)) == 5:
-            selected_fifth = lane
-            break
-    if selected_fifth is None and len(lanes) >= 5:
-        selected_fifth = lanes[4]
-    if selected_fifth is not None:
-        fifthness_score = _lane_fifthness_score(selected_fifth)
-        decode_meta["fifthness_selected_fifth_query"] = int(selected_fifth.get("query", -1))
-        decode_meta["fifthness_selected_fifth_score"] = None if fifthness_score is None else float(fifthness_score)
-        decode_meta["fifthness_selected_fifth_rank_score"] = float(
-            _lane_fifthness_rank_score(selected_fifth, fifthness_decode_rank_weight)
-        )
-        decode_meta["fifthness_selected_fifth_gate_pass"] = (
-            None
-            if not bool(use_fifthness_decode)
-            else _fifthness_gate_reason(selected_fifth, True, fifthness_decode_thr) is None
-        )
     if count_head_meta is not None:
         for lane in lanes:
             lane.update(count_head_meta)

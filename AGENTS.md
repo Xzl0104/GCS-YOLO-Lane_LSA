@@ -78,10 +78,19 @@ This is H,W order. Do not reverse it.
 Default model:
 
 ```text
-ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12.yaml
 ```
 
-Current data and label contract:
+Current label contract:
+
+```text
+point_mode = fixed_y
+fixed_y_start = 710 / 720 = 0.9861111111111112
+fixed_y_end = 0.25
+K = 32
+```
+
+Active experimental K56 contract:
 
 ```text
 data = data/tusimple_gcs_fixed_y_k56_960x544.yaml
@@ -92,39 +101,7 @@ fixed_y_end = 160 / 720 = 0.2222222222222222
 K = 56
 ```
 
-Default-off K56 fifth-candidate verifier experiment:
-
-```text
-model = ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-fifthness-v1.yaml
-```
-
-This opt-in YAML may additionally emit `pred_fifthness_logits: B x Q`. The default K56 YAML must not emit `pred_fifthness_logits`.
-The first `gcs_yolo_lane_s_q12_k56_fifthness_v1_ft8_seed1_b32w4` short gate is rejected: best official-val was epoch 5 `0.959006`, below the K56 parent `0.959315`, with worse FP/FN and high GT4-to-5 pressure. Do not start full/e180 training from that recipe.
-The follow-up `gcs_yolo_lane_s_q12_k56_fifthness_gt5neg_ft8_seed1_b32w4` gate is also not promotable: best official-val was epoch 6 `0.959319`, only `+0.000004` over the parent, but FP worsened to `0.047429` and `rate_4_to_5` rose to `0.121212`. Do not treat this as a full-training candidate.
-The fifthness verifier is now wired into inference/evaluation through default-off decode switches. It is ignored unless `gcs_use_fifthness_decode=True`, and when enabled it may only gate or re-rank the selected fifth lane and fifth-lane rescue candidates. Enabling fifthness decode against a model that does not emit `pred_fifthness_logits` must fail fast.
-A 2026-06-15 closed-loop official-val sweep of the `fifthness_gt5neg` checkpoint with fifthness decode thresholds `0.30/0.50/0.70/0.85` is not promotable. Low thresholds keep ACC at `0.959319` but preserve worse FP/`rate_4_to_5`; high threshold `0.85` lowers FP and `rate_4_to_5` but drops ACC to `0.959023` and worsens GT5 `5->4`. Do not start full/e180 from these decode settings.
-
-Default-off K56 x-localization auxiliary experiment:
-
-```text
-model = ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-xloc-v1.yaml
-```
-
-This opt-in YAML keeps K56 fixed-y anchors unchanged and adds `pred_x_bin_logits: B x Q x K x bins` plus `pred_x_bin_offsets: B x Q x K` for training-side x-bin classification and within-bin offset supervision. The default K56 YAML must not emit these xloc outputs. The xloc losses are default-off and folded into `point_loss`; they do not change decode, use GT during inference, fabricate lanes, or alter official metrics. Fixed-y y is already anchor-derived, so this candidate targets horizontal error only.
-
 The K56 labels must be regenerated from original TuSimple JSON and images, not resampled from existing K32 labels.
-
-Current K56 official-val state:
-
-```text
-label oracle = 0.998256
-baseline official_best = 0.959315 at epoch 152
-best val-only min-points grid = 0.959750 with point_valid_thr=0.40, candidate_min_points=5, final_min_points=9, fifth_min_points=4
-vs current-code K32 0.953756 = +0.005559
-vs legacy 0.959224 = +0.000091
-```
-
-K56 is now the sole active code/config path after the 2026-06-16 K32 cleanup, but it still has no final/promotable official-test claim. A user-requested diagnostic-only official-test audit was run on 2026-06-14 for the K56 parent, min-points, `cqcalib`, `curveaux`, and `lowfp_joint` rows; those numbers must not be used for checkpoint, threshold, postprocess, loss, or model selection. The rejected K56 gates are `gcs_yolo_lane_s_q12_k56_cqcalib_ft12_seed1_b32w4`, `gcs_yolo_lane_s_q12_k56_cqcalib_lr1e4_ft8_seed1_b32w4`, `gcs_yolo_lane_s_q12_k56_curveaux_ft8_seed1_b32w4`, `gcs_yolo_lane_s_q12_k56_lowfp_joint_ft8_seed1_b32w4`, `gcs_yolo_lane_s_q12_k56_countadj_lowmargin_ft8_seed1_b32w4`, and `gcs_yolo_lane_s_q12_k56_countff_supp_ft8_seed1_b32w4`; do not rerun these exact recipes as the next path. The `countff_supp` source-side switches have been removed; keep only its summaries and diagnostics as audit history.
 
 The model output must include:
 
@@ -167,32 +144,9 @@ gcs_hard_negative_visible_support_points = 12.0
 gcs_point_valid_gt5_edge_segment = 0.0
 gcs_point_valid_gt5_edge_segment_thr = 0.65
 gcs_point_valid_gt5_edge_segment_min_points = 5
-gcs_geometry_curvature = 0.0
-gcs_geometry_curvature_beta_px = 5.0
-gcs_xloc_cls = 0.0
-gcs_xloc_offset = 0.0
-gcs_xloc_offset_beta_px = 3.0
-gcs_fifthness = 0.0
-gcs_fifthness_pairwise = 0.0
-gcs_fifthness_margin = 0.2
-gcs_fifthness_negative_topk = 2
-gcs_fifthness_negative_score_thr = 0.1
-gcs_fifthness_include_gt5_negatives = False
-```
-
-Current default-off fifthness decode knobs:
-
-```text
-gcs_use_fifthness_decode = False
-gcs_fifthness_decode_thr = 0.0
-gcs_fifthness_decode_rank_weight = 1.0
 ```
 
 `gcs_quality_gt5_edge_floor` is training-side only. When enabled above `0.0`, it floors the matched Quality Head target for real left/right edge lanes in GT5 images only; it does not change decode, use GT during inference, or fabricate lanes.
-
-`gcs_xloc*` is a default-off training-side K56 fixed-y horizontal localization candidate. `gcs_fifthness*` is the remaining default-off training-side K56 fifth-candidate verifier objective. Fifthness positives are GT5 edge matched lanes and negatives are competitive unmatched outside candidates. By default, fifthness negatives are mined from GT3/GT4 images; `gcs_fifthness_include_gt5_negatives` is a default-off follow-up switch that also mines GT5 same-image unmatched outside candidates. These training-side knobs do not by themselves change decode, use GT during inference, fabricate lanes, or alter official metrics.
-
-The rejected `gcs_quality_pairwise*`, `gcs_count_cumulative*`, and Count Head fifth-candidate evidence / `count5ev-v1` source paths were removed from current code on 2026-06-16. Historical experiment records remain in docs, but these are no longer current-code knobs or runnable model configs.
 
 When `gcs_quality_hard_negative_from_head` is enabled, Quality Head hard negatives must be mined from unmatched queries only. Hungarian-matched queries remain matched quality targets even when their current continuous quality target is `0.0`.
 
@@ -207,15 +161,12 @@ exist_loss
 point_loss
 point_valid_loss
 line_iou_loss
-curvature_loss
 count_cls_loss
 count_sum_loss
 quality_loss
 ```
 
-The 8-loss setup is the default logging contract. `curvature_loss` is default-off unless
-`gcs_geometry_curvature > 0.0`; it is training-side only and targets fixed-y GT5 edge-lane
-geometry without changing decode, official metrics, or inference GT usage.
+The 7-loss setup is the default baseline, not a permanent research restriction.
 
 ## Agent Coordination Rules
 
@@ -283,14 +234,11 @@ Use the skill name explicitly when you want that workflow to trigger reliably.
 
 ## Research Integrity
 
-Use official-val for checkpoint, threshold, postprocess, and parameter selection. Use test only for one-shot final evaluation of a selected candidate, and require `tools/eval_tusimple_official.py --split test` to carry an official-val `--selection-summary` unless the run is explicitly marked `--diagnostic-only-test`.
+Use official-val for checkpoint, threshold, postprocess, and parameter selection. Use test only for one-shot final evaluation of a selected candidate.
 
 Do not tune on test, use GT during inference or decode, fabricate lanes, silently change official metrics, or claim improvement without official-val evidence.
-Selection and diagnostic tools must not accept TuSimple test GT through `--split val --gt-json ...`; keep the explicit GT-source and `test_set` path guards enabled when changing official-val tooling.
 
 Old or removed mechanisms may return as controlled experimental candidates when explicit, configurable, traceable, and validated under the same protocol.
-
-When a controlled experimental direction has completed its planned same-protocol official-val gate and is rejected as not useful, remove its active source path so it cannot affect later work. Delete the failed direction's source-side switches, CLI args, config defaults, model YAMLs, loss/decode branches, runnable command templates, and dedicated tests unless they are still needed for an incomplete isolation gate, a diagnostic tool, or a clearly planned follow-up. Keep concise documentation records, official-val evidence, experiment summaries, and diagnostics as audit history. Large rejected-run checkpoint artifacts should be deleted or archived after summaries and diagnostics are preserved. Previously removed mechanisms may return only as a fresh controlled candidate with an explicit hypothesis and official-val validation.
 
 ## Git Sync Policy
 

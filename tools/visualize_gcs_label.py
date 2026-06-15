@@ -20,7 +20,7 @@ REQUIRED_KEYS = ("lanes", "lane_valid", "num_lanes")
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Visualize converted GCS TuSimple labels.")
-    parser.add_argument("--dataset-root", default="datasets/tusimple_fixed_y_k56_960x544", help="Converted dataset root.")
+    parser.add_argument("--dataset-root", default="datasets/tusimple_fixed_y_960x544", help="Converted dataset root.")
     parser.add_argument("--split", default="train", choices=("train", "val", "test"), help="Dataset split.")
     parser.add_argument("--max-images", type=int, default=50, help="Maximum number of samples to visualize.")
     parser.add_argument("--save-dir", default="runs/label_vis", help="Visualization output directory.")

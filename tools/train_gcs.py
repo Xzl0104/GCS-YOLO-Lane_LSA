@@ -19,14 +19,6 @@ from ultralytics.models.yolo.gcs_lane.train import (
     GCS_MAINLINE_COUNT_BOUNDARY_GT5_POS_WEIGHT,
     GCS_MAINLINE_COUNT_BOUNDARY_LABEL_SMOOTHING,
     GCS_MAINLINE_COUNT_SUM_GAIN,
-    GCS_MAINLINE_FIFTHNESS,
-    GCS_MAINLINE_FIFTHNESS_MARGIN,
-    GCS_MAINLINE_FIFTHNESS_INCLUDE_GT5_NEGATIVES,
-    GCS_MAINLINE_FIFTHNESS_NEGATIVE_SCORE_THR,
-    GCS_MAINLINE_FIFTHNESS_NEGATIVE_TOPK,
-    GCS_MAINLINE_FIFTHNESS_PAIRWISE,
-    GCS_MAINLINE_GEOMETRY_CURVATURE_BETA_PX,
-    GCS_MAINLINE_GEOMETRY_CURVATURE_GAIN,
     GCS_MAINLINE_GROUP_SAMPLER_RATIOS,
     GCS_MAINLINE_GT5_EDGE_LOSS_WEIGHT,
     GCS_MAINLINE_GT5_OVERSAMPLE_WEIGHT,
@@ -40,16 +32,13 @@ from ultralytics.models.yolo.gcs_lane.train import (
     GCS_MAINLINE_QUALITY_GAIN,
     GCS_MAINLINE_QUALITY_GT5_EDGE_FLOOR,
     GCS_MAINLINE_QUALITY_NEG_WEIGHT,
-    GCS_MAINLINE_XLOC_CLS,
-    GCS_MAINLINE_XLOC_OFFSET,
-    GCS_MAINLINE_XLOC_OFFSET_BETA_PX,
     GCSLaneTrainer,
 )
 from ultralytics.utils.gcs_shape import DATASET_IMAGE_SHAPES, normalize_imgsz, shape_str, trainer_imgsz
 from ultralytics.utils.gcs_postprocess import GCS_DEFAULT_MAX_DET
 
 
-DEFAULT_MODEL = ROOT / "ultralytics" / "cfg" / "models" / "gcs" / "gcs-yolo-lane-s-q12-k56.yaml"
+DEFAULT_MODEL = ROOT / "ultralytics" / "cfg" / "models" / "gcs" / "gcs-yolo-lane-s-q12.yaml"
 
 
 def str2bool(value: str | bool) -> bool:
@@ -68,8 +57,8 @@ def dataset_defaults(dataset: str) -> dict[str, Path]:
     """Return conventional local paths for a converted GCS dataset."""
     name = dataset.lower()
     if name == "tusimple":
-        fixed_root = ROOT / "datasets" / "tusimple_fixed_y_k56_960x544"
-        fixed_data = ROOT / "data" / "tusimple_gcs_fixed_y_k56_960x544.yaml"
+        fixed_root = ROOT / "datasets" / "tusimple_fixed_y_960x544"
+        fixed_data = ROOT / "data" / "tusimple_gcs_fixed_y_960x544.yaml"
         if fixed_data.exists():
             return {
                 "data": fixed_data,
@@ -256,36 +245,6 @@ def parse_args() -> argparse.Namespace:
         default=15.0,
         help="Half-width in pixels used to expand lane points into horizontal strips for LineIoU.",
     )
-    parser.add_argument(
-        "--gcs-geometry-curvature",
-        type=float,
-        default=GCS_MAINLINE_GEOMETRY_CURVATURE_GAIN,
-        help="Fixed-y GT5 edge-lane curvature auxiliary loss gain. 0 disables.",
-    )
-    parser.add_argument(
-        "--gcs-geometry-curvature-beta-px",
-        type=float,
-        default=GCS_MAINLINE_GEOMETRY_CURVATURE_BETA_PX,
-        help="SmoothL1 beta in pixels for the GT5 edge curvature auxiliary loss.",
-    )
-    parser.add_argument(
-        "--gcs-xloc-cls",
-        type=float,
-        default=GCS_MAINLINE_XLOC_CLS,
-        help="Optional fixed-y x-bin classification auxiliary gain folded into point_loss. 0 disables.",
-    )
-    parser.add_argument(
-        "--gcs-xloc-offset",
-        type=float,
-        default=GCS_MAINLINE_XLOC_OFFSET,
-        help="Optional fixed-y within-bin x-offset auxiliary gain folded into point_loss. 0 disables.",
-    )
-    parser.add_argument(
-        "--gcs-xloc-offset-beta-px",
-        type=float,
-        default=GCS_MAINLINE_XLOC_OFFSET_BETA_PX,
-        help="SmoothL1 beta in pixels for the optional xloc within-bin offset auxiliary.",
-    )
     parser.add_argument("--gcs-count-cls", type=float, default=0.3, help="Explicit Count Head count=2/3/4/5 CE loss gain.")
     parser.add_argument(
         "--gcs-count-sum",
@@ -311,44 +270,6 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=GCS_MAINLINE_QUALITY_GT5_EDGE_FLOOR,
         help="Minimum Quality Head target for matched left/right GT5 edge lanes. 0 disables.",
-    )
-    parser.add_argument(
-        "--gcs-fifthness",
-        type=float,
-        default=GCS_MAINLINE_FIFTHNESS,
-        help="Fifthness verifier BCE gain for GT5 edge positives vs GT3/GT4 false outside fifth candidates. 0 disables.",
-    )
-    parser.add_argument(
-        "--gcs-fifthness-pairwise",
-        type=float,
-        default=GCS_MAINLINE_FIFTHNESS_PAIRWISE,
-        help="Fifthness verifier pairwise ranking gain for true GT5 edge lanes vs false fifth candidates. 0 disables.",
-    )
-    parser.add_argument(
-        "--gcs-fifthness-margin",
-        type=float,
-        default=GCS_MAINLINE_FIFTHNESS_MARGIN,
-        help="Logit margin for the fifthness verifier pairwise ranking loss.",
-    )
-    parser.add_argument(
-        "--gcs-fifthness-negative-topk",
-        type=int,
-        default=GCS_MAINLINE_FIFTHNESS_NEGATIVE_TOPK,
-        help="Maximum unmatched outside candidates mined per GT3/GT4 image, and per GT5 image when explicitly enabled.",
-    )
-    parser.add_argument(
-        "--gcs-fifthness-negative-score-thr",
-        type=float,
-        default=GCS_MAINLINE_FIFTHNESS_NEGATIVE_SCORE_THR,
-        help="Minimum exist*visible-segment support score for a false fifthness negative candidate.",
-    )
-    parser.add_argument(
-        "--gcs-fifthness-include-gt5-negatives",
-        type=str2bool,
-        nargs="?",
-        const=True,
-        default=GCS_MAINLINE_FIFTHNESS_INCLUDE_GT5_NEGATIVES,
-        help="Also mine unmatched outside candidates in GT5 images as false fifthness negatives.",
     )
     parser.add_argument("--gcs-quality-hard-negative-weight", type=float, default=1.0)
     parser.add_argument("--gcs-quality-duplicate-negative-weight", type=float, default=1.5)
@@ -633,14 +554,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gcs-decode-rescue-candidate-min-points", type=int, default=4)
     parser.add_argument("--gcs-decode-final-min-points", type=int, default=6)
     parser.add_argument("--gcs-decode-fifth-min-points", type=int, default=5)
-    parser.add_argument(
-        "--gcs-use-fifthness-decode",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Use optional pred_fifthness_logits only when choosing/rescuing selected rank 5.",
-    )
-    parser.add_argument("--gcs-fifthness-decode-thr", type=float, default=0.0)
-    parser.add_argument("--gcs-fifthness-decode-rank-weight", type=float, default=1.0)
     parser.add_argument("--gcs-line-nms-min-overlap", type=int, default=6)
     parser.add_argument("--gcs-line-nms-rescue-dist-px", type=float, default=30.0)
     parser.add_argument("--gcs-quality-rescue-5th", action=argparse.BooleanOptionalAction, default=True, help="Enable quality-gated fifth-lane rescue when pred_quality_logits are present.")
@@ -827,7 +740,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--gcs-official-best-gt-json", default="", help="Stratified official-val json-lines used for official_best.pt selection.")
     parser.add_argument("--gcs-official-best-archive-root", default="archive", help="Path to archive/ or archive/TUSimple.")
-    parser.add_argument("--gcs-official-best-split", default="val", choices=("val",))
+    parser.add_argument("--gcs-official-best-split", default="val", choices=("train", "val", "test"))
     parser.add_argument("--gcs-official-best-confs", default="0.005 0.01 0.015 0.02 0.03 0.05 0.08 0.10")
     parser.add_argument("--gcs-official-best-point-valid-thrs", default="0.20 0.25 0.30 0.35")
     parser.add_argument("--gcs-official-best-nms-dist-pxs", default="18.0")
@@ -973,10 +886,10 @@ def main() -> None:
             # retaining epochN.pt checkpoint files; best.pt is still the ordinary val-F1 best.
             save_period = -1
     if args.gcs_official_best:
-        from tools.sweep_tusimple_official import validate_official_best_split
+        from tools.sweep_tusimple_official import validate_official_sweep_split
 
         try:
-            args.gcs_official_best_split = validate_official_best_split(
+            args.gcs_official_best_split = validate_official_sweep_split(
                 args.gcs_official_best_split,
                 context="Training official_best selection",
             )
@@ -1044,11 +957,6 @@ def main() -> None:
         "gcs_point_invalid_x": args.gcs_point_invalid_x,
         "gcs_line_iou": args.gcs_line_iou,
         "gcs_line_iou_width_px": args.gcs_line_iou_width_px,
-        "gcs_geometry_curvature": args.gcs_geometry_curvature,
-        "gcs_geometry_curvature_beta_px": args.gcs_geometry_curvature_beta_px,
-        "gcs_xloc_cls": args.gcs_xloc_cls,
-        "gcs_xloc_offset": args.gcs_xloc_offset,
-        "gcs_xloc_offset_beta_px": args.gcs_xloc_offset_beta_px,
         "gcs_count_cls": args.gcs_count_cls,
         "gcs_count_sum": args.gcs_count_sum,
         "gcs_count_sum_normalize": args.gcs_count_sum_normalize,
@@ -1056,12 +964,6 @@ def main() -> None:
         "gcs_quality_dist_thr_px": args.gcs_quality_dist_thr_px,
         "gcs_quality_neg_weight": args.gcs_quality_neg_weight,
         "gcs_quality_gt5_edge_floor": args.gcs_quality_gt5_edge_floor,
-        "gcs_fifthness": args.gcs_fifthness,
-        "gcs_fifthness_pairwise": args.gcs_fifthness_pairwise,
-        "gcs_fifthness_margin": args.gcs_fifthness_margin,
-        "gcs_fifthness_negative_topk": args.gcs_fifthness_negative_topk,
-        "gcs_fifthness_negative_score_thr": args.gcs_fifthness_negative_score_thr,
-        "gcs_fifthness_include_gt5_negatives": args.gcs_fifthness_include_gt5_negatives,
         "gcs_quality_hard_negative_weight": args.gcs_quality_hard_negative_weight,
         "gcs_quality_duplicate_negative_weight": args.gcs_quality_duplicate_negative_weight,
         "gcs_quality_hard_negative_from_head": args.gcs_quality_hard_negative_from_head,
@@ -1143,9 +1045,6 @@ def main() -> None:
         "gcs_decode_rescue_candidate_min_points": args.gcs_decode_rescue_candidate_min_points,
         "gcs_decode_final_min_points": args.gcs_decode_final_min_points,
         "gcs_decode_fifth_min_points": args.gcs_decode_fifth_min_points,
-        "gcs_use_fifthness_decode": args.gcs_use_fifthness_decode,
-        "gcs_fifthness_decode_thr": args.gcs_fifthness_decode_thr,
-        "gcs_fifthness_decode_rank_weight": args.gcs_fifthness_decode_rank_weight,
         "gcs_line_nms_min_overlap": args.gcs_line_nms_min_overlap,
         "gcs_line_nms_rescue_dist_px": args.gcs_line_nms_rescue_dist_px,
         "gcs_quality_rescue_5th": args.gcs_quality_rescue_5th,

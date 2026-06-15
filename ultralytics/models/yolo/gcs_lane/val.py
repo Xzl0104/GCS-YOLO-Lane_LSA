@@ -32,7 +32,6 @@ LOSS_NAMES = (
     "point_loss",
     "point_valid_loss",
     "line_iou_loss",
-    "curvature_loss",
     "count_cls_loss",
     "count_sum_loss",
     "quality_loss",
@@ -42,7 +41,6 @@ LOSS_GAIN_ARGS = (
     "gcs_point",
     "gcs_point_valid",
     "gcs_line_iou",
-    "gcs_geometry_curvature",
     "gcs_count_cls",
     "gcs_count_sum",
     "gcs_quality",
@@ -52,7 +50,6 @@ DEFAULT_LOSS_GAINS = (
     5.0,
     0.5,
     0.3,
-    0.0,
     0.3,
     0.02,
     0.3,
@@ -156,7 +153,7 @@ class GCSLaneValidator:
         if self.args is None:
             raise ValueError("GCSLaneValidator requires args or an explicit dataloader.")
 
-        data_path = self._path_value(self._arg(self.args, "data", None)) or str(ROOT.parent / "data/tusimple_gcs_fixed_y_k56_960x544.yaml")
+        data_path = self._path_value(self._arg(self.args, "data", None)) or str(ROOT.parent / "data/tusimple_gcs_fixed_y_960x544.yaml")
         data = check_det_dataset(data_path)
         image_dir = self._path_value(self._arg(self.args, "val_images", None)) or data.get("val") or data.get("test")
         label_dir = self._path_value(self._arg(self.args, "val_gcs_labels", None))
@@ -362,19 +359,6 @@ class GCSLaneValidator:
     def _decode_fifth_min_points(self) -> int:
         """Return final visible-anchor floor for selected rank 5."""
         return int(self._arg(self.args, "gcs_decode_fifth_min_points", 5) or 5)
-
-    def _use_fifthness_decode(self) -> bool:
-        """Return whether optional fifthness logits should affect only selected rank 5."""
-        return bool(self._arg(self.args, "gcs_use_fifthness_decode", False))
-
-    def _fifthness_decode_thr(self) -> float:
-        """Return selected-rank-5 fifthness gate threshold."""
-        return float(self._arg(self.args, "gcs_fifthness_decode_thr", 0.0) or 0.0)
-
-    def _fifthness_decode_rank_weight(self) -> float:
-        """Return selected-rank-5 fifthness rank-score exponent."""
-        value = self._arg(self.args, "gcs_fifthness_decode_rank_weight", 1.0)
-        return 1.0 if value is None else float(value)
 
     def _line_nms_rescue_dist_px(self) -> float:
         """Return duplicate distance used for pre-NMS rescue."""
@@ -669,9 +653,6 @@ class GCSLaneValidator:
         pred_quality_logits = preds.get("pred_quality_logits")
         if pred_quality_logits is not None:
             pred_quality_logits = pred_quality_logits.detach()
-        pred_fifthness_logits = preds.get("pred_fifthness_logits")
-        if pred_fifthness_logits is not None:
-            pred_fifthness_logits = pred_fifthness_logits.detach()
         if pred_logits.ndim == 3 and pred_logits.shape[-1] == 1:
             pred_logits = pred_logits.squeeze(-1)
         h, w = int(batch["img"].shape[-2]), int(batch["img"].shape[-1])
@@ -697,9 +678,6 @@ class GCSLaneValidator:
                     pred_count_boundary_logits[i] if pred_count_boundary_logits is not None else None
                 ),
                 pred_quality_logits=pred_quality_logits[i] if pred_quality_logits is not None else None,
-                pred_fifthness_logits=(
-                    pred_fifthness_logits[i] if pred_fifthness_logits is not None else None
-                ),
                 image_shape=(h, w),
                 score_thr=conf,
                 point_valid_thr=point_valid_thr,
@@ -752,9 +730,6 @@ class GCSLaneValidator:
                 soft_count_prior_weight=self._soft_count_prior_weight(),
                 soft_count_duplicate_penalty=self._soft_count_duplicate_penalty(),
                 soft_count_invalid_penalty=self._soft_count_invalid_penalty(),
-                use_fifthness_decode=self._use_fifthness_decode(),
-                fifthness_decode_thr=self._fifthness_decode_thr(),
-                fifthness_decode_rank_weight=self._fifthness_decode_rank_weight(),
                 return_meta=True,
             )
             gt_lanes, gt_valid = self._valid_gt_lanes(gt_lanes_t, gt_valid_t)

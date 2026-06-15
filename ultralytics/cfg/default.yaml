@@ -118,11 +118,6 @@ gcs_point_valid: 0.5 # (float) GCS per-point visibility BCE loss gain for fixed-
 gcs_point_invalid_x: 0.05 # (float) relative pseudo-x penalty for matched invisible anchors weighted by point-valid probability
 gcs_line_iou: 0.3 # (float) GCS whole-lane LineIoU loss gain
 gcs_line_iou_width_px: 15.0 # (float) half-width in pixels used to expand lane points for LineIoU
-gcs_geometry_curvature: 0.0 # (float) fixed-y GT5 edge-lane curvature auxiliary loss gain; 0 disables
-gcs_geometry_curvature_beta_px: 5.0 # (float) SmoothL1 beta in pixels for the GT5 edge curvature auxiliary loss
-gcs_xloc_cls: 0.0 # (float) fixed-y x-bin classification auxiliary gain folded into point_loss; 0 disables
-gcs_xloc_offset: 0.0 # (float) fixed-y within-bin x-offset auxiliary gain folded into point_loss; 0 disables
-gcs_xloc_offset_beta_px: 3.0 # (float) SmoothL1 beta in pixels for the xloc within-bin offset auxiliary
 gcs_count_cls: 0.3 # (float) explicit image-level Count Head count=2/3/4/5 CE loss gain
 gcs_count_sum: 0.03 # (float) exist-count consistency loss gain for sum(sigmoid(pred_logits)) ~= GT lane count
 gcs_count_sum_normalize: True # (bool) normalize count_sum_loss by GT lane count
@@ -130,12 +125,6 @@ gcs_quality: 0.4 # (float) lane-level Quality Head BCE loss gain
 gcs_quality_dist_thr_px: 20.0 # (float) pixel threshold for quality target point-inlier score
 gcs_quality_neg_weight: 0.5 # (float) relative weight for unmatched-query quality negatives
 gcs_quality_gt5_edge_floor: 0.0 # (float) minimum matched Quality Head target for left/right GT5 edge lanes; 0 disables
-gcs_fifthness: 0.0 # (float) optional fifth-candidate verifier BCE gain; 0 disables
-gcs_fifthness_pairwise: 0.0 # (float) optional fifthness verifier pairwise ranking gain; 0 disables
-gcs_fifthness_margin: 0.2 # (float) logit margin for fifthness verifier pairwise ranking
-gcs_fifthness_negative_topk: 2 # (int) max unmatched outside candidates mined per image for fifthness negatives
-gcs_fifthness_negative_score_thr: 0.1 # (float) min exist*visible score for fifthness negative candidates
-gcs_fifthness_include_gt5_negatives: False # (bool) also mine unmatched outside candidates in GT5 images as fifthness negatives
 gcs_quality_hard_negative_weight: 1.0 # (float) absolute Quality Head BCE weight for mined unmatched hard negatives
 gcs_quality_duplicate_negative_weight: 1.5 # (float) absolute Quality Head BCE weight for unmatched duplicate negatives
 gcs_quality_hard_negative_from_head: False # (bool) mine Quality Head hard negatives from high unmatched pred_quality_logits
@@ -217,9 +206,6 @@ gcs_decode_rescue_candidate_point_valid_thr: 0.08 # (float) rescue candidate-poo
 gcs_decode_rescue_candidate_min_points: 4 # (int) rescue candidate-pool visible-anchor floor before final Top-K
 gcs_decode_final_min_points: 6 # (int) final visible-anchor floor for selected ranks 1-4
 gcs_decode_fifth_min_points: 5 # (int) final visible-anchor floor for selected rank 5
-gcs_use_fifthness_decode: False # (bool) use optional pred_fifthness_logits only when choosing/rescuing selected rank 5
-gcs_fifthness_decode_thr: 0.0 # (float) minimum fifthness probability for selected rank 5 when fifthness decode is enabled
-gcs_fifthness_decode_rank_weight: 1.0 # (float) exponent applied to fifthness probability in selected-rank-5 scoring
 gcs_line_nms_min_overlap: 6 # (int) minimum shared visible anchors for lane-NMS duplicate suppression
 gcs_line_nms_rescue_dist_px: 30.0 # (float) duplicate distance used when rescuing lanes from pre-NMS candidates
 gcs_quality_rescue_5th: True # (bool) enable quality-gated fifth-lane rescue when pred_quality_logits are present
@@ -280,7 +266,7 @@ gcs_official_best_period: 0 # (int) official-best sweep interval; 0 reuses save_
 gcs_official_best_top_k: 1 # (int) preserve top-K official-val checkpoints under weights/official_topk; 1 keeps legacy behavior
 gcs_official_best_gt_json: "" # (str) stratified official-val json-lines used for official_best.pt selection
 gcs_official_best_archive_root: "archive" # (str) path to archive/ or archive/TUSimple for official-best sweeps
-gcs_official_best_split: "val" # (str) TuSimple official-best image lookup split; val-only for checkpoint selection
+gcs_official_best_split: "val" # (str) TuSimple split for official-best image lookup
 gcs_official_best_confs: "0.005 0.01 0.015 0.02 0.03 0.05 0.08 0.10" # (str) candidate-pool confidence thresholds for official-best sweep
 gcs_official_best_point_valid_thrs: "0.20 0.25 0.30 0.35" # (str) candidate-pool point-valid thresholds for official-best sweep
 gcs_official_best_nms_dist_pxs: "18.0" # (str) lane-NMS thresholds for official-best sweep

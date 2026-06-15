@@ -63,7 +63,7 @@ TASK2DATA = {
     "classify": "imagenet10",
     "pose": "coco8-pose.yaml",
     "obb": "dota8.yaml",
-    "gcs_lane": str(ROOT.parent / "data/tusimple_gcs_fixed_y_k56_960x544.yaml"),
+    "gcs_lane": str(ROOT.parent / "data/tusimple_gcs_fixed_y_960x544.yaml"),
 }
 TASK2CALIBRATIONDATA = {
     "detect": "coco128.yaml",
@@ -71,7 +71,7 @@ TASK2CALIBRATIONDATA = {
     "classify": "imagenet100",
     "pose": "coco8-pose.yaml",
     "obb": "dota128.yaml",
-    "gcs_lane": str(ROOT.parent / "data/tusimple_gcs_fixed_y_k56_960x544.yaml"),
+    "gcs_lane": str(ROOT.parent / "data/tusimple_gcs_fixed_y_960x544.yaml"),
 }
 TASK2MODEL = {
     "detect": "yolo26n.pt",
@@ -79,7 +79,7 @@ TASK2MODEL = {
     "classify": "yolo26n-cls.pt",
     "pose": "yolo26n-pose.pt",
     "obb": "yolo26n-obb.pt",
-    "gcs_lane": str(ROOT / "cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml"),
+    "gcs_lane": str(ROOT / "cfg/models/gcs/gcs-yolo-lane-s-q12.yaml"),
 }
 TASK2METRIC = {
     "detect": "metrics/mAP50-95(B)",
@@ -189,11 +189,6 @@ CFG_FLOAT_KEYS = frozenset(
         "gcs_point_invalid_x",
         "gcs_line_iou",
         "gcs_line_iou_width_px",
-        "gcs_geometry_curvature",
-        "gcs_geometry_curvature_beta_px",
-        "gcs_xloc_cls",
-        "gcs_xloc_offset",
-        "gcs_xloc_offset_beta_px",
         "gcs_count_cls",
         "gcs_count_sum",
         "gcs_quality",
@@ -202,9 +197,6 @@ CFG_FLOAT_KEYS = frozenset(
         "gcs_quality_gt5_edge_floor",
         "gcs_quality_hard_negative_weight",
         "gcs_quality_duplicate_negative_weight",
-        "gcs_fifthness",
-        "gcs_fifthness_pairwise",
-        "gcs_fifthness_margin",
         "gcs_hard_negative_visible_support_points",
         "gcs_count_head_warmup_epochs",
         "gcs_count_cls_w2",
@@ -222,7 +214,6 @@ CFG_FLOAT_KEYS = frozenset(
         "gcs_decode_rescue_candidate_conf",
         "gcs_decode_rescue_candidate_point_valid_thr",
         "gcs_line_nms_rescue_dist_px",
-        "gcs_fifthness_decode_rank_weight",
         "gcs_quality_rescue_count5_thr",
         "gcs_quality_rescue_conf_thr",
         "gcs_quality_rescue_mean_valid_thr",
@@ -344,8 +335,6 @@ CFG_FRACTION_KEYS = frozenset(
         "gcs_point_valid_gt5_edge_segment_thr",
         "gcs_quality_neg_weight",
         "gcs_quality_gt5_edge_floor",
-        "gcs_fifthness_negative_score_thr",
-        "gcs_fifthness_decode_thr",
         "gcs_hard_negative_quality_thr",
         "gcs_hard_negative_visible_thr",
         "gcs_duplicate_iou_thr",
@@ -389,7 +378,6 @@ CFG_INT_KEYS = frozenset(
         "gcs_eval_min_points",
         "gcs_count_min_gt_points",
         "gcs_hard_negative_topk",
-        "gcs_fifthness_negative_topk",
         "gcs_point_valid_gt5_edge_segment_min_points",
         "gcs_decode_candidate_min_points",
         "gcs_decode_rescue_candidate_min_points",
@@ -460,8 +448,6 @@ CFG_BOOL_KEYS = frozenset(
         "gcs_gt5_extra_aug",
         "gcs_quality_hard_negative_from_head",
         "gcs_hard_negative_visible_segment",
-        "gcs_fifthness_include_gt5_negatives",
-        "gcs_use_fifthness_decode",
     }
 )
 

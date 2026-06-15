@@ -28,7 +28,6 @@ from gcs_tools.tusimple_official_eval import (  # noqa: E402
     official_metric_score,
     read_tusimple_json_lines,
     tusimple_image_path,
-    validate_tusimple_selection_source,
     write_tusimple_predictions,
 )
 from tools.infer_gcs import (  # noqa: E402
@@ -52,7 +51,7 @@ from ultralytics.utils.torch_utils import select_device  # noqa: E402
 
 DEFAULT_ARCHIVE = ROOT / "archive"
 DEFAULT_WEIGHTS = (
-    ROOT / "runs" / "gcs_lane" / "gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4" / "weights" / "official_best.pt"
+    ROOT / "runs" / "gcs_lane" / "gcs_yolo_lane_s_tusimple_fixed_y_visible_iou_full" / "weights" / "best.pt"
 )
 
 
@@ -66,24 +65,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gt-json", default=None, help="Official TuSimple GT json-lines file. Defaults to archive test labels.")
     parser.add_argument("--pred-json", default=None, help="Evaluate an existing TuSimple-format prediction json-lines file.")
     parser.add_argument("--weights", default=str(DEFAULT_WEIGHTS), help="GCS checkpoint .pt used when --pred-json is not set.")
-    parser.add_argument(
-        "--selection-summary",
-        default=None,
-        help=(
-            "Official-val selection summary proving final-test weights and postprocess settings. "
-            "Accepts training official_best_summary.json or tusimple_official_sweep_summary.json."
-        ),
-    )
-    parser.add_argument(
-        "--diagnostic-only-test",
-        action="store_true",
-        help="Allow --split test as an explicitly non-promotable diagnostic audit and mark the output accordingly.",
-    )
-    parser.add_argument(
-        "--diagnostic-reason",
-        default="",
-        help="Optional reason recorded when --diagnostic-only-test is used.",
-    )
     parser.add_argument(
         "--imgsz",
         nargs="+",
@@ -131,9 +112,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rescue-candidate-min-points", type=int, default=4, help="Rescue candidate-pool visible-anchor floor before final Top-K.")
     parser.add_argument("--final-min-points", type=int, default=6, help="Final visible-anchor floor for selected ranks 1-4.")
     parser.add_argument("--fifth-min-points", type=int, default=5, help="Final visible-anchor floor for selected rank 5.")
-    parser.add_argument("--use-fifthness-decode", action=argparse.BooleanOptionalAction, default=False, help="Use optional pred_fifthness_logits only for selected rank 5.")
-    parser.add_argument("--fifthness-decode-thr", type=float, default=0.0, help="Minimum fifthness probability for selected rank 5 when enabled.")
-    parser.add_argument("--fifthness-decode-rank-weight", type=float, default=1.0, help="Exponent applied to fifthness probability in selected-rank-5 scoring.")
     parser.add_argument("--line-nms-min-overlap", type=int, default=6, help="Minimum shared visible anchors for lane-NMS duplicate suppression.")
     parser.add_argument("--line-nms-rescue-dist-px", type=float, default=30.0, help="Duplicate distance used when rescuing lanes from pre-NMS candidates.")
     parser.add_argument("--quality-rescue-5th", action=argparse.BooleanOptionalAction, default=True, help="Enable quality-gated fifth-lane rescue when pred_quality_logits are present.")
@@ -279,302 +257,6 @@ def _rank_min_points_tag(config: dict[int, int] | None) -> str | None:
     return "rankmin" + "-".join(f"r{int(k)}p{int(v)}" for k, v in sorted(config.items()))
 
 
-def _rank_min_points_selection_tag(value: dict[int, int] | str | None) -> str:
-    parsed = parse_rank_min_points(value)
-    if not parsed:
-        return "none"
-    return ",".join(f"{int(rank)}:{int(parsed[rank])}" for rank in sorted(parsed))
-
-
-def _read_json_object(path: str | Path) -> dict:
-    path = Path(path)
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except OSError as exc:
-        raise ValueError(f"Cannot read selection summary: {path}") from exc
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"Selection summary is not valid JSON: {path}: {exc}") from exc
-    if not isinstance(data, dict):
-        raise ValueError(f"Selection summary must be a JSON object: {path}")
-    return data
-
-
-def _selection_summary_type(data: dict) -> str:
-    if isinstance(data.get("selector"), dict) and isinstance(data.get("best"), dict):
-        return "official_best_summary"
-    if isinstance(data.get("config"), dict) and isinstance(data.get("best"), dict):
-        return "official_sweep_summary"
-    raise ValueError(
-        "Selection summary must be a training official_best_summary.json or "
-        "tusimple_official_sweep_summary.json with a best row."
-    )
-
-
-def _numeric_equal(left, right, *, tol: float = 1e-9) -> bool:
-    if isinstance(left, bool) or isinstance(right, bool):
-        return bool(left) == bool(right)
-    try:
-        return abs(float(left) - float(right)) <= tol
-    except (TypeError, ValueError):
-        return str(left) == str(right)
-
-
-def _compare_selection_value(
-    mismatches: list[str],
-    *,
-    name: str,
-    selected,
-    current,
-    normalize=None,
-) -> None:
-    if selected is None:
-        return
-    selected_value = normalize(selected) if normalize else selected
-    current_value = normalize(current) if normalize else current
-    if not _numeric_equal(selected_value, current_value):
-        mismatches.append(f"{name}: selected={selected_value!r}, current={current_value!r}")
-
-
-def _conventional_weight_identity(path: Path) -> tuple[str, str] | None:
-    if path.parent.name != "weights":
-        return None
-    return path.parent.parent.name, path.name
-
-
-def _weights_match(selected: str | Path, current: str | Path, *, summary_path: Path) -> bool:
-    selected_path = Path(str(selected))
-    if not selected_path.is_absolute():
-        selected_path = summary_path.parent / selected_path
-    current_path = Path(str(current))
-    try:
-        if selected_path.resolve() == current_path.resolve():
-            return True
-    except OSError:
-        if selected_path.absolute() == current_path.absolute():
-            return True
-    selected_id = _conventional_weight_identity(selected_path)
-    current_id = _conventional_weight_identity(current_path)
-    return selected_id is not None and selected_id == current_id
-
-
-def _selection_best_excerpt(best: dict) -> dict:
-    keys = {
-        "official_acc",
-        "official_fp",
-        "official_fn",
-        "images",
-        "conf",
-        "point_valid_thr",
-        "nms_dist_px",
-        "max_det",
-        "min_points",
-        "rank_min_points",
-        "candidate_min_points",
-        "final_min_points",
-        "fifth_min_points",
-        "use_fifthness_decode",
-        "fifthness_decode_thr",
-        "fifthness_decode_rank_weight",
-    }
-    return {k: best[k] for k in sorted(keys) if k in best}
-
-
-def validate_test_evaluation_protocol(
-    *,
-    split: str,
-    selection_summary: str | Path | None,
-    diagnostic_only_test: bool,
-    diagnostic_reason: str = "",
-    weights: str | Path | None = None,
-    pred_json: str | Path | None = None,
-    imgsz: tuple[int, int] | list[int] = (544, 960),
-    conf: float,
-    point_valid_thr: float,
-    nms_dist_px: float,
-    max_det: int,
-    min_points: int,
-    max_images: int,
-    rank_min_points: dict[int, int] | str | None,
-    use_count_head_decode: bool,
-    count_head_temperature: float,
-    candidate_score_thr: float,
-    candidate_point_valid_thr: float,
-    candidate_min_points: int,
-    enable_rescue_candidate_pool: bool,
-    rescue_candidate_score_thr: float,
-    rescue_candidate_point_valid_thr: float,
-    rescue_candidate_min_points: int,
-    final_min_points: int,
-    fifth_min_points: int,
-    use_fifthness_decode: bool = False,
-    fifthness_decode_thr: float = 0.0,
-    fifthness_decode_rank_weight: float = 1.0,
-) -> dict:
-    """Enforce final-test provenance while allowing explicitly labeled diagnostic test audits."""
-    normalized_split = str(split).strip().lower()
-    if normalized_split != "test":
-        return {
-            "split": normalized_split,
-            "mode": "non_test",
-            "diagnostic_only_test": False,
-            "not_for_selection": False,
-            "selection_summary": None,
-            "selection_summary_type": None,
-            "selection_summary_validated": False,
-            "selection_mismatches": [],
-            "selection_warnings": [],
-        }
-    if int(max_images or 0) > 0 and not diagnostic_only_test:
-        raise ValueError("--split test final evaluation requires the full test set. Use --diagnostic-only-test for capped audits.")
-    if not selection_summary and not diagnostic_only_test:
-        raise ValueError(
-            "--split test requires --selection-summary from official-val selection. "
-            "For user-requested audits that are not promotable final evidence, pass --diagnostic-only-test."
-        )
-
-    info = {
-        "split": normalized_split,
-        "mode": "diagnostic_only" if diagnostic_only_test else "final",
-        "diagnostic_only_test": bool(diagnostic_only_test),
-        "not_for_selection": bool(diagnostic_only_test),
-        "diagnostic_reason": str(diagnostic_reason or ""),
-        "selection_summary": None,
-        "selection_summary_type": None,
-        "selection_summary_validated": False,
-        "selection_best": None,
-        "selection_config": None,
-        "selection_mismatches": [],
-        "selection_warnings": [],
-    }
-    if not selection_summary:
-        info["selection_warnings"].append("No official-val selection summary was provided.")
-        return info
-
-    summary_path = Path(selection_summary)
-    data = _read_json_object(summary_path)
-    summary_type = _selection_summary_type(data)
-    best = data.get("best")
-    if not isinstance(best, dict):
-        raise ValueError("Selection summary best row must be a JSON object.")
-    config = data.get("config") if isinstance(data.get("config"), dict) else {}
-    if best.get("official_acc", data.get("best_fitness")) is None:
-        raise ValueError("Selection summary best row must contain official_acc or best_fitness.")
-
-    selected_weights = None
-    if summary_type == "official_sweep_summary":
-        source_split = str(config.get("split", "")).strip().lower()
-        if source_split != "val":
-            raise ValueError(f"Selection summary must come from official-val, got split={source_split!r}.")
-        validate_tusimple_selection_source(source_split, gt_json=config.get("gt_json"), context="Final test selection summary")
-        if int(config.get("max_images", 0) or 0) > 0:
-            raise ValueError("Selection summary used max_images; final test selection must use the full official-val set.")
-        selected_weights = config.get("weights")
-        config_imgsz = config.get("imgsz")
-        if config_imgsz is not None and [int(x) for x in config_imgsz] != [int(imgsz[0]), int(imgsz[1])]:
-            raise ValueError(f"Selection summary imgsz={config_imgsz} does not match current imgsz={list(imgsz)}.")
-    else:
-        if data.get("best_epoch") is None or data.get("best_fitness") is None:
-            raise ValueError("Training official_best selection summary must contain best_epoch and best_fitness.")
-        selector = data.get("selector") if isinstance(data.get("selector"), dict) else {}
-        if selector.get("metric", "official_acc") != "official_acc":
-            raise ValueError("Training official_best selection summary must select by official_acc.")
-        best_fitness = data.get("best_fitness")
-        if best_fitness is not None and best.get("official_acc") is not None and not _numeric_equal(best_fitness, best["official_acc"]):
-            raise ValueError("Training official_best summary best_fitness must match best.official_acc.")
-        validate_tusimple_selection_source("val", gt_json=selector.get("gt_json"), context="Final test selection summary")
-        selected_weights = summary_path.parent / "weights" / "official_best.pt"
-
-    images = best.get("images")
-    if images is not None and int(images) != 363:
-        raise ValueError(f"Selection summary best row must cover the 363-image official-val split, got images={images}.")
-
-    mismatches: list[str] = []
-    _compare_selection_value(mismatches, name="conf", selected=best.get("conf"), current=conf)
-    _compare_selection_value(mismatches, name="point_valid_thr", selected=best.get("point_valid_thr"), current=point_valid_thr)
-    _compare_selection_value(mismatches, name="nms_dist_px", selected=best.get("nms_dist_px"), current=nms_dist_px)
-    _compare_selection_value(mismatches, name="max_det", selected=best.get("max_det"), current=max_det)
-    _compare_selection_value(mismatches, name="min_points", selected=best.get("min_points"), current=min_points)
-    _compare_selection_value(
-        mismatches,
-        name="rank_min_points",
-        selected=best.get("rank_min_points"),
-        current=rank_min_points,
-        normalize=_rank_min_points_selection_tag,
-    )
-    _compare_selection_value(mismatches, name="candidate_min_points", selected=best.get("candidate_min_points"), current=candidate_min_points)
-    _compare_selection_value(mismatches, name="final_min_points", selected=best.get("final_min_points"), current=final_min_points)
-    _compare_selection_value(mismatches, name="fifth_min_points", selected=best.get("fifth_min_points"), current=fifth_min_points)
-    _compare_selection_value(
-        mismatches,
-        name="use_fifthness_decode",
-        selected=best.get("use_fifthness_decode", False),
-        current=use_fifthness_decode,
-    )
-    _compare_selection_value(
-        mismatches,
-        name="fifthness_decode_thr",
-        selected=best.get("fifthness_decode_thr", 0.0),
-        current=fifthness_decode_thr,
-    )
-    _compare_selection_value(
-        mismatches,
-        name="fifthness_decode_rank_weight",
-        selected=best.get("fifthness_decode_rank_weight", 1.0),
-        current=fifthness_decode_rank_weight,
-    )
-
-    fifthness_config_defaults = {
-        "use_fifthness_decode": False,
-        "fifthness_decode_thr": 0.0,
-        "fifthness_decode_rank_weight": 1.0,
-    }
-    scalar_config = {
-        "use_count_head_decode": use_count_head_decode,
-        "count_head_temperature": count_head_temperature,
-        "candidate_score_thr": candidate_score_thr,
-        "candidate_point_valid_thr": candidate_point_valid_thr,
-        "use_fifthness_decode": use_fifthness_decode,
-        "fifthness_decode_thr": fifthness_decode_thr,
-        "fifthness_decode_rank_weight": fifthness_decode_rank_weight,
-        "enable_rescue_candidate_pool": enable_rescue_candidate_pool,
-        "rescue_candidate_conf": rescue_candidate_score_thr,
-        "rescue_candidate_point_valid_thr": rescue_candidate_point_valid_thr,
-        "rescue_candidate_min_points": rescue_candidate_min_points,
-    }
-    for key, current in scalar_config.items():
-        selected = config.get(key, fifthness_config_defaults.get(key))
-        if isinstance(selected, (str, int, float, bool)) or selected is None:
-            _compare_selection_value(mismatches, name=key, selected=selected, current=current)
-
-    if selected_weights and weights and not pred_json and not _weights_match(selected_weights, weights, summary_path=summary_path):
-        mismatches.append(f"weights: selected={selected_weights!r}, current={str(weights)!r}")
-    if pred_json:
-        info["selection_warnings"].append(
-            "--pred-json mode cannot prove the prediction file was generated from the selected weights; "
-            "keep its generation command, commit SHA, weights, and selection summary with the result."
-        )
-
-    info.update(
-        {
-            "selection_summary": str(summary_path.resolve()),
-            "selection_summary_type": summary_type,
-            "selection_summary_validated": True,
-            "selection_best": _selection_best_excerpt(best),
-            "selection_config": {
-                k: config[k]
-                for k in sorted(config)
-                if k in {"split", "gt_json", "weights", "max_images", "imgsz"}
-            },
-            "selection_mismatches": mismatches,
-        }
-    )
-    if mismatches and not diagnostic_only_test:
-        raise ValueError(
-            "Final test parameters do not match the official-val selection summary: " + "; ".join(mismatches)
-        )
-    return info
-
-
 def _weight_run_dir(weights: str | Path) -> Path | None:
     """Return runs/gcs_lane/<name> for a conventional .../weights/best.pt path."""
     path = Path(weights)
@@ -668,9 +350,6 @@ def predict_tusimple_records(
     rescue_candidate_min_points: int = 4,
     final_min_points: int = 6,
     fifth_min_points: int = 5,
-    use_fifthness_decode: bool = False,
-    fifthness_decode_thr: float = 0.0,
-    fifthness_decode_rank_weight: float = 1.0,
     line_nms_min_overlap: int = 6,
     line_nms_rescue_dist_px: float = 30.0,
     quality_rescue_5th: bool = True,
@@ -747,7 +426,6 @@ def predict_tusimple_records(
         pred_count = preds.get("pred_count_logits")
         pred_count_boundary = preds.get("pred_count_boundary_logits")
         pred_quality = preds.get("pred_quality_logits")
-        pred_fifthness = preds.get("pred_fifthness_logits")
         decoded, decode_meta = decode_gcs_predictions(
             preds["pred_points"][0],
             preds["pred_logits"][0],
@@ -755,7 +433,6 @@ def predict_tusimple_records(
             pred_count_logits=pred_count[0] if pred_count is not None else None,
             pred_count_boundary_logits=pred_count_boundary[0] if pred_count_boundary is not None else None,
             pred_quality_logits=pred_quality[0] if pred_quality is not None else None,
-            pred_fifthness_logits=pred_fifthness[0] if pred_fifthness is not None else None,
             image_shape=original_shape,
             score_thr=conf,
             point_valid_thr=point_valid_thr,
@@ -810,9 +487,6 @@ def predict_tusimple_records(
             soft_count_prior_weight=soft_count_prior_weight,
             soft_count_duplicate_penalty=soft_count_duplicate_penalty,
             soft_count_invalid_penalty=soft_count_invalid_penalty,
-            use_fifthness_decode=use_fifthness_decode,
-            fifthness_decode_thr=fifthness_decode_thr,
-            fifthness_decode_rank_weight=fifthness_decode_rank_weight,
             return_meta=True,
         )
         tusimple_lanes = gcs_lanes_to_tusimple_lanes(
@@ -855,9 +529,6 @@ def evaluate_tusimple_official(
     split: str = "test",
     gt_json: str | Path | None = None,
     pred_json: str | Path | None = None,
-    selection_summary: str | Path | None = None,
-    diagnostic_only_test: bool = False,
-    diagnostic_reason: str = "",
     imgsz: int | tuple[int, int] | list[int] = (544, 960),
     conf: float = 0.25,
     point_valid_thr: float = 0.5,
@@ -886,9 +557,6 @@ def evaluate_tusimple_official(
     rescue_candidate_min_points: int = 4,
     final_min_points: int = 6,
     fifth_min_points: int = 5,
-    use_fifthness_decode: bool = False,
-    fifthness_decode_thr: float = 0.0,
-    fifthness_decode_rank_weight: float = 1.0,
     line_nms_min_overlap: int = 6,
     line_nms_rescue_dist_px: float = 30.0,
     quality_rescue_5th: bool = True,
@@ -927,44 +595,14 @@ def evaluate_tusimple_official(
     score_fn_weight: float = DEFAULT_OFFICIAL_SCORE_FN_WEIGHT,
 ) -> dict:
     """Evaluate either a GCS checkpoint or an existing prediction file with TuSimple official metrics."""
-    imgsz = normalize_imgsz(imgsz, dataset="tusimple")
-    rank_min_points = parse_rank_min_points(rank_min_points)
-    protocol_info = validate_test_evaluation_protocol(
-        split=split,
-        selection_summary=selection_summary,
-        diagnostic_only_test=diagnostic_only_test,
-        diagnostic_reason=diagnostic_reason,
-        weights=weights,
-        pred_json=pred_json,
-        imgsz=imgsz,
-        conf=conf,
-        point_valid_thr=point_valid_thr,
-        nms_dist_px=nms_dist_px,
-        max_det=max_det,
-        min_points=min_points,
-        max_images=max_images,
-        rank_min_points=rank_min_points,
-        use_count_head_decode=use_count_head_decode,
-        count_head_temperature=count_head_temperature,
-        candidate_score_thr=candidate_score_thr,
-        candidate_point_valid_thr=candidate_point_valid_thr,
-        candidate_min_points=candidate_min_points,
-        enable_rescue_candidate_pool=enable_rescue_candidate_pool,
-        rescue_candidate_score_thr=rescue_candidate_score_thr,
-        rescue_candidate_point_valid_thr=rescue_candidate_point_valid_thr,
-        rescue_candidate_min_points=rescue_candidate_min_points,
-        final_min_points=final_min_points,
-        fifth_min_points=fifth_min_points,
-        use_fifthness_decode=use_fifthness_decode,
-        fifthness_decode_thr=fifthness_decode_thr,
-        fifthness_decode_rank_weight=fifthness_decode_rank_weight,
-    )
     archive_root = find_tusimple_archive_root(archive_root)
     gt_path = Path(gt_json) if gt_json else default_tusimple_gt_json(archive_root, split=split)
     gt_records = read_tusimple_json_lines(gt_path)
     if max_images and max_images > 0:
         gt_records = gt_records[: int(max_images)]
 
+    imgsz = normalize_imgsz(imgsz, dataset="tusimple")
+    rank_min_points = parse_rank_min_points(rank_min_points)
     save_dir = resolve_save_dir(
         save_dir=save_dir,
         weights=weights,
@@ -1025,9 +663,6 @@ def evaluate_tusimple_official(
             rescue_candidate_min_points=rescue_candidate_min_points,
             final_min_points=final_min_points,
             fifth_min_points=fifth_min_points,
-            use_fifthness_decode=use_fifthness_decode,
-            fifthness_decode_thr=fifthness_decode_thr,
-            fifthness_decode_rank_weight=fifthness_decode_rank_weight,
             line_nms_min_overlap=line_nms_min_overlap,
             line_nms_rescue_dist_px=line_nms_rescue_dist_px,
             quality_rescue_5th=quality_rescue_5th,
@@ -1083,9 +718,6 @@ def evaluate_tusimple_official(
         6,
     )
     summary.update(_summarize_prediction_counts(pred_records, gt_records))
-    if protocol_info.get("diagnostic_only_test"):
-        summary["diagnostic_only_test"] = True
-        summary["not_for_selection"] = True
     if timing:
         summary.update(timing)
 
@@ -1117,9 +749,6 @@ def evaluate_tusimple_official(
             "rescue_candidate_min_points": int(rescue_candidate_min_points),
             "final_min_points": int(final_min_points),
             "fifth_min_points": int(fifth_min_points),
-            "use_fifthness_decode": bool(use_fifthness_decode),
-            "fifthness_decode_thr": float(fifthness_decode_thr),
-            "fifthness_decode_rank_weight": float(fifthness_decode_rank_weight),
             "line_nms_min_overlap": int(line_nms_min_overlap),
             "line_nms_rescue_dist_px": float(line_nms_rescue_dist_px),
             "quality_rescue_5th": bool(quality_rescue_5th),
@@ -1162,7 +791,6 @@ def evaluate_tusimple_official(
             "device": str(device),
             "half": bool(half),
         },
-        "protocol": protocol_info,
     }
     if save_records:
         output["records"] = per_image
@@ -1186,9 +814,6 @@ def main() -> None:
         split=args.split,
         gt_json=args.gt_json,
         pred_json=args.pred_json,
-        selection_summary=args.selection_summary,
-        diagnostic_only_test=args.diagnostic_only_test,
-        diagnostic_reason=args.diagnostic_reason,
         imgsz=normalize_imgsz(args.imgsz, dataset=args.dataset),
         conf=args.conf,
         point_valid_thr=args.point_valid_thr,

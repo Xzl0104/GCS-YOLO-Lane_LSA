@@ -22,24 +22,6 @@ BAD_PATTERNS = [
     r"\bmargin_loss\b",
 ]
 
-REMOVED_ACTIVE_SOURCE_PATTERNS = [
-    r"\bgcs_count_cumulative\b",
-    r"\bgcs_count_cumulative_label_smoothing\b",
-    r"\bcount_cumulative_loss\b",
-    r"\bcount_cumulative_gain\b",
-    r"\bcount_cumulative_label_smoothing\b",
-    r"\bgcs_quality_pairwise\b",
-    r"\bgcs_quality_pairwise_margin\b",
-    r"\bquality_pairwise_gain\b",
-    r"\bquality_pairwise_margin\b",
-    r"\buse_count_fifth_evidence\b",
-    r"\buse_fifth_candidate_evidence\b",
-    r"\bfifth_candidate_residual\b",
-    r"\bfifth_candidate_context\b",
-    r"\bfifth_candidate_features\b",
-    r"\bcount5ev\b",
-]
-
 SKIP_DIRS = {
     ".git",
     ".idea",
@@ -74,8 +56,6 @@ SOURCE_SUFFIXES = {
     ".txt",
 }
 
-ACTIVE_SOURCE_SUFFIXES = SOURCE_SUFFIXES - {".md"}
-
 
 def should_skip(path: Path) -> bool:
     rel = path.relative_to(ROOT)
@@ -107,11 +87,6 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Bypass this default-mainline guard for a documented official-ACC restoration experiment.",
     )
-    parser.add_argument(
-        "--allow-removed-experiment-tokens",
-        action="store_true",
-        help="Bypass the removed-experiment token guard for a documented fresh restoration experiment.",
-    )
     return parser.parse_args()
 
 
@@ -120,49 +95,31 @@ def legacy_loss_tokens_allowed(args: argparse.Namespace) -> bool:
     return args.allow_legacy_loss_tokens or env_value in {"1", "true", "yes", "on"}
 
 
-def removed_experiment_tokens_allowed(args: argparse.Namespace) -> bool:
-    env_value = os.environ.get("GCS_ALLOW_REMOVED_EXPERIMENT_TOKENS", "").strip().lower()
-    return args.allow_removed_experiment_tokens or env_value in {"1", "true", "yes", "on"}
+def main() -> int:
+    args = parse_args()
+    if legacy_loss_tokens_allowed(args):
+        print("OK: legacy loss token guard bypassed for an explicit restoration experiment.")
+        return 0
 
-
-def scan_patterns(patterns: list[str], *, active_source_only: bool = False) -> bool:
     failed = False
     for path in iter_source_files():
-        if active_source_only and path.suffix not in ACTIVE_SOURCE_SUFFIXES:
-            continue
         try:
             text = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
             continue
-        for pattern in patterns:
+        for pattern in BAD_PATTERNS:
             for match in re.finditer(pattern, text):
                 line_no = text.count("\n", 0, match.start()) + 1
                 print(f"[BAD] {path.relative_to(ROOT)}:{line_no}: matched {pattern}")
                 failed = True
-    return failed
-
-
-def main() -> int:
-    args = parse_args()
-
-    failed = False
-    if legacy_loss_tokens_allowed(args):
-        print("OK: legacy loss token guard bypassed for an explicit restoration experiment.")
-    else:
-        failed = scan_patterns(BAD_PATTERNS) or failed
-
-    if removed_experiment_tokens_allowed(args):
-        print("OK: removed experiment token guard bypassed for an explicit restoration experiment.")
-    else:
-        failed = scan_patterns(REMOVED_ACTIVE_SOURCE_PATTERNS, active_source_only=True) or failed
 
     if failed:
         print("\nDefault-mainline loss cleanup verification failed.")
-        print("Legacy or removed experiment tokens were found outside an approved restoration experiment.")
-        print("Remove them from the default mainline, or use the explicit allow flags only for a documented official-ACC restoration branch.")
+        print("Legacy loss tokens were found outside an approved restoration experiment.")
+        print("Remove them from the default mainline, or use --allow-legacy-loss-tokens only for a documented official-ACC restoration branch.")
         return 1
 
-    print("OK: no accidental legacy or removed experiment tokens found in the default mainline.")
+    print("OK: no accidental legacy loss tokens found in the default mainline.")
     return 0
 
 

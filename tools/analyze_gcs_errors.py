@@ -32,11 +32,9 @@ from ultralytics.utils.gcs_postprocess import GCS_DEFAULT_MAX_DET, decode_gcs_pr
 from ultralytics.utils.torch_utils import select_device
 
 
-DEFAULT_WEIGHTS = (
-    ROOT / "runs" / "gcs_lane" / "gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4" / "weights" / "official_best.pt"
-)
-DEFAULT_SOURCE = ROOT / "datasets" / "tusimple_fixed_y_k56_960x544" / "images" / "test"
-DEFAULT_LABELS = ROOT / "datasets" / "tusimple_fixed_y_k56_960x544" / "labels_gcs" / "test"
+DEFAULT_WEIGHTS = ROOT / "runs" / "gcs_lane" / "gcs_yolo_lane_s_tusimple_refquery_e220" / "weights" / "best.pt"
+DEFAULT_SOURCE = ROOT / "datasets" / "tusimple_fixed_y_960x544" / "images" / "test"
+DEFAULT_LABELS = ROOT / "datasets" / "tusimple_fixed_y_960x544" / "labels_gcs" / "test"
 
 
 def parse_args() -> argparse.Namespace:
@@ -212,8 +210,6 @@ def main() -> None:
         )
         pred_quality_t = preds.get("pred_quality_logits")
         pred_quality_t = pred_quality_t[0].detach().float().cpu() if pred_quality_t is not None else None
-        pred_fifthness_t = preds.get("pred_fifthness_logits")
-        pred_fifthness_t = pred_fifthness_t[0].detach().float().cpu() if pred_fifthness_t is not None else None
         if pred_logits_t.ndim == 2 and pred_logits_t.shape[-1] == 1:
             pred_logits_t = pred_logits_t.squeeze(-1)
         scores = pred_logits_t.sigmoid().cpu().numpy().astype(np.float32)
@@ -263,7 +259,6 @@ def main() -> None:
             pred_count_logits=pred_count_t,
             pred_count_boundary_logits=pred_count_boundary_t,
             pred_quality_logits=pred_quality_t,
-            pred_fifthness_logits=pred_fifthness_t,
             image_shape=img.shape[:2],
             score_thr=args.conf,
             point_valid_thr=args.point_valid_thr,

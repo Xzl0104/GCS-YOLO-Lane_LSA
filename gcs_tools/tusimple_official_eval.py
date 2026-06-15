@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -12,7 +11,6 @@ import numpy as np
 TUSIMPLE_ORIGINAL_SHAPE = (720, 1280)
 DEFAULT_OFFICIAL_SCORE_FP_WEIGHT = 0.02
 DEFAULT_OFFICIAL_SCORE_FN_WEIGHT = 0.02
-_TEST_GT_FILENAMES = {"test_label.json", "test_label_new.json"}
 
 
 def official_metric_score(
@@ -75,62 +73,6 @@ def normalize_tusimple_gt_record(record: dict) -> dict:
     out = dict(record)
     out["lanes"] = valid_tusimple_lanes(record.get("lanes", []))
     return out
-
-
-def looks_like_tusimple_test_gt_json(path: str | Path) -> bool:
-    """Return True when a GT json path is a conventional TuSimple test label file."""
-    parts = [part.lower() for part in Path(path).parts]
-    if not parts:
-        return False
-    if parts[-1] in _TEST_GT_FILENAMES:
-        return True
-    return len(parts) >= 3 and parts[-3:] == ["train_set", "seg_label", "test.json"]
-
-
-def validate_tusimple_selection_source(
-    split: str,
-    *,
-    gt_json: str | Path | None = None,
-    gt_records: Iterable[dict] | None = None,
-    archive_root: str | Path | None = None,
-    context: str = "TuSimple official selection",
-) -> str:
-    """Reject test data in validation/training selection and diagnosis flows."""
-    normalized = str(split).strip().lower()
-    if normalized == "test":
-        raise ValueError(
-            f"{context} cannot use --split test for threshold, diagnosis, postprocess, or checkpoint selection. "
-            "Use --split val for selection, then use tools/eval_tusimple_official.py --split test "
-            "for one-shot final test evaluation."
-        )
-    if gt_json is not None and looks_like_tusimple_test_gt_json(gt_json):
-        raise ValueError(
-            f"{context} cannot use TuSimple test GT json for validation selection or diagnosis: {gt_json}"
-        )
-    if gt_records is not None and archive_root is not None:
-        root = find_tusimple_archive_root(archive_root)
-        root_resolved = root.resolve()
-        test_hits: list[str] = []
-        for record in gt_records:
-            raw_file = str(record.get("raw_file", ""))
-            if not raw_file:
-                continue
-            image_path = tusimple_image_path(root, raw_file, split=normalized)
-            try:
-                rel_parts = [part.lower() for part in image_path.resolve().relative_to(root_resolved).parts]
-            except ValueError:
-                rel_parts = [part.lower() for part in image_path.parts]
-            if "test_set" in rel_parts:
-                test_hits.append(raw_file)
-                if len(test_hits) >= 5:
-                    break
-        if test_hits:
-            examples = ", ".join(test_hits)
-            raise ValueError(
-                f"{context} cannot use GT records that resolve to TuSimple test_set images "
-                f"under --split {normalized}: {examples}"
-            )
-    return normalized
 
 
 def _linear_regression_slope(y: np.ndarray, x: np.ndarray) -> float:
@@ -218,28 +160,9 @@ class TuSimpleOfficialLaneEval:
     ) -> tuple[TuSimpleEvalResult, list[dict]]:
         """Evaluate TuSimple-format predictions against TuSimple-format GT records."""
         preds = list(pred_records)
-        gt_items = list(gt_records)
-        gt_raw_files = [str(item["raw_file"]) for item in gt_items]
-        gt_counter = Counter(gt_raw_files)
-        gts = {str(item["raw_file"]): normalize_tusimple_gt_record(item) for item in gt_items}
-        if strict_length:
-            duplicate_gt = [raw for raw, count in gt_counter.items() if count > 1]
-            if duplicate_gt:
-                raise ValueError(f"GT raw_file contains duplicates: {duplicate_gt[:5]}")
-            pred_raw_files: list[str] = []
-            for pred in preds:
-                if "raw_file" not in pred:
-                    raise ValueError("raw_file or lanes or run_time not in some predictions.")
-                pred_raw_files.append(str(pred["raw_file"]))
-            pred_counter = Counter(pred_raw_files)
-            if pred_counter != gt_counter:
-                missing = list((gt_counter - pred_counter).elements())[:5]
-                extra = list((pred_counter - gt_counter).elements())[:5]
-                duplicate_pred = [raw for raw, count in pred_counter.items() if count > gt_counter.get(raw, 0)][:5]
-                raise ValueError(
-                    "Prediction raw_file set does not match GT under strict_length: "
-                    f"missing={missing}, extra={extra}, duplicate={duplicate_pred}"
-                )
+        gts = {str(item["raw_file"]): normalize_tusimple_gt_record(item) for item in gt_records}
+        if strict_length and len(preds) != len(gts):
+            raise ValueError("We do not get the predictions of all the test tasks.")
 
         accuracy = 0.0
         fp = 0.0

@@ -17,60 +17,53 @@ This is H,W order. Do not reverse it.
 Default data YAML:
 
 ```text
-data/tusimple_gcs_fixed_y_k56_960x544.yaml
+data/tusimple_gcs_fixed_y_960x544.yaml
 ```
 
 Default data root:
 
 ```text
-datasets/tusimple_fixed_y_k56_960x544
+datasets/tusimple_fixed_y_960x544
 ```
 
 The test split must not participate in training split rebuilds, threshold search, checkpoint selection, or postprocess tuning.
 
-The K56 dataset must be rebuilt from original TuSimple JSON and images. Do not resample existing K32 labels into K56 labels.
-
-Current K56 status:
+Active experimental K56 data YAML:
 
 ```text
-K56 label oracle: 0.998256
-K56 parent official_best: 0.959315 at epoch 152
-K56 best val-only min-points row: 0.959750 at point_valid_thr=0.40, candidate_min_points=5, final_min_points=9, fifth_min_points=4
+data/tusimple_gcs_fixed_y_k56_960x544.yaml
 ```
 
-The min-points row is validation-selected and not promoted because it carries GT4-to-5 false fifth-lane risk (`count_acc_4=0.863636`). The rejected K56 gates are `gcs_yolo_lane_s_q12_k56_cqcalib_ft12_seed1_b32w4`, `gcs_yolo_lane_s_q12_k56_cqcalib_lr1e4_ft8_seed1_b32w4`, `gcs_yolo_lane_s_q12_k56_curveaux_ft8_seed1_b32w4`, `gcs_yolo_lane_s_q12_k56_lowfp_joint_ft8_seed1_b32w4`, `gcs_yolo_lane_s_q12_k56_countadj_lowmargin_ft8_seed1_b32w4`, and `gcs_yolo_lane_s_q12_k56_countff_supp_ft8_seed1_b32w4`; do not rerun or continue those exact recipes as the next path.
+Active experimental K56 data root:
+
+```text
+datasets/tusimple_fixed_y_k56_960x544
+```
+
+The K56 dataset must be rebuilt from original TuSimple JSON and images. Do not resample existing K32 labels into K56 labels.
 
 ## Model Contract
 
 Default model:
 
 ```text
-ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12.yaml
 ```
 
-K56 is the sole active code/config path after the 2026-06-16 cleanup. Older K32/Q8 model YAMLs were removed from active source; historical results remain documentation-only references.
-
-Default-off K56 fifth-candidate verifier experiment:
-
-```text
-ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-fifthness-v1.yaml
-```
-
-This model YAML is opt-in and enables an optional fifthness verifier head. It is not the K56 default. The first `gcs_yolo_lane_s_q12_k56_fifthness_v1_ft8_seed1_b32w4` short gate is rejected: best official-val was epoch 5 `0.959006`, below the K56 parent `0.959315`, with worse FP/FN and high GT4-to-5 pressure. The follow-up `gcs_yolo_lane_s_q12_k56_fifthness_gt5neg_ft8_seed1_b32w4` gate is also not promotable: best official-val was epoch 6 `0.959319`, only `+0.000004` over parent, but FP worsened to `0.047429` and `rate_4_to_5` rose to `0.121212`. A 2026-06-15 official-val fifthness score audit found useful but insufficient separation: GT5 selected rank-5 matched scores had median `0.960218`, while GT4 unmatched false-fifth scores had median `0.841094` and max `0.942222`; thresholds low enough to retain GT5 keep too many false fifths, and high thresholds reproduce the GT5 `5->4` tradeoff. The enhanced audit CSV also records Count Head `P4/P5/margin`; on the same server rerun, GT4 unmatched false-fifth samples had median `P5=0.996325` and median margin `0.992650`, indicating many false fifths are Count Head count=5 overconfidence cases. The follow-up default-K56 adjacent Count margin gate `gcs_yolo_lane_s_q12_k56_countadj_lowmargin_ft8_seed1_b32w4` was stopped after epoch 4 and is rejected: independent official-val reproduced `0.958843`, below parent `0.959315`, and `rate_4_to_5=0.090909` worsened versus parent `0.075758`. The candidate-specific Count false-fifth suppression gate `gcs_yolo_lane_s_q12_k56_countff_supp_ft8_seed1_b32w4` completed 8 epochs and is also not promotable: official_best epoch 7 reached `0.959496`, but FP worsened to `0.047062`, FN to `0.031680`, and GT5 `rate_5_to_4` to `0.175676`; the more balanced epoch 4 row was only `+0.000057` ACC over parent. Do not start full/e180 from these checkpoints.
-
-The rejected `gcs_quality_pairwise*`, `gcs_count_cumulative*`, and Count Head fifth-candidate evidence / `count5ev-v1` source paths were removed from current code on 2026-06-16. Historical official-val records remain in the decision log and bottleneck notes, but these are no longer current-code knobs or runnable model configs.
-
-Default-off K56 x-localization auxiliary experiment:
-
-```text
-ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-xloc-v1.yaml
-```
-
-This model YAML is opt-in and keeps the default K56 fixed-y y anchors unchanged. It adds auxiliary x-bin classification and within-bin x-offset outputs for the K56 point head only; it does not enable fifthness logits, Count Head fifth-candidate evidence, decode changes, official metric changes, or test usage. The default K56 YAML must not emit the xloc outputs.
+Legacy Q=8 config is retained for historical reproduction, ablation, or controlled experimental candidates.
 
 ## Label Contract
 
 Current label mode:
+
+```text
+point_mode = fixed_y
+fixed_y_start = 710 / 720 = 0.9861111111111112
+fixed_y_end = 0.25
+K = 32
+```
+
+Active experimental K56 label mode:
 
 ```text
 point_mode = fixed_y
@@ -80,16 +73,6 @@ K = 56
 ```
 
 The K56 anchors align exactly to TuSimple official h-samples from `710` down to `160` at step `10`, normalized by original height `720`.
-
-Exact K56 label artifacts should pass:
-
-```bash
-python tools/check_gcs_label_order_split.py \
-  --dataset-root datasets/tusimple_fixed_y_k56_960x544 \
-  --expect-fixed-y 56,710/720,160/720
-```
-
-This check validates the fixed-y anchor contract directly; it is not a substitute for rebuilding labels from raw TuSimple JSON/images.
 
 Expected fixed-y label fields:
 
@@ -122,25 +105,6 @@ pred_count_boundary_logits: B x 2
 `pred_count_logits` is the image-level Count Head for classes count=2/3/4/5. `pred_quality_logits` is lane-level quality for training, diagnostics, and gated rescue behavior.
 `pred_count_boundary_logits` is the count>=4/count>=5 boundary calibration sub-head used by the default Count Head loss/decode path.
 
-The opt-in `gcs-yolo-lane-s-q12-k56-fifthness-v1.yaml` experiment may additionally emit:
-
-```text
-pred_fifthness_logits: B x Q
-```
-
-The default K56 model config must not emit `pred_fifthness_logits`; `tools/check_model.py` treats it as optional only when the head enables `use_fifthness`.
-
-The optional fifthness logits are ignored by decode unless the explicit default-off decode switch is enabled. When enabled, fifthness may only gate or re-rank the selected fifth lane and fifth-lane rescue candidates; selected ranks 1-4 keep the default `exist * visible_segment_mean_valid * visible_support_score` ordering.
-
-The opt-in `gcs-yolo-lane-s-q12-k56-xloc-v1.yaml` experiment may additionally emit:
-
-```text
-pred_x_bin_logits: B x Q x K x bins
-pred_x_bin_offsets: B x Q x K
-```
-
-These outputs are training-side auxiliaries for fixed-y x localization. They are ignored by decode and official evaluation unless a future controlled experiment explicitly changes that contract.
-
 The candidate-aware Count Head uses the same short-lane visibility semantics as decode when building count evidence:
 
 ```text
@@ -159,7 +123,6 @@ exist_loss
 point_loss
 point_valid_loss
 line_iou_loss
-curvature_loss
 count_cls_loss
 count_sum_loss
 quality_loss
@@ -186,7 +149,7 @@ gcs_gt5_oversample_weight = 1.0
 gcs_group_sampler_ratios = 2:0.01,3:0.29,4:0.42,5:0.28
 ```
 
-The GT5 candidate-quality knobs above are training-side only. They strengthen real matched query supervision inside the existing logged loss items:
+The GT5 candidate-quality knobs above are training-side only. They strengthen real matched query supervision inside the existing 7 loss items:
 
 - `gcs_count_boundary_gt5_pos_weight` weights the Count Boundary `count>=5` positive target inside `count_cls_loss`.
 - `gcs_candidate_gt5_edge_weight` weights matched left/right GT5 edge queries/lanes inside `exist_loss`, `point_loss`, `point_valid_loss`, `line_iou_loss`, and `quality_loss`; it is matched edge-query/lane weighting, not per-anchor positive-target-only weighting.
@@ -211,47 +174,13 @@ gcs_hard_negative_visible_support_points = 12.0
 gcs_point_valid_gt5_edge_segment = 0.0
 gcs_point_valid_gt5_edge_segment_thr = 0.65
 gcs_point_valid_gt5_edge_segment_min_points = 5
-gcs_geometry_curvature = 0.0
-gcs_geometry_curvature_beta_px = 5.0
-gcs_xloc_cls = 0.0
-gcs_xloc_offset = 0.0
-gcs_xloc_offset_beta_px = 3.0
-gcs_fifthness = 0.0
-gcs_fifthness_pairwise = 0.0
-gcs_fifthness_margin = 0.2
-gcs_fifthness_negative_topk = 2
-gcs_fifthness_negative_score_thr = 0.1
-gcs_fifthness_include_gt5_negatives = False
 ```
-
-Current default-off inference/decode experimental knobs:
-
-```text
-gcs_use_fifthness_decode = False
-gcs_fifthness_decode_thr = 0.0
-gcs_fifthness_decode_rank_weight = 1.0
-```
-
-When `gcs_use_fifthness_decode=True`, `decode_gcs_predictions()` requires `pred_fifthness_logits` and fails fast if the model does not emit them. Historical official-val selection summaries that do not record these fields are treated as selecting the old defaults (`False/0.0/1.0`) for final-test provenance checks.
 
 `gcs_count_adjacent_margin_gain` enables a default-off training-side margin term inside `count_cls_loss` that pushes the GT count logit above neighboring count classes. It is intended for controlled GT3/GT4/GT5 calibration experiments and does not add a new logged loss item.
-
-The removed `gcs_count_false_fifth_suppression*` source switches belonged only to the rejected `gcs_yolo_lane_s_q12_k56_countff_supp_ft8_seed1_b32w4` gate. Keep that run as audit history, but do not treat the switches as available current-code knobs.
-
 
 `gcs_quality_gt5_edge_floor` is a default-off training-side candidate that floors matched Quality Head targets only for real left/right edge lanes in GT5 images. It is intended to test whether true short GT5 edge lanes are being assigned quality targets too low to survive quality-gated fifth-lane decode behavior.
 
 The `gcs_quality_gt5_edge_floor`, `gcs_quality_hard_negative_from_head`, `gcs_hard_negative_visible_segment*`, and `gcs_point_valid_gt5_edge_segment*` knobs are intended for controlled GT5 quality experiments. They do not change decode, read GT during inference, fabricate lanes, or alter official metrics.
-
-`gcs_geometry_curvature` is a default-off fixed-y geometry auxiliary candidate. When enabled, it adds `curvature_loss`, a SmoothL1 penalty on second-order x curvature for Hungarian-matched left/right edge lanes in GT>=5 images only. It is training-side only and does not change decode, read GT during inference, fabricate lanes, or alter official metrics.
-
-The first K56 curvature gate `gcs_yolo_lane_s_q12_k56_curveaux_ft8_seed1_b32w4` is rejected: best official-val was `0.958732`, below the K56 parent `0.959315`. Keep the infrastructure default-off and do not rerun the exact `gcs_geometry_curvature=0.05` recipe as the next path.
-
-`gcs_xloc_cls` and `gcs_xloc_offset` are default-off fixed-y x-localization auxiliaries. When enabled, `gcs_xloc_cls` trains a per-anchor x-bin classifier and `gcs_xloc_offset` trains a bounded within-bin x-offset SmoothL1 term; both are folded into `point_loss`. They require a model that emits `pred_x_bin_logits`, and offset loss additionally requires `pred_x_bin_offsets`. They do not change decode, read GT during inference, fabricate lanes, or alter official metrics. The K56 fixed-y y coordinate is already anchor-derived; xloc-v1 targets horizontal error only.
-
-`gcs_fifthness*` is a default-off fifth-candidate verifier objective. It supervises GT5 edge matched lanes as positives and competitive unmatched outside candidates as negatives, with an optional pairwise margin term. By default, competitive fifthness negatives are mined from GT3/GT4 images. The additional `gcs_fifthness_include_gt5_negatives` switch is default-off and, when enabled, also mines unmatched outside candidates in GT5 images so same-image false fifth candidates are explicitly ranked below true GT5 edge matches. Loss-side GT lane counting, Count Head targets, Count Boundary targets, Count Sum targets, hard-loss lane-count filters, and GT5 point-valid boosting all use `gcs_count_min_gt_points` consistently. Current generated K56 labels, dataset loading, label-oracle conversion, and TuSimple prediction conversion still require at least 2 valid anchors per lane, so full one-anchor lane support is not yet an active data/decode contract. It requires a fifthness-enabled model YAML; enabling the loss against a default model is an error.
-
-For logging stability, current optional experimental terms stay folded into existing loss items instead of adding new CSV columns: xloc is inside `point_loss`, and fifthness is an independent auxiliary term reported through the existing `quality_loss` item. Analyze enabled runs with the exact CLI gains from `args.yaml`; do not infer subterm magnitudes from the 8-loss CSV alone.
 
 When `gcs_quality_hard_negative_from_head` is enabled, Quality Head hard negatives are mined from unmatched queries only. Hungarian-matched queries remain matched quality targets even when their current continuous quality target is `0.0`; they must not be reclassified as hard negatives.
 
@@ -261,7 +190,7 @@ These knobs remain default-off after the 2026-06-13 `gcs_yolo_lane_s_q12_gt5segq
 
 ## Experimental Loss Policy
 
-The current 8-loss logging setup is a default baseline, not a permanent restriction. `curvature_loss` is inert unless its gain is enabled.
+The current 7-loss setup is a default baseline, not a permanent restriction.
 
 Previously removed losses or modules may be restored as controlled experimental candidates if the goal is to improve official ACC.
 
@@ -328,11 +257,6 @@ These are diagnostics unless explicitly promoted into a controlled experimental 
 
 The test set must not be used for threshold search, rescue parameter search, soft-count search, rank-min-points search, final/fifth min-points search, NMS distance search, checkpoint selection, model design iteration, or loss-weight tuning.
 
-`tools/sweep_tusimple_official.py` supports validation-only grids for `candidate_min_points`, `final_min_points`, and `fifth_min_points`. K56 must retune these on official-val because 56 anchors make each point correspond to one official 10px h-sample; K32 min-points semantics do not carry over unchanged.
-
 `tools/sweep_tusimple_official.py` and `tools/diagnose_gcs_gt5.py` default to `--split val` and reject `--split test`. Training-time `official_best` selection also rejects `split=test`.
-These selection/diagnostic paths also reject conventional TuSimple test GT json paths and explicit GT records that resolve to `test_set` images, so `--split val --gt-json <test labels>` cannot be used as a test-leakage bypass. Training-time `official_best` selection is val-only; do not use train or test split for checkpoint selection.
 
-Test is only for one-shot final evaluation of a candidate already selected on official-val, using `tools/eval_tusimple_official.py --split test --selection-summary <official-val-summary>`. The final-test command must prove the weights and postprocess parameters match the selected official-val row. Extra user-requested test audits must pass `--diagnostic-only-test`, and their outputs are marked `diagnostic_only_test=true` and `not_for_selection=true`.
-
-If the user explicitly requests extra test evaluations for audit purposes, label them diagnostic-only and do not use them to choose checkpoints, thresholds, postprocess settings, losses, model variants, or promotion. The 2026-06-14 user-requested K56 test audit is such a diagnostic-only exception; it does not create a final/promotable official-test claim for K56.
+Test is only for one-shot final evaluation of a candidate already selected on official-val, using `tools/eval_tusimple_official.py --split test`.

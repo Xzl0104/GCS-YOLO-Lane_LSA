@@ -20,7 +20,7 @@ from ultralytics.utils.gcs_shape import normalize_imgsz, shape_str
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Export YOLO segmentation labels from GCS labels_gcs npz files.")
-    parser.add_argument("--dataset-root", default="datasets/tusimple_fixed_y_k56_960x544", help="Converted dataset root.")
+    parser.add_argument("--dataset-root", default="datasets/tusimple_fixed_y_960x544", help="Converted dataset root.")
     parser.add_argument("--splits", nargs="+", default=["train", "val", "test"], help="Dataset splits to export.")
     parser.add_argument("--imgsz", nargs="+", type=int, default=[544, 960], help="Image shape as H W.")
     parser.add_argument("--line-width", type=int, default=12, help="Lane rasterization width in pixels.")

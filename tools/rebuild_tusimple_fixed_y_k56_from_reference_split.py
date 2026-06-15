@@ -25,7 +25,7 @@ from ultralytics.utils.gcs_shape import normalize_imgsz, shape_str
 
 TUSIMPLE_OFFICIAL_TOP_Y_NORM = 160.0 / 720.0
 DEFAULT_OUTPUT_ROOT = ROOT / "datasets" / "tusimple_fixed_y_k56_960x544"
-DEFAULT_REFERENCE_ROOT = ROOT / "datasets" / "tusimple_fixed_y_k56_960x544"
+DEFAULT_REFERENCE_ROOT = ROOT / "datasets" / "tusimple_fixed_y_960x544"
 DEFAULT_SUMMARY = ROOT / "runs" / "gcs_lane" / "tusimple_fixed_y_k56_official_h_samples.json"
 
 
@@ -209,9 +209,10 @@ def main() -> None:
     output_root = ROOT / args.output_root if not Path(args.output_root).is_absolute() else Path(args.output_root)
     img_shape = normalize_imgsz(args.imgsz)
 
-    ref_split = reference_raw_file_split(reference_root)
     ensure_dataset_dirs(output_root, include_test=True)
     removed = clear_output_splits(output_root, ("train", "val", "test")) if args.overwrite else {}
+
+    ref_split = reference_raw_file_split(reference_root)
     split_samples: dict[str, list[Any]] = {"train": [], "val": [], "test": []}
     missing_reference: list[str] = []
 

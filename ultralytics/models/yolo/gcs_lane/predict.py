@@ -155,9 +155,6 @@ class GCSLanePredictor(BasePredictor):
         quality_logits = preds.get("pred_quality_logits")
         if quality_logits is not None:
             quality_logits = quality_logits.detach()
-        fifthness_logits = preds.get("pred_fifthness_logits")
-        if fifthness_logits is not None:
-            fifthness_logits = fifthness_logits.detach()
         conf = 0.25 if self.args.conf is None else float(self.args.conf)
         generic_max_det = getattr(self.args, "max_det", None)
         if generic_max_det is not None and int(generic_max_det) != 300:
@@ -177,12 +174,6 @@ class GCSLanePredictor(BasePredictor):
         candidate_min_points = int(getattr(self.args, "gcs_decode_candidate_min_points", 5) or 5)
         final_min_points = int(getattr(self.args, "gcs_decode_final_min_points", 6) or 6)
         fifth_min_points = int(getattr(self.args, "gcs_decode_fifth_min_points", 5) or 5)
-        use_fifthness_decode = bool(getattr(self.args, "gcs_use_fifthness_decode", False))
-        fifthness_decode_thr = float(getattr(self.args, "gcs_fifthness_decode_thr", 0.0) or 0.0)
-        fifthness_decode_rank_weight_arg = getattr(self.args, "gcs_fifthness_decode_rank_weight", 1.0)
-        fifthness_decode_rank_weight = (
-            1.0 if fifthness_decode_rank_weight_arg is None else float(fifthness_decode_rank_weight_arg)
-        )
         line_nms_min_overlap = max(int(getattr(self.args, "gcs_line_nms_min_overlap", 6) or 6), 1)
         line_nms_rescue_dist_px = float(getattr(self.args, "gcs_line_nms_rescue_dist_px", 30.0) or 0.0)
         quality_rescue_5th = bool(getattr(self.args, "gcs_quality_rescue_5th", True))
@@ -210,10 +201,6 @@ class GCSLanePredictor(BasePredictor):
             quality_iter = [None] * int(points.shape[0])
         else:
             quality_iter = list(quality_logits)
-        if fifthness_logits is None:
-            fifthness_iter = [None] * int(points.shape[0])
-        else:
-            fifthness_iter = list(fifthness_logits)
 
         for (
             lane_points,
@@ -222,19 +209,10 @@ class GCSLanePredictor(BasePredictor):
             lane_count_logits,
             lane_count_boundary_logits,
             lane_quality_logits,
-            lane_fifthness_logits,
             orig_img,
             img_path,
         ) in zip(
-            points,
-            logits,
-            valid_iter,
-            count_iter,
-            count_boundary_iter,
-            quality_iter,
-            fifthness_iter,
-            orig_imgs,
-            self.batch[0],
+            points, logits, valid_iter, count_iter, count_boundary_iter, quality_iter, orig_imgs, self.batch[0]
         ):
             lanes = decode_gcs_predictions(
                 lane_points,
@@ -243,7 +221,6 @@ class GCSLanePredictor(BasePredictor):
                 pred_count_logits=lane_count_logits,
                 pred_count_boundary_logits=lane_count_boundary_logits,
                 pred_quality_logits=lane_quality_logits,
-                pred_fifthness_logits=lane_fifthness_logits,
                 image_shape=orig_img.shape[:2],
                 score_thr=conf,
                 point_valid_thr=point_valid_thr,
@@ -267,9 +244,6 @@ class GCSLanePredictor(BasePredictor):
                 quality_rescue_quality_thr=quality_rescue_quality_thr,
                 quality_rescue_min_points=quality_rescue_min_points,
                 quality_rescue_dist_px=quality_rescue_dist_px,
-                use_fifthness_decode=use_fifthness_decode,
-                fifthness_decode_thr=fifthness_decode_thr,
-                fifthness_decode_rank_weight=fifthness_decode_rank_weight,
             )
             result = GCSLaneResults(orig_img, path=img_path, names=self.model.names, lanes=lanes)
             if not lanes:

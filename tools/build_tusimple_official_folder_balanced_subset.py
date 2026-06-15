@@ -22,7 +22,7 @@ from gcs_tools.tusimple_official_eval import (  # noqa: E402
 
 
 DEFAULT_OUTPUT = ROOT / "runs" / "gcs_lane" / "tusimple_official_val_363_folder_aware_seed20260602.json"
-DEFAULT_DATASET_ROOT = ROOT / "datasets" / "tusimple_fixed_y_k56_960x544"
+DEFAULT_DATASET_ROOT = ROOT / "datasets" / "tusimple_fixed_y_960x544"
 
 
 def parse_args() -> argparse.Namespace:

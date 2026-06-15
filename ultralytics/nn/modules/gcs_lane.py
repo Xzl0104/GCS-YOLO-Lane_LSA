@@ -713,15 +713,12 @@ class GCSLaneHead(nn.Module):
         self,
         c1=128,
         num_queries=12,
-        num_points=56,
+        num_points=32,
         num_decoder_layers=3,
         nhead=8,
         point_mode="free",
         fixed_y_start=TUSIMPLE_OFFICIAL_BOTTOM_Y_NORM,
-        fixed_y_end=160.0 / 720.0,
-        use_fifthness=False,
-        xloc_bins=0,
-        xloc_offset=True,
+        fixed_y_end=0.25,
     ):
         """Initialize the GCS lane query decoder."""
         super().__init__()
@@ -750,13 +747,6 @@ class GCSLaneHead(nn.Module):
             raise ValueError(f"GCSLaneHead point_mode must be 'free' or 'fixed_y', got {point_mode!r}.")
         self.fixed_y_start = float(fixed_y_start)
         self.fixed_y_end = float(fixed_y_end)
-        self.use_fifthness = bool(use_fifthness)
-        self.xloc_bins = int(xloc_bins or 0)
-        self.xloc_offset = bool(xloc_offset)
-        if self.xloc_bins == 1 or self.xloc_bins < 0:
-            raise ValueError(f"GCSLaneHead xloc_bins must be 0 or >=2, got {self.xloc_bins}.")
-        if self.xloc_bins > 1 and self.point_mode != "fixed_y":
-            raise ValueError("GCSLaneHead xloc_bins is only supported for fixed_y x-only lane heads.")
         if not (0.0 <= self.fixed_y_end < self.fixed_y_start <= 1.0):
             raise ValueError(
                 f"Expected 0 <= fixed_y_end < fixed_y_start <= 1, got "
@@ -817,20 +807,6 @@ class GCSLaneHead(nn.Module):
             nn.ReLU(inplace=True),
             nn.Linear(c1, 1),
         )
-        if self.xloc_bins > 1:
-            self.xloc_bin_mlp = nn.Sequential(
-                nn.Linear(c1, c1),
-                nn.ReLU(inplace=True),
-                nn.Linear(c1, c1),
-                nn.ReLU(inplace=True),
-                nn.Linear(c1, num_points * self.xloc_bins),
-            )
-            if self.xloc_offset:
-                self.xloc_offset_mlp = nn.Sequential(
-                    nn.Linear(c1, c1),
-                    nn.ReLU(inplace=True),
-                    nn.Linear(c1, num_points),
-                )
         self.exist_mlp = nn.Sequential(
             nn.Linear(c1, c1),
             nn.ReLU(inplace=True),
@@ -841,22 +817,13 @@ class GCSLaneHead(nn.Module):
             nn.ReLU(inplace=True),
             nn.Linear(c1, 1),
         )
-        if self.use_fifthness:
-            self.fifthness_mlp = nn.Sequential(
-                nn.Linear(c1, c1),
-                nn.ReLU(inplace=True),
-                nn.Linear(c1, 1),
-            )
         self.register_buffer("point_reference_logits", self._build_point_references(), persistent=False)
         self.register_buffer("fixed_y_anchors", self._build_fixed_y_anchors(), persistent=False)
         self._init_point_delta_head()
         self._init_point_valid_head()
         self._init_point_refine_head()
         self._init_point_valid_refine_head()
-        self._init_xloc_heads()
         self._init_quality_head()
-        if self.use_fifthness:
-            self._init_fifthness_head()
 
     def _build_fixed_y_anchors(self):
         """Build shared bottom-to-top y anchors for fixed-y x-only prediction."""
@@ -905,26 +872,9 @@ class GCSLaneHead(nn.Module):
         nn.init.normal_(final.weight, mean=0.0, std=5e-3)
         nn.init.zeros_(final.bias)
 
-    def _init_xloc_heads(self):
-        """Initialize optional x-bin/offset localization heads near a neutral state."""
-        if hasattr(self, "xloc_bin_mlp"):
-            final = self.xloc_bin_mlp[-1]
-            nn.init.normal_(final.weight, mean=0.0, std=1e-3)
-            nn.init.zeros_(final.bias)
-        if hasattr(self, "xloc_offset_mlp"):
-            final = self.xloc_offset_mlp[-1]
-            nn.init.normal_(final.weight, mean=0.0, std=1e-3)
-            nn.init.zeros_(final.bias)
-
     def _init_quality_head(self):
         """Initialize lane-quality logits near the BCE decision boundary."""
         final = self.quality_mlp[-1]
-        nn.init.normal_(final.weight, mean=0.0, std=1e-3)
-        nn.init.zeros_(final.bias)
-
-    def _init_fifthness_head(self):
-        """Initialize fifthness verifier logits near the BCE decision boundary."""
-        final = self.fifthness_mlp[-1]
         nn.init.normal_(final.weight, mean=0.0, std=1e-3)
         nn.init.zeros_(final.bias)
 
@@ -1009,32 +959,24 @@ class GCSLaneHead(nn.Module):
         decoder_macs = b * layers * (self_attn_macs + cross_attn_macs + ffn_macs)
         point_mlp_macs = b * q * (2 * d * d + d * (k * point_dims))
         point_valid_mlp_macs = b * q * (d * d + d * k)
-        xloc_mlp_macs = 0
-        if int(getattr(self, "xloc_bins", 0) or 0) > 1:
-            xloc_mlp_macs = b * q * (2 * d * d + d * (k * int(self.xloc_bins)))
-            if bool(getattr(self, "xloc_offset", False)):
-                xloc_mlp_macs += b * q * (d * d + d * k)
         sample_macs = b * q * k * min(3, len(xs)) * d * 4
         coord_mlp_macs = b * q * k * (2 * d + d * d)
         refine_mlp_macs = b * q * k * ((2 * d) * d + d)
         valid_refine_mlp_macs = b * q * k * ((2 * d) * d + d)
         exist_mlp_macs = b * q * (d * d + d)
         quality_mlp_macs = b * q * (d * d + d)
-        fifthness_mlp_macs = b * q * (d * d + d) if bool(getattr(self, "use_fifthness", False)) else 0
         return (
             2.0
             * (
                 decoder_macs
                 + point_mlp_macs
                 + point_valid_mlp_macs
-                + xloc_mlp_macs
                 + 2 * sample_macs
                 + 2 * coord_mlp_macs
                 + refine_mlp_macs
                 + valid_refine_mlp_macs
                 + exist_mlp_macs
                 + quality_mlp_macs
-                + fifthness_mlp_macs
             )
             / 1e9
         )
@@ -1131,14 +1073,6 @@ class GCSLaneHead(nn.Module):
             "pred_valid_logits": pred_valid_logits,
             "pred_quality_logits": pred_quality_logits,
         }
-        if hasattr(self, "xloc_bin_mlp"):
-            out["pred_x_bin_logits"] = self.xloc_bin_mlp(hs).view(
-                b, self.num_queries, self.num_points, self.xloc_bins
-            )
-            if hasattr(self, "xloc_offset_mlp"):
-                out["pred_x_bin_offsets"] = self.xloc_offset_mlp(hs).view(b, self.num_queries, self.num_points)
-        if hasattr(self, "fifthness_mlp"):
-            out["pred_fifthness_logits"] = self.fifthness_mlp(hs).squeeze(-1)
         if hasattr(self, "count_head"):
             # Count CE trains only the Count Head; shared lane features and candidate branches keep their own losses.
             pred_count_logits, pred_count_boundary_logits = self.count_head.forward_with_boundary(
