@@ -215,8 +215,6 @@ Current default-off training-side experimental knobs:
 gcs_count_adjacent_margin = 0.2
 gcs_count_adjacent_margin_gain = 0.0
 gcs_count_adjacent_margin_gt45_weight = 1.0
-gcs_count_false_fifth_suppression = 0.0
-gcs_count_false_fifth_margin = 0.2
 gcs_quality_gt5_edge_floor = 0.0
 gcs_quality_hard_negative_from_head = False
 gcs_hard_negative_visible_segment = False
@@ -251,7 +249,8 @@ When `gcs_use_fifthness_decode=True`, `decode_gcs_predictions()` requires `pred_
 
 `gcs_count_adjacent_margin_gain` enables a default-off training-side margin term inside `count_cls_loss` that pushes the GT count logit above neighboring count classes. It is intended for controlled GT3/GT4/GT5 calibration experiments and does not add a new logged loss item.
 
-`gcs_count_false_fifth_suppression*` is a default-off training-side Count Head calibration candidate. It reuses the competitive unmatched outside-candidate mining from `competitive_fifth_masks()` and adds a target-vs-count5 logit margin only for GT3/GT4 images that actually contain a mined false fifth candidate. It stays inside `count_cls_loss`, preserves `pred_count_logits: B x 4` and `pred_count_boundary_logits: B x 2`, does not require a fifthness head, and does not change decode, official metrics, or inference GT usage. It is intended as a narrower alternative to the rejected broad adjacent Count margin gate.
+The removed `gcs_count_false_fifth_suppression*` source switches belonged only to the rejected `gcs_yolo_lane_s_q12_k56_countff_supp_ft8_seed1_b32w4` gate. Keep that run as audit history, but do not treat the switches as available current-code knobs.
+
 
 `gcs_quality_gt5_edge_floor` is a default-off training-side candidate that floors matched Quality Head targets only for real left/right edge lanes in GT5 images. It is intended to test whether true short GT5 edge lanes are being assigned quality targets too low to survive quality-gated fifth-lane decode behavior.
 

@@ -16,8 +16,6 @@ from ultralytics.models.yolo.gcs_lane.train import (
     GCS_MAINLINE_COUNT_BOUNDARY_LABEL_SMOOTHING,
     GCS_MAINLINE_COUNT_CUMULATIVE,
     GCS_MAINLINE_COUNT_CUMULATIVE_LABEL_SMOOTHING,
-    GCS_MAINLINE_COUNT_FALSE_FIFTH_MARGIN,
-    GCS_MAINLINE_COUNT_FALSE_FIFTH_SUPPRESSION,
     GCS_MAINLINE_COUNT_SUM_GAIN,
     GCS_MAINLINE_FIFTHNESS,
     GCS_MAINLINE_FIFTHNESS_MARGIN,
@@ -448,11 +446,6 @@ def test_mainline_sampler_defaults_and_ratio_boost_boundaries(monkeypatch):
         GCS_MAINLINE_COUNT_CUMULATIVE_LABEL_SMOOTHING,
     )
     assert math.isclose(
-        DEFAULT_CFG_DICT["gcs_count_false_fifth_suppression"],
-        GCS_MAINLINE_COUNT_FALSE_FIFTH_SUPPRESSION,
-    )
-    assert math.isclose(DEFAULT_CFG_DICT["gcs_count_false_fifth_margin"], GCS_MAINLINE_COUNT_FALSE_FIFTH_MARGIN)
-    assert math.isclose(
         DEFAULT_CFG_DICT["gcs_point_valid_gt5_pos_weight"], GCS_MAINLINE_POINT_VALID_GT5_POS_WEIGHT
     )
     assert math.isclose(DEFAULT_CFG_DICT["gcs_gt5_edge_loss_weight"], GCS_MAINLINE_GT5_EDGE_LOSS_WEIGHT)
@@ -501,8 +494,6 @@ def test_mainline_sampler_defaults_and_ratio_boost_boundaries(monkeypatch):
     assert tuple(getattr(args, f"gcs_count_cls_w{i}") for i in range(2, 6)) == GCS_MAINLINE_COUNT_CLS_WEIGHTS
     assert math.isclose(args.gcs_count_cumulative, GCS_MAINLINE_COUNT_CUMULATIVE)
     assert math.isclose(args.gcs_count_cumulative_label_smoothing, GCS_MAINLINE_COUNT_CUMULATIVE_LABEL_SMOOTHING)
-    assert math.isclose(args.gcs_count_false_fifth_suppression, GCS_MAINLINE_COUNT_FALSE_FIFTH_SUPPRESSION)
-    assert math.isclose(args.gcs_count_false_fifth_margin, GCS_MAINLINE_COUNT_FALSE_FIFTH_MARGIN)
     assert math.isclose(args.gcs_point_valid_gt5_pos_weight, GCS_MAINLINE_POINT_VALID_GT5_POS_WEIGHT)
     assert math.isclose(args.gcs_gt5_edge_loss_weight, GCS_MAINLINE_GT5_EDGE_LOSS_WEIGHT)
     assert args.gcs_count_boundary == GCS_MAINLINE_COUNT_BOUNDARY_GAIN
@@ -552,14 +543,6 @@ def test_mainline_sampler_defaults_and_ratio_boost_boundaries(monkeypatch):
         GCS_MAINLINE_COUNT_CUMULATIVE_LABEL_SMOOTHING,
     )
     assert math.isclose(
-        trainer_overrides["gcs_count_false_fifth_suppression"],
-        GCS_MAINLINE_COUNT_FALSE_FIFTH_SUPPRESSION,
-    )
-    assert math.isclose(
-        trainer_overrides["gcs_count_false_fifth_margin"],
-        GCS_MAINLINE_COUNT_FALSE_FIFTH_MARGIN,
-    )
-    assert math.isclose(
         trainer_overrides["gcs_point_valid_gt5_pos_weight"], GCS_MAINLINE_POINT_VALID_GT5_POS_WEIGHT
     )
     assert math.isclose(trainer_overrides["gcs_gt5_edge_loss_weight"], GCS_MAINLINE_GT5_EDGE_LOSS_WEIGHT)
@@ -607,11 +590,6 @@ def test_mainline_sampler_defaults_and_ratio_boost_boundaries(monkeypatch):
         criterion.count_cumulative_label_smoothing,
         GCS_MAINLINE_COUNT_CUMULATIVE_LABEL_SMOOTHING,
     )
-    assert math.isclose(
-        criterion.count_false_fifth_suppression_gain,
-        GCS_MAINLINE_COUNT_FALSE_FIFTH_SUPPRESSION,
-    )
-    assert math.isclose(criterion.count_false_fifth_margin, GCS_MAINLINE_COUNT_FALSE_FIFTH_MARGIN)
     assert math.isclose(criterion.point_valid_gt5_pos_weight, GCS_MAINLINE_POINT_VALID_GT5_POS_WEIGHT)
     assert math.isclose(criterion.gt5_edge_loss_weight, GCS_MAINLINE_GT5_EDGE_LOSS_WEIGHT)
     assert math.isclose(criterion.count_boundary_gain, GCS_MAINLINE_COUNT_BOUNDARY_GAIN)
@@ -687,10 +665,6 @@ def test_train_gcs_main_forwards_fifthness_cli_overrides(monkeypatch):
             "0.15",
             "--gcs-count-cumulative-label-smoothing",
             "0.05",
-            "--gcs-count-false-fifth-suppression",
-            "0.12",
-            "--gcs-count-false-fifth-margin",
-            "0.35",
             "--no-val",
         ],
     )
@@ -708,9 +682,6 @@ def test_train_gcs_main_forwards_fifthness_cli_overrides(monkeypatch):
     assert captured["gcs_fifthness_include_gt5_negatives"] is True
     assert math.isclose(captured["gcs_count_cumulative"], 0.15)
     assert math.isclose(captured["gcs_count_cumulative_label_smoothing"], 0.05)
-    assert math.isclose(captured["gcs_count_false_fifth_suppression"], 0.12)
-    assert math.isclose(captured["gcs_count_false_fifth_margin"], 0.35)
-
 
 def test_gcs_loss_item_names_stay_stable():
     expected = (
@@ -760,8 +731,6 @@ def test_gt5_candidate_cfg_keys_have_expected_types():
         "gcs_count_adjacent_margin",
         "gcs_count_adjacent_margin_gain",
         "gcs_count_adjacent_margin_gt45_weight",
-        "gcs_count_false_fifth_suppression",
-        "gcs_count_false_fifth_margin",
         "gcs_count_cumulative",
         "gcs_geometry_curvature",
         "gcs_geometry_curvature_beta_px",
@@ -1088,105 +1057,6 @@ def test_count_adjacent_margin_gt45_weight_boosts_mixed_batch_gradient():
     assert torch.isclose(logits_base.grad[0, 0].abs(), logits_base.grad[1, 3].abs())
     assert logits_boosted.grad[1, 3].abs() > logits_boosted.grad[0, 0].abs()
     assert logits_boosted.grad[1, 3].abs() > logits_base.grad[1, 3].abs()
-
-
-def test_count_false_fifth_suppression_is_default_off_for_count_loss():
-    _, valid = _gt([0.15, 0.35, 0.55, 0.75])
-    pred_count_logits = torch.tensor([[0.0, 0.0, 1.5, 2.5]], requires_grad=True)
-    preds = {"pred_count_logits": pred_count_logits}
-    pred_points = torch.zeros(1, 6, 6, 2)
-    false_mask = torch.zeros(1, 6, dtype=torch.bool)
-    false_mask[0, 5] = True
-    common = {
-        "gcs_point_mode": "fixed_y",
-        "gcs_imgsz": [544, 960],
-        "gcs_count_boundary": 0.0,
-    }
-    base = GCSLoss(model={**common, "gcs_count_false_fifth_suppression": 0.0})
-    explicit_off = GCSLoss(model={**common, "gcs_count_false_fifth_suppression": 0.0})
-
-    base_loss = base.count_head_loss(preds, pred_points, [valid])
-    explicit_off_loss = explicit_off.count_head_loss(preds, pred_points, [valid], false_fifth_negative_mask=false_mask)
-
-    assert torch.isclose(explicit_off_loss, base_loss)
-
-
-def test_count_false_fifth_suppression_penalizes_gt4_count5_overconfidence():
-    _, valid = _gt([0.15, 0.35, 0.55, 0.75])
-    pred_count_logits = torch.tensor([[0.0, 0.0, 1.5, 2.5]], requires_grad=True)
-    false_mask = torch.zeros(1, 6, dtype=torch.bool)
-    false_mask[0, 5] = True
-    criterion = GCSLoss(
-        model={
-            "gcs_point_mode": "fixed_y",
-            "gcs_imgsz": [544, 960],
-            "gcs_count_boundary": 0.0,
-            "gcs_count_false_fifth_suppression": 1.0,
-            "gcs_count_false_fifth_margin": 0.2,
-        }
-    )
-
-    gt_count, _, _ = criterion.count_head_targets(pred_count_logits, [valid])
-    term = criterion.count_false_fifth_suppression_loss(pred_count_logits, gt_count, false_mask)
-    assert term > 0
-    term.backward()
-
-    assert pred_count_logits.grad is not None
-    assert pred_count_logits.grad[0, 2] < 0
-    assert pred_count_logits.grad[0, 3] > 0
-
-
-def test_count_false_fifth_suppression_ignores_gt5_images():
-    _, valid = _gt([0.1, 0.25, 0.4, 0.55, 0.7])
-    pred_count_logits = torch.tensor([[0.0, 0.0, 1.5, 2.5]], requires_grad=True)
-    false_mask = torch.zeros(1, 6, dtype=torch.bool)
-    false_mask[0, 5] = True
-    criterion = GCSLoss(
-        model={
-            "gcs_point_mode": "fixed_y",
-            "gcs_imgsz": [544, 960],
-            "gcs_count_false_fifth_suppression": 1.0,
-        }
-    )
-
-    gt_count, _, _ = criterion.count_head_targets(pred_count_logits, [valid])
-    term = criterion.count_false_fifth_suppression_loss(pred_count_logits, gt_count, false_mask)
-
-    assert torch.isclose(term, torch.tensor(0.0))
-
-
-def test_count_false_fifth_suppression_requires_mask_when_enabled():
-    _, valid = _gt([0.15, 0.35, 0.55, 0.75])
-    preds = {"pred_count_logits": torch.zeros(1, 4)}
-    pred_points = torch.zeros(1, 6, 6, 2)
-    criterion = GCSLoss(
-        model={
-            "gcs_point_mode": "fixed_y",
-            "gcs_imgsz": [544, 960],
-            "gcs_count_false_fifth_suppression": 1.0,
-            "gcs_count_boundary": 0.0,
-        }
-    )
-
-    with pytest.raises(ValueError, match="false_fifth_negative_mask"):
-        criterion.count_head_loss(preds, pred_points, [valid])
-
-
-def test_count_false_fifth_suppression_rejects_wrong_mask_shape():
-    _, valid = _gt([0.15, 0.35, 0.55, 0.75])
-    logits = torch.zeros(1, 4)
-    false_mask = torch.zeros(1, 6, 1, dtype=torch.bool)
-    criterion = GCSLoss(
-        model={
-            "gcs_point_mode": "fixed_y",
-            "gcs_imgsz": [544, 960],
-            "gcs_count_false_fifth_suppression": 1.0,
-        }
-    )
-    gt_count, _, _ = criterion.count_head_targets(logits, [valid])
-
-    with pytest.raises(ValueError, match="false_fifth_negative_mask must have shape"):
-        criterion.count_false_fifth_suppression_loss(logits, gt_count, false_mask)
 
 
 def test_candidate_gt5_edge_weight_targets_real_edge_queries():

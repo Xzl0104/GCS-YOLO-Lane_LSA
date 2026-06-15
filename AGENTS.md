@@ -125,7 +125,7 @@ vs current-code K32 0.953756 = +0.005559
 vs legacy 0.959224 = +0.000091
 ```
 
-K56 is still experimental, not mainline-promoted, and has no final/promotable official-test claim. A user-requested diagnostic-only official-test audit was run on 2026-06-14 for the K56 parent, min-points, `cqcalib`, `curveaux`, and `lowfp_joint` rows; those numbers must not be used for checkpoint, threshold, postprocess, loss, or model selection. The rejected K56 gates are `gcs_yolo_lane_s_q12_k56_cqcalib_ft12_seed1_b32w4`, `gcs_yolo_lane_s_q12_k56_cqcalib_lr1e4_ft8_seed1_b32w4`, `gcs_yolo_lane_s_q12_k56_curveaux_ft8_seed1_b32w4`, and `gcs_yolo_lane_s_q12_k56_lowfp_joint_ft8_seed1_b32w4`; do not rerun these exact recipes as the next path.
+K56 is still experimental, not mainline-promoted, and has no final/promotable official-test claim. A user-requested diagnostic-only official-test audit was run on 2026-06-14 for the K56 parent, min-points, `cqcalib`, `curveaux`, and `lowfp_joint` rows; those numbers must not be used for checkpoint, threshold, postprocess, loss, or model selection. The rejected K56 gates are `gcs_yolo_lane_s_q12_k56_cqcalib_ft12_seed1_b32w4`, `gcs_yolo_lane_s_q12_k56_cqcalib_lr1e4_ft8_seed1_b32w4`, `gcs_yolo_lane_s_q12_k56_curveaux_ft8_seed1_b32w4`, `gcs_yolo_lane_s_q12_k56_lowfp_joint_ft8_seed1_b32w4`, `gcs_yolo_lane_s_q12_k56_countadj_lowmargin_ft8_seed1_b32w4`, and `gcs_yolo_lane_s_q12_k56_countff_supp_ft8_seed1_b32w4`; do not rerun these exact recipes as the next path. The `countff_supp` source-side switches have been removed; keep only its summaries and diagnostics as audit history.
 
 The model output must include:
 

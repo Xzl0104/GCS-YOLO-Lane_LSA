@@ -216,8 +216,6 @@ CFG_FLOAT_KEYS = frozenset(
         "gcs_count_adjacent_margin",
         "gcs_count_adjacent_margin_gain",
         "gcs_count_adjacent_margin_gt45_weight",
-        "gcs_count_false_fifth_suppression",
-        "gcs_count_false_fifth_margin",
         "gcs_count_head_temp",
         "gcs_decode_candidate_conf",
         "gcs_decode_candidate_point_valid_thr",

@@ -6091,3 +6091,39 @@ Free or move server run artifacts before any new training. If the user wants to 
 Mainline or experiment:
 
 Interrupted default-off experimental gate. No official ACC improvement is claimed, and no test evidence was used.
+
+## 2026-06-15: Remove rejected Count false-fifth suppression source switches
+
+Decision:
+
+Remove the source-side `gcs_count_false_fifth_suppression` and `gcs_count_false_fifth_margin` experiment switches, including their default config keys, CLI arguments, trainer defaults, `GCSLoss` branch, and dedicated tests.
+
+Why:
+
+The completed FT8 gate `gcs_yolo_lane_s_q12_k56_countff_supp_ft8_seed1_b32w4` did not meet the joint official-val objective. Its official_best epoch 7 had a small ACC increase but worsened FP, FN, and GT5 `rate_5_to_4`; the more balanced epoch 4 row had only a `+0.000057` ACC margin with worse FN. Keeping the switch available created maintenance cost and a copy-paste risk for a recipe that should not be rerun.
+
+What remains:
+
+The run name and official-val evidence remain documented as rejected audit history. The current-code knobs retained for future controlled work are `gcs_count_cumulative*`, `gcs_quality_pairwise*`, `gcs_fifthness*`, fifthness decode plumbing, adjacent Count margin, and the `count5ev-v1` isolation YAML. The `countff_supp` CLI/config/loss path is no longer a current-code option.
+
+Artifact cleanup:
+
+Local and remote rejected K56 run directories were checked for large weight artifacts (`.pt`, `.pth`, `.onnx`, `.engine`). The local `curveaux` rejected directory and the remote rejected K56 directories already contained no such weight files, so no checkpoint deletion was required. Summary files such as `args.yaml`, `results.csv`, official summaries, and diagnostics were left intact.
+
+Validation evidence:
+
+```text
+D:/miniconda3/envs/lsa_yolo/python.exe -m py_compile ultralytics/utils/gcs_loss.py ultralytics/models/yolo/gcs_lane/train.py tools/train_gcs.py tests/test_gcs_count_aware.py
+D:/miniconda3/envs/lsa_yolo/python.exe -m pytest tests/test_gcs_count_aware.py -q -p no:cacheprovider --basetemp .tmp_pytest/remove_countff
+D:/miniconda3/envs/lsa_yolo/python.exe scripts/check_gcs_agent_setup.py
+D:/miniconda3/envs/lsa_yolo/python.exe scripts/verify_loss_cleanup.py
+D:/miniconda3/envs/lsa_yolo/python.exe tools/check_gcs_algorithm_contract.py
+D:/miniconda3/envs/lsa_yolo/python.exe tools/check_gcs_count_head_topk_contract.py
+D:/miniconda3/envs/lsa_yolo/python.exe tools/check_gcs_decode_meta_contract.py
+D:/miniconda3/envs/lsa_yolo/python.exe tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml --imgsz 544 960 --batch 1
+git diff --check
+```
+
+Mainline or experiment:
+
+Mainline cleanup of a rejected default-off experimental branch. No official ACC improvement is claimed, and no test data was used.
