@@ -6034,3 +6034,60 @@ Do not start full/e180 unless the short gate improves or at least matches the K5
 Mainline or experiment:
 
 Default-off experimental model config. No official ACC improvement is claimed until the remote official-val short gate completes.
+
+## 2026-06-15: Stop count5ev-v1 full/e180 escalation after incomplete FT8 attempt
+
+Decision:
+
+Do not launch full/e180 from:
+
+```text
+gcs_yolo_lane_s_q12_k56_count5ev_v1_ft8_seed1_b32w4
+```
+
+Treat the first remote FT8 attempt as incomplete and non-promotable. Rerun the 8-epoch gate only after the server root filesystem has enough free space for checkpoints, official sweeps, diagnostics, and logs.
+
+Why:
+
+The run stopped after epoch 3/8 with no `Traceback`, `RuntimeError`, CUDA OOM, shape error, NaN, or Inf keyword found in the training log. At the time of audit, the server root filesystem was `98%` full with only about `687M` free, while `runs/gcs_lane` used about `16G`. The partial official-val evidence does not support escalation even before accounting for the incomplete run state.
+
+Evidence:
+
+K56 parent:
+
+```text
+ACC=0.959315, FP=0.045225, FN=0.028466,
+rate_4_to_5=0.075758, rate_5_to_4=0.148649
+```
+
+Partial `count5ev-v1` official-val:
+
+```text
+epoch1: ACC=0.958453, FP=0.047658, FN=0.032599,
+        rate_4_to_5=0.060606, rate_5_to_4=0.162162
+epoch2: ACC=0.957082, FP=0.048072, FN=0.031910,
+        rate_4_to_5=0.090909, rate_5_to_4=0.162162
+epoch3: ACC=0.958500, FP=0.046235, FN=0.029155,
+        rate_4_to_5=0.090909, rate_5_to_4=0.135135
+```
+
+The epoch3 row improves GT5 `5->4` versus parent but worsens GT4 `4->5` and remains below parent ACC. The run did not reach the planned epoch4 early-stop checkpoint or epoch8 completion, so it is not a clean rejection of the mechanism; it is a non-promotable interrupted gate.
+
+Alternatives considered:
+
+- Launch full/e180 because epoch3 improves GT5 `rate_5_to_4`.
+- Resume or rerun immediately on the nearly full server root filesystem.
+- Treat the partial rows as enough to permanently reject Count Head fifth-candidate evidence.
+- Record the run as incomplete and require disk cleanup before any rerun.
+
+Tradeoff:
+
+Stopping escalation avoids spending full-training budget on a partial run that is below parent and has worse GT4 false-fifth pressure. Deferring a clean rerun means the count-evidence-only hypothesis remains not fully tested, but it preserves attribution and avoids another environment-corrupted gate.
+
+Next smallest safe action:
+
+Free or move server run artifacts before any new training. If the user wants to continue this exact hypothesis, rerun the documented FT8 gate from the K56 parent `official_best.pt` on official-val only, then decide from a complete epoch4/epoch8 Top-K summary. Do not use test and do not start full/e180 from the interrupted run.
+
+Mainline or experiment:
+
+Interrupted default-off experimental gate. No official ACC improvement is claimed, and no test evidence was used.

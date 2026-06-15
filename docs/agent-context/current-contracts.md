@@ -77,6 +77,7 @@ ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-count5ev-v1.yaml
 ```
 
 This model YAML is opt-in and enables Count Head fifth-candidate evidence without enabling the fifthness verifier head. It must preserve the normal six-output contract and must not emit `pred_fifthness_logits`. Its purpose is to isolate whether direct fifth-candidate evidence in the Count Head helps GT4/GT5 count calibration, because the earlier fifthness-v1 gates mixed Count Head evidence with an auxiliary fifthness output and fifthness training losses.
+The first remote FT8 attempt `gcs_yolo_lane_s_q12_k56_count5ev_v1_ft8_seed1_b32w4` is incomplete and not promotable: the process stopped after epoch 3/8 while the server root filesystem had only about `687M` free. Partial official-val rows stayed below the K56 parent (`epoch1=0.958453`, `epoch2=0.957082`, `epoch3=0.958500` versus parent `0.959315`), and epoch 3 worsened `rate_4_to_5` to `0.090909`. Do not start full/e180 from this run; rerun the FT8 gate only after freeing server disk space.
 
 ## Label Contract
 

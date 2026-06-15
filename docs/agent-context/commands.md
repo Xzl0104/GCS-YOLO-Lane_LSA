@@ -215,6 +215,18 @@ python tools/train_gcs.py \
 
 Do not start full/e180 unless the short gate improves or at least matches the K56 parent while keeping FP controlled, lowering `rate_4_to_5`, and avoiding GT5 `rate_5_to_4` regression.
 
+First remote attempt status:
+
+```text
+run: gcs_yolo_lane_s_q12_k56_count5ev_v1_ft8_seed1_b32w4
+status: incomplete, stopped after epoch 3/8
+environment risk: server root filesystem had about 687M free after the stop
+partial official-val: epoch1=0.958453, epoch2=0.957082, epoch3=0.958500
+decision: not promotable; do not start full/e180 from this run
+```
+
+Before rerunning this FT8 gate, free server disk space or move run artifacts off the nearly full root filesystem.
+
 The 2026-06-15 reliability audit closed the missing inference loop: `pred_fifthness_logits` can now be consumed by decode with:
 
 ```text
