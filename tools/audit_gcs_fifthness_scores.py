@@ -44,7 +44,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Official-val-only audit of optional fifthness scores for GT4 false fifth candidates "
-            "and GT5 selected fifth candidates."
+            "and GT5 selected fifth candidates, with Count Head P4/P5/margin evidence."
         )
     )
     parser.add_argument("--dataset", default="tusimple", choices=("tusimple",))
@@ -117,6 +117,19 @@ def _score(lane: dict | None, key: str) -> float | None:
     try:
         return float(lane[key])
     except (TypeError, ValueError):
+        return None
+
+
+def _count_prob_value(source: dict | None, count: int) -> float | None:
+    if source is None:
+        return None
+    prob = source.get("count_head_prob")
+    if prob is None:
+        return None
+    try:
+        values = list(prob)
+        return float(values[int(count) - 2])
+    except (IndexError, TypeError, ValueError):
         return None
 
 
@@ -201,6 +214,9 @@ def _lane_row(
         "quality_rescue_5th": None if lane is None else int(bool(lane.get("quality_rescue_5th", False))),
         "count_head_policy_count": None if lane is None else lane.get("count_head_policy_count"),
         "effective_policy_count": None if lane is None else lane.get("effective_policy_count"),
+        "count_head_prob_4": _count_prob_value(lane, 4),
+        "count_head_prob_5": _count_prob_value(lane, 5),
+        "count_head_margin": _score(lane, "count_head_margin"),
     }
 
 
@@ -363,6 +379,9 @@ def run(args: argparse.Namespace) -> dict:
                 "top5_candidate_fifthness_before_nms": decode_meta.get("top5_candidate_fifthness_before_nms"),
                 "effective_policy_count": decode_meta.get("effective_policy_count"),
                 "count_head_policy_count": decode_meta.get("count_head_policy_count"),
+                "count_head_prob_4": _count_prob_value(decode_meta, 4),
+                "count_head_prob_5": _count_prob_value(decode_meta, 5),
+                "count_head_margin": decode_meta.get("count_head_margin"),
             }
         )
 
@@ -465,7 +484,9 @@ def run(args: argparse.Namespace) -> dict:
         "pairwise_auc_true_gt5_rank5_matched_vs_false_gt4_unmatched": _pairwise_auc(true_scores, false_scores),
         "decision_hint": (
             "Use this as a diagnostic only. A useful training/decode hypothesis should show high true_keep_rate "
-            "and low false_keep_rate at the same threshold before launching another training gate."
+            "and low false_keep_rate at the same threshold before launching another training gate. Inspect the CSV "
+            "count_head_prob_4/count_head_prob_5/count_head_margin fields to distinguish fifthness overlap from "
+            "Count Head GT4-vs-GT5 overconfidence."
         ),
     }
 
@@ -489,6 +510,9 @@ def run(args: argparse.Namespace) -> dict:
         "quality_rescue_5th",
         "count_head_policy_count",
         "effective_policy_count",
+        "count_head_prob_4",
+        "count_head_prob_5",
+        "count_head_margin",
     ]
     image_fields = [
         "raw_file",
@@ -504,6 +528,9 @@ def run(args: argparse.Namespace) -> dict:
         "top5_candidate_fifthness_before_nms",
         "effective_policy_count",
         "count_head_policy_count",
+        "count_head_prob_4",
+        "count_head_prob_5",
+        "count_head_margin",
     ]
     _write_csv(save_dir / "fifthness_score_audit_lanes.csv", rows, lane_fields)
     _write_csv(save_dir / "fifthness_score_audit_images.csv", image_rows, image_fields)

@@ -5688,6 +5688,16 @@ threshold 0.85: true_keep=0.931034, false_keep=0.375000
 artifact: runs/gcs_lane/gcs_yolo_lane_s_q12_k56_fifthness_gt5neg_ft8_seed1_b32w4/analysis_official_best_val_fifthness_score_audit/fifthness_score_audit_summary.json
 ```
 
+The tool was then extended to write Count Head `count_head_prob_4`, `count_head_prob_5`, and `count_head_margin` into both audit CSVs. A server rerun of the same official-val audit showed:
+
+```text
+GT4 unmatched output5 false-fifth Count Head: count=8,
+median P4=0.003675, median P5=0.996325, median margin=0.992650
+
+GT5 selected-rank-5 matched Count Head: count=58,
+median P4=0.0000009, median P5=0.999999, median margin=0.999998
+```
+
 Alternatives considered:
 
 - Launch full/e180 because `fifthness_gt5neg` is numerically `+0.000004` over the K56 parent.
@@ -5697,7 +5707,7 @@ Alternatives considered:
 
 Tradeoff:
 
-The audit preserves a useful signal: GT5 true fifth candidates tend to score higher. But the false-fifth high tail overlaps the true low tail, so a single threshold cannot suppress GT4 false fifths without also losing some GT5 fifth lanes. This does not rule out a new training hypothesis, but it does rule out spending full/e180 on the current checkpoint/recipe.
+The audit preserves a useful signal: GT5 true fifth candidates tend to score higher. But the false-fifth high tail overlaps the true low tail, so a single threshold cannot suppress GT4 false fifths without also losing some GT5 fifth lanes. The Count Head columns further show that many GT4 false-fifth rows are high-confidence count=5 decisions, so the next hypothesis should inspect GT4 false-fifth Count Head calibration/case structure before any new short gate. This does not rule out a new training hypothesis, but it does rule out spending full/e180 on the current checkpoint/recipe.
 
 Validation evidence:
 
@@ -5712,3 +5722,58 @@ The split-test command failed as intended with the project test-protection error
 Mainline or experiment:
 
 Mainline diagnostic tool plus rejected experiment decision. No official ACC improvement is claimed, no test data was used, and no full/e180 training is justified by this evidence.
+
+## 2026-06-15: Keep K56 fifthness full/e180 blocked after Count Head audit enrichment
+
+Decision:
+
+Do not launch K56/fifthness full/e180 training from `gcs_yolo_lane_s_q12_k56_fifthness_gt5neg_ft8_seed1_b32w4` or any direct fifthness-threshold continuation. Treat the enhanced audit as evidence that the next smallest safe action is a read-only GT4 false-fifth case audit and, only after that, a short Count Head calibration gate if a specific mechanism is justified.
+
+Why:
+
+The current fifthness checkpoint does not meet the joint objective. Its best official-val ACC is only `+0.000004` over the K56 parent, while FP and `rate_4_to_5` are worse. The fifthness decode thresholds merely trade GT4 false fifths against GT5 `5->4`. The enhanced audit shows that GT4 false-fifth rows often have Count Head `P5` near one, so continuing to tune fifthness thresholds would not address the image-level count overconfidence that is selecting output5 in the first place.
+
+Evidence:
+
+```text
+K56 parent official-val: ACC=0.959315, FP=0.045225, FN=0.028466,
+rate_4_to_5=0.075758, rate_5_to_4=0.148649
+
+fifthness_gt5neg official-val: ACC=0.959319, FP=0.047429, FN=0.027089,
+rate_4_to_5=0.121212, rate_5_to_4=0.067568
+
+fifthness decode thr0.85: ACC=0.959023, FP=0.042470,
+rate_4_to_5=0.030303, rate_5_to_4=0.162162
+
+enhanced score audit: GT4 false-fifth median P5=0.996325,
+median P4=0.003675, median Count Head margin=0.992650
+```
+
+Alternatives considered:
+
+- Start full/e180 because `fifthness_gt5neg` numerically beats parent by `0.000004`.
+- Use fifthness decode `thr=0.85` as a low-FP branch.
+- Run another fifthness threshold sweep.
+- Use the existing default-off adjacent Count margin or cumulative Count loss immediately as a short training gate.
+
+Tradeoff:
+
+Blocking full/e180 saves GPU time and preserves research integrity, but it delays any chance of finding a lucky long-training recovery. Running the next read-only case audit first is slower than launching a broad fine-tune, but it keeps the change path attributable and avoids repeating rejected Count/Quality pushes.
+
+Next smallest safe action:
+
+Create or run a val-only case audit table for the 8 GT4 false-fifth samples and comparable GT5 true fifth samples, including Count Head `P4/P5/margin`, fifthness, quality, rank score, visible support, edge side, selected rank, rescue source, and output count. Use it to decide whether a narrow Count Head calibration short gate is justified. Do not use test.
+
+If the case audit supports using existing Count Head mechanisms without new code, the smallest training gate is an 8-epoch fine-tune from the K56 parent official-best checkpoint with only:
+
+```text
+gcs_count_adjacent_margin=0.2
+gcs_count_adjacent_margin_gain=0.05
+gcs_count_adjacent_margin_gt45_weight=1.0
+```
+
+This is intentionally weaker than the earlier rejected K32 adjacent-margin direction and should not be combined with fifthness, cumulative Count, or Quality changes in the same run. Success requires official-val ACC at least matching the K56 parent, FP not increasing, `rate_4_to_5` and GT4 false-fifth `P5/margin` decreasing, and GT5 `rate_5_to_4` not worsening.
+
+Mainline or experiment:
+
+Diagnostic and experiment-planning decision. No official ACC improvement is claimed.

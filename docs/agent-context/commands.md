@@ -292,10 +292,12 @@ Result:
 artifact: runs/gcs_lane/gcs_yolo_lane_s_q12_k56_fifthness_gt5neg_ft8_seed1_b32w4/analysis_official_best_val_fifthness_score_audit/fifthness_score_audit_summary.json
 GT4 unmatched output5 false-fifth scores: count=8, median=0.841094, mean=0.826202, max=0.942222
 GT5 selected rank5 matched output5 scores: count=58, median=0.960218, mean=0.931124, min=0.576185
+GT4 unmatched output5 Count Head: median P4=0.003675, median P5=0.996325, median margin=0.992650
+GT5 selected rank5 matched Count Head: median P4=0.0000009, median P5=0.999999, median margin=0.999998
 threshold 0.30/0.50: true_keep=1.000000, false_keep=1.000000
 threshold 0.70: true_keep=0.965517, false_keep=0.875000
 threshold 0.85: true_keep=0.931034, false_keep=0.375000
-decision: score separation is real but not clean enough for the joint objective; do not launch full/e180 from this checkpoint
+decision: score separation is real but not clean enough for the joint objective, and the false fifth cases show Count Head P5 overconfidence; do not launch full/e180 from this checkpoint
 ```
 
 Reference command shape for a future official-val-only fifthness decode sweep with a new hypothesis:
@@ -347,6 +349,33 @@ python tools/train_gcs.py \
   --gcs-official-best-gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
   --gcs-official-best-archive-root runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset
 ```
+
+Count Head GT4-vs-GT5 low-margin short-gate template, only after the false-fifth case audit supports testing the existing adjacent-margin mechanism:
+
+```bash
+python tools/train_gcs.py \
+  --model ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml \
+  --data data/tusimple_gcs_fixed_y_k56_960x544.yaml \
+  --imgsz 544 960 \
+  --name gcs_yolo_lane_s_q12_k56_countadj_lowmargin_ft8_seed1_b32w4 \
+  --pretrained runs/gcs_lane/gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4/weights/official_best.pt \
+  --epochs 8 \
+  --batch 32 \
+  --workers 4 \
+  --seed 1 \
+  --lr0 0.00005 \
+  --lrf 0.2 \
+  --gcs-count-adjacent-margin 0.2 \
+  --gcs-count-adjacent-margin-gain 0.05 \
+  --gcs-count-adjacent-margin-gt45-weight 1.0 \
+  --gcs-official-best \
+  --gcs-official-best-period 1 \
+  --gcs-official-best-top-k 5 \
+  --gcs-official-best-gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
+  --gcs-official-best-archive-root runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset
+```
+
+This is not a full/e180 recipe. It tests one hypothesis only: whether a small adjacent Count Head margin can reduce GT4 false-fifth `P5/margin` without increasing FP or GT5 `5->4`. Do not mix in new fifthness, cumulative, or Quality changes in the same gate.
 
 Command retained for reproducibility only:
 
