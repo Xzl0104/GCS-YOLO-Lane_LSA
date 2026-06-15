@@ -6127,3 +6127,33 @@ git diff --check
 Mainline or experiment:
 
 Mainline cleanup of a rejected default-off experimental branch. No official ACC improvement is claimed, and no test data was used.
+
+## 2026-06-15: Adopt failed-candidate source cleanup policy
+
+Decision:
+
+After a controlled experimental direction completes its planned same-protocol official-val gate and is rejected as not useful, remove its active source path instead of leaving dead switches in the codebase. Preserve documentation and diagnostic evidence.
+
+Why:
+
+Rejected default-off switches can still affect later work through accidental CLI use, config drift, maintenance burden, or copy-pasted command templates. The `countff_supp` cleanup showed the preferred pattern: remove the failed source branch, keep the official-val result and diagnostic rationale.
+
+Policy:
+
+- Delete failed direction source-side switches, CLI args, config defaults, model YAMLs, loss/decode branches, runnable command templates, and dedicated tests.
+- Keep concise negative-result records in active docs and `decision-log.md`.
+- Keep summaries and diagnostics needed to understand the negative result.
+- Delete or archive large rejected-run checkpoints once summaries and diagnostics are preserved.
+- Do not delete incomplete, not-yet-isolated, or still-diagnostic infrastructure merely because one recipe failed.
+- Allow a removed mechanism to return only as a fresh controlled candidate with an explicit hypothesis, new source changes, and official-val validation.
+
+Validation evidence:
+
+```text
+D:/miniconda3/envs/lsa_yolo/python.exe scripts/check_gcs_agent_setup.py
+git diff --check
+```
+
+Mainline or experiment:
+
+Workflow and research-integrity policy. No algorithm behavior or official metrics are changed.

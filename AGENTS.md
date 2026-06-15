@@ -290,6 +290,8 @@ Selection and diagnostic tools must not accept TuSimple test GT through `--split
 
 Old or removed mechanisms may return as controlled experimental candidates when explicit, configurable, traceable, and validated under the same protocol.
 
+When a controlled experimental direction has completed its planned same-protocol official-val gate and is rejected as not useful, remove its active source path so it cannot affect later work. Delete the failed direction's source-side switches, CLI args, config defaults, model YAMLs, loss/decode branches, runnable command templates, and dedicated tests unless they are still needed for an incomplete isolation gate, a diagnostic tool, or a clearly planned follow-up. Keep concise documentation records, official-val evidence, experiment summaries, and diagnostics as audit history. Large rejected-run checkpoint artifacts should be deleted or archived after summaries and diagnostics are preserved. Previously removed mechanisms may return only as a fresh controlled candidate with an explicit hypothesis and official-val validation.
+
 ## Git Sync Policy
 
 `AGENTS.md` and `README.md` are part of the project source and must be tracked and synchronized with the GitHub branch. Do not treat them as local-only files when they contain project workflow, environment, contract, research-policy, or handoff-summary changes.

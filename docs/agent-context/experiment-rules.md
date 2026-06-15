@@ -29,6 +29,27 @@ Every experimental candidate must be:
 - validated with the smallest useful contract checks
 - compared on official-val before any promotion claim
 
+## Failed Candidate Cleanup
+
+When a controlled candidate has completed its planned official-val gate and the evidence shows the direction is not useful, clean it out of the active source path instead of leaving dead switches that can influence later work.
+
+Apply cleanup when all are true:
+
+- the candidate has a completed, same-protocol official-val result
+- the result fails the promotion objective, such as lower ACC or a worse FP/FN/GT4/GT5 tradeoff
+- the code path is not part of the current baseline contract
+- the code path is not still needed for an incomplete isolation gate, a diagnostic tool, or a clearly planned follow-up
+
+Cleanup means:
+
+- remove source-side switches, CLI args, config defaults, model YAMLs, loss/decode branches, and dedicated tests for that failed direction
+- remove runnable command templates that could restart the rejected recipe
+- keep concise documentation records in `current-contracts.md`, `known-bottlenecks.md`, `commands.md`, and/or `decision-log.md`
+- keep experiment summaries and diagnostic artifacts needed to understand the negative result
+- delete or archive large rejected-run checkpoint artifacts when summaries and diagnostics have already been preserved
+
+Do not delete historical documentation, official-val evidence, or diagnostic tools merely because the first recipe failed. Previously removed mechanisms may return only as a new controlled candidate with an explicit hypothesis, fresh source changes, and official-val validation.
+
 ## Integrity Rules
 
 Do not:
@@ -58,4 +79,5 @@ Use test only once for final evaluation of a candidate already selected on offic
 6. Compare official ACC against the baseline.
 7. Analyze FP, FN, GT4/GT5 confusion, output5 rate, rescue precision, candidate shortfall, and valid-points failure.
 8. Promote only with official-val evidence.
-9. Use test only for final confirmation.
+9. If the candidate is rejected under the cleanup rule, remove its active source path and preserve the negative-result record.
+10. Use test only for final confirmation.
