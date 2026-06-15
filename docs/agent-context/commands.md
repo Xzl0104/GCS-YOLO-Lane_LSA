@@ -377,6 +377,8 @@ python tools/train_gcs.py \
 
 This is not a full/e180 recipe. It tests one hypothesis only: whether a small adjacent Count Head margin can reduce GT4 false-fifth `P5/margin` without increasing FP or GT5 `5->4`. Do not mix in new fifthness, cumulative, or Quality changes in the same gate.
 
+Result: rejected after epoch 4. Training ran cleanly with no NaN/shape/CUDA error, but independent official-val sweep reproduced best `official_acc=0.958843`, `FP=0.044399`, `FN=0.029155`, `count_acc_4=0.848485`, `count_acc_5=0.905405`, `rate_4_to_5=0.090909`, and `rate_5_to_4=0.094595`. This is below the K56 parent `0.959315` and worsens parent `rate_4_to_5=0.075758`, so do not continue this run to epoch 8 or full/e180. GT5 diagnosis kept 67/74 and attributed drops to `count_head_under_predict=4` and `quality_too_low=3`, with candidate-pool shortfall, valid-points failure, and GT5 NMS suppression at zero.
+
 Command retained for reproducibility only:
 
 ```bash

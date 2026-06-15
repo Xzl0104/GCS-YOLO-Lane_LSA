@@ -5777,3 +5777,51 @@ This is intentionally weaker than the earlier rejected K32 adjacent-margin direc
 Mainline or experiment:
 
 Diagnostic and experiment-planning decision. No official ACC improvement is claimed.
+
+## 2026-06-15: Reject K56 adjacent Count margin low-margin short gate
+
+Decision:
+
+Do not continue `gcs_yolo_lane_s_q12_k56_countadj_lowmargin_ft8_seed1_b32w4` to epoch 8 or full/e180. Keep the K56 parent `gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4` epoch-152 `official_best.pt` as the active reference for this line.
+
+Why:
+
+The short gate tested the existing adjacent Count Head margin as a narrow follow-up to the fifthness Count Head audit. It improved GT5 retention but failed the joint objective because official-val ACC stayed below the parent and GT4 false fifth pressure worsened.
+
+Evidence:
+
+```text
+K56 parent official-val: ACC=0.959315, FP=0.045225, FN=0.028466,
+rate_4_to_5=0.075758, rate_5_to_4=0.148649
+
+countadj_lowmargin epoch4/best: ACC=0.958843, FP=0.044399, FN=0.029155,
+count_acc_4=0.848485, count_acc_5=0.905405,
+rate_4_to_5=0.090909, rate_5_to_4=0.094595
+
+independent official-val sweep: reproduced ACC=0.958843, FP=0.044399,
+FN=0.029155, rate_4_to_5=0.090909, rate_5_to_4=0.094595
+
+single official-val eval reproduction: Accuracy=0.958636, FP=0.045087, FN=0.030762
+
+GT5 diagnosis: kept=67/74, count_head_under_predict=4, quality_too_low=3,
+valid_points_fail=0, candidate_pool_shortfall=0, GT5 NMS suppression=0
+```
+
+Alternatives considered:
+
+- Continue the run to epoch 8 because GT5 `rate_5_to_4` improved.
+- Launch full/e180 from this checkpoint because FP is slightly lower.
+- Repeat adjacent-margin Count calibration with a different broad gain.
+- Return to fifthness threshold tuning.
+
+Tradeoff:
+
+Stopping early may miss a late lucky recovery, but the run already failed the required promotion gate: ACC did not match the parent and GT4 `4->5` got worse. Continuing would spend full-training budget on a mechanism that appears to shift the error balance rather than solve it.
+
+Next smallest safe action:
+
+Do not start full training. Use official-val-only case analysis to design a candidate-specific GT4 false-fifth mechanism, or audit the parent and rejected gate false-fifth cases side by side. The next training gate should be more targeted than a broad adjacent Count margin and must require ACC at least matching parent, FP not increasing, lower `rate_4_to_5`, and no GT5 `rate_5_to_4` regression.
+
+Mainline or experiment:
+
+Rejected experimental short gate. No official ACC improvement is claimed, and test was not used.
