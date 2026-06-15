@@ -5588,3 +5588,67 @@ The new tests cover default-off unchanged decode, fail-fast missing logits, Q an
 Mainline or experiment:
 
 Mainline reliability plumbing for a default-off experimental candidate. No official-val improvement is claimed until a closed-loop fifthness decode sweep or short gate beats the K56 parent while controlling FP and `rate_4_to_5`.
+
+## 2026-06-15: Reject K56 fifthness closed-loop decode sweep
+
+Decision:
+
+Do not continue the exact `gcs_yolo_lane_s_q12_k56_fifthness_gt5neg_ft8_seed1_b32w4` closed-loop fifthness decode direction with more short training, and do not launch full/e180 from it.
+
+Sweep protocol:
+
+All rows below used official-val only:
+
+```text
+weights: runs/gcs_lane/gcs_yolo_lane_s_q12_k56_fifthness_gt5neg_ft8_seed1_b32w4/weights/official_best.pt
+split: val
+gt_json: runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json
+archive_root: runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset
+imgsz: 544 960
+grid: conf=0.005, point_valid_thr=0.35/0.40, nms_dist_px=18, max_det=5,
+      candidate_min_points=5, final_min_points=6/7/8/9, fifth_min_points=4/5/6
+decode: --use-fifthness-decode --fifthness-decode-rank-weight 1.0
+thresholds: 0.30, 0.50, 0.70, 0.85
+```
+
+Official-val comparison:
+
+| row | ACC | FP | FN | count_acc_4 | count_acc_5 | rate_4_to_5 | rate_5_to_4 | decision |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| K56 parent | 0.959315 | 0.045225 | 0.028466 | 0.878788 | 0.851351 | 0.075758 | 0.148649 | baseline |
+| fifthdecode thr0.30 | 0.959319 | 0.047429 | 0.027089 | 0.833333 | 0.932432 | 0.121212 | 0.067568 | rejected |
+| fifthdecode thr0.50 | 0.959319 | 0.047429 | 0.027089 | 0.833333 | 0.932432 | 0.121212 | 0.067568 | rejected |
+| fifthdecode thr0.70 | 0.959220 | 0.046465 | 0.027778 | 0.848485 | 0.878378 | 0.106061 | 0.121622 | rejected |
+| fifthdecode thr0.85 | 0.959023 | 0.042470 | 0.028466 | 0.924242 | 0.837838 | 0.030303 | 0.162162 | rejected |
+
+Artifact paths:
+
+```text
+runs/gcs_lane/gcs_yolo_lane_s_q12_k56_fifthness_gt5neg_ft8_seed1_b32w4/analysis_official_best_val_fifthness_decode_thr0p30_w1/tusimple_official_sweep_summary.json
+runs/gcs_lane/gcs_yolo_lane_s_q12_k56_fifthness_gt5neg_ft8_seed1_b32w4/analysis_official_best_val_fifthness_decode_thr0p50_w1/tusimple_official_sweep_summary.json
+runs/gcs_lane/gcs_yolo_lane_s_q12_k56_fifthness_gt5neg_ft8_seed1_b32w4/analysis_official_best_val_fifthness_decode_thr0p70_w1/tusimple_official_sweep_summary.json
+runs/gcs_lane/gcs_yolo_lane_s_q12_k56_fifthness_gt5neg_ft8_seed1_b32w4/analysis_official_best_val_fifthness_decode_thr0p85_w1/tusimple_official_sweep_summary.json
+```
+
+Why:
+
+The fifthness decode gate can move the GT4/GT5 tradeoff, but no threshold found a clean official-val improvement. Low thresholds preserve GT5 retention and the tiny `+0.000004` ACC numerical delta, but keep FP and GT4 false fifth pressure worse than the parent. High threshold `0.85` lowers FP and false fifth pressure, but increases GT5 `5->4` and reduces official ACC below the parent.
+
+Alternatives considered:
+
+- Treat `thr=0.30/0.50` as promotable because ACC is numerically above parent.
+- Use `thr=0.85` as a low-FP branch.
+- Start short training with the same recipe plus fifthness decode enabled.
+- Launch full/e180 from the current checkpoint.
+
+Tradeoff:
+
+Rejecting this exact direction preserves the joint objective of improving official ACC without shifting errors from GT5 `5->4` into GT4 false fifth pressure. It also avoids spending full-training budget on a checkpoint whose fifthness score distribution is not yet calibrated for both classes of errors.
+
+Next smallest safe action:
+
+Run only read-only official-val case audits of fifthness score distributions for GT4 false fifth candidates and GT5 true fifth candidates. Do not train again until that audit identifies a new lower-FP hypothesis.
+
+Mainline or experiment:
+
+Rejected experimental postprocess/decode sweep. Test was not used, and no final/promotable test claim exists.

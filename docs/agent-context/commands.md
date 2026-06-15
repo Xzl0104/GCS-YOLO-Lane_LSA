@@ -251,13 +251,24 @@ diagnosis: count_acc_4=0.833333, count_acc_5=0.932432, rate_4_to_5=0.121212, rat
 decision: not promotable; the tiny ACC delta is not meaningful because FP and GT4-to-5 pressure worsened
 ```
 
-Decision after combining both short gates with the server evidence: do not start K56/fifthness full/e180 training from either exact recipe. The smallest safe next step is an official-val-only fifthness decode sweep or a new short gate with explicit lower-FP false-fifth pressure, preserving `--gcs-official-best --gcs-official-best-top-k 5`.
+Decision after combining both short gates with the server evidence: do not start K56/fifthness full/e180 training from either exact recipe.
 
-Official-val-only fifthness decode sweep template for an existing fifthness checkpoint:
+The first closed-loop official-val fifthness decode sweep of the `fifthness_gt5neg` official-best checkpoint is rejected:
+
+```text
+thr=0.30: official_acc=0.959319, FP=0.047429, FN=0.027089, rate_4_to_5=0.121212, rate_5_to_4=0.067568
+thr=0.50: official_acc=0.959319, FP=0.047429, FN=0.027089, rate_4_to_5=0.121212, rate_5_to_4=0.067568
+thr=0.70: official_acc=0.959220, FP=0.046465, FN=0.027778, rate_4_to_5=0.106061, rate_5_to_4=0.121622
+thr=0.85: official_acc=0.959023, FP=0.042470, FN=0.028466, rate_4_to_5=0.030303, rate_5_to_4=0.162162
+```
+
+Do not rerun these exact threshold sweeps as the next path. The smallest safe next action is an official-val-only fifthness score distribution/case audit that compares GT4 false fifth candidates with GT5 true fifth candidates.
+
+Reference command shape for a future official-val-only fifthness decode sweep with a new hypothesis:
 
 ```bash
 python tools/sweep_tusimple_official.py \
-  --weights runs/gcs_lane/gcs_yolo_lane_s_q12_k56_fifthness_gt5neg_ft8_seed1_b32w4/weights/official_best.pt \
+  --weights <fifthness-enabled-official-val-selected-weights.pt> \
   --split val \
   --gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
   --archive-root runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset \
@@ -274,7 +285,7 @@ python tools/sweep_tusimple_official.py \
   --fifthness-decode-rank-weight <explicit-weight>
 ```
 
-Short closed-loop training gate template, only after choosing a new hypothesis that explicitly targets lower `rate_4_to_5`/FP:
+Short closed-loop training gate template, only after an official-val case audit identifies a new hypothesis that explicitly targets lower `rate_4_to_5`/FP without worsening GT5 `5->4`:
 
 ```bash
 python tools/train_gcs.py \

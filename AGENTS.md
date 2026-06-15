@@ -111,6 +111,7 @@ This opt-in YAML may additionally emit `pred_fifthness_logits: B x Q` and enable
 The first `gcs_yolo_lane_s_q12_k56_fifthness_v1_ft8_seed1_b32w4` short gate is rejected: best official-val was epoch 5 `0.959006`, below the K56 parent `0.959315`, with worse FP/FN and high GT4-to-5 pressure. Do not start full/e180 training from that recipe.
 The follow-up `gcs_yolo_lane_s_q12_k56_fifthness_gt5neg_ft8_seed1_b32w4` gate is also not promotable: best official-val was epoch 6 `0.959319`, only `+0.000004` over the parent, but FP worsened to `0.047429` and `rate_4_to_5` rose to `0.121212`. Do not treat this as a full-training candidate.
 The fifthness verifier is now wired into inference/evaluation through default-off decode switches. It is ignored unless `gcs_use_fifthness_decode=True`, and when enabled it may only gate or re-rank the selected fifth lane and fifth-lane rescue candidates. Enabling fifthness decode against a model that does not emit `pred_fifthness_logits` must fail fast.
+A 2026-06-15 closed-loop official-val sweep of the `fifthness_gt5neg` checkpoint with fifthness decode thresholds `0.30/0.50/0.70/0.85` is not promotable. Low thresholds keep ACC at `0.959319` but preserve worse FP/`rate_4_to_5`; high threshold `0.85` lowers FP and `rate_4_to_5` but drops ACC to `0.959023` and worsens GT5 `5->4`. Do not start full/e180 from these decode settings.
 
 The K56 labels must be regenerated from original TuSimple JSON and images, not resampled from existing K32 labels.
 

@@ -94,6 +94,8 @@ The first short fifthness-v1 gate `gcs_yolo_lane_s_q12_k56_fifthness_v1_ft8_seed
 
 The `pred_fifthness_logits` verifier is now wired into inference/evaluation only through the explicit fifthness decode switches. When enabled, it can gate or re-rank only the selected fifth lane and fifth-lane rescue candidates; ranks 1-4 keep the default visible-segment ranking. Enabling fifthness decode against a model that does not emit `pred_fifthness_logits` fails fast. This closes an implementation blind spot but is not official-val improvement evidence by itself, so do not start full/e180 from the rejected fifthness gates.
 
+The first closed-loop official-val fifthness decode sweep of the `fifthness_gt5neg` checkpoint is also not promotable. Thresholds `0.30/0.50` reproduce the same `0.959319` ACC while keeping high FP and `rate_4_to_5=0.121212`; `0.70` drops below parent; `0.85` lowers false fifth pressure but drops ACC to `0.959023` and worsens GT5 `5->4`.
+
 A user-requested K56 official-test audit on `2026-06-14` is diagnostic-only, not a final/promotable test claim. The tested rows were: parent default `0.959429`, parent minpoints `pv=0.40/final=9/fifth=4` `0.959131`, `cqcalib_ft12` `0.953748`, `cqcalib_lr1e4_ft8` `0.958869`, `curveaux_ft8` `0.959706`, and `lowfp_joint_ft8` `0.959401`. These numbers must not be used to choose checkpoints, thresholds, postprocess settings, losses, or promotion decisions; `curveaux_ft8` remains rejected because its official-val `0.958732` is below the K56 parent `0.959315`.
 
 Use the local RTX 4060 8GB workstation for smoke, contract, label/oracle, and model-shape checks only. Run formal training and official-val evaluation on the remote server.
