@@ -46,6 +46,50 @@ def test_k56_data_and_model_contract_match():
     assert math.isclose(float(data["fixed_y"][1]), float(head_args[6]))
 
 
+def test_k56_experimental_model_variants_keep_q12_k56_contract():
+    variants = {
+        "gcs-yolo-lane-s-q12-k56-dec4.yaml": {"decoder_layers": 4, "bifpn_channels": 128},
+        "gcs-yolo-lane-s-q12-k56-bifpn192.yaml": {"decoder_layers": 3, "bifpn_channels": 192},
+        "gcs-yolo-lane-s-q12-k56-bifpn256.yaml": {"decoder_layers": 3, "bifpn_channels": 256},
+        "gcs-yolo-lane-s-q12-k56-cqcalib.yaml": {
+            "decoder_layers": 3,
+            "bifpn_channels": 128,
+            "count_quality_calib_dim": 64,
+        },
+        "gcs-yolo-lane-s-q12-k56-strip-p23.yaml": {
+            "decoder_layers": 3,
+            "bifpn_channels": 128,
+            "strip_levels": "p2,p3",
+        },
+    }
+
+    for filename, expected in variants.items():
+        model = yaml.safe_load(
+            (ROOT / "ultralytics" / "cfg" / "models" / "gcs" / filename).read_text(encoding="utf-8")
+        )
+        bifpn_layers = [layer for layer in model["head"] if layer[2] == "LaneBiFPN"]
+        gcs_layers = [layer for layer in model["head"] if layer[2] == "GCSLaneHead"]
+        strip_layers = [layer for layer in model["head"] if layer[2] == "LaneStripPyramidAttention"]
+        assert len(bifpn_layers) == 1
+        assert len(gcs_layers) == 1
+        assert bifpn_layers[0][3][0] == expected["bifpn_channels"]
+
+        head_args = gcs_layers[0][3]
+        assert head_args[:4] == [12, 56, expected["decoder_layers"], 8]
+        assert head_args[4] == "fixed_y"
+        assert math.isclose(float(head_args[5]), 710.0 / 720.0)
+        assert math.isclose(float(head_args[6]), 160.0 / 720.0)
+        if "count_quality_calib_dim" in expected:
+            assert head_args[7] == expected["count_quality_calib_dim"]
+        else:
+            assert len(head_args) == 7
+        if "strip_levels" in expected:
+            assert len(strip_layers) == 1
+            assert strip_layers[0][3][0] == expected["strip_levels"]
+        else:
+            assert strip_layers == []
+
+
 def test_k56_train_command_infers_k56_label_dirs_from_data_yaml():
     labels = train_gcs.infer_gcs_label_dirs_from_data(ROOT / "data" / "tusimple_gcs_fixed_y_k56_960x544.yaml")
 

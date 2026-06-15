@@ -56,6 +56,7 @@ from ultralytics.nn.modules import (
     HGStem,
     ImagePoolingAttn,
     Index,
+    LaneStripPyramidAttention,
     LaneFeatureProjection,
     LaneBiFPN,
     LRPCHead,
@@ -1861,6 +1862,14 @@ def parse_model(d, ch, verbose=True):
             out_channels = args[0] if args else 128
             args = [c1, out_channels, *args[1:]]
             c2 = [out_channels, out_channels, out_channels, out_channels]
+        elif m is LaneStripPyramidAttention:
+            c1 = ch[f] if isinstance(f, int) else [ch[x] for x in f]
+            if not isinstance(c1, (list, tuple)) or len(c1) != 4:
+                raise ValueError(f"LaneStripPyramidAttention expects four P2-P5 channel values, got {c1}.")
+            if any(c != c1[0] for c in c1):
+                raise ValueError(f"LaneStripPyramidAttention expects equal P2-P5 channels, got {c1}.")
+            args = [c1[0], *args]
+            c2 = [c1[0], c1[0], c1[0], c1[0]]
         elif m is LaneFeatureProjection:
             c1 = [ch[x] for x in f]
             out_channels = args[0] if args else 128

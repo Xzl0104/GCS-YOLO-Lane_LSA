@@ -120,6 +120,7 @@ Current conservative count-generalization defaults:
 gcs_count_sum = 0.03
 gcs_quality = 0.4
 gcs_quality_neg_weight = 0.5
+gcs_quality_point_weight = 0.5
 gcs_count_cls_w2/w3/w4/w5 = 0.5/1.2/1.4/1.8
 gcs_count_boundary_gt5_pos_weight = 1.15
 gcs_point_valid_gt5_pos_weight = 2.0
@@ -133,9 +134,10 @@ gcs_group_sampler_ratios = 2:0.01,3:0.29,4:0.42,5:0.28
 
 The GT5 candidate-quality knobs are training-side only. They strengthen real matched GT5 edge-query supervision inside existing loss items and do not change decode, use GT during inference/decode, or fabricate lanes.
 
-Current default-off training-side experimental knobs:
+Current default-preserving/default-off training-side experimental knobs:
 
 ```text
+gcs_quality_point_weight ablations = 0.8 or 1.0
 gcs_quality_gt5_edge_floor = 0.0
 gcs_quality_hard_negative_from_head = False
 gcs_hard_negative_visible_segment = False
@@ -145,6 +147,8 @@ gcs_point_valid_gt5_edge_segment = 0.0
 gcs_point_valid_gt5_edge_segment_thr = 0.65
 gcs_point_valid_gt5_edge_segment_min_points = 5
 ```
+
+`gcs_quality_point_weight` defaults to `0.5`, preserving the historical `0.5 * point_score + 0.5 * line_iou_score` Quality target. K56 Quality target ablations should test `0.8` first, and only test `1.0` if official-val and GT5 diagnosis justify it.
 
 `gcs_quality_gt5_edge_floor` is training-side only. When enabled above `0.0`, it floors the matched Quality Head target for real left/right edge lanes in GT5 images only; it does not change decode, use GT during inference, or fabricate lanes.
 

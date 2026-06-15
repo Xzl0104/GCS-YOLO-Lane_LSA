@@ -32,6 +32,7 @@ from ultralytics.models.yolo.gcs_lane.train import (
     GCS_MAINLINE_QUALITY_GAIN,
     GCS_MAINLINE_QUALITY_GT5_EDGE_FLOOR,
     GCS_MAINLINE_QUALITY_NEG_WEIGHT,
+    GCS_MAINLINE_QUALITY_POINT_WEIGHT,
     GCSLaneTrainer,
 )
 from ultralytics.utils.gcs_shape import DATASET_IMAGE_SHAPES, normalize_imgsz, shape_str, trainer_imgsz
@@ -265,6 +266,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gcs-quality", type=float, default=GCS_MAINLINE_QUALITY_GAIN, help="Lane-level Quality Head BCE loss gain.")
     parser.add_argument("--gcs-quality-dist-thr-px", type=float, default=20.0, help="Pixel threshold for quality target point-inlier score.")
     parser.add_argument("--gcs-quality-neg-weight", type=float, default=GCS_MAINLINE_QUALITY_NEG_WEIGHT, help="Relative weight for unmatched-query quality negatives.")
+    parser.add_argument(
+        "--gcs-quality-point-weight",
+        type=float,
+        default=GCS_MAINLINE_QUALITY_POINT_WEIGHT,
+        help="Blend weight for point-inlier score in Quality targets; line-IoU receives 1-weight.",
+    )
     parser.add_argument(
         "--gcs-quality-gt5-edge-floor",
         type=float,
@@ -963,6 +970,7 @@ def main() -> None:
         "gcs_quality": args.gcs_quality,
         "gcs_quality_dist_thr_px": args.gcs_quality_dist_thr_px,
         "gcs_quality_neg_weight": args.gcs_quality_neg_weight,
+        "gcs_quality_point_weight": args.gcs_quality_point_weight,
         "gcs_quality_gt5_edge_floor": args.gcs_quality_gt5_edge_floor,
         "gcs_quality_hard_negative_weight": args.gcs_quality_hard_negative_weight,
         "gcs_quality_duplicate_negative_weight": args.gcs_quality_duplicate_negative_weight,

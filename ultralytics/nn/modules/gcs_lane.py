@@ -1,6 +1,8 @@
 # Ultralytics AGPL-3.0 License - https://ultralytics.com/license
 """GCS-YOLO-Lane neural network modules."""
 
+import re
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -9,6 +11,7 @@ TUSIMPLE_OFFICIAL_BOTTOM_Y_NORM = 710.0 / 720.0
 
 __all__ = (
     "CoordReweight",
+    "LaneStripPyramidAttention",
     "LineStripAttention",
     "LSEM",
     "WeightedFusion",
@@ -133,6 +136,58 @@ class LSEM(nn.Module):
         x = self.dilated_context(x)
         x = self.out_conv(x)
         return self.act(x + identity)
+
+
+class LaneStripPyramidAttention(nn.Module):
+    """Optional lightweight strip attention after P2-P5 fusion."""
+
+    def __init__(self, c, levels="p2,p3", k=9):
+        """Initialize strip-attention residuals for selected pyramid levels."""
+        super().__init__()
+        self.level_names = ("p2", "p3", "p4", "p5")
+        selected = self._parse_levels(levels)
+        self.selected = selected
+        self.blocks = nn.ModuleList(LineStripAttention(c, k=k) if i in selected else nn.Identity() for i in range(4))
+        self.gains = nn.Parameter(torch.zeros(4, dtype=torch.float32))
+
+    @staticmethod
+    def _parse_levels(levels) -> set[int]:
+        """Parse selected P2-P5 levels from a YAML-friendly string/list/bitmask."""
+        if levels is None or levels is False:
+            return set()
+        if isinstance(levels, int):
+            return {i for i in range(4) if levels & (1 << i)}
+        if isinstance(levels, (list, tuple, set)):
+            parts = [str(x).strip().lower() for x in levels]
+        else:
+            text = str(levels).strip().lower()
+            if text in {"", "none", "off", "false", "0"}:
+                return set()
+            if text in {"all", "p2p3p4p5"}:
+                return {0, 1, 2, 3}
+            parts = [x for x in re.split(r"[,;|\s]+", text.replace("+", ",")) if x]
+        mapping = {"0": 0, "1": 0, "2": 0, "p2": 0, "3": 1, "p3": 1, "4": 2, "p4": 2, "5": 3, "p5": 3}
+        selected = set()
+        for part in parts:
+            if part in {"p2p3", "23"}:
+                selected.update({0, 1})
+                continue
+            if part not in mapping:
+                raise ValueError(f"Unsupported LaneStripPyramidAttention level {part!r}; use p2,p3,p4,p5.")
+            selected.add(mapping[part])
+        return selected
+
+    def forward(self, xs):
+        """Apply zero-initialized residual strip attention to selected pyramid features."""
+        if len(xs) != 4:
+            raise ValueError(f"LaneStripPyramidAttention expects [P2, P3, P4, P5], got {len(xs)} feature maps.")
+        out = []
+        for i, (x, block) in enumerate(zip(xs, self.blocks)):
+            if i in self.selected:
+                out.append(x + self.gains[i].to(device=x.device, dtype=x.dtype) * block(x))
+            else:
+                out.append(x)
+        return out
 
 
 class WeightedFusion(nn.Module):
@@ -719,6 +774,7 @@ class GCSLaneHead(nn.Module):
         point_mode="free",
         fixed_y_start=TUSIMPLE_OFFICIAL_BOTTOM_Y_NORM,
         fixed_y_end=0.25,
+        count_quality_calib_dim=0,
     ):
         """Initialize the GCS lane query decoder."""
         super().__init__()
@@ -747,6 +803,7 @@ class GCSLaneHead(nn.Module):
             raise ValueError(f"GCSLaneHead point_mode must be 'free' or 'fixed_y', got {point_mode!r}.")
         self.fixed_y_start = float(fixed_y_start)
         self.fixed_y_end = float(fixed_y_end)
+        self.count_quality_calib_dim = int(count_quality_calib_dim or 0)
         if not (0.0 <= self.fixed_y_end < self.fixed_y_start <= 1.0):
             raise ValueError(
                 f"Expected 0 <= fixed_y_end < fixed_y_start <= 1, got "
@@ -817,6 +874,15 @@ class GCSLaneHead(nn.Module):
             nn.ReLU(inplace=True),
             nn.Linear(c1, 1),
         )
+        if self.count_quality_calib_dim > 0:
+            self.count_quality_calib = nn.Sequential(
+                nn.Linear(c1 * 3, self.count_quality_calib_dim),
+                nn.LayerNorm(self.count_quality_calib_dim),
+                nn.SiLU(),
+                nn.Linear(self.count_quality_calib_dim, c1),
+            )
+            nn.init.zeros_(self.count_quality_calib[-1].weight)
+            nn.init.zeros_(self.count_quality_calib[-1].bias)
         self.register_buffer("point_reference_logits", self._build_point_references(), persistent=False)
         self.register_buffer("fixed_y_anchors", self._build_fixed_y_anchors(), persistent=False)
         self._init_point_delta_head()
@@ -877,6 +943,15 @@ class GCSLaneHead(nn.Module):
         final = self.quality_mlp[-1]
         nn.init.normal_(final.weight, mean=0.0, std=1e-3)
         nn.init.zeros_(final.bias)
+
+    def _count_quality_tokens(self, hs):
+        """Return optional shared Count/Quality calibrated query tokens."""
+        if not hasattr(self, "count_quality_calib"):
+            return hs
+        mean_token = hs.mean(dim=1, keepdim=True).expand_as(hs)
+        max_token = hs.max(dim=1, keepdim=True).values.expand_as(hs)
+        delta = self.count_quality_calib(torch.cat((hs, mean_token, max_token), dim=-1))
+        return hs + delta
 
     def _sample_point_features(self, xs, points):
         """Sample high-resolution image features at normalized point coordinates.
@@ -1062,8 +1137,9 @@ class GCSLaneHead(nn.Module):
         else:
             pred_valid_logits = pred_logits.new_full((b, self.num_queries, self.num_points), 20.0)
 
+        count_quality_hs = self._count_quality_tokens(hs)
         if hasattr(self, "quality_mlp"):
-            pred_quality_logits = self.quality_mlp(hs).squeeze(-1)
+            pred_quality_logits = self.quality_mlp(count_quality_hs).squeeze(-1)
         else:
             # Backward compatibility for checkpoints saved before the Quality Head existed.
             pred_quality_logits = pred_logits.new_zeros((b, self.num_queries))
@@ -1077,7 +1153,7 @@ class GCSLaneHead(nn.Module):
             # Count CE trains only the Count Head; shared lane features and candidate branches keep their own losses.
             pred_count_logits, pred_count_boundary_logits = self.count_head.forward_with_boundary(
                 [x.detach() for x in xs],
-                hs.detach(),
+                count_quality_hs.detach(),
                 pred_logits=pred_logits.detach(),
                 pred_valid_logits=pred_valid_logits.detach(),
                 pred_points=pred_points.detach(),

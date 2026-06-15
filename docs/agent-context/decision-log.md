@@ -4829,3 +4829,72 @@ No test metric was used. The run stayed on `--split val` and `--imgsz 544 960`.
 Mainline or experiment:
 
 Diagnostic-only experiment. K56 epoch152 remains the official-val reference, and K56 remains not test-ready.
+
+## 2026-06-16: Add explicit K56 Quality-target and architecture candidates
+
+Decision:
+
+Add controlled, validation-only K56 candidates without changing default mainline behavior:
+
+```text
+gcs_quality_point_weight = 0.5 default
+gcs_quality_point_weight ablations = 0.8 first, 1.0 only if 0.8 helps
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-dec4.yaml
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-bifpn192.yaml
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-bifpn256.yaml
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-cqcalib.yaml
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-strip-p23.yaml
+```
+
+`gcs_quality_point_weight` changes matched Quality Head target construction to:
+
+```text
+quality_target = gcs_quality_point_weight * point_score + (1 - gcs_quality_point_weight) * line_iou_score
+```
+
+The default `0.5` preserves the previous `0.5/0.5` target. The `cqcalib` YAML adds a zero-initialized Count/Quality query-token calibration residual inside `GCSLaneHead`; Count Head losses still receive detached query tokens so the existing Count Head isolation contract remains intact. `strip-p23` adds zero-initialized residual `LaneStripPyramidAttention` after LaneBiFPN and before the head. The BiFPN channel and decoder-depth variants keep `Q=12`, `K=56`, fixed-y `710/720 -> 160/720`, and `--imgsz 544 960`.
+
+Why:
+
+The completed K56 baseline remains blocked by Count/Quality separation, not candidate supply, rank, NMS, or label representation. Epoch152 has `official_acc=0.959315`, matched/unmatched Quality mean `0.913939/0.831922`, GT5 `quality_too_low=6/74`, and `count_head_under_predict=5/74`. K56 anchors already align to TuSimple official h-samples, so increasing the Quality target point-inlier weight is the smallest test of whether the Quality Head should track official point inliers more directly. The structure candidates cover the user-requested capacity and lane-aware options while keeping each experiment attributable.
+
+Alternatives considered:
+
+- Directly promote larger LaneBiFPN channels or `decoder_layers=4`.
+- Increase `num_queries` from Q12 to Q16.
+- Repeat Count/Quality weight pushes from the rejected K56 fine-tune gates.
+- Keep Quality target construction fixed at `0.5/0.5`.
+- Add new output fields for Count/Quality calibration.
+
+Tradeoff:
+
+The candidate set increases code and config surface area, but every change is explicit, shape-checked, and keeps the output contract unchanged. The Count/Quality calibration residual does not let Count loss train shared non-count-head parameters, preserving existing isolation tests; if a future experiment wants Count loss to train that residual, it must be a separate explicit contract change. BiFPN 192/256 and decoder-depth variants may increase memory, so formal runs need remote RTX 4090 validation and may require batch adjustment only after OOM or throughput evidence.
+
+Validation evidence:
+
+Local validation passed:
+
+```text
+git diff --check
+D:\miniconda3\envs\lsa_yolo\python.exe -m py_compile ultralytics\nn\modules\gcs_lane.py ultralytics\nn\tasks.py ultralytics\nn\modules\__init__.py ultralytics\utils\gcs_loss.py ultralytics\models\yolo\gcs_lane\train.py tools\train_gcs.py tests\test_gcs_count_aware.py tests\test_gcs_k56_contract.py
+D:\miniconda3\envs\lsa_yolo\python.exe -m pytest tests\test_gcs_count_aware.py tests\test_gcs_k56_contract.py -q --basetemp <workspace-temp> -p no:cacheprovider
+D:\miniconda3\envs\lsa_yolo\python.exe tools\check_gcs_count_head_topk_contract.py
+D:\miniconda3\envs\lsa_yolo\python.exe tools\check_gcs_decode_meta_contract.py
+D:\miniconda3\envs\lsa_yolo\python.exe tools\check_gcs_algorithm_contract.py
+D:\miniconda3\envs\lsa_yolo\python.exe scripts\verify_loss_cleanup.py
+D:\miniconda3\envs\lsa_yolo\python.exe scripts\check_gcs_agent_setup.py
+D:\miniconda3\envs\lsa_yolo\python.exe tools\check_model.py --cfg ultralytics\cfg\models\gcs\gcs-yolo-lane-s-q12-k56.yaml --imgsz 544 960 --batch 1
+D:\miniconda3\envs\lsa_yolo\python.exe tools\check_model.py --cfg ultralytics\cfg\models\gcs\gcs-yolo-lane-s-q12-k56-dec4.yaml --imgsz 544 960 --batch 1
+D:\miniconda3\envs\lsa_yolo\python.exe tools\check_model.py --cfg ultralytics\cfg\models\gcs\gcs-yolo-lane-s-q12-k56-bifpn192.yaml --imgsz 544 960 --batch 1
+D:\miniconda3\envs\lsa_yolo\python.exe tools\check_model.py --cfg ultralytics\cfg\models\gcs\gcs-yolo-lane-s-q12-k56-bifpn256.yaml --imgsz 544 960 --batch 1
+D:\miniconda3\envs\lsa_yolo\python.exe tools\check_model.py --cfg ultralytics\cfg\models\gcs\gcs-yolo-lane-s-q12-k56-cqcalib.yaml --imgsz 544 960 --batch 1
+D:\miniconda3\envs\lsa_yolo\python.exe tools\check_model.py --cfg ultralytics\cfg\models\gcs\gcs-yolo-lane-s-q12-k56-strip-p23.yaml --imgsz 544 960 --batch 1
+```
+
+The first pytest attempt failed only because pytest could not access `C:\Users\Xue\AppData\Local\Temp\pytest-of-Xue`; rerunning with a workspace temp directory passed `49 passed, 1 skipped`.
+
+No official-val metric exists yet for these new candidates, and no test evidence was used.
+
+Mainline or experiment:
+
+Experimental candidates only. Mainline defaults and output contracts remain unchanged.

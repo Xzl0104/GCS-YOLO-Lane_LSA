@@ -52,6 +52,19 @@ ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12.yaml
 
 Legacy Q=8 config is retained for historical reproduction, ablation, or controlled experimental candidates.
 
+Active K56 experimental model variants are explicit and not mainline promotions:
+
+```text
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-dec4.yaml
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-bifpn192.yaml
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-bifpn256.yaml
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-cqcalib.yaml
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-strip-p23.yaml
+```
+
+All K56 variants keep `Q=12`, `K=56`, fixed-y anchors `710/720 -> 160/720`, and `--imgsz 544 960`. They differ only in the named architecture candidate.
+
 ## Label Contract
 
 Current label mode:
@@ -138,6 +151,7 @@ Current conservative count-generalization defaults:
 gcs_count_sum = 0.03
 gcs_quality = 0.4
 gcs_quality_neg_weight = 0.5
+gcs_quality_point_weight = 0.5
 gcs_count_cls_w2/w3/w4/w5 = 0.5/1.2/1.4/1.8
 gcs_count_boundary_gt5_pos_weight = 1.15
 gcs_point_valid_gt5_pos_weight = 2.0
@@ -160,12 +174,13 @@ They do not change decode, do not use GT during inference/decode, and do not fab
 
 `gcs_soft_count_decision`, `gcs_last_lane_rescue`, and `gcs_edge_last_lane_rescue` remain default-off unless selected by official-val evidence.
 
-Current default-off training-side experimental knobs:
+Current default-preserving/default-off training-side experimental knobs:
 
 ```text
 gcs_count_adjacent_margin = 0.2
 gcs_count_adjacent_margin_gain = 0.0
 gcs_count_adjacent_margin_gt45_weight = 1.0
+gcs_quality_point_weight ablations = 0.8 or 1.0
 gcs_quality_gt5_edge_floor = 0.0
 gcs_quality_hard_negative_from_head = False
 gcs_hard_negative_visible_segment = False
@@ -177,6 +192,14 @@ gcs_point_valid_gt5_edge_segment_min_points = 5
 ```
 
 `gcs_count_adjacent_margin_gain` enables a default-off training-side margin term inside `count_cls_loss` that pushes the GT count logit above neighboring count classes. It is intended for controlled GT3/GT4/GT5 calibration experiments and does not add a new logged loss item.
+
+`gcs_quality_point_weight` controls the matched Quality Head target blend:
+
+```text
+quality_target = gcs_quality_point_weight * point_score + (1 - gcs_quality_point_weight) * line_iou_score
+```
+
+The default `0.5` preserves existing behavior. K56 ablations should try `0.8` first because K56 anchors align to TuSimple official h-samples; `1.0` is only a follow-up if official-val and GT5 diagnosis support it. This is training-side target construction only and does not change decode, use GT during inference, fabricate lanes, or alter official metrics.
 
 `gcs_quality_gt5_edge_floor` is a default-off training-side candidate that floors matched Quality Head targets only for real left/right edge lanes in GT5 images. It is intended to test whether true short GT5 edge lanes are being assigned quality targets too low to survive quality-gated fifth-lane decode behavior.
 

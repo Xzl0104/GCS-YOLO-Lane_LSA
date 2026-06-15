@@ -28,11 +28,12 @@ from ultralytics.models.yolo.gcs_lane.train import (
     GCS_MAINLINE_QUALITY_GAIN,
     GCS_MAINLINE_QUALITY_GT5_EDGE_FLOOR,
     GCS_MAINLINE_QUALITY_NEG_WEIGHT,
+    GCS_MAINLINE_QUALITY_POINT_WEIGHT,
     GCSLaneTrainer,
     apply_gt5_oversample_weight_to_ratios,
 )
 from ultralytics.engine.trainer import BaseTrainer
-from ultralytics.nn.modules.gcs_lane import CandidateAwareCountHead, GCSLaneHead
+from ultralytics.nn.modules.gcs_lane import CandidateAwareCountHead, GCSLaneHead, LaneStripPyramidAttention
 from ultralytics.utils import DEFAULT_CFG_DICT
 from ultralytics.utils.gcs_candidate_matching import GCSLaneCandidate
 from ultralytics.utils.gcs_count_diagnostics import build_candidates_from_predictions, diagnose_count_errors
@@ -288,6 +289,94 @@ def test_gcs_lane_head_count_boundary_backward_isolated_from_shared_branches():
     )
 
 
+def test_gcs_lane_head_count_quality_calib_keeps_output_contract_and_quality_grad():
+    torch.manual_seed(4)
+    head = GCSLaneHead(
+        c1=16,
+        num_queries=6,
+        num_points=8,
+        num_decoder_layers=1,
+        nhead=4,
+        point_mode="fixed_y",
+        count_quality_calib_dim=8,
+    )
+    head.min_spatial_tokens = 0
+    feats = [
+        torch.randn(2, 16, 8, 16),
+        torch.randn(2, 16, 4, 8),
+        torch.randn(2, 16, 3, 4),
+        torch.randn(2, 16, 2, 3),
+    ]
+
+    out = head(feats)
+
+    assert out["pred_quality_logits"].shape == (2, 6)
+    assert out["pred_count_logits"].shape == (2, 4)
+    assert out["pred_count_boundary_logits"].shape == (2, 2)
+    out["pred_quality_logits"].sum().backward()
+    calib_grads = [
+        param.grad
+        for name, param in head.named_parameters()
+        if name.startswith("count_quality_calib.") and param.requires_grad
+    ]
+    assert any(grad is not None and torch.count_nonzero(grad).item() > 0 for grad in calib_grads)
+
+
+def test_gcs_lane_head_count_quality_calib_preserves_count_head_isolation():
+    torch.manual_seed(5)
+    head = GCSLaneHead(
+        c1=16,
+        num_queries=6,
+        num_points=8,
+        num_decoder_layers=1,
+        nhead=4,
+        point_mode="fixed_y",
+        count_quality_calib_dim=8,
+    )
+    head.min_spatial_tokens = 0
+    feats = [
+        torch.randn(2, 16, 8, 16, requires_grad=True),
+        torch.randn(2, 16, 4, 8, requires_grad=True),
+        torch.randn(2, 16, 3, 4, requires_grad=True),
+        torch.randn(2, 16, 2, 3, requires_grad=True),
+    ]
+
+    out = head(feats)
+    out["pred_count_boundary_logits"].sum().backward()
+
+    assert any(
+        param.grad is not None and torch.count_nonzero(param.grad).item() > 0
+        for name, param in head.named_parameters()
+        if name.startswith("count_head.") and param.requires_grad
+    )
+    assert all(feat.grad is None for feat in feats)
+    assert all(
+        param.grad is None
+        for name, param in head.named_parameters()
+        if name.startswith("count_quality_calib.") and param.requires_grad
+    )
+
+
+def test_lane_strip_pyramid_attention_is_zero_init_residual_for_selected_levels():
+    torch.manual_seed(6)
+    module = LaneStripPyramidAttention(16, levels="p2,p3", k=9)
+    xs = [
+        torch.randn(2, 16, 8, 16),
+        torch.randn(2, 16, 4, 8),
+        torch.randn(2, 16, 3, 4),
+        torch.randn(2, 16, 2, 3),
+    ]
+
+    out = module(xs)
+
+    assert [tuple(x.shape) for x in out] == [tuple(x.shape) for x in xs]
+    assert module.selected == {0, 1}
+    assert torch.allclose(out[0], xs[0])
+    assert torch.allclose(out[1], xs[1])
+    assert torch.equal(out[2], xs[2])
+    assert torch.equal(out[3], xs[3])
+
+
 def test_count_sum_loss_backward():
     criterion = GCSLoss(model={"gcs_point_mode": "fixed_y", "gcs_imgsz": [544, 960], "gcs_count_sum": 0.02})
     pred_logits = torch.randn(2, 12, requires_grad=True)
@@ -310,6 +399,7 @@ def test_mainline_sampler_defaults_and_ratio_boost_boundaries(monkeypatch):
     assert math.isclose(DEFAULT_CFG_DICT["gcs_count_sum"], GCS_MAINLINE_COUNT_SUM_GAIN)
     assert math.isclose(DEFAULT_CFG_DICT["gcs_quality"], GCS_MAINLINE_QUALITY_GAIN)
     assert math.isclose(DEFAULT_CFG_DICT["gcs_quality_neg_weight"], GCS_MAINLINE_QUALITY_NEG_WEIGHT)
+    assert math.isclose(DEFAULT_CFG_DICT["gcs_quality_point_weight"], GCS_MAINLINE_QUALITY_POINT_WEIGHT)
     assert math.isclose(DEFAULT_CFG_DICT["gcs_quality_gt5_edge_floor"], GCS_MAINLINE_QUALITY_GT5_EDGE_FLOOR)
     assert tuple(DEFAULT_CFG_DICT[f"gcs_count_cls_w{i}"] for i in range(2, 6)) == GCS_MAINLINE_COUNT_CLS_WEIGHTS
     assert math.isclose(
@@ -347,6 +437,7 @@ def test_mainline_sampler_defaults_and_ratio_boost_boundaries(monkeypatch):
     assert math.isclose(args.gcs_count_sum, GCS_MAINLINE_COUNT_SUM_GAIN)
     assert math.isclose(args.gcs_quality, GCS_MAINLINE_QUALITY_GAIN)
     assert math.isclose(args.gcs_quality_neg_weight, GCS_MAINLINE_QUALITY_NEG_WEIGHT)
+    assert math.isclose(args.gcs_quality_point_weight, GCS_MAINLINE_QUALITY_POINT_WEIGHT)
     assert math.isclose(args.gcs_quality_gt5_edge_floor, GCS_MAINLINE_QUALITY_GT5_EDGE_FLOOR)
     assert tuple(getattr(args, f"gcs_count_cls_w{i}") for i in range(2, 6)) == GCS_MAINLINE_COUNT_CLS_WEIGHTS
     assert math.isclose(args.gcs_point_valid_gt5_pos_weight, GCS_MAINLINE_POINT_VALID_GT5_POS_WEIGHT)
@@ -378,6 +469,7 @@ def test_mainline_sampler_defaults_and_ratio_boost_boundaries(monkeypatch):
     assert math.isclose(trainer_overrides["gcs_count_sum"], GCS_MAINLINE_COUNT_SUM_GAIN)
     assert math.isclose(trainer_overrides["gcs_quality"], GCS_MAINLINE_QUALITY_GAIN)
     assert math.isclose(trainer_overrides["gcs_quality_neg_weight"], GCS_MAINLINE_QUALITY_NEG_WEIGHT)
+    assert math.isclose(trainer_overrides["gcs_quality_point_weight"], GCS_MAINLINE_QUALITY_POINT_WEIGHT)
     assert math.isclose(trainer_overrides["gcs_quality_gt5_edge_floor"], GCS_MAINLINE_QUALITY_GT5_EDGE_FLOOR)
     assert tuple(trainer_overrides[f"gcs_count_cls_w{i}"] for i in range(2, 6)) == GCS_MAINLINE_COUNT_CLS_WEIGHTS
     assert math.isclose(
@@ -411,6 +503,7 @@ def test_mainline_sampler_defaults_and_ratio_boost_boundaries(monkeypatch):
     assert math.isclose(criterion.count_sum_gain, GCS_MAINLINE_COUNT_SUM_GAIN)
     assert math.isclose(criterion.quality_gain, GCS_MAINLINE_QUALITY_GAIN)
     assert math.isclose(criterion.quality_neg_weight, GCS_MAINLINE_QUALITY_NEG_WEIGHT)
+    assert math.isclose(criterion.quality_point_weight, GCS_MAINLINE_QUALITY_POINT_WEIGHT)
     assert math.isclose(criterion.quality_gt5_edge_floor, GCS_MAINLINE_QUALITY_GT5_EDGE_FLOOR)
     assert criterion.count_cls_weights == GCS_MAINLINE_COUNT_CLS_WEIGHTS
     assert math.isclose(criterion.point_valid_gt5_pos_weight, GCS_MAINLINE_POINT_VALID_GT5_POS_WEIGHT)
@@ -465,12 +558,14 @@ def test_gt5_candidate_cfg_keys_have_expected_types():
         "gcs_count_adjacent_margin_gain",
         "gcs_count_adjacent_margin_gt45_weight",
         "gcs_candidate_gt5_edge_weight",
+        "gcs_quality_point_weight",
         "gcs_quality_gt5_edge_floor",
         "gcs_hard_negative_visible_support_points",
         "gcs_point_valid_gt5_edge_continuity",
         "gcs_point_valid_gt5_edge_segment",
     } <= CFG_FLOAT_KEYS
     assert "gcs_hard_negative_visible_thr" in CFG_FRACTION_KEYS
+    assert "gcs_quality_point_weight" in CFG_FRACTION_KEYS
     assert "gcs_quality_gt5_edge_floor" in CFG_FRACTION_KEYS
     assert "gcs_point_valid_gt5_edge_continuity_thr" in CFG_FRACTION_KEYS
     assert "gcs_point_valid_gt5_edge_segment_thr" in CFG_FRACTION_KEYS
@@ -764,6 +859,34 @@ def test_quality_gt5_edge_floor_only_boosts_matched_edge_targets():
     base_target4 = base.build_quality_targets(pred_quality_logits4, pred_points4, [lanes4], [valid4], indices4)
     floor_target4 = floored.build_quality_targets(pred_quality_logits4, pred_points4, [lanes4], [valid4], indices4)
     assert torch.allclose(floor_target4, base_target4)
+
+
+def test_quality_point_weight_blends_point_inlier_and_line_iou_targets():
+    lanes, valid = _gt([0.5], points=6)
+    pred_points = lanes.unsqueeze(0).clone()
+    pred_points[0, 0, :3, 0] += 30.0 / 960.0
+    pred_quality_logits = torch.zeros(1, 1)
+    indices = [(torch.tensor([0]), torch.tensor([0]))]
+    common = {
+        "gcs_point_mode": "fixed_y",
+        "gcs_imgsz": [544, 960],
+        "gcs_quality_dist_thr_px": 20.0,
+        "gcs_line_iou_width_px": 15.0,
+    }
+
+    point_only = GCSLoss(model={**common, "gcs_quality_point_weight": 1.0})
+    line_only = GCSLoss(model={**common, "gcs_quality_point_weight": 0.0})
+    default = GCSLoss(model={**common, "gcs_quality_point_weight": 0.5})
+    point_heavy = GCSLoss(model={**common, "gcs_quality_point_weight": 0.8})
+
+    point_target = point_only.build_quality_targets(pred_quality_logits, pred_points, [lanes], [valid], indices)
+    line_target = line_only.build_quality_targets(pred_quality_logits, pred_points, [lanes], [valid], indices)
+    default_target = default.build_quality_targets(pred_quality_logits, pred_points, [lanes], [valid], indices)
+    point_heavy_target = point_heavy.build_quality_targets(pred_quality_logits, pred_points, [lanes], [valid], indices)
+
+    assert point_target[0, 0] > line_target[0, 0]
+    assert torch.allclose(default_target, 0.5 * point_target + 0.5 * line_target)
+    assert torch.allclose(point_heavy_target, 0.8 * point_target + 0.2 * line_target)
 
 
 def test_visible_segment_hard_negative_mining_is_default_off():

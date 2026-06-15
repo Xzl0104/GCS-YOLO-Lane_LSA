@@ -100,6 +100,43 @@ python tools/train_gcs.py \
   --gcs-official-best-archive-root runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset
 ```
 
+Recommended next K56 official-val gates:
+
+1. Gate Quality target point-inlier weighting first. This is the smallest change and keeps the K56 model architecture unchanged:
+
+```bash
+python tools/train_gcs.py \
+  --model ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml \
+  --data data/tusimple_gcs_fixed_y_k56_960x544.yaml \
+  --imgsz 544 960 \
+  --name gcs_yolo_lane_s_q12_k56_qpoint08_ft8_seed1_b32w4 \
+  --pretrained runs/gcs_lane/gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4/weights/official_best.pt \
+  --epochs 8 \
+  --batch 32 \
+  --workers 4 \
+  --seed 1 \
+  --gcs-quality-point-weight 0.8 \
+  --gcs-official-best \
+  --gcs-official-best-period 1 \
+  --gcs-official-best-top-k 5 \
+  --gcs-official-best-gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
+  --gcs-official-best-archive-root runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset
+```
+
+Success criteria: official-val `official_acc > 0.959315`, preferably `>=0.9600`; matched/unmatched Quality gap `>0.12`; GT5 diagnosis `quality_too_low <=3/74`; `count_head_under_predict <=5/74`; no candidate-pool shortfall, GT5 NMS suppression, or rank5-score-low regression; and no GT4->5 increase above the epoch152 baseline `0.075758`. Only try `--gcs-quality-point-weight 1.0` if the `0.8` gate improves official-val or the GT5 diagnostic tradeoff without raising false fifth-lane pressure.
+
+2. If the target ablation is not sufficient, test one explicit structural candidate at a time:
+
+```text
+Count/Quality shared calibration: ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-cqcalib.yaml
+decoder_layers=4:                ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-dec4.yaml
+LaneBiFPN channels=192:          ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-bifpn192.yaml
+LaneBiFPN channels=256:          ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-bifpn256.yaml
+post-BiFPN strip P2/P3:          ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-strip-p23.yaml
+```
+
+Priority after the Quality target gate: `cqcalib`, then `dec4`, then `bifpn192`. Treat `bifpn256` and `strip-p23` as later checks unless `bifpn192` or Count/Quality evidence justifies more capacity or attention search. All are validation-only candidates until official-val selects one; do not use test.
+
 Completed K56 remote baseline state:
 
 ```text
@@ -370,6 +407,17 @@ python tools/check_gcs_algorithm_contract.py
 
 ```bash
 python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12.yaml --imgsz 544 960
+```
+
+For K56 architecture candidates, run `check_model.py` on the exact YAML before remote training:
+
+```bash
+python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml --imgsz 544 960 --batch 1
+python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-dec4.yaml --imgsz 544 960 --batch 1
+python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-bifpn192.yaml --imgsz 544 960 --batch 1
+python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-bifpn256.yaml --imgsz 544 960 --batch 1
+python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-cqcalib.yaml --imgsz 544 960 --batch 1
+python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-strip-p23.yaml --imgsz 544 960 --batch 1
 ```
 
 ## Head Dependency Check

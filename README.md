@@ -33,6 +33,7 @@ The current mainline uses conservative count-generalization defaults:
 gcs_count_sum = 0.03
 gcs_quality = 0.4
 gcs_quality_neg_weight = 0.5
+gcs_quality_point_weight = 0.5
 gcs_count_cls_w2/w3/w4/w5 = 0.5/1.2/1.4/1.8
 gcs_count_boundary_gt5_pos_weight = 1.15
 gcs_point_valid_gt5_pos_weight = 2.0
@@ -84,11 +85,25 @@ The run completed on `2026-06-14` at 180/180 epochs with no NaN, shape error, tr
 
 Independent GT5 diagnosis on official-val found 63/74 GT5 images kept; remaining GT5 drops are `count_head_under_predict=5` and `quality_too_low=6`, with candidate-pool shortfall, GT5 NMS suppression, and rank-score-low all at zero. Two K56 Count/Quality fine-tune gates from the epoch152 parent were stopped early because they regressed official-val: `gcs_yolo_lane_s_q12_k56_cqcalib_ft12_seed1_b32w4` best `0.953415`, and `gcs_yolo_lane_s_q12_k56_cqcalib_lr1e4_ft8_seed1_b32w4` best `0.957787`. Do not rerun those exact recipes as the next path.
 
-Use the local RTX 4060 8GB workstation for smoke, contract, label/oracle, and model-shape checks only. Run formal training and official-val evaluation on the remote server.
-
-Default-off training knobs remain available for controlled experiments:
+The current code adds explicit, validation-only K56 candidates for the next official-val gates:
 
 ```text
+Quality target ablation: --gcs-quality-point-weight 0.8, then 1.0 only if 0.8 helps
+decoder_layers=4:        ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-dec4.yaml
+LaneBiFPN channels=192:  ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-bifpn192.yaml
+LaneBiFPN channels=256:  ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-bifpn256.yaml
+Count/Quality calib:     ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-cqcalib.yaml
+post-BiFPN strip P2/P3:  ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-strip-p23.yaml
+```
+
+Recommended order: first gate `--gcs-quality-point-weight 0.8` from the K56 epoch152 parent; then a structural Count/Quality calibration candidate; then `decoder_layers=4`; then `LaneBiFPN=192`. Treat `256` and extra strip attention as later capacity checks unless official-val evidence supports expanding the search.
+
+Use the local RTX 4060 8GB workstation for smoke, contract, label/oracle, and model-shape checks only. Run formal training and official-val evaluation on the remote server.
+
+Default-preserving/default-off training knobs remain available for controlled experiments:
+
+```text
+gcs_quality_point_weight ablations = 0.8 or 1.0
 gcs_quality_gt5_edge_floor = 0.0
 gcs_quality_hard_negative_from_head = False
 gcs_hard_negative_visible_segment = False
