@@ -5652,3 +5652,63 @@ Run only read-only official-val case audits of fifthness score distributions for
 Mainline or experiment:
 
 Rejected experimental postprocess/decode sweep. Test was not used, and no final/promotable test claim exists.
+
+## 2026-06-15: Add official-val fifthness score audit and keep full/e180 blocked
+
+Decision:
+
+Add a read-only official-val diagnostic tool:
+
+```text
+tools/audit_gcs_fifthness_scores.py
+```
+
+Use it to compare optional `pred_fifthness_logits` scores for GT4 false fifth candidates and GT5 selected-rank-5 matched candidates. Keep the current `gcs_yolo_lane_s_q12_k56_fifthness_gt5neg_ft8_seed1_b32w4` checkpoint rejected for full/e180 escalation.
+
+Why:
+
+The closed-loop decode sweep showed that fifthness thresholds move the GT4/GT5 tradeoff but do not improve official-val ACC. The remaining question was whether the fifthness score distribution had enough separation to form a lower-FP hypothesis.
+
+Evidence:
+
+The official-val-only command:
+
+```text
+python tools/audit_gcs_fifthness_scores.py --weights runs/gcs_lane/gcs_yolo_lane_s_q12_k56_fifthness_gt5neg_ft8_seed1_b32w4/weights/official_best.pt --split val --gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json --archive-root runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset --imgsz 544 960 --conf 0.005 --point-valid-thr 0.35 --nms-dist-px 18 --max-det 5 --candidate-conf 0.005 --candidate-point-valid-thr 0.35 --candidate-min-points 5 --final-min-points 6 --fifth-min-points 5 --thresholds 0.30 0.50 0.70 0.85 --save-dir runs/gcs_lane/gcs_yolo_lane_s_q12_k56_fifthness_gt5neg_ft8_seed1_b32w4/analysis_official_best_val_fifthness_score_audit
+```
+
+reported:
+
+```text
+GT4 unmatched output5 false-fifth scores: count=8, median=0.841094, mean=0.826202, max=0.942222
+GT5 selected rank5 matched output5 scores: count=58, median=0.960218, mean=0.931124, min=0.576185
+threshold 0.30/0.50: true_keep=1.000000, false_keep=1.000000
+threshold 0.70: true_keep=0.965517, false_keep=0.875000
+threshold 0.85: true_keep=0.931034, false_keep=0.375000
+artifact: runs/gcs_lane/gcs_yolo_lane_s_q12_k56_fifthness_gt5neg_ft8_seed1_b32w4/analysis_official_best_val_fifthness_score_audit/fifthness_score_audit_summary.json
+```
+
+Alternatives considered:
+
+- Launch full/e180 because `fifthness_gt5neg` is numerically `+0.000004` over the K56 parent.
+- Use `thr=0.85` as a low-FP branch.
+- Continue threshold sweeps around `0.85`.
+- Stop fifthness entirely.
+
+Tradeoff:
+
+The audit preserves a useful signal: GT5 true fifth candidates tend to score higher. But the false-fifth high tail overlaps the true low tail, so a single threshold cannot suppress GT4 false fifths without also losing some GT5 fifth lanes. This does not rule out a new training hypothesis, but it does rule out spending full/e180 on the current checkpoint/recipe.
+
+Validation evidence:
+
+```text
+D:/miniconda3/envs/lsa_yolo/python.exe -m py_compile tools/audit_gcs_fifthness_scores.py
+D:/miniconda3/envs/lsa_yolo/python.exe tools/audit_gcs_fifthness_scores.py --help
+D:/miniconda3/envs/lsa_yolo/python.exe tools/audit_gcs_fifthness_scores.py --split test --gt-json archive/TUSimple/test_label.json
+```
+
+The split-test command failed as intended with the project test-protection error.
+
+Mainline or experiment:
+
+Mainline diagnostic tool plus rejected experiment decision. No official ACC improvement is claimed, no test data was used, and no full/e180 training is justified by this evidence.

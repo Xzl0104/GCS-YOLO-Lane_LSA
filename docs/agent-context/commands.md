@@ -262,7 +262,41 @@ thr=0.70: official_acc=0.959220, FP=0.046465, FN=0.027778, rate_4_to_5=0.106061,
 thr=0.85: official_acc=0.959023, FP=0.042470, FN=0.028466, rate_4_to_5=0.030303, rate_5_to_4=0.162162
 ```
 
-Do not rerun these exact threshold sweeps as the next path. The smallest safe next action is an official-val-only fifthness score distribution/case audit that compares GT4 false fifth candidates with GT5 true fifth candidates.
+Do not rerun these exact threshold sweeps as the next path. The official-val-only fifthness score distribution/case audit has now been run and also does not justify full/e180.
+
+Fifthness score distribution audit command:
+
+```bash
+python tools/audit_gcs_fifthness_scores.py \
+  --weights runs/gcs_lane/gcs_yolo_lane_s_q12_k56_fifthness_gt5neg_ft8_seed1_b32w4/weights/official_best.pt \
+  --split val \
+  --gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
+  --archive-root runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset \
+  --imgsz 544 960 \
+  --conf 0.005 \
+  --point-valid-thr 0.35 \
+  --nms-dist-px 18 \
+  --max-det 5 \
+  --candidate-conf 0.005 \
+  --candidate-point-valid-thr 0.35 \
+  --candidate-min-points 5 \
+  --final-min-points 6 \
+  --fifth-min-points 5 \
+  --thresholds 0.30 0.50 0.70 0.85 \
+  --save-dir runs/gcs_lane/gcs_yolo_lane_s_q12_k56_fifthness_gt5neg_ft8_seed1_b32w4/analysis_official_best_val_fifthness_score_audit
+```
+
+Result:
+
+```text
+artifact: runs/gcs_lane/gcs_yolo_lane_s_q12_k56_fifthness_gt5neg_ft8_seed1_b32w4/analysis_official_best_val_fifthness_score_audit/fifthness_score_audit_summary.json
+GT4 unmatched output5 false-fifth scores: count=8, median=0.841094, mean=0.826202, max=0.942222
+GT5 selected rank5 matched output5 scores: count=58, median=0.960218, mean=0.931124, min=0.576185
+threshold 0.30/0.50: true_keep=1.000000, false_keep=1.000000
+threshold 0.70: true_keep=0.965517, false_keep=0.875000
+threshold 0.85: true_keep=0.931034, false_keep=0.375000
+decision: score separation is real but not clean enough for the joint objective; do not launch full/e180 from this checkpoint
+```
 
 Reference command shape for a future official-val-only fifthness decode sweep with a new hypothesis:
 
