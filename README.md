@@ -100,6 +100,8 @@ The follow-up official-val score audit at `runs/gcs_lane/gcs_yolo_lane_s_q12_k56
 
 The follow-up Count Head adjacent-margin short gate `gcs_yolo_lane_s_q12_k56_countadj_lowmargin_ft8_seed1_b32w4` is rejected and should not be continued to full/e180. It was stopped after epoch 4: independent official-val sweep reproduced best `official_acc=0.958843`, `FP=0.044399`, `FN=0.029155`, below the K56 parent `0.959315`, and `rate_4_to_5=0.090909` worsened versus parent `0.075758`. GT5 `rate_5_to_4` improved to `0.094595`, but the joint objective requires reducing both GT5 `5->4` and GT4 false fifth pressure. The GT5 diagnosis still points to `count_head_under_predict=4` and `quality_too_low=3`, with candidate pool, valid-points, and NMS not dominant.
 
+A narrower default-off Count Head candidate is now available for the next short gate: `gcs_count_false_fifth_suppression` with `gcs_count_false_fifth_margin`. It reuses the existing competitive unmatched outside-candidate mining and suppresses Count Head `count=5` only for GT3/GT4 images that contain a mined false fifth candidate. It stays inside `count_cls_loss`, does not add outputs or loss columns, does not require the fifthness head, and does not alter decode or official evaluation. This is intended to test the specific Count Head overconfidence found in the false-fifth audit, not to rerun the rejected broad adjacent-margin recipe.
+
 A user-requested K56 official-test audit on `2026-06-14` is diagnostic-only, not a final/promotable test claim. The tested rows were: parent default `0.959429`, parent minpoints `pv=0.40/final=9/fifth=4` `0.959131`, `cqcalib_ft12` `0.953748`, `cqcalib_lr1e4_ft8` `0.958869`, `curveaux_ft8` `0.959706`, and `lowfp_joint_ft8` `0.959401`. These numbers must not be used to choose checkpoints, thresholds, postprocess settings, losses, or promotion decisions; `curveaux_ft8` remains rejected because its official-val `0.958732` is below the K56 parent `0.959315`.
 
 Use the local RTX 4060 8GB workstation for smoke, contract, label/oracle, and model-shape checks only. Run formal training and official-val evaluation on the remote server.
@@ -127,6 +129,8 @@ gcs_fifthness_negative_score_thr = 0.1
 gcs_fifthness_include_gt5_negatives = False
 gcs_count_cumulative = 0.0
 gcs_count_cumulative_label_smoothing = 0.0
+gcs_count_false_fifth_suppression = 0.0
+gcs_count_false_fifth_margin = 0.2
 gcs_use_fifthness_decode = False
 gcs_fifthness_decode_thr = 0.0
 gcs_fifthness_decode_rank_weight = 1.0

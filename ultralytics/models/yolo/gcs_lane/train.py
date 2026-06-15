@@ -46,6 +46,8 @@ GCS_MAINLINE_FIFTHNESS_INCLUDE_GT5_NEGATIVES = False
 GCS_MAINLINE_COUNT_CLS_WEIGHTS = (0.5, 1.2, 1.4, 1.8)
 GCS_MAINLINE_COUNT_CUMULATIVE = 0.0
 GCS_MAINLINE_COUNT_CUMULATIVE_LABEL_SMOOTHING = 0.0
+GCS_MAINLINE_COUNT_FALSE_FIFTH_SUPPRESSION = 0.0
+GCS_MAINLINE_COUNT_FALSE_FIFTH_MARGIN = 0.2
 GCS_MAINLINE_POINT_VALID_GT5_POS_WEIGHT = 2.0
 GCS_MAINLINE_GT5_EDGE_LOSS_WEIGHT = 1.15
 GCS_MAINLINE_COUNT_BOUNDARY_GAIN = 0.05
@@ -300,6 +302,8 @@ class GCSLaneTrainer(BaseTrainer):
             "gcs_count_cumulative_label_smoothing",
             GCS_MAINLINE_COUNT_CUMULATIVE_LABEL_SMOOTHING,
         )
+        overrides.setdefault("gcs_count_false_fifth_suppression", GCS_MAINLINE_COUNT_FALSE_FIFTH_SUPPRESSION)
+        overrides.setdefault("gcs_count_false_fifth_margin", GCS_MAINLINE_COUNT_FALSE_FIFTH_MARGIN)
         overrides.setdefault("gcs_point_valid_gt5_pos_weight", GCS_MAINLINE_POINT_VALID_GT5_POS_WEIGHT)
         overrides.setdefault("gcs_gt5_edge_loss_weight", GCS_MAINLINE_GT5_EDGE_LOSS_WEIGHT)
         overrides.setdefault("gcs_count_boundary", GCS_MAINLINE_COUNT_BOUNDARY_GAIN)

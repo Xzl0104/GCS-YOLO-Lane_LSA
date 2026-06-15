@@ -155,6 +155,8 @@ gcs_count_cumulative_label_smoothing: 0.0 # (float) label smoothing for cumulati
 gcs_count_adjacent_margin: 0.2 # (float) target-vs-neighbor Count Head logit margin for adjacent count classes
 gcs_count_adjacent_margin_gain: 0.0 # (float) adjacent count margin gain inside count_cls_loss; 0 disables
 gcs_count_adjacent_margin_gt45_weight: 1.0 # (float) extra adjacent-margin sample weight for GT4/GT5 images; 1 disables
+gcs_count_false_fifth_suppression: 0.0 # (float) candidate-specific GT3/GT4 count=5 suppression gain; 0 disables
+gcs_count_false_fifth_margin: 0.2 # (float) target-vs-count5 logit margin for competitive false fifth images
 gcs_exist_pos_weight: 1.0 # (float) positive query weight for GCS lane existence BCE
 gcs_exist_focal_gamma: 2.0 # (float) quality focal gamma for GCS existence BCE; 0 disables focal weighting
 gcs_exist_focal_alpha: -1.0 # (float) optional focal alpha for GCS existence BCE; set 0..1 to enable alpha weighting

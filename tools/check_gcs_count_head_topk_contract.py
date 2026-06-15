@@ -471,10 +471,16 @@ def check_no_score_contamination() -> None:
     pattern = re.compile(
         r"(count_prob.*rank|rank.*count_prob|pred_count.*rank|rank_score.*count_head|count_head.*rank_score)"
     )
+    diagnostic_audit_files = {
+        Path("tools/audit_gcs_false_fifth_cases.py"),
+        Path("tools/audit_gcs_fifthness_scores.py"),
+    }
     hits: list[str] = []
     for rel in ("ultralytics", "tools"):
         for path in (ROOT / rel).rglob("*.py"):
             if path.name.startswith("check_"):
+                continue
+            if path.relative_to(ROOT) in diagnostic_audit_files:
                 continue
             text = path.read_text(encoding="utf-8", errors="ignore")
             for lineno, line in enumerate(text.splitlines(), 1):

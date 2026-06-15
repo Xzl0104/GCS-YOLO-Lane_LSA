@@ -20,6 +20,8 @@ from ultralytics.models.yolo.gcs_lane.train import (
     GCS_MAINLINE_COUNT_BOUNDARY_LABEL_SMOOTHING,
     GCS_MAINLINE_COUNT_CUMULATIVE,
     GCS_MAINLINE_COUNT_CUMULATIVE_LABEL_SMOOTHING,
+    GCS_MAINLINE_COUNT_FALSE_FIFTH_MARGIN,
+    GCS_MAINLINE_COUNT_FALSE_FIFTH_SUPPRESSION,
     GCS_MAINLINE_COUNT_SUM_GAIN,
     GCS_MAINLINE_FIFTHNESS,
     GCS_MAINLINE_FIFTHNESS_MARGIN,
@@ -429,6 +431,18 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=1.0,
         help="Extra adjacent-margin sample weight for GT4/GT5 images. 1 disables.",
+    )
+    parser.add_argument(
+        "--gcs-count-false-fifth-suppression",
+        type=float,
+        default=GCS_MAINLINE_COUNT_FALSE_FIFTH_SUPPRESSION,
+        help="Candidate-specific Count Head count=5 suppression gain for GT3/GT4 images with false fifth candidates.",
+    )
+    parser.add_argument(
+        "--gcs-count-false-fifth-margin",
+        type=float,
+        default=GCS_MAINLINE_COUNT_FALSE_FIFTH_MARGIN,
+        help="Target-vs-count5 Count Head logit margin for competitive false fifth images.",
     )
     parser.add_argument("--gcs-exist-pos-weight", type=float, default=1.0)
     parser.add_argument("--gcs-exist-focal-gamma", type=float, default=2.0, help="Quality focal gamma for existence BCE. 0 disables focal weighting.")
@@ -1086,6 +1100,8 @@ def main() -> None:
         "gcs_count_adjacent_margin": args.gcs_count_adjacent_margin,
         "gcs_count_adjacent_margin_gain": args.gcs_count_adjacent_margin_gain,
         "gcs_count_adjacent_margin_gt45_weight": args.gcs_count_adjacent_margin_gt45_weight,
+        "gcs_count_false_fifth_suppression": args.gcs_count_false_fifth_suppression,
+        "gcs_count_false_fifth_margin": args.gcs_count_false_fifth_margin,
         "gcs_count_cumulative": args.gcs_count_cumulative,
         "gcs_count_cumulative_label_smoothing": args.gcs_count_cumulative_label_smoothing,
         "gcs_exist_pos_weight": args.gcs_exist_pos_weight,

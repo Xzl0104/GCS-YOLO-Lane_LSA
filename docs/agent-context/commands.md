@@ -379,6 +379,34 @@ This is not a full/e180 recipe. It tests one hypothesis only: whether a small ad
 
 Result: rejected after epoch 4. Training ran cleanly with no NaN/shape/CUDA error, but independent official-val sweep reproduced best `official_acc=0.958843`, `FP=0.044399`, `FN=0.029155`, `count_acc_4=0.848485`, `count_acc_5=0.905405`, `rate_4_to_5=0.090909`, and `rate_5_to_4=0.094595`. This is below the K56 parent `0.959315` and worsens parent `rate_4_to_5=0.075758`, so do not continue this run to epoch 8 or full/e180. GT5 diagnosis kept 67/74 and attributed drops to `count_head_under_predict=4` and `quality_too_low=3`, with candidate-pool shortfall, valid-points failure, and GT5 NMS suppression at zero.
 
+Candidate-specific Count Head false-fifth suppression short gate:
+
+```bash
+python tools/train_gcs.py \
+  --model ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml \
+  --data data/tusimple_gcs_fixed_y_k56_960x544.yaml \
+  --imgsz 544 960 \
+  --name gcs_yolo_lane_s_q12_k56_countff_supp_ft8_seed1_b32w4 \
+  --pretrained runs/gcs_lane/gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4/weights/official_best.pt \
+  --epochs 8 \
+  --batch 32 \
+  --workers 4 \
+  --seed 1 \
+  --lr0 0.00005 \
+  --lrf 0.2 \
+  --gcs-count-false-fifth-suppression 0.05 \
+  --gcs-count-false-fifth-margin 0.2 \
+  --gcs-fifthness-negative-topk 2 \
+  --gcs-fifthness-negative-score-thr 0.1 \
+  --gcs-official-best \
+  --gcs-official-best-period 1 \
+  --gcs-official-best-top-k 5 \
+  --gcs-official-best-gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
+  --gcs-official-best-archive-root runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset
+```
+
+This is not a full/e180 recipe. It tests one narrow training-side hypothesis only: suppress Count Head count=5 overconfidence for GT3/GT4 images that actually contain a competitive unmatched outside false-fifth candidate. It does not add a fifthness head, does not change decode, does not use GT at inference, and keeps the existing 8-loss CSV contract by folding the term into `count_cls_loss`. Early-stop if epoch 4 remains below the K56 parent and `rate_4_to_5` is not lower. Promotion to a longer run requires official-val `ACC >= 0.959315`, FP not higher than `0.045225`, `rate_4_to_5 < 0.075758`, and no GT5 `rate_5_to_4` regression versus `0.148649`.
+
 Command retained for reproducibility only:
 
 ```bash

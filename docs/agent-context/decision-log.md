@@ -5825,3 +5825,63 @@ Do not start full training. Use official-val-only case analysis to design a cand
 Mainline or experiment:
 
 Rejected experimental short gate. No official ACC improvement is claimed, and test was not used.
+
+## 2026-06-15: Add candidate-specific Count false-fifth suppression
+
+Decision:
+
+Add a default-off training-side Count Head calibration candidate:
+
+```text
+gcs_count_false_fifth_suppression = 0.0
+gcs_count_false_fifth_margin = 0.2
+```
+
+When enabled, the loss reuses `competitive_fifth_masks()` to find competitive unmatched outside false-fifth candidates. It adds a target-vs-count5 logit margin only for GT3/GT4 images where such a false fifth candidate exists. The term is folded into `count_cls_loss`, preserves the existing `pred_count_logits: B x 4` and `pred_count_boundary_logits: B x 2` output contract, does not require `pred_fifthness_logits`, does not change decode, and does not alter official metrics.
+
+Why:
+
+The K56 fifthness score audit and false-fifth case audit showed a narrow failure mode: GT4 false-fifth rows often have high Count Head count=5 confidence (`median P5=0.996325`, median margin `0.992650`). Broad adjacent Count margin was rejected because it improved GT5 retention while worsening GT4 false fifth pressure. The new candidate targets only images with an actually mined false fifth candidate, so it is more surgical than another global Count Head margin or Quality/fifthness threshold sweep.
+
+Alternatives considered:
+
+- Continue `gcs_yolo_lane_s_q12_k56_countadj_lowmargin_ft8_seed1_b32w4` to epoch 8 or full/e180.
+- Add another fifthness decode threshold or Quality rescue sweep.
+- Add a broad Count Boundary count>=5 negative boost for all GT3/GT4 images.
+- Add candidate-specific Count Head suppression using the existing competitive unmatched outside-candidate mining.
+
+Tradeoff:
+
+The candidate may reduce GT4 false fifth pressure, but it can still push borderline GT5 scenes toward `5->4` if the mined-candidate signal is too noisy or the gain is too high. Keeping it default-off and testing with a short official-val gate preserves baseline reproducibility and attribution.
+
+Validation evidence:
+
+Local validation after implementation:
+
+```text
+D:/miniconda3/envs/lsa_yolo/python.exe -m py_compile ultralytics/utils/gcs_loss.py ultralytics/models/yolo/gcs_lane/train.py tools/train_gcs.py tools/check_gcs_count_head_topk_contract.py tests/test_gcs_count_aware.py
+D:/miniconda3/envs/lsa_yolo/python.exe -m pytest tests/test_gcs_count_aware.py -q -p no:cacheprovider --basetemp .tmp_pytest/count_false_fifth_rerun
+D:/miniconda3/envs/lsa_yolo/python.exe scripts/verify_loss_cleanup.py
+D:/miniconda3/envs/lsa_yolo/python.exe tools/check_gcs_count_head_topk_contract.py
+D:/miniconda3/envs/lsa_yolo/python.exe tools/check_gcs_algorithm_contract.py
+D:/miniconda3/envs/lsa_yolo/python.exe tools/check_gcs_decode_meta_contract.py
+D:/miniconda3/envs/lsa_yolo/python.exe scripts/check_gcs_agent_setup.py
+git diff --check
+```
+
+The new tests cover default-off unchanged Count Head loss, GT4 false-fifth gradient direction, GT5 guard behavior, default config values, CLI forwarding, trainer defaults, and config type registration. The Count Head contract checker now excludes read-only audit scripts from the static rank-score contamination scan so diagnostic field names do not create false positives; decode and official metric behavior are unchanged.
+
+Next official-val gate:
+
+Run from the K56 parent epoch152 `official_best.pt` with only:
+
+```text
+gcs_count_false_fifth_suppression = 0.05
+gcs_count_false_fifth_margin = 0.2
+```
+
+Use `epochs=8`, `batch=32`, `workers=4`, `lr0=0.00005`, `lrf=0.2`, `--gcs-official-best`, and official-val only. Early-stop if epoch 4 remains below the parent and `rate_4_to_5` is not lower. Do not start full/e180 unless official-val beats or matches the K56 parent while also keeping FP controlled, lowering `rate_4_to_5`, and avoiding GT5 `rate_5_to_4` regression.
+
+Mainline or experiment:
+
+Default-off experimental training-side candidate. No official ACC improvement is claimed until the remote official-val short gate completes.

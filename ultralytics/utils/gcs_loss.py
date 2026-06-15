@@ -48,6 +48,8 @@ class GCSLoss(nn.Module):
         count_boundary_gt5_pos_weight: float | None = None,
         count_cumulative: float | None = None,
         count_cumulative_label_smoothing: float | None = None,
+        count_false_fifth_suppression: float | None = None,
+        count_false_fifth_margin: float | None = None,
         quality_dist_thr_px: float | None = None,
         quality_neg_weight: float | None = None,
         quality_hard_negative_weight: float | None = None,
@@ -242,6 +244,16 @@ class GCSLoss(nn.Module):
         self.count_adjacent_margin_gt45_weight = float(
             self._arg(args, "gcs_count_adjacent_margin_gt45_weight", 1.0)
         )
+        self.count_false_fifth_suppression_gain = float(
+            count_false_fifth_suppression
+            if count_false_fifth_suppression is not None
+            else self._arg(args, "gcs_count_false_fifth_suppression", 0.0)
+        )
+        self.count_false_fifth_margin = float(
+            count_false_fifth_margin
+            if count_false_fifth_margin is not None
+            else self._arg(args, "gcs_count_false_fifth_margin", 0.2)
+        )
         self.updates = 0
         self.exist_pos_weight = float(
             exist_pos_weight if exist_pos_weight is not None else self._arg(args, "gcs_exist_pos_weight", 1.0)
@@ -412,6 +424,8 @@ class GCSLoss(nn.Module):
             "gcs_count_cumulative": self.count_cumulative_gain,
             "gcs_count_adjacent_margin": self.count_adjacent_margin,
             "gcs_count_adjacent_margin_gain": self.count_adjacent_margin_gain,
+            "gcs_count_false_fifth_suppression": self.count_false_fifth_suppression_gain,
+            "gcs_count_false_fifth_margin": self.count_false_fifth_margin,
             "gcs_count_sum": self.count_sum_gain,
             "gcs_quality": self.quality_gain,
             "gcs_quality_pairwise": self.quality_pairwise_gain,
@@ -2074,7 +2088,11 @@ class GCSLoss(nn.Module):
         return gt_count, gt_count_cls, gt_count_raw
 
     def count_head_loss(
-        self, preds: dict[str, torch.Tensor], pred_points: torch.Tensor, gt_valid: list[torch.Tensor]
+        self,
+        preds: dict[str, torch.Tensor],
+        pred_points: torch.Tensor,
+        gt_valid: list[torch.Tensor],
+        false_fifth_negative_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Return CE plus optional count>=4/count>=5 boundary BCE for the image-level Count Head."""
         pred_count_logits = preds.get("pred_count_logits")
@@ -2101,6 +2119,19 @@ class GCSLoss(nn.Module):
         if self.count_adjacent_margin_gain > 0.0:
             count_loss = count_loss + self.count_adjacent_margin_gain * self.count_adjacent_margin_loss(
                 pred_count_logits, gt_count_cls, gt_count
+            )
+        if self.count_false_fifth_suppression_gain > 0.0:
+            if false_fifth_negative_mask is None:
+                raise ValueError(
+                    "gcs_count_false_fifth_suppression requires false_fifth_negative_mask from "
+                    "competitive_fifth_masks()."
+                )
+            count_loss = count_loss + self.count_false_fifth_suppression_gain * (
+                self.count_false_fifth_suppression_loss(
+                    pred_count_logits,
+                    gt_count,
+                    false_fifth_negative_mask,
+                )
             )
         if self.count_boundary_gain <= 0.0:
             return count_loss
@@ -2191,6 +2222,39 @@ class GCSLoss(nn.Module):
                 sample_weight,
             )
         return (loss * sample_weight).sum() / sample_weight.sum().clamp_min(1.0)
+
+    def count_false_fifth_suppression_loss(
+        self,
+        pred_count_logits: torch.Tensor,
+        gt_count: torch.Tensor,
+        false_fifth_negative_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        """Suppress count=5 only for GT3/GT4 images with competitive unmatched outside candidates."""
+        logits = pred_count_logits.float()
+        if false_fifth_negative_mask.ndim == 2:
+            image_has_false_fifth = false_fifth_negative_mask.to(device=logits.device, dtype=torch.bool).any(dim=1)
+        elif false_fifth_negative_mask.ndim == 1:
+            image_has_false_fifth = false_fifth_negative_mask.to(device=logits.device, dtype=torch.bool)
+        else:
+            raise ValueError(
+                "false_fifth_negative_mask must have shape B or B x Q, "
+                f"got {tuple(false_fifth_negative_mask.shape)}."
+            )
+        if image_has_false_fifth.numel() != logits.shape[0]:
+            raise ValueError(
+                "false_fifth_negative_mask must have one value per image, "
+                f"got {image_has_false_fifth.numel()} vs B={logits.shape[0]}."
+            )
+        gt_count = gt_count.to(device=logits.device, dtype=torch.long)
+        eligible = image_has_false_fifth & gt_count.ge(3) & gt_count.le(4)
+        if not bool(eligible.any()):
+            return self._zero_like(logits)
+
+        target_idx = (gt_count[eligible] - 2).view(-1, 1)
+        target_logit = logits[eligible].gather(dim=1, index=target_idx).squeeze(1)
+        count5_logit = logits[eligible, 3]
+        margin = logits.new_tensor(float(self.count_false_fifth_margin))
+        return torch.relu(margin - (target_logit - count5_logit)).pow(2).mean()
 
     def count_boundary_targets(self, pred_count_boundary_logits: torch.Tensor, gt_valid: list[torch.Tensor]) -> torch.Tensor:
         """Build smoothed binary targets for count>=4 and count>=5 boundary logits."""
@@ -2346,6 +2410,7 @@ class GCSLoss(nn.Module):
             self.quality_pairwise_gain > 0.0
             or self.fifthness_gain > 0.0
             or self.fifthness_pairwise_gain > 0.0
+            or self.count_false_fifth_suppression_gain > 0.0
         ):
             fifth_positive_mask, fifth_negative_mask = self.competitive_fifth_masks(
                 pred_logits,
@@ -2390,7 +2455,12 @@ class GCSLoss(nn.Module):
             if self.geometry_curvature_gain > 0.0
             else self._zero_like(pred_points)
         )
-        count_cls_loss = self.count_head_loss(preds, pred_points, gt_valid)
+        count_cls_loss = self.count_head_loss(
+            preds,
+            pred_points,
+            gt_valid,
+            false_fifth_negative_mask=fifth_negative_mask,
+        )
         count_sum_loss = self.count_sum_loss(pred_logits, batch, gt_valid)
         quality_loss_base = (
             self.quality_loss(
