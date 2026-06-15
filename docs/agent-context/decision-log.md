@@ -5411,3 +5411,45 @@ Full one-anchor support remains a separate explicit experiment. It would need co
 Mainline or experiment:
 
 Mainline reliability maintenance plus future-experiment groundwork. No official-val Accuracy improvement is claimed from this patch by itself.
+
+## 2026-06-15: Add one-anchor official-eval and K56 export contract tests
+
+Decision:
+
+Add regression coverage for the current one-anchor boundary without changing baseline behavior:
+
+```text
+official eval:
+- a GT lane with one valid h-sample is counted
+- one-point predictions can match it because invalid h-sample positions dominate line accuracy
+
+current GCS contract:
+- raw TuSimple ingest still drops one-point lanes
+- `gcs_lanes_to_tusimple_lanes()` still filters one-anchor decoded lanes
+- K56 fixed-y label building still drops raw one-point lanes
+```
+
+Why:
+
+The official evaluator's one-anchor behavior is real, but the GCS lane representation and export path are still line/segment based. The evaluator maps invalid positions to a shared placeholder before computing line accuracy, so a degenerate one-point prediction can pass the match threshold in a 56-h-sample lane even when the single valid x is wrong. Allowing one-point candidates into official export without a full data, matcher, decode, and postprocess contract could therefore create misleading metric matches. The current safest state is to document and test both sides: official-val has a small real gap, and the GCS baseline intentionally does not emit one-anchor lanes yet.
+
+Validation evidence:
+
+```text
+D:/miniconda3/envs/lsa_yolo/python.exe -m py_compile tests/test_gcs_k56_contract.py
+D:/miniconda3/envs/lsa_yolo/python.exe -m pytest tests/test_gcs_k56_contract.py -q -p no:cacheprovider --basetemp .tmp_pytest/k56_one_anchor_contract_clean
+```
+
+The pytest run passed with `15 passed, 1 skipped`.
+
+Impact:
+
+This is reliability-test coverage and documentation. It does not change official metric logic, model outputs, labels, training, inference, decode, or current official-val scores. It is not a trigger for full/e180 training.
+
+Remaining work:
+
+Full one-anchor support remains a default-off experiment. It should start with an oracle/synthetic official-val contract check and explicit guards against degenerate one-point false positives before any training run.
+
+Mainline or experiment:
+
+Mainline reliability coverage plus future-experiment guardrail. No official-val Accuracy improvement is claimed from this patch by itself.

@@ -10,9 +10,12 @@ import torch
 import yaml
 
 from gcs_tools.label_utils import fixed_y_anchors
+from gcs_tools.tusimple_official_eval import TuSimpleOfficialLaneEval, gcs_lanes_to_tusimple_lanes
+from gcs_tools.tusimple_utils import parse_lanes
 from tools import check_tusimple_fixed_y_label_oracle as oracle
 from tools import analyze_tusimple_hsample_endpoints as endpoint_analysis
 from tools import check_gcs_label_order_split as label_split_check
+from tools.convert_tusimple_to_gcs import build_gcs_arrays
 from tools import rebuild_tusimple_fixed_y_k56_from_reference_split as builder
 from tools import train_gcs
 from ultralytics.models.yolo.gcs_lane.train import GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT
@@ -168,6 +171,90 @@ def test_hsample_endpoint_analysis_counts_ultra_short_and_anchor_hits():
     assert summary["k32"]["zero_anchor_lanes"] == 1
     assert summary["k56"]["one_anchor_lanes"] == 1
     assert summary["ultra_short_examples"][0]["raw_file"] == "clips/a/1/20.jpg"
+
+
+def test_tusimple_official_eval_counts_single_valid_hsample_lane():
+    h_samples = list(range(160, 711, 10))
+    lane = [-2] * len(h_samples)
+    lane[2] = 100
+    wrong_lane = [-2] * len(h_samples)
+    wrong_lane[2] = 200
+    gt_records = [
+        {
+            "raw_file": "clips/a/1/20.jpg",
+            "h_samples": h_samples,
+            "lanes": [lane],
+        }
+    ]
+    empty_pred = [{"raw_file": "clips/a/1/20.jpg", "lanes": [], "run_time": 1.0}]
+    exact_single_pred = [
+        {
+            "raw_file": "clips/a/1/20.jpg",
+            "lanes": [lane],
+            "run_time": 1.0,
+        }
+    ]
+    wrong_single_pred = [
+        {
+            "raw_file": "clips/a/1/20.jpg",
+            "lanes": [wrong_lane],
+            "run_time": 1.0,
+        }
+    ]
+
+    empty_result, _ = TuSimpleOfficialLaneEval.bench_records(empty_pred, gt_records)
+    exact_result, _ = TuSimpleOfficialLaneEval.bench_records(exact_single_pred, gt_records)
+    wrong_result, _ = TuSimpleOfficialLaneEval.bench_records(wrong_single_pred, gt_records)
+
+    assert empty_result.as_dict() == {"Accuracy": 0.0, "FP": 0.0, "FN": 1.0, "images": 1}
+    assert exact_result.as_dict() == {"Accuracy": 1.0, "FP": 0.0, "FN": 0.0, "images": 1}
+    assert wrong_result.accuracy > TuSimpleOfficialLaneEval.pt_thresh
+    assert wrong_result.as_dict()["FN"] == 0.0
+
+
+def test_current_gcs_export_filters_single_anchor_lanes():
+    points_norm = np.zeros((4, 2), dtype=np.float32)
+    points_norm[:, 1] = np.array([160, 170, 180, 190], dtype=np.float32) / 720.0
+    points_norm[2, 0] = 100.0 / 1280.0
+    point_valid = np.array([0.0, 0.0, 1.0, 0.0], dtype=np.float32)
+
+    lanes = gcs_lanes_to_tusimple_lanes(
+        [{"points_norm": points_norm, "point_valid": point_valid}],
+        h_samples=[160, 170, 180, 190],
+        image_shape=(720, 1280),
+    )
+
+    assert lanes == []
+
+
+def test_current_tusimple_raw_ingest_drops_one_point_lanes():
+    sample = {
+        "h_samples": [160, 170, 180],
+        "lanes": [
+            [-2, 100, -2],
+            [10, 20, -2],
+        ],
+    }
+
+    lanes = parse_lanes(sample)
+
+    assert len(lanes) == 1
+    assert lanes[0] == [(20.0, 170.0), (10.0, 160.0)]
+
+
+def test_current_k56_array_builder_drops_one_point_lanes():
+    arrays = build_gcs_arrays(
+        [[(100.0, 160.0)]],
+        img_shape=(720, 1280),
+        num_points=56,
+        point_mode="fixed_y",
+        fixed_y_start=710.0 / 720.0,
+        fixed_y_end=160.0 / 720.0,
+    )
+
+    assert arrays["lanes"].shape == (0, 56, 2)
+    assert arrays["lane_valid"].shape == (0, 56)
+    assert int(arrays["num_lanes"][0]) == 0
 
 
 def test_k56_gt5_edge_segment_support_targets_edge_lanes_only():
