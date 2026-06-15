@@ -405,7 +405,9 @@ python tools/train_gcs.py \
   --gcs-official-best-archive-root runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset
 ```
 
-This is not a full/e180 recipe. It tests one narrow training-side hypothesis only: suppress Count Head count=5 overconfidence for GT3/GT4 images that actually contain a competitive unmatched outside false-fifth candidate. It does not add a fifthness head, does not change decode, does not use GT at inference, and keeps the existing 8-loss CSV contract by folding the term into `count_cls_loss`. Early-stop if epoch 4 remains below the K56 parent and `rate_4_to_5` is not lower. Promotion to a longer run requires official-val `ACC >= 0.959315`, FP not higher than `0.045225`, `rate_4_to_5 < 0.075758`, and no GT5 `rate_5_to_4` regression versus `0.148649`.
+This is not a full/e180 recipe. It tests one narrow training-side hypothesis only: suppress Count Head count=5 overconfidence for GT3/GT4 images that actually contain a competitive unmatched outside false-fifth candidate. It does not add a fifthness head, does not change decode, does not use GT at inference, and keeps the existing 8-loss CSV contract by folding the term into `count_cls_loss`.
+
+Result: rejected after the planned 8 epochs. Training ran cleanly and retained Top-K official-val checkpoints. Official_best epoch 7 reached `official_acc=0.959496`, but FP worsened to `0.047062`, FN to `0.031680`, GT5 `rate_5_to_4` to `0.175676`, and `rate_4_to_5=0.075758` only matched the K56 parent. The more balanced epoch 4 row had `official_acc=0.959372`, `FP=0.044444`, `rate_4_to_5=0.060606`, and `rate_5_to_4=0.135135`, but its ACC margin was only `+0.000057` and FN was worse than the parent. Independent official-val reproduced epoch 7; GT5 diagnosis kept 61/74 and attributed drops to `count_head_under_predict=8` and `quality_too_low=5`. Do not start full/e180 from this run.
 
 Command retained for reproducibility only:
 

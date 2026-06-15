@@ -5885,3 +5885,84 @@ Use `epochs=8`, `batch=32`, `workers=4`, `lr0=0.00005`, `lrf=0.2`, `--gcs-offici
 Mainline or experiment:
 
 Default-off experimental training-side candidate. No official ACC improvement is claimed until the remote official-val short gate completes.
+
+## 2026-06-15: Reject K56 Count false-fifth suppression short gate for full/e180
+
+Decision:
+
+Do not launch full/e180 training from `gcs_yolo_lane_s_q12_k56_countff_supp_ft8_seed1_b32w4`. Keep `gcs_count_false_fifth_suppression` default-off and treat this FT8 run as a rejected short gate.
+
+Why:
+
+The completed 8-epoch gate did not satisfy the joint objective. The official_best epoch 7 has slightly higher ACC than the K56 parent, but it worsens FP, FN, and GT5 `5->4`. The more balanced epoch 4 row improves FP and both GT4/GT5 confusion rates, but its ACC margin is only `+0.000057` and FN is still worse. This is not strong enough evidence for a full/e180 launch.
+
+Evidence:
+
+```text
+K56 parent official-val:
+ACC=0.959315, FP=0.045225, FN=0.028466,
+rate_4_to_5=0.075758, rate_5_to_4=0.148649
+
+countff_supp official-val by epoch:
+e1 ACC=0.958366, FP=0.048577, FN=0.033517,
+   rate_4_to_5=0.060606, rate_5_to_4=0.148649
+e2 ACC=0.957133, FP=0.047291, FN=0.030992,
+   rate_4_to_5=0.075758, rate_5_to_4=0.162162
+e3 ACC=0.958078, FP=0.048806, FN=0.032828,
+   rate_4_to_5=0.075758, rate_5_to_4=0.175676
+e4 ACC=0.959372, FP=0.044444, FN=0.029614,
+   count_acc_4=0.878788, count_acc_5=0.864865,
+   rate_4_to_5=0.060606, rate_5_to_4=0.135135,
+   gt5_output5=0.864865,
+   gt5_count_head_under=0.067568,
+   gt5_valid_fail=0.067568
+e5 ACC=0.958712, FP=0.045638, FN=0.027089,
+   rate_4_to_5=0.075758, rate_5_to_4=0.108108
+e6 ACC=0.959097, FP=0.047153, FN=0.029844,
+   rate_4_to_5=0.090909, rate_5_to_4=0.135135
+e7/official_best ACC=0.959496, FP=0.047062, FN=0.031680,
+   count_acc_4=0.878788, count_acc_5=0.824324,
+   rate_4_to_5=0.075758, rate_5_to_4=0.175676,
+   gt5_output5=0.824324
+e8 ACC=0.958676, FP=0.047475, FN=0.031910,
+   rate_4_to_5=0.090909, rate_5_to_4=0.148649
+
+e4 delta vs parent:
+ACC +0.000057, FP -0.000781, FN +0.001148,
+rate_4_to_5 -0.015152, rate_5_to_4 -0.013514
+
+e7 official_best delta vs parent:
+ACC +0.000181, FP +0.001837, FN +0.003214,
+rate_4_to_5 +0.000000, rate_5_to_4 +0.027027
+```
+
+Independent official-val sweep of `weights/official_best.pt` reproduced epoch 7:
+
+```text
+official_acc=0.959496, FP=0.047062, FN=0.031680,
+count_acc_4=0.878788, count_acc_5=0.824324,
+rate_4_to_5=0.075758, rate_5_to_4=0.175676,
+gt5_output5_rate=0.824324,
+gt5_count_head_under_rate=0.108108,
+gt5_valid_points_fail_rate=0.067568
+```
+
+GT5 diagnosis on the official_best checkpoint kept 61/74 GT5 images and attributed drops to `count_head_under_predict=8` and `quality_too_low=5`, with candidate-pool shortfall at zero. The false-fifth audit reported `gt4_to_5=5/66` and `gt5_to_4=13/74`; GT4 unmatched output5 false-fifth rows still had median `count_head_prob_5=0.990249` and median Count Head margin `0.980498`.
+
+Alternatives considered:
+
+- Launch full/e180 from official_best epoch 7 because ACC is `+0.000181` over parent.
+- Launch full/e180 from the more balanced epoch 4 Top-K checkpoint.
+- Keep the run rejected because no retained checkpoint meets the joint ACC/FP/GT4/GT5 objective.
+
+Tradeoff:
+
+Rejecting the run may discard a small ACC gain from epoch 7 and a cleaner FP/GT4/GT5 tradeoff from epoch 4. The accepted tradeoff is to avoid full-training escalation from a volatile short fine-tune where one retained row improves ACC at the cost of FP/GT5 recall, while the more balanced row has only a tiny ACC margin.
+
+Next smallest safe action:
+
+Do not run full/e180 for this recipe. Use the retained epoch 4/7 contrast as diagnostic evidence for the next hypothesis: reduce Count Head false-fifth overconfidence without increasing GT5 count-under or quality drops. Do not use test.
+
+Mainline or experiment:
+
+Rejected experimental short gate. No full-training or mainline promotion, and no test evidence was used.
