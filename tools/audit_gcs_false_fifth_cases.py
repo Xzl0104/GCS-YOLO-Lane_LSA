@@ -202,6 +202,8 @@ def _selected_rank5(decoded: list[dict]) -> tuple[int | None, dict | None]:
 
 def _lane_row(
     *,
+    run_name: str,
+    args: argparse.Namespace,
     raw_file: str,
     gt_count: int,
     pred_count: int,
@@ -213,9 +215,16 @@ def _lane_row(
 ) -> dict:
     side, outside_gap, candidate_x = _outside_edge_stats(lane, selected_top4)
     return {
+        "run_name": run_name,
         "raw_file": raw_file,
         "gt_count": int(gt_count),
         "pred_count": int(pred_count),
+        "point_valid_thr": float(args.point_valid_thr),
+        "candidate_min_points": int(args.candidate_min_points),
+        "final_min_points": int(args.final_min_points),
+        "fifth_min_points": int(args.fifth_min_points),
+        "use_fifthness_decode": int(bool(args.use_fifthness_decode)),
+        "fifthness_decode_thr": float(args.fifthness_decode_thr),
         "group": group,
         "pred_index": pred_index,
         "query": None if lane is None else lane.get("query"),
@@ -287,6 +296,13 @@ def _resolve_save_dir(args: argparse.Namespace) -> Path:
     return ROOT / "runs" / "gcs_lane" / tag
 
 
+def _run_name_from_weights(weights: str) -> str:
+    path = Path(weights)
+    if path.name.endswith(".pt") and len(path.parents) >= 2:
+        return path.parents[1].name
+    return path.stem
+
+
 def run(args: argparse.Namespace) -> dict:
     split = validate_tusimple_selection_source(args.split, gt_json=args.gt_json, context="False fifth case audit")
     if split != "val":
@@ -310,6 +326,7 @@ def run(args: argparse.Namespace) -> dict:
     warn_max_det_mismatch(args.weights, max_det=args.max_det, context="False fifth case audit")
     model = load_gcs_model(args.weights, device=device, half=bool(args.half), gcs_imgsz=imgsz)
     rank_min_points = parse_rank_min_points(args.rank_min_points)
+    run_name = _run_name_from_weights(args.weights)
 
     image_rows: list[dict] = []
     lane_rows: list[dict] = []
@@ -400,9 +417,16 @@ def run(args: argparse.Namespace) -> dict:
 
         image_rows.append(
             {
+                "run_name": run_name,
                 "raw_file": raw_file,
                 "gt_count": gt_count,
                 "pred_count": pred_count_out,
+                "point_valid_thr": float(args.point_valid_thr),
+                "candidate_min_points": int(args.candidate_min_points),
+                "final_min_points": int(args.final_min_points),
+                "fifth_min_points": int(args.fifth_min_points),
+                "use_fifthness_decode": int(bool(args.use_fifthness_decode)),
+                "fifthness_decode_thr": float(args.fifthness_decode_thr),
                 "accuracy": round(float(acc), 6),
                 "fp": round(float(fp), 6),
                 "fn": round(float(fn), 6),
@@ -435,6 +459,8 @@ def run(args: argparse.Namespace) -> dict:
             if selected_rank5 is not None:
                 lane_rows.append(
                     _lane_row(
+                        run_name=run_name,
+                        args=args,
                         raw_file=raw_file,
                         gt_count=gt_count,
                         pred_count=pred_count_out,
@@ -449,6 +475,8 @@ def run(args: argparse.Namespace) -> dict:
                 if pred_idx not in matched:
                     lane_rows.append(
                         _lane_row(
+                            run_name=run_name,
+                            args=args,
                             raw_file=raw_file,
                             gt_count=gt_count,
                             pred_count=pred_count_out,
@@ -464,6 +492,8 @@ def run(args: argparse.Namespace) -> dict:
             group = "gt5_selected_rank5_output5" if pred_count_out == 5 else "gt5_selected_rank5_not_output5"
             lane_rows.append(
                 _lane_row(
+                    run_name=run_name,
+                    args=args,
                     raw_file=raw_file,
                     gt_count=gt_count,
                     pred_count=pred_count_out,
@@ -477,6 +507,8 @@ def run(args: argparse.Namespace) -> dict:
             if pred_count_out == 5 and bool(selected_rank5_matched):
                 lane_rows.append(
                     _lane_row(
+                        run_name=run_name,
+                        args=args,
                         raw_file=raw_file,
                         gt_count=gt_count,
                         pred_count=pred_count_out,
@@ -507,6 +539,7 @@ def run(args: argparse.Namespace) -> dict:
     ]
     summary = {
         "config": {
+            "run_name": run_name,
             "weights": str(args.weights),
             "split": split,
             "gt_json": str(gt_json),
@@ -541,9 +574,16 @@ def run(args: argparse.Namespace) -> dict:
     save_dir = _resolve_save_dir(args)
     save_dir.mkdir(parents=True, exist_ok=True)
     lane_fields = [
+        "run_name",
         "raw_file",
         "gt_count",
         "pred_count",
+        "point_valid_thr",
+        "candidate_min_points",
+        "final_min_points",
+        "fifth_min_points",
+        "use_fifthness_decode",
+        "fifthness_decode_thr",
         "group",
         "pred_index",
         "query",
@@ -571,9 +611,16 @@ def run(args: argparse.Namespace) -> dict:
         "candidate_median_x_px",
     ]
     image_fields = [
+        "run_name",
         "raw_file",
         "gt_count",
         "pred_count",
+        "point_valid_thr",
+        "candidate_min_points",
+        "final_min_points",
+        "fifth_min_points",
+        "use_fifthness_decode",
+        "fifthness_decode_thr",
         "accuracy",
         "fp",
         "fn",
