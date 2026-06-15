@@ -21,7 +21,9 @@ from ultralytics.utils.gcs_postprocess import GCS_DEFAULT_MAX_DET, decode_gcs_pr
 from ultralytics.utils.torch_utils import select_device
 
 
-DEFAULT_WEIGHTS = ROOT / "runs" / "gcs_lane" / "gcs_yolo_lane_s_tusimple_refquery_e220" / "weights" / "best.pt"
+DEFAULT_WEIGHTS = (
+    ROOT / "runs" / "gcs_lane" / "gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4" / "weights" / "official_best.pt"
+)
 COLORS = (
     (0, 255, 0),
     (0, 200, 255),
@@ -36,7 +38,7 @@ COLORS = (
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Visualize GT and raw prediction point order with 0..K-1 indices.")
-    parser.add_argument("--dataset-root", default="datasets/tusimple_fixed_y_960x544", help="Converted dataset root.")
+    parser.add_argument("--dataset-root", default="datasets/tusimple_fixed_y_k56_960x544", help="Converted dataset root.")
     parser.add_argument("--split", default="val", choices=("train", "val", "test"), help="Dataset split.")
     parser.add_argument("--dataset", default="tusimple", choices=sorted(DATASET_IMAGE_SHAPES))
     parser.add_argument("--weights", default=str(DEFAULT_WEIGHTS), help="GCS checkpoint. Use empty string to skip predictions.")

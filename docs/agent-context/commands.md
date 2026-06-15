@@ -17,8 +17,8 @@ remote RTX 4090 24GB: formal training/evaluation, default Q12/K56 batch=32 worke
 
 ```bash
 python tools/train_gcs.py \
-  --model ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12.yaml \
-  --data data/tusimple_gcs_fixed_y_960x544.yaml \
+  --model ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml \
+  --data data/tusimple_gcs_fixed_y_k56_960x544.yaml \
   --imgsz 544 960
 ```
 
@@ -28,8 +28,8 @@ Use this when ordinary `best.pt` is not reliable for TuSimple official Accuracy 
 
 ```bash
 python tools/train_gcs.py \
-  --model ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12.yaml \
-  --data data/tusimple_gcs_fixed_y_960x544.yaml \
+  --model ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml \
+  --data data/tusimple_gcs_fixed_y_k56_960x544.yaml \
   --imgsz 544 960 \
   --gcs-official-best \
   --gcs-official-best-period 1 \
@@ -42,9 +42,9 @@ python tools/train_gcs.py \
 
 ## Next Remote Official-Val Experiments
 
-Do not launch another `K=32` GT5 quality/count fine-tune as the next main path: the visible-segment hard-negative and GT5 edge Quality floor gates have both completed and are not promotable, and the `K=32` label oracle does not leave enough geometry headroom for the `0.97` objective.
+Do not launch another historical `K=32` GT5 quality/count fine-tune: the active K32 YAML/data paths have been removed, the visible-segment hard-negative and GT5 edge Quality floor gates completed and are not promotable, and the `K=32` label oracle did not leave enough geometry headroom for the `0.97` objective.
 
-The current experimental K56 family/reference is the separate `Q12-K56` official-h-sample-aligned candidate:
+The current K56 family/reference is the active `Q12-K56` official-h-sample-aligned path:
 
 ```text
 data:  data/tusimple_gcs_fixed_y_k56_960x544.yaml
@@ -68,7 +68,7 @@ K56 label rebuild command:
 python tools/rebuild_tusimple_fixed_y_k56_from_reference_split.py \
   --archive-root archive \
   --output-root datasets/tusimple_fixed_y_k56_960x544 \
-  --reference-root datasets/tusimple_fixed_y_960x544
+  --reference-root datasets/tusimple_fixed_y_k56_960x544
 ```
 
 K56 label oracle command:
@@ -170,52 +170,9 @@ data:  data/tusimple_gcs_fixed_y_k56_960x544.yaml
 goal:  reduce both GT5 5->4 drops and GT4/GT3 false fifth-lane pressure
 ```
 
-This candidate is opt-in. The YAML enables the optional `pred_fifthness_logits: B x Q` head and Count Head fifth-candidate evidence; the training losses and fifthness decode remain default-off until non-zero gains or explicit decode switches are passed. Use official-val only for selection and do not use the diagnostic K56 test audit to choose gains. By default, fifthness negatives come from GT3/GT4 unmatched outside candidates; `--gcs-fifthness-include-gt5-negatives True` is an explicit follow-up switch for also mining GT5 same-image unmatched outside false fifth candidates.
+This candidate is opt-in. The YAML enables the optional `pred_fifthness_logits: B x Q` head; the training losses and fifthness decode remain default-off until non-zero gains or explicit decode switches are passed. Use official-val only for selection and do not use the diagnostic K56 test audit to choose gains. By default, fifthness negatives come from GT3/GT4 unmatched outside candidates; `--gcs-fifthness-include-gt5-negatives True` is an explicit follow-up switch for also mining GT5 same-image unmatched outside false fifth candidates.
 
-K56 count5ev-v1 default-off Count Head evidence isolation candidate:
-
-```text
-model: ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-count5ev-v1.yaml
-data:  data/tusimple_gcs_fixed_y_k56_960x544.yaml
-goal:  isolate Count Head fifth-candidate evidence without emitting `pred_fifthness_logits`
-```
-
-This candidate is opt-in. The YAML enables `use_count_fifth_evidence=True` while keeping `use_fifthness=False`, so it must preserve the normal six model outputs. Use it to test whether fifth-candidate evidence alone improves Count Head GT4/GT5 calibration before adding fifthness verifier losses or fifthness decode.
-
-Local shape check before any remote run:
-
-```bash
-python tools/check_model.py \
-  --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-count5ev-v1.yaml \
-  --imgsz 544 960 \
-  --batch 1
-```
-
-Remote official-val short gate from the K56 epoch152 parent:
-
-```bash
-python tools/train_gcs.py \
-  --model ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-count5ev-v1.yaml \
-  --data data/tusimple_gcs_fixed_y_k56_960x544.yaml \
-  --imgsz 544 960 \
-  --name gcs_yolo_lane_s_q12_k56_count5ev_v1_ft8_seed1_b32w4 \
-  --pretrained runs/gcs_lane/gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4/weights/official_best.pt \
-  --epochs 8 \
-  --batch 32 \
-  --workers 4 \
-  --seed 1 \
-  --lr0 0.00005 \
-  --lrf 0.2 \
-  --gcs-official-best \
-  --gcs-official-best-period 1 \
-  --gcs-official-best-top-k 5 \
-  --gcs-official-best-gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
-  --gcs-official-best-archive-root runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset
-```
-
-Do not start full/e180 unless the short gate improves or at least matches the K56 parent while keeping FP controlled, lowering `rate_4_to_5`, and avoiding GT5 `rate_5_to_4` regression.
-
-First remote attempt status:
+Removed K56 count5ev-v1 history:
 
 ```text
 run: gcs_yolo_lane_s_q12_k56_count5ev_v1_ft8_seed1_b32w4
@@ -225,7 +182,53 @@ partial official-val: epoch1=0.958453, epoch2=0.957082, epoch3=0.958500
 decision: not promotable; do not start full/e180 from this run
 ```
 
-Before rerunning this FT8 gate, free server disk space or move run artifacts off the nearly full root filesystem.
+The `gcs-yolo-lane-s-q12-k56-count5ev-v1.yaml` config and Count Head fifth-candidate evidence source path were removed from current code on 2026-06-16. Keep the run summary above as audit history only; do not rerun it as a current-code template.
+
+K56 xloc-v1 default-off x-localization auxiliary candidate:
+
+```text
+model: ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-xloc-v1.yaml
+data:  data/tusimple_gcs_fixed_y_k56_960x544.yaml
+goal:  reduce ordinary K56 horizontal x error while keeping fixed-y y anchors unchanged
+```
+
+This candidate is opt-in. The default K56 head already predicts only x and obtains y directly from fixed TuSimple h-sample anchors; xloc-v1 therefore does not add y regression. It adds `pred_x_bin_logits` and `pred_x_bin_offsets` for training-side x-bin classification plus within-bin offset supervision. Decode and official metrics ignore these outputs.
+
+Local shape check before any remote run:
+
+```bash
+python tools/check_model.py \
+  --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-xloc-v1.yaml \
+  --imgsz 544 960 \
+  --batch 1
+```
+
+Remote official-val short gate from the K56 epoch152 parent:
+
+```bash
+python tools/train_gcs.py \
+  --model ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-xloc-v1.yaml \
+  --data data/tusimple_gcs_fixed_y_k56_960x544.yaml \
+  --imgsz 544 960 \
+  --name gcs_yolo_lane_s_q12_k56_xloc_v1_ft8_seed1_b32w4 \
+  --pretrained runs/gcs_lane/gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4/weights/official_best.pt \
+  --epochs 8 \
+  --batch 32 \
+  --workers 4 \
+  --seed 1 \
+  --lr0 0.00005 \
+  --lrf 0.2 \
+  --gcs-xloc-cls 0.10 \
+  --gcs-xloc-offset 0.03 \
+  --gcs-xloc-offset-beta-px 3.0 \
+  --gcs-official-best \
+  --gcs-official-best-period 1 \
+  --gcs-official-best-top-k 5 \
+  --gcs-official-best-gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
+  --gcs-official-best-archive-root runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset
+```
+
+Do not combine this first gate with fifthness/count5 evidence, min-points retuning, or test evaluation. Do not start full/e180 unless the short gate improves official-val ACC over the K56 parent while not worsening FP/FN, `rate_4_to_5`, or GT5 `rate_5_to_4`; also inspect average x error on official-val diagnostics before claiming the xloc signal helped.
 
 The 2026-06-15 reliability audit closed the missing inference loop: `pred_fifthness_logits` can now be consumed by decode with:
 
@@ -285,8 +288,6 @@ python tools/train_gcs.py \
   --gcs-fifthness <explicit-gain> \
   --gcs-fifthness-pairwise <explicit-gain> \
   --gcs-fifthness-include-gt5-negatives <True-or-False> \
-  --gcs-quality-pairwise <explicit-gain> \
-  --gcs-count-cumulative <explicit-gain> \
   --gcs-official-best \
   --gcs-official-best-period 1 \
   --gcs-official-best-top-k 5 \
@@ -393,8 +394,6 @@ python tools/train_gcs.py \
   --lrf <explicit-lrf> \
   --gcs-fifthness <explicit-gain> \
   --gcs-fifthness-pairwise <explicit-gain> \
-  --gcs-quality-pairwise <explicit-gain> \
-  --gcs-count-cumulative <explicit-gain> \
   --gcs-use-fifthness-decode \
   --gcs-fifthness-decode-thr <explicit-threshold> \
   --gcs-fifthness-decode-rank-weight <explicit-weight> \
@@ -440,35 +439,7 @@ Removed Count Head false-fifth suppression gate:
 
 Command retained for reproducibility only:
 
-```bash
-python tools/train_gcs.py \
-  --model ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-fifthness-v1.yaml \
-  --data data/tusimple_gcs_fixed_y_k56_960x544.yaml \
-  --imgsz 544 960 \
-  --name gcs_yolo_lane_s_q12_k56_fifthness_gt5neg_ft8_seed1_b32w4 \
-  --pretrained runs/gcs_lane/gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4/weights/official_best.pt \
-  --epochs 8 \
-  --batch 32 \
-  --workers 4 \
-  --seed 1 \
-  --lr0 0.00005 \
-  --lrf 0.2 \
-  --gcs-fifthness 0.20 \
-  --gcs-fifthness-pairwise 0.20 \
-  --gcs-fifthness-margin 0.20 \
-  --gcs-fifthness-negative-topk 2 \
-  --gcs-fifthness-negative-score-thr 0.10 \
-  --gcs-fifthness-include-gt5-negatives True \
-  --gcs-quality-pairwise 0.15 \
-  --gcs-quality-pairwise-margin 0.20 \
-  --gcs-count-cumulative 0.03 \
-  --gcs-count-cumulative-label-smoothing 0.00 \
-  --gcs-official-best \
-  --gcs-official-best-period 1 \
-  --gcs-official-best-top-k 5 \
-  --gcs-official-best-gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
-  --gcs-official-best-archive-root runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset
-```
+The original command used removed `gcs_quality_pairwise*` and `gcs_count_cumulative*` flags. Keep the run result as audit history only; do not copy the old command shape into new current-code experiments.
 
 Rejected K56 Count/Quality gates from the epoch152 parent:
 
@@ -619,26 +590,7 @@ GT5 kept: 49/74
 GT5 failure counts: quality_too_low=14, count_head_under_predict=7, valid_points_fail=3, candidate_pool_shortfall=1
 ```
 
-Rejected gate command, kept for reproducibility only:
-
-```bash
-python tools/train_gcs.py \
-  --model ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12.yaml \
-  --data data/tusimple_gcs_fixed_y_960x544.yaml \
-  --imgsz 544 960 \
-  --name gcs_yolo_lane_s_q12_quality_gt5edgefloor_ft12_seed1_b8w0 \
-  --pretrained runs/gcs_lane/gcs_yolo_lane_s_q12_e180_countboundary_rankfix_balgt45_v1/weights/official_best.pt \
-  --epochs 12 \
-  --batch 8 \
-  --workers 0 \
-  --seed 1 \
-  --gcs-quality-gt5-edge-floor 0.65 \
-  --gcs-official-best \
-  --gcs-official-best-period 1 \
-  --gcs-official-best-top-k 5 \
-  --gcs-official-best-gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
-  --gcs-official-best-archive-root runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset
-```
+The rejected historical K32 gate command is intentionally not kept as a runnable template because the active K32 model/data YAMLs were removed on 2026-06-16. Keep the run summaries below as audit history only.
 
 Result:
 
@@ -687,7 +639,7 @@ python tools/infer_gcs.py \
 ```bash
 python tools/eval_gcs.py \
   --weights <weights.pt> \
-  --data data/tusimple_gcs_fixed_y_960x544.yaml \
+  --data data/tusimple_gcs_fixed_y_k56_960x544.yaml \
   --split val \
   --imgsz 544 960
 ```
@@ -817,9 +769,9 @@ python tools/check_gcs_algorithm_contract.py
 ## Model Shape Check
 
 ```bash
-python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12.yaml --imgsz 544 960
+python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml --imgsz 544 960 --batch 1
 python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-fifthness-v1.yaml --imgsz 544 960 --batch 1
-python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-count5ev-v1.yaml --imgsz 544 960 --batch 1
+python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-xloc-v1.yaml --imgsz 544 960 --batch 1
 ```
 
 ## Head Dependency Check

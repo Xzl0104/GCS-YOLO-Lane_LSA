@@ -14,8 +14,6 @@ from ultralytics.models.yolo.gcs_lane.train import (
     GCS_MAINLINE_COUNT_BOUNDARY_GAIN,
     GCS_MAINLINE_COUNT_BOUNDARY_GT5_POS_WEIGHT,
     GCS_MAINLINE_COUNT_BOUNDARY_LABEL_SMOOTHING,
-    GCS_MAINLINE_COUNT_CUMULATIVE,
-    GCS_MAINLINE_COUNT_CUMULATIVE_LABEL_SMOOTHING,
     GCS_MAINLINE_COUNT_SUM_GAIN,
     GCS_MAINLINE_FIFTHNESS,
     GCS_MAINLINE_FIFTHNESS_MARGIN,
@@ -35,11 +33,12 @@ from ultralytics.models.yolo.gcs_lane.train import (
     GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT_THR,
     GCS_MAINLINE_POINT_VALID_GT5_POS_WEIGHT,
     GCS_MAINLINE_QUALITY_HARD_NEGATIVE_FROM_HEAD,
-    GCS_MAINLINE_QUALITY_PAIRWISE,
-    GCS_MAINLINE_QUALITY_PAIRWISE_MARGIN,
     GCS_MAINLINE_QUALITY_GAIN,
     GCS_MAINLINE_QUALITY_GT5_EDGE_FLOOR,
     GCS_MAINLINE_QUALITY_NEG_WEIGHT,
+    GCS_MAINLINE_XLOC_CLS,
+    GCS_MAINLINE_XLOC_OFFSET,
+    GCS_MAINLINE_XLOC_OFFSET_BETA_PX,
     GCSLaneTrainer,
     apply_gt5_oversample_weight_to_ratios,
 )
@@ -63,15 +62,15 @@ def _gt(xs: list[float], points: int = 6) -> tuple[torch.Tensor, torch.Tensor]:
     return lanes, valid
 
 
-def _gt_fixed_y32(
+def _gt_fixed_y56(
     xs: list[float],
     *,
-    visible_start: int = 20,
-    visible_end: int = 26,
+    visible_start: int = 40,
+    visible_end: int = 46,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    y = torch.linspace(710.0 / 720.0, 0.25, 32)
+    y = torch.linspace(710.0 / 720.0, 160.0 / 720.0, 56)
     lanes = torch.stack([torch.stack((torch.full_like(y, x), y), dim=-1) for x in xs], dim=0)
-    valid = torch.zeros((len(xs), 32), dtype=torch.float32)
+    valid = torch.zeros((len(xs), 56), dtype=torch.float32)
     valid[:, visible_start:visible_end] = 1.0
     return lanes, valid
 
@@ -199,10 +198,10 @@ def test_count_head_visible_segment_evidence_keeps_short_edge_lane_count_visible
     high = math.log(0.95 / 0.05)
     low = math.log(0.05 / 0.95)
     pred_logits = torch.full((1, 6), high)
-    pred_valid_logits = torch.full((1, 6, 32), low)
+    pred_valid_logits = torch.full((1, 6, 56), low)
     pred_valid_logits[0, 0:4, :] = high
-    pred_valid_logits[0, 4, 20:26] = high
-    pred_valid_logits[0, 5, [1, 6, 11, 16, 21, 26]] = high
+    pred_valid_logits[0, 4, 40:46] = high
+    pred_valid_logits[0, 5, [1, 10, 19, 28, 37, 46]] = high
 
     valid_prob = pred_valid_logits.sigmoid()
     visible_mean, visible_support, visible_points, all_anchor_mean = head._visible_segment_stats(valid_prob)
@@ -230,36 +229,6 @@ def test_count_head_visible_segment_evidence_keeps_short_edge_lane_count_visible
     assert features[0, valid_mean_idx] < 0.9
 
 
-def test_count_head_fifth_candidate_evidence_features_are_default_off():
-    high = math.log(0.95 / 0.05)
-    low = math.log(0.05 / 0.95)
-    pred_logits = torch.full((1, 6), high)
-    pred_valid_logits = torch.full((1, 6, 32), low)
-    pred_valid_logits[0, 0:5, 20:28] = high
-    pred_points = torch.zeros(1, 6, 32, 2)
-    pred_points[..., 1] = torch.linspace(710.0 / 720.0, 0.25, 32)
-    for q, x in enumerate([0.2, 0.35, 0.5, 0.65, 0.82, 0.48]):
-        pred_points[0, q, :, 0] = x
-
-    default_head = CandidateAwareCountHead([16, 16, 16, 16], query_dim=16, hidden_dim=32, topq=8)
-    enabled_head = CandidateAwareCountHead(
-        [16, 16, 16, 16],
-        query_dim=16,
-        hidden_dim=32,
-        topq=8,
-        use_fifth_candidate_evidence=True,
-    )
-
-    features = enabled_head._fifth_candidate_features(pred_logits, pred_valid_logits, pred_points)
-    names = enabled_head.fifth_candidate_feature_names
-    assert features.shape == (1, len(names))
-    assert features[0, names.index("fifth_lane_quality")] > 0.60
-    assert features[0, names.index("fifth_outside_gap")] > 0.0
-    assert features[0, names.index("fifth_edge_side")] > 0.0
-    assert default_head.use_fifth_candidate_evidence is False
-    assert enabled_head.use_fifth_candidate_evidence is True
-
-
 def test_gcs_lane_head_optional_fifthness_output_shape():
     torch.manual_seed(12)
     head = GCSLaneHead(
@@ -270,7 +239,6 @@ def test_gcs_lane_head_optional_fifthness_output_shape():
         nhead=4,
         point_mode="fixed_y",
         use_fifthness=True,
-        use_count_fifth_evidence=True,
     )
     head.min_spatial_tokens = 0
     feats = [
@@ -283,7 +251,6 @@ def test_gcs_lane_head_optional_fifthness_output_shape():
     assert out["pred_fifthness_logits"].shape == out["pred_logits"].shape
     assert out["pred_count_logits"].shape == (2, 4)
     assert out["pred_count_boundary_logits"].shape == (2, 2)
-    assert head.count_head.use_fifth_candidate_evidence is True
 
 
 def test_gcs_lane_head_default_has_no_fifthness_output():
@@ -307,33 +274,53 @@ def test_gcs_lane_head_default_has_no_fifthness_output():
     assert "pred_fifthness_logits" not in out
     assert out["pred_count_logits"].shape == (1, 4)
     assert out["pred_count_boundary_logits"].shape == (1, 2)
-    assert head.count_head.use_fifth_candidate_evidence is False
 
 
-def test_gcs_lane_head_count_fifth_evidence_keeps_fifthness_output_off():
-    torch.manual_seed(14)
-    head = GCSLaneHead(
+def test_gcs_lane_head_xloc_outputs_are_opt_in():
+    torch.manual_seed(15)
+    default_head = GCSLaneHead(
         c1=16,
         num_queries=6,
         num_points=8,
         num_decoder_layers=1,
         nhead=4,
         point_mode="fixed_y",
-        use_fifthness=False,
-        use_count_fifth_evidence=True,
     )
-    head.min_spatial_tokens = 0
+    xloc_head = GCSLaneHead(
+        c1=16,
+        num_queries=6,
+        num_points=8,
+        num_decoder_layers=1,
+        nhead=4,
+        point_mode="fixed_y",
+        xloc_bins=16,
+        xloc_offset=True,
+    )
+    default_head.min_spatial_tokens = 0
+    xloc_head.min_spatial_tokens = 0
     feats = [
         torch.randn(1, 16, 8, 16),
         torch.randn(1, 16, 4, 8),
         torch.randn(1, 16, 3, 4),
         torch.randn(1, 16, 2, 3),
     ]
-    out = head(feats)
-    assert "pred_fifthness_logits" not in out
-    assert out["pred_count_logits"].shape == (1, 4)
-    assert out["pred_count_boundary_logits"].shape == (1, 2)
-    assert head.count_head.use_fifth_candidate_evidence is True
+
+    default_out = default_head(feats)
+    xloc_out = xloc_head(feats)
+
+    assert "pred_x_bin_logits" not in default_out
+    assert "pred_x_bin_offsets" not in default_out
+    assert xloc_out["pred_x_bin_logits"].shape == (*xloc_out["pred_points"].shape[:3], 16)
+    assert xloc_out["pred_x_bin_offsets"].shape == xloc_out["pred_points"].shape[:3]
+    assert torch.allclose(
+        xloc_out["pred_points"][..., 1],
+        xloc_head.fixed_y_anchors.view(1, 1, -1).expand_as(xloc_out["pred_points"][..., 1]),
+    )
+
+
+def test_gcs_lane_head_rejects_xloc_for_free_point_mode():
+    with pytest.raises(ValueError, match="fixed_y"):
+        GCSLaneHead(c1=16, num_queries=6, num_points=8, num_decoder_layers=1, nhead=4, xloc_bins=8)
 
 
 def test_gcs_lane_head_count_backward_isolated_from_shared_branches():
@@ -429,8 +416,6 @@ def test_mainline_sampler_defaults_and_ratio_boost_boundaries(monkeypatch):
     assert math.isclose(DEFAULT_CFG_DICT["gcs_quality"], GCS_MAINLINE_QUALITY_GAIN)
     assert math.isclose(DEFAULT_CFG_DICT["gcs_quality_neg_weight"], GCS_MAINLINE_QUALITY_NEG_WEIGHT)
     assert math.isclose(DEFAULT_CFG_DICT["gcs_quality_gt5_edge_floor"], GCS_MAINLINE_QUALITY_GT5_EDGE_FLOOR)
-    assert math.isclose(DEFAULT_CFG_DICT["gcs_quality_pairwise"], GCS_MAINLINE_QUALITY_PAIRWISE)
-    assert math.isclose(DEFAULT_CFG_DICT["gcs_quality_pairwise_margin"], GCS_MAINLINE_QUALITY_PAIRWISE_MARGIN)
     assert math.isclose(DEFAULT_CFG_DICT["gcs_fifthness"], GCS_MAINLINE_FIFTHNESS)
     assert math.isclose(DEFAULT_CFG_DICT["gcs_fifthness_pairwise"], GCS_MAINLINE_FIFTHNESS_PAIRWISE)
     assert math.isclose(DEFAULT_CFG_DICT["gcs_fifthness_margin"], GCS_MAINLINE_FIFTHNESS_MARGIN)
@@ -440,11 +425,6 @@ def test_mainline_sampler_defaults_and_ratio_boost_boundaries(monkeypatch):
     )
     assert DEFAULT_CFG_DICT["gcs_fifthness_include_gt5_negatives"] is GCS_MAINLINE_FIFTHNESS_INCLUDE_GT5_NEGATIVES
     assert tuple(DEFAULT_CFG_DICT[f"gcs_count_cls_w{i}"] for i in range(2, 6)) == GCS_MAINLINE_COUNT_CLS_WEIGHTS
-    assert math.isclose(DEFAULT_CFG_DICT["gcs_count_cumulative"], GCS_MAINLINE_COUNT_CUMULATIVE)
-    assert math.isclose(
-        DEFAULT_CFG_DICT["gcs_count_cumulative_label_smoothing"],
-        GCS_MAINLINE_COUNT_CUMULATIVE_LABEL_SMOOTHING,
-    )
     assert math.isclose(
         DEFAULT_CFG_DICT["gcs_point_valid_gt5_pos_weight"], GCS_MAINLINE_POINT_VALID_GT5_POS_WEIGHT
     )
@@ -457,6 +437,9 @@ def test_mainline_sampler_defaults_and_ratio_boost_boundaries(monkeypatch):
     assert DEFAULT_CFG_DICT["gcs_count_adjacent_margin_gt45_weight"] == 1.0
     assert DEFAULT_CFG_DICT["gcs_geometry_curvature"] == GCS_MAINLINE_GEOMETRY_CURVATURE_GAIN
     assert DEFAULT_CFG_DICT["gcs_geometry_curvature_beta_px"] == GCS_MAINLINE_GEOMETRY_CURVATURE_BETA_PX
+    assert DEFAULT_CFG_DICT["gcs_xloc_cls"] == GCS_MAINLINE_XLOC_CLS
+    assert DEFAULT_CFG_DICT["gcs_xloc_offset"] == GCS_MAINLINE_XLOC_OFFSET
+    assert DEFAULT_CFG_DICT["gcs_xloc_offset_beta_px"] == GCS_MAINLINE_XLOC_OFFSET_BETA_PX
     assert DEFAULT_CFG_DICT["gcs_candidate_gt5_edge_weight"] == GCS_MAINLINE_CANDIDATE_GT5_EDGE_WEIGHT
     assert DEFAULT_CFG_DICT["gcs_point_valid_gt5_edge_continuity"] == GCS_MAINLINE_POINT_VALID_GT5_EDGE_CONTINUITY
     assert (
@@ -483,8 +466,6 @@ def test_mainline_sampler_defaults_and_ratio_boost_boundaries(monkeypatch):
     assert math.isclose(args.gcs_quality, GCS_MAINLINE_QUALITY_GAIN)
     assert math.isclose(args.gcs_quality_neg_weight, GCS_MAINLINE_QUALITY_NEG_WEIGHT)
     assert math.isclose(args.gcs_quality_gt5_edge_floor, GCS_MAINLINE_QUALITY_GT5_EDGE_FLOOR)
-    assert math.isclose(args.gcs_quality_pairwise, GCS_MAINLINE_QUALITY_PAIRWISE)
-    assert math.isclose(args.gcs_quality_pairwise_margin, GCS_MAINLINE_QUALITY_PAIRWISE_MARGIN)
     assert math.isclose(args.gcs_fifthness, GCS_MAINLINE_FIFTHNESS)
     assert math.isclose(args.gcs_fifthness_pairwise, GCS_MAINLINE_FIFTHNESS_PAIRWISE)
     assert math.isclose(args.gcs_fifthness_margin, GCS_MAINLINE_FIFTHNESS_MARGIN)
@@ -492,8 +473,6 @@ def test_mainline_sampler_defaults_and_ratio_boost_boundaries(monkeypatch):
     assert math.isclose(args.gcs_fifthness_negative_score_thr, GCS_MAINLINE_FIFTHNESS_NEGATIVE_SCORE_THR)
     assert args.gcs_fifthness_include_gt5_negatives is GCS_MAINLINE_FIFTHNESS_INCLUDE_GT5_NEGATIVES
     assert tuple(getattr(args, f"gcs_count_cls_w{i}") for i in range(2, 6)) == GCS_MAINLINE_COUNT_CLS_WEIGHTS
-    assert math.isclose(args.gcs_count_cumulative, GCS_MAINLINE_COUNT_CUMULATIVE)
-    assert math.isclose(args.gcs_count_cumulative_label_smoothing, GCS_MAINLINE_COUNT_CUMULATIVE_LABEL_SMOOTHING)
     assert math.isclose(args.gcs_point_valid_gt5_pos_weight, GCS_MAINLINE_POINT_VALID_GT5_POS_WEIGHT)
     assert math.isclose(args.gcs_gt5_edge_loss_weight, GCS_MAINLINE_GT5_EDGE_LOSS_WEIGHT)
     assert args.gcs_count_boundary == GCS_MAINLINE_COUNT_BOUNDARY_GAIN
@@ -504,6 +483,9 @@ def test_mainline_sampler_defaults_and_ratio_boost_boundaries(monkeypatch):
     assert args.gcs_count_adjacent_margin_gt45_weight == 1.0
     assert args.gcs_geometry_curvature == GCS_MAINLINE_GEOMETRY_CURVATURE_GAIN
     assert args.gcs_geometry_curvature_beta_px == GCS_MAINLINE_GEOMETRY_CURVATURE_BETA_PX
+    assert args.gcs_xloc_cls == GCS_MAINLINE_XLOC_CLS
+    assert args.gcs_xloc_offset == GCS_MAINLINE_XLOC_OFFSET
+    assert args.gcs_xloc_offset_beta_px == GCS_MAINLINE_XLOC_OFFSET_BETA_PX
     assert args.gcs_candidate_gt5_edge_weight == GCS_MAINLINE_CANDIDATE_GT5_EDGE_WEIGHT
     assert args.gcs_point_valid_gt5_edge_continuity == GCS_MAINLINE_POINT_VALID_GT5_EDGE_CONTINUITY
     assert args.gcs_point_valid_gt5_edge_continuity_thr == GCS_MAINLINE_POINT_VALID_GT5_EDGE_CONTINUITY_THR
@@ -526,8 +508,6 @@ def test_mainline_sampler_defaults_and_ratio_boost_boundaries(monkeypatch):
     assert math.isclose(trainer_overrides["gcs_quality"], GCS_MAINLINE_QUALITY_GAIN)
     assert math.isclose(trainer_overrides["gcs_quality_neg_weight"], GCS_MAINLINE_QUALITY_NEG_WEIGHT)
     assert math.isclose(trainer_overrides["gcs_quality_gt5_edge_floor"], GCS_MAINLINE_QUALITY_GT5_EDGE_FLOOR)
-    assert math.isclose(trainer_overrides["gcs_quality_pairwise"], GCS_MAINLINE_QUALITY_PAIRWISE)
-    assert math.isclose(trainer_overrides["gcs_quality_pairwise_margin"], GCS_MAINLINE_QUALITY_PAIRWISE_MARGIN)
     assert math.isclose(trainer_overrides["gcs_fifthness"], GCS_MAINLINE_FIFTHNESS)
     assert math.isclose(trainer_overrides["gcs_fifthness_pairwise"], GCS_MAINLINE_FIFTHNESS_PAIRWISE)
     assert math.isclose(trainer_overrides["gcs_fifthness_margin"], GCS_MAINLINE_FIFTHNESS_MARGIN)
@@ -537,11 +517,6 @@ def test_mainline_sampler_defaults_and_ratio_boost_boundaries(monkeypatch):
     )
     assert trainer_overrides["gcs_fifthness_include_gt5_negatives"] is GCS_MAINLINE_FIFTHNESS_INCLUDE_GT5_NEGATIVES
     assert tuple(trainer_overrides[f"gcs_count_cls_w{i}"] for i in range(2, 6)) == GCS_MAINLINE_COUNT_CLS_WEIGHTS
-    assert math.isclose(trainer_overrides["gcs_count_cumulative"], GCS_MAINLINE_COUNT_CUMULATIVE)
-    assert math.isclose(
-        trainer_overrides["gcs_count_cumulative_label_smoothing"],
-        GCS_MAINLINE_COUNT_CUMULATIVE_LABEL_SMOOTHING,
-    )
     assert math.isclose(
         trainer_overrides["gcs_point_valid_gt5_pos_weight"], GCS_MAINLINE_POINT_VALID_GT5_POS_WEIGHT
     )
@@ -551,6 +526,9 @@ def test_mainline_sampler_defaults_and_ratio_boost_boundaries(monkeypatch):
     assert trainer_overrides["gcs_count_boundary_gt5_pos_weight"] == GCS_MAINLINE_COUNT_BOUNDARY_GT5_POS_WEIGHT
     assert trainer_overrides["gcs_geometry_curvature"] == GCS_MAINLINE_GEOMETRY_CURVATURE_GAIN
     assert trainer_overrides["gcs_geometry_curvature_beta_px"] == GCS_MAINLINE_GEOMETRY_CURVATURE_BETA_PX
+    assert trainer_overrides["gcs_xloc_cls"] == GCS_MAINLINE_XLOC_CLS
+    assert trainer_overrides["gcs_xloc_offset"] == GCS_MAINLINE_XLOC_OFFSET
+    assert trainer_overrides["gcs_xloc_offset_beta_px"] == GCS_MAINLINE_XLOC_OFFSET_BETA_PX
     assert trainer_overrides["gcs_candidate_gt5_edge_weight"] == GCS_MAINLINE_CANDIDATE_GT5_EDGE_WEIGHT
     assert trainer_overrides["gcs_point_valid_gt5_edge_continuity"] == GCS_MAINLINE_POINT_VALID_GT5_EDGE_CONTINUITY
     assert (
@@ -576,8 +554,6 @@ def test_mainline_sampler_defaults_and_ratio_boost_boundaries(monkeypatch):
     assert math.isclose(criterion.quality_gain, GCS_MAINLINE_QUALITY_GAIN)
     assert math.isclose(criterion.quality_neg_weight, GCS_MAINLINE_QUALITY_NEG_WEIGHT)
     assert math.isclose(criterion.quality_gt5_edge_floor, GCS_MAINLINE_QUALITY_GT5_EDGE_FLOOR)
-    assert math.isclose(criterion.quality_pairwise_gain, GCS_MAINLINE_QUALITY_PAIRWISE)
-    assert math.isclose(criterion.quality_pairwise_margin, GCS_MAINLINE_QUALITY_PAIRWISE_MARGIN)
     assert math.isclose(criterion.fifthness_gain, GCS_MAINLINE_FIFTHNESS)
     assert math.isclose(criterion.fifthness_pairwise_gain, GCS_MAINLINE_FIFTHNESS_PAIRWISE)
     assert math.isclose(criterion.fifthness_margin, GCS_MAINLINE_FIFTHNESS_MARGIN)
@@ -585,11 +561,6 @@ def test_mainline_sampler_defaults_and_ratio_boost_boundaries(monkeypatch):
     assert math.isclose(criterion.fifthness_negative_score_thr, GCS_MAINLINE_FIFTHNESS_NEGATIVE_SCORE_THR)
     assert criterion.fifthness_include_gt5_negatives is GCS_MAINLINE_FIFTHNESS_INCLUDE_GT5_NEGATIVES
     assert criterion.count_cls_weights == GCS_MAINLINE_COUNT_CLS_WEIGHTS
-    assert math.isclose(criterion.count_cumulative_gain, GCS_MAINLINE_COUNT_CUMULATIVE)
-    assert math.isclose(
-        criterion.count_cumulative_label_smoothing,
-        GCS_MAINLINE_COUNT_CUMULATIVE_LABEL_SMOOTHING,
-    )
     assert math.isclose(criterion.point_valid_gt5_pos_weight, GCS_MAINLINE_POINT_VALID_GT5_POS_WEIGHT)
     assert math.isclose(criterion.gt5_edge_loss_weight, GCS_MAINLINE_GT5_EDGE_LOSS_WEIGHT)
     assert math.isclose(criterion.count_boundary_gain, GCS_MAINLINE_COUNT_BOUNDARY_GAIN)
@@ -600,6 +571,9 @@ def test_mainline_sampler_defaults_and_ratio_boost_boundaries(monkeypatch):
     assert math.isclose(criterion.count_adjacent_margin_gt45_weight, 1.0)
     assert math.isclose(criterion.geometry_curvature_gain, GCS_MAINLINE_GEOMETRY_CURVATURE_GAIN)
     assert math.isclose(criterion.geometry_curvature_beta_px, GCS_MAINLINE_GEOMETRY_CURVATURE_BETA_PX)
+    assert math.isclose(criterion.xloc_cls_gain, GCS_MAINLINE_XLOC_CLS)
+    assert math.isclose(criterion.xloc_offset_gain, GCS_MAINLINE_XLOC_OFFSET)
+    assert math.isclose(criterion.xloc_offset_beta_px, GCS_MAINLINE_XLOC_OFFSET_BETA_PX)
     assert math.isclose(criterion.candidate_gt5_edge_weight, GCS_MAINLINE_CANDIDATE_GT5_EDGE_WEIGHT)
     assert math.isclose(criterion.point_valid_gt5_edge_continuity, GCS_MAINLINE_POINT_VALID_GT5_EDGE_CONTINUITY)
     assert math.isclose(
@@ -645,10 +619,6 @@ def test_train_gcs_main_forwards_fifthness_cli_overrides(monkeypatch):
             "--imgsz",
             "544",
             "960",
-            "--gcs-quality-pairwise",
-            "0.35",
-            "--gcs-quality-pairwise-margin",
-            "0.45",
             "--gcs-fifthness",
             "0.7",
             "--gcs-fifthness-pairwise",
@@ -661,10 +631,12 @@ def test_train_gcs_main_forwards_fifthness_cli_overrides(monkeypatch):
             "0.2",
             "--gcs-fifthness-include-gt5-negatives",
             "True",
-            "--gcs-count-cumulative",
-            "0.15",
-            "--gcs-count-cumulative-label-smoothing",
-            "0.05",
+            "--gcs-xloc-cls",
+            "0.6",
+            "--gcs-xloc-offset",
+            "0.4",
+            "--gcs-xloc-offset-beta-px",
+            "2.5",
             "--no-val",
         ],
     )
@@ -672,16 +644,16 @@ def test_train_gcs_main_forwards_fifthness_cli_overrides(monkeypatch):
     train_gcs.main()
 
     assert captured["trained"] is True
-    assert math.isclose(captured["gcs_quality_pairwise"], 0.35)
-    assert math.isclose(captured["gcs_quality_pairwise_margin"], 0.45)
     assert math.isclose(captured["gcs_fifthness"], 0.7)
     assert math.isclose(captured["gcs_fifthness_pairwise"], 0.25)
     assert math.isclose(captured["gcs_fifthness_margin"], 0.55)
     assert captured["gcs_fifthness_negative_topk"] == 3
     assert math.isclose(captured["gcs_fifthness_negative_score_thr"], 0.2)
     assert captured["gcs_fifthness_include_gt5_negatives"] is True
-    assert math.isclose(captured["gcs_count_cumulative"], 0.15)
-    assert math.isclose(captured["gcs_count_cumulative_label_smoothing"], 0.05)
+    assert math.isclose(captured["gcs_xloc_cls"], 0.6)
+    assert math.isclose(captured["gcs_xloc_offset"], 0.4)
+    assert math.isclose(captured["gcs_xloc_offset_beta_px"], 2.5)
+
 
 def test_gcs_loss_item_names_stay_stable():
     expected = (
@@ -725,19 +697,96 @@ def test_curvature_loss_targets_gt5_edge_lanes_only():
     assert pred_points.grad[0, 2].abs().sum() == 0
 
 
+def test_xloc_loss_requires_xloc_head_outputs_when_enabled():
+    lanes, valid = _gt([0.23, 0.71])
+    pred_points = lanes.unsqueeze(0).clone()
+    criterion = GCSLoss(
+        model={
+            "gcs_point_mode": "fixed_y",
+            "gcs_imgsz": [544, 960],
+            "gcs_xloc_cls": 1.0,
+        }
+    )
+
+    with pytest.raises(ValueError, match="pred_x_bin_logits is missing"):
+        criterion.xloc_loss(
+            {},
+            pred_points,
+            [lanes],
+            [valid],
+            [(torch.arange(2), torch.arange(2))],
+        )
+
+
+def test_xloc_offset_loss_requires_offset_head_when_enabled():
+    lanes, valid = _gt([0.23, 0.71])
+    pred_points = lanes.unsqueeze(0).clone()
+    criterion = GCSLoss(
+        model={
+            "gcs_point_mode": "fixed_y",
+            "gcs_imgsz": [544, 960],
+            "gcs_xloc_offset": 1.0,
+        }
+    )
+    preds = {"pred_x_bin_logits": torch.zeros(1, 2, 6, 8)}
+
+    with pytest.raises(ValueError, match="pred_x_bin_offsets is missing"):
+        criterion.xloc_loss(
+            preds,
+            pred_points,
+            [lanes],
+            [valid],
+            [(torch.arange(2), torch.arange(2))],
+        )
+
+
+def test_xloc_loss_backpropagates_to_bin_and_offset_heads():
+    lanes, valid = _gt([0.23, 0.71])
+    pred_points = lanes.unsqueeze(0).clone()
+    pred_x_bin_logits = torch.zeros(1, 2, 6, 8, requires_grad=True)
+    pred_x_bin_offsets = torch.zeros(1, 2, 6, requires_grad=True)
+    criterion = GCSLoss(
+        model={
+            "gcs_point_mode": "fixed_y",
+            "gcs_imgsz": [544, 960],
+            "gcs_xloc_cls": 0.7,
+            "gcs_xloc_offset": 0.3,
+            "gcs_xloc_offset_beta_px": 3.0,
+        }
+    )
+
+    loss = criterion.xloc_loss(
+        {
+            "pred_x_bin_logits": pred_x_bin_logits,
+            "pred_x_bin_offsets": pred_x_bin_offsets,
+        },
+        pred_points,
+        [lanes],
+        [valid],
+        [(torch.arange(2), torch.arange(2))],
+    )
+
+    assert torch.isfinite(loss) and loss > 0
+    loss.backward()
+    assert pred_x_bin_logits.grad is not None
+    assert pred_x_bin_offsets.grad is not None
+    assert torch.count_nonzero(pred_x_bin_logits.grad).item() > 0
+    assert torch.count_nonzero(pred_x_bin_offsets.grad).item() > 0
+
+
 def test_gt5_candidate_cfg_keys_have_expected_types():
     assert {
         "gcs_count_boundary_gt5_pos_weight",
         "gcs_count_adjacent_margin",
         "gcs_count_adjacent_margin_gain",
         "gcs_count_adjacent_margin_gt45_weight",
-        "gcs_count_cumulative",
         "gcs_geometry_curvature",
         "gcs_geometry_curvature_beta_px",
+        "gcs_xloc_cls",
+        "gcs_xloc_offset",
+        "gcs_xloc_offset_beta_px",
         "gcs_candidate_gt5_edge_weight",
         "gcs_quality_gt5_edge_floor",
-        "gcs_quality_pairwise",
-        "gcs_quality_pairwise_margin",
         "gcs_fifthness",
         "gcs_fifthness_pairwise",
         "gcs_fifthness_margin",
@@ -745,7 +794,6 @@ def test_gt5_candidate_cfg_keys_have_expected_types():
         "gcs_point_valid_gt5_edge_continuity",
         "gcs_point_valid_gt5_edge_segment",
     } <= CFG_FLOAT_KEYS
-    assert "gcs_count_cumulative_label_smoothing" in CFG_FRACTION_KEYS
     assert "gcs_fifthness_negative_score_thr" in CFG_FRACTION_KEYS
     assert "gcs_fifthness_negative_topk" in CFG_INT_KEYS
     assert "gcs_fifthness_include_gt5_negatives" in CFG_BOOL_KEYS
@@ -779,25 +827,6 @@ def test_count_boundary_gt5_pos_weight_increases_count_loss():
     boosted_loss = boosted.count_head_loss(preds, pred_points, [valid])
 
     assert boosted_loss > base_loss
-
-
-def test_count_cumulative_loss_uses_existing_count_logits():
-    _, valid5 = _gt([0.1, 0.25, 0.4, 0.55, 0.7])
-    logits = torch.zeros(1, 4, requires_grad=True)
-    criterion = GCSLoss(
-        model={
-            "gcs_point_mode": "fixed_y",
-            "gcs_imgsz": [544, 960],
-            "gcs_count_cumulative": 1.0,
-            "gcs_count_cumulative_label_smoothing": 0.0,
-        }
-    )
-    gt_count, _, _ = criterion.count_head_targets(logits, [valid5])
-    loss = criterion.count_cumulative_loss(logits, gt_count)
-    assert torch.isfinite(loss) and loss > 0
-    loss.backward()
-    assert logits.grad is not None
-    assert logits.grad[0, 3] < 0
 
 
 def test_fifthness_targets_gt5_edges_and_gt4_false_fifth_candidates():
@@ -1168,52 +1197,9 @@ def test_quality_hard_negative_from_head_increases_quality_loss():
     assert pred_quality_logits.grad is not None
 
 
-def test_quality_pairwise_ranks_gt5_edge_over_false_fifth_candidate():
-    lanes, valid = _gt([0.1, 0.25, 0.4, 0.55, 0.7])
-    pred_points = torch.cat((lanes, lanes[:1].clone()), dim=0).unsqueeze(0)
-    pred_quality_logits = torch.tensor([[0.0, -4.0, -4.0, -4.0, -4.0, 4.0]], requires_grad=True)
-    indices = [(torch.arange(5), torch.arange(5))]
-    pos_mask = torch.zeros(1, 6, dtype=torch.bool)
-    neg_mask = torch.zeros(1, 6, dtype=torch.bool)
-    pos_mask[0, 0] = True
-    neg_mask[0, 5] = True
-    common = {
-        "gcs_point_mode": "fixed_y",
-        "gcs_imgsz": [544, 960],
-        "gcs_quality_dist_thr_px": 100.0,
-        "gcs_quality_neg_weight": 0.5,
-    }
-    base = GCSLoss(model={**common, "gcs_quality_pairwise": 0.0})
-    ranked = GCSLoss(model={**common, "gcs_quality_pairwise": 1.0, "gcs_quality_pairwise_margin": 0.5})
-
-    base_loss = base.quality_loss(
-        pred_quality_logits,
-        pred_points,
-        [lanes],
-        [valid],
-        indices,
-        fifth_positive_mask=pos_mask,
-        fifth_negative_mask=neg_mask,
-    )
-    ranked_loss = ranked.quality_loss(
-        pred_quality_logits,
-        pred_points,
-        [lanes],
-        [valid],
-        indices,
-        fifth_positive_mask=pos_mask,
-        fifth_negative_mask=neg_mask,
-    )
-    assert ranked_loss > base_loss
-    ranked_loss.backward()
-    assert pred_quality_logits.grad is not None
-    assert pred_quality_logits.grad[0, 0] < 0
-    assert pred_quality_logits.grad[0, 5] > 0
-
-
 def test_quality_head_hard_negative_from_head_ignores_matched_zero_quality_lane():
-    lanes, valid = _gt_fixed_y32([0.8])
-    pred_points = torch.zeros(1, 3, 32, 2)
+    lanes, valid = _gt_fixed_y56([0.8])
+    pred_points = torch.zeros(1, 3, 56, 2)
     pred_points[0, :, :, 1] = lanes[0, :, 1]
     pred_quality_logits = torch.tensor([[4.0, -4.0, -4.0]], requires_grad=True)
     indices = [(torch.tensor([0]), torch.tensor([0]))]
@@ -1259,7 +1245,7 @@ def test_quality_head_hard_negative_from_head_ignores_matched_zero_quality_lane(
 
 
 def test_quality_gt5_edge_floor_only_boosts_matched_edge_targets():
-    lanes, valid = _gt_fixed_y32([0.1, 0.3, 0.5, 0.7, 0.9])
+    lanes, valid = _gt_fixed_y56([0.1, 0.3, 0.5, 0.7, 0.9])
     extra_lane = lanes[:1].clone()
     pred_points = torch.cat([lanes, extra_lane], dim=0).unsqueeze(0)
     pred_points[..., 0] = 0.0
@@ -1280,7 +1266,7 @@ def test_quality_gt5_edge_floor_only_boosts_matched_edge_targets():
     assert torch.allclose(floor_target[0, 1:4], base_target[0, 1:4])
     assert floor_target[0, 5].item() == 0.0
 
-    lanes4, valid4 = _gt_fixed_y32([0.1, 0.3, 0.5, 0.7])
+    lanes4, valid4 = _gt_fixed_y56([0.1, 0.3, 0.5, 0.7])
     pred_points4 = lanes4.unsqueeze(0).clone()
     pred_points4[..., 0] = 0.0
     pred_quality_logits4 = torch.zeros(1, 4)
@@ -1292,14 +1278,14 @@ def test_quality_gt5_edge_floor_only_boosts_matched_edge_targets():
 
 
 def test_visible_segment_hard_negative_mining_is_default_off():
-    lanes, valid = _gt_fixed_y32([0.2])
+    lanes, valid = _gt_fixed_y56([0.2])
     high = math.log(0.95 / 0.05)
     low = math.log(0.05 / 0.95)
     pred_logits = torch.full((1, 3), high)
-    pred_valid_logits = torch.full((1, 3, 32), low)
+    pred_valid_logits = torch.full((1, 3, 56), low)
     pred_valid_logits[0, 0, :] = high
     pred_valid_logits[0, 1, 20:26] = high
-    pred_points = torch.zeros(1, 3, 32, 2)
+    pred_points = torch.zeros(1, 3, 56, 2)
     pred_points[0, :, :, 1] = lanes[0, :, 1]
     pred_points[0, 0, :, 0] = 0.2
     pred_points[0, 1, :, 0] = 0.85
@@ -1329,14 +1315,14 @@ def test_visible_segment_hard_negative_mining_is_default_off():
 
 
 def test_visible_segment_hard_negative_mining_selects_short_unmatched_candidate():
-    lanes, valid = _gt_fixed_y32([0.2])
+    lanes, valid = _gt_fixed_y56([0.2])
     high = math.log(0.95 / 0.05)
     low = math.log(0.05 / 0.95)
     pred_logits = torch.full((1, 3), high)
-    pred_valid_logits = torch.full((1, 3, 32), low)
+    pred_valid_logits = torch.full((1, 3, 56), low)
     pred_valid_logits[0, 0, :] = high
     pred_valid_logits[0, 1, 20:26] = high
-    pred_points = torch.zeros(1, 3, 32, 2)
+    pred_points = torch.zeros(1, 3, 56, 2)
     pred_points[0, :, :, 1] = lanes[0, :, 1]
     pred_points[0, 0, :, 0] = 0.2
     pred_points[0, 1, :, 0] = 0.85
@@ -1376,14 +1362,14 @@ def test_visible_segment_hard_negative_mining_selects_short_unmatched_candidate(
 
 
 def test_visible_segment_hard_negative_recipe_keeps_matched_queries_protected():
-    lanes, valid = _gt_fixed_y32([0.2])
+    lanes, valid = _gt_fixed_y56([0.2])
     high = math.log(0.95 / 0.05)
     low = math.log(0.05 / 0.95)
     pred_logits = torch.full((1, 2), high)
-    pred_valid_logits = torch.full((1, 2, 32), low)
+    pred_valid_logits = torch.full((1, 2, 56), low)
     pred_valid_logits[0, 0, 20:26] = high
     pred_valid_logits[0, 1, 20:26] = high
-    pred_points = torch.zeros(1, 2, 32, 2)
+    pred_points = torch.zeros(1, 2, 56, 2)
     pred_points[0, :, :, 1] = lanes[0, :, 1]
     pred_points[0, 0, :, 0] = 0.2
     pred_points[0, 1, :, 0] = 0.85
@@ -1480,9 +1466,9 @@ def test_point_valid_gt5_edge_segment_adds_loss():
     assert pred_valid_logits.grad is not None
 
 
-def test_point_valid_gt5_edge_segment_uses_fixed_y32_edge_queries_only():
-    visible_start, visible_end = 20, 26
-    lanes5, valid5 = _gt_fixed_y32(
+def test_point_valid_gt5_edge_segment_uses_fixed_y56_edge_queries_only():
+    visible_start, visible_end = 40, 46
+    lanes5, valid5 = _gt_fixed_y56(
         [0.1, 0.25, 0.4, 0.55, 0.7],
         visible_start=visible_start,
         visible_end=visible_end,
@@ -1508,7 +1494,7 @@ def test_point_valid_gt5_edge_segment_uses_fixed_y32_edge_queries_only():
         }
     )
 
-    edge_logits = torch.full((1, 5, 32), 4.0)
+    edge_logits = torch.full((1, 5, 56), 4.0)
     edge_logits[0, 0, visible_start:visible_end] = -3.0
     edge_logits[0, 4, visible_start:visible_end] = -3.0
     edge_logits = edge_logits.requires_grad_()
@@ -1518,20 +1504,20 @@ def test_point_valid_gt5_edge_segment_uses_fixed_y32_edge_queries_only():
     edge_segment_loss.backward()
     assert edge_logits.grad is not None
 
-    middle_logits = torch.full((1, 5, 32), 4.0)
+    middle_logits = torch.full((1, 5, 56), 4.0)
     middle_logits[0, 2, visible_start:visible_end] = -3.0
     middle_base_loss = base.point_valid_loss(middle_logits, pred_points5, [valid5], indices5, gt_points=[lanes5])
     middle_segment_loss = segment.point_valid_loss(middle_logits, pred_points5, [valid5], indices5, gt_points=[lanes5])
     assert torch.isclose(middle_segment_loss, middle_base_loss)
 
-    lanes4, valid4 = _gt_fixed_y32(
+    lanes4, valid4 = _gt_fixed_y56(
         [0.1, 0.25, 0.55, 0.7],
         visible_start=visible_start,
         visible_end=visible_end,
     )
     pred_points4 = lanes4.unsqueeze(0).clone()
     indices4 = [(torch.arange(4), torch.arange(4))]
-    gt4_logits = torch.full((1, 4, 32), 4.0)
+    gt4_logits = torch.full((1, 4, 56), 4.0)
     gt4_logits[0, 0, visible_start:visible_end] = -3.0
     gt4_logits[0, 3, visible_start:visible_end] = -3.0
     gt4_base_loss = base.point_valid_loss(gt4_logits, pred_points4, [valid4], indices4, gt_points=[lanes4])

@@ -18,8 +18,6 @@ from ultralytics.models.yolo.gcs_lane.train import (
     GCS_MAINLINE_COUNT_BOUNDARY_GAIN,
     GCS_MAINLINE_COUNT_BOUNDARY_GT5_POS_WEIGHT,
     GCS_MAINLINE_COUNT_BOUNDARY_LABEL_SMOOTHING,
-    GCS_MAINLINE_COUNT_CUMULATIVE,
-    GCS_MAINLINE_COUNT_CUMULATIVE_LABEL_SMOOTHING,
     GCS_MAINLINE_COUNT_SUM_GAIN,
     GCS_MAINLINE_FIFTHNESS,
     GCS_MAINLINE_FIFTHNESS_MARGIN,
@@ -39,18 +37,19 @@ from ultralytics.models.yolo.gcs_lane.train import (
     GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT_THR,
     GCS_MAINLINE_POINT_VALID_GT5_POS_WEIGHT,
     GCS_MAINLINE_QUALITY_HARD_NEGATIVE_FROM_HEAD,
-    GCS_MAINLINE_QUALITY_PAIRWISE,
-    GCS_MAINLINE_QUALITY_PAIRWISE_MARGIN,
     GCS_MAINLINE_QUALITY_GAIN,
     GCS_MAINLINE_QUALITY_GT5_EDGE_FLOOR,
     GCS_MAINLINE_QUALITY_NEG_WEIGHT,
+    GCS_MAINLINE_XLOC_CLS,
+    GCS_MAINLINE_XLOC_OFFSET,
+    GCS_MAINLINE_XLOC_OFFSET_BETA_PX,
     GCSLaneTrainer,
 )
 from ultralytics.utils.gcs_shape import DATASET_IMAGE_SHAPES, normalize_imgsz, shape_str, trainer_imgsz
 from ultralytics.utils.gcs_postprocess import GCS_DEFAULT_MAX_DET
 
 
-DEFAULT_MODEL = ROOT / "ultralytics" / "cfg" / "models" / "gcs" / "gcs-yolo-lane-s-q12.yaml"
+DEFAULT_MODEL = ROOT / "ultralytics" / "cfg" / "models" / "gcs" / "gcs-yolo-lane-s-q12-k56.yaml"
 
 
 def str2bool(value: str | bool) -> bool:
@@ -69,8 +68,8 @@ def dataset_defaults(dataset: str) -> dict[str, Path]:
     """Return conventional local paths for a converted GCS dataset."""
     name = dataset.lower()
     if name == "tusimple":
-        fixed_root = ROOT / "datasets" / "tusimple_fixed_y_960x544"
-        fixed_data = ROOT / "data" / "tusimple_gcs_fixed_y_960x544.yaml"
+        fixed_root = ROOT / "datasets" / "tusimple_fixed_y_k56_960x544"
+        fixed_data = ROOT / "data" / "tusimple_gcs_fixed_y_k56_960x544.yaml"
         if fixed_data.exists():
             return {
                 "data": fixed_data,
@@ -269,6 +268,24 @@ def parse_args() -> argparse.Namespace:
         default=GCS_MAINLINE_GEOMETRY_CURVATURE_BETA_PX,
         help="SmoothL1 beta in pixels for the GT5 edge curvature auxiliary loss.",
     )
+    parser.add_argument(
+        "--gcs-xloc-cls",
+        type=float,
+        default=GCS_MAINLINE_XLOC_CLS,
+        help="Optional fixed-y x-bin classification auxiliary gain folded into point_loss. 0 disables.",
+    )
+    parser.add_argument(
+        "--gcs-xloc-offset",
+        type=float,
+        default=GCS_MAINLINE_XLOC_OFFSET,
+        help="Optional fixed-y within-bin x-offset auxiliary gain folded into point_loss. 0 disables.",
+    )
+    parser.add_argument(
+        "--gcs-xloc-offset-beta-px",
+        type=float,
+        default=GCS_MAINLINE_XLOC_OFFSET_BETA_PX,
+        help="SmoothL1 beta in pixels for the optional xloc within-bin offset auxiliary.",
+    )
     parser.add_argument("--gcs-count-cls", type=float, default=0.3, help="Explicit Count Head count=2/3/4/5 CE loss gain.")
     parser.add_argument(
         "--gcs-count-sum",
@@ -294,18 +311,6 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=GCS_MAINLINE_QUALITY_GT5_EDGE_FLOOR,
         help="Minimum Quality Head target for matched left/right GT5 edge lanes. 0 disables.",
-    )
-    parser.add_argument(
-        "--gcs-quality-pairwise",
-        type=float,
-        default=GCS_MAINLINE_QUALITY_PAIRWISE,
-        help="Competitive Quality Head pairwise ranking gain for GT5 edge positives vs false fifth candidates. 0 disables.",
-    )
-    parser.add_argument(
-        "--gcs-quality-pairwise-margin",
-        type=float,
-        default=GCS_MAINLINE_QUALITY_PAIRWISE_MARGIN,
-        help="Logit margin for the default-off competitive Quality Head pairwise ranking loss.",
     )
     parser.add_argument(
         "--gcs-fifthness",
@@ -399,18 +404,6 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=GCS_MAINLINE_COUNT_BOUNDARY_GT5_POS_WEIGHT,
         help="Extra Count Boundary BCE weight for count>=5 positive targets. 1 disables.",
-    )
-    parser.add_argument(
-        "--gcs-count-cumulative",
-        type=float,
-        default=GCS_MAINLINE_COUNT_CUMULATIVE,
-        help="Cumulative count>=3/4/5 supervision gain from existing Bx4 Count Head logits. 0 disables.",
-    )
-    parser.add_argument(
-        "--gcs-count-cumulative-label-smoothing",
-        type=float,
-        default=GCS_MAINLINE_COUNT_CUMULATIVE_LABEL_SMOOTHING,
-        help="Label smoothing for the default-off cumulative count>=3/4/5 targets.",
     )
     parser.add_argument(
         "--gcs-count-adjacent-margin",
@@ -1053,6 +1046,9 @@ def main() -> None:
         "gcs_line_iou_width_px": args.gcs_line_iou_width_px,
         "gcs_geometry_curvature": args.gcs_geometry_curvature,
         "gcs_geometry_curvature_beta_px": args.gcs_geometry_curvature_beta_px,
+        "gcs_xloc_cls": args.gcs_xloc_cls,
+        "gcs_xloc_offset": args.gcs_xloc_offset,
+        "gcs_xloc_offset_beta_px": args.gcs_xloc_offset_beta_px,
         "gcs_count_cls": args.gcs_count_cls,
         "gcs_count_sum": args.gcs_count_sum,
         "gcs_count_sum_normalize": args.gcs_count_sum_normalize,
@@ -1060,8 +1056,6 @@ def main() -> None:
         "gcs_quality_dist_thr_px": args.gcs_quality_dist_thr_px,
         "gcs_quality_neg_weight": args.gcs_quality_neg_weight,
         "gcs_quality_gt5_edge_floor": args.gcs_quality_gt5_edge_floor,
-        "gcs_quality_pairwise": args.gcs_quality_pairwise,
-        "gcs_quality_pairwise_margin": args.gcs_quality_pairwise_margin,
         "gcs_fifthness": args.gcs_fifthness,
         "gcs_fifthness_pairwise": args.gcs_fifthness_pairwise,
         "gcs_fifthness_margin": args.gcs_fifthness_margin,
@@ -1086,8 +1080,6 @@ def main() -> None:
         "gcs_count_adjacent_margin": args.gcs_count_adjacent_margin,
         "gcs_count_adjacent_margin_gain": args.gcs_count_adjacent_margin_gain,
         "gcs_count_adjacent_margin_gt45_weight": args.gcs_count_adjacent_margin_gt45_weight,
-        "gcs_count_cumulative": args.gcs_count_cumulative,
-        "gcs_count_cumulative_label_smoothing": args.gcs_count_cumulative_label_smoothing,
         "gcs_exist_pos_weight": args.gcs_exist_pos_weight,
         "gcs_exist_focal_gamma": args.gcs_exist_focal_gamma,
         "gcs_exist_focal_alpha": args.gcs_exist_focal_alpha,

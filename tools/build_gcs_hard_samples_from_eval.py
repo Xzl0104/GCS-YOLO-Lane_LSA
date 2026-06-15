@@ -16,7 +16,7 @@ if str(ROOT) not in sys.path:
 os.chdir(ROOT)
 
 
-DEFAULT_DATASET_ROOT = ROOT / "datasets" / "tusimple_fixed_y_960x544"
+DEFAULT_DATASET_ROOT = ROOT / "datasets" / "tusimple_fixed_y_k56_960x544"
 
 
 def parse_list(value: str) -> list[str]:

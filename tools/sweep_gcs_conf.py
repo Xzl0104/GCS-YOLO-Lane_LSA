@@ -33,7 +33,9 @@ from ultralytics.utils.gcs_postprocess import (
 from ultralytics.utils.torch_utils import select_device
 
 
-DEFAULT_WEIGHTS = ROOT / "runs" / "gcs_lane" / "gcs_yolo_lane_s_tusimple_refquery_e220" / "weights" / "best.pt"
+DEFAULT_WEIGHTS = (
+    ROOT / "runs" / "gcs_lane" / "gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4" / "weights" / "official_best.pt"
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -155,8 +157,7 @@ def parse_args() -> argparse.Namespace:
 def default_data_yaml(dataset: str) -> Path:
     """Prefer the fixed-y TuSimple yaml used by current experiments when it exists."""
     candidates = [
-        ROOT / "data" / f"{dataset}_gcs_fixed_y_960x544.yaml",
-        ROOT / "data" / f"{dataset}_gcs_stratified_960x544.yaml",
+        ROOT / "data" / f"{dataset}_gcs_fixed_y_k56_960x544.yaml",
         ROOT / "data" / f"{dataset}_gcs.yaml",
     ]
     for path in candidates:

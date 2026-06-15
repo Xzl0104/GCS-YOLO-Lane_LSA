@@ -207,7 +207,6 @@ class CandidateAwareCountHead(nn.Module):
         use_query_feat: bool = True,
         use_score_feat: bool = True,
         use_geometry_feat: bool = True,
-        use_fifth_candidate_evidence: bool = False,
     ):
         """Initialize the count classification head."""
         super().__init__()
@@ -219,22 +218,10 @@ class CandidateAwareCountHead(nn.Module):
         self.use_query_feat = bool(use_query_feat)
         self.use_score_feat = bool(use_score_feat)
         self.use_geometry_feat = bool(use_geometry_feat)
-        self.use_fifth_candidate_evidence = bool(use_fifth_candidate_evidence)
         self.visible_valid_thr = 0.5
         self.visible_support_points = 12.0
         self.score_extra_dim = 7
         self.geometry_extra_dim = 3
-        self.fifth_candidate_feature_names = (
-            "fifth_lane_quality",
-            "fourth_lane_quality",
-            "fourth_to_fifth_quality_gap",
-            "fifth_visible_points",
-            "fifth_visible_support",
-            "fifth_visible_mean",
-            "fifth_outside_gap",
-            "fifth_edge_side",
-        )
-        self.fifth_candidate_feature_dim = len(self.fifth_candidate_feature_names)
         self.cardinality_feature_names = (
             "exist_soft_count",
             "exist_valid_soft_count",
@@ -289,7 +276,6 @@ class CandidateAwareCountHead(nn.Module):
             nn.Linear(hidden_dim, hidden_dim),
         )
         self.cardinality_residual = self._build_cardinality_residual(hidden_dim, dropout)
-        self.fifth_candidate_residual = self._build_fifth_candidate_residual(hidden_dim, dropout)
         self.count_cls = nn.Linear(hidden_dim, 4)
         self.count_boundary_cls = nn.Linear(hidden_dim, 2)
         nn.init.zeros_(self.count_boundary_cls.weight)
@@ -302,30 +288,10 @@ class CandidateAwareCountHead(nn.Module):
         self.use_query_feat = bool(getattr(self, "use_query_feat", True))
         self.use_score_feat = bool(getattr(self, "use_score_feat", True))
         self.use_geometry_feat = bool(getattr(self, "use_geometry_feat", True))
-        self.use_fifth_candidate_evidence = bool(getattr(self, "use_fifth_candidate_evidence", False))
         self.visible_valid_thr = float(getattr(self, "visible_valid_thr", 0.5))
         self.visible_support_points = float(getattr(self, "visible_support_points", 12.0))
         self.score_extra_dim = int(getattr(self, "score_extra_dim", 7))
         self.geometry_extra_dim = int(getattr(self, "geometry_extra_dim", 3))
-        self.fifth_candidate_feature_names = tuple(
-            getattr(
-                self,
-                "fifth_candidate_feature_names",
-                (
-                    "fifth_lane_quality",
-                    "fourth_lane_quality",
-                    "fourth_to_fifth_quality_gap",
-                    "fifth_visible_points",
-                    "fifth_visible_support",
-                    "fifth_visible_mean",
-                    "fifth_outside_gap",
-                    "fifth_edge_side",
-                ),
-            )
-        )
-        self.fifth_candidate_feature_dim = int(
-            getattr(self, "fifth_candidate_feature_dim", len(self.fifth_candidate_feature_names))
-        )
         self.cardinality_feature_names = tuple(
             getattr(
                 self,
@@ -381,8 +347,6 @@ class CandidateAwareCountHead(nn.Module):
             )
         if not hasattr(self, "cardinality_residual"):
             _attach("cardinality_residual", self._build_cardinality_residual(hidden_dim, 0.1))
-        if not hasattr(self, "fifth_candidate_residual"):
-            _attach("fifth_candidate_residual", self._build_fifth_candidate_residual(hidden_dim, 0.1))
         if not hasattr(self, "count_boundary_cls"):
             boundary = nn.Linear(hidden_dim, 2)
             nn.init.zeros_(boundary.weight)
@@ -393,19 +357,6 @@ class CandidateAwareCountHead(nn.Module):
         """Build a zero-initialized full-query count evidence residual."""
         residual = nn.Sequential(
             nn.Linear(int(self.cardinality_feature_dim), hidden_dim),
-            nn.LayerNorm(hidden_dim),
-            nn.SiLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim, hidden_dim),
-        )
-        nn.init.zeros_(residual[-1].weight)
-        nn.init.zeros_(residual[-1].bias)
-        return residual
-
-    def _build_fifth_candidate_residual(self, hidden_dim: int, dropout: float) -> nn.Sequential:
-        """Build a zero-initialized fifth-candidate evidence residual."""
-        residual = nn.Sequential(
-            nn.Linear(int(self.fifth_candidate_feature_dim), hidden_dim),
             nn.LayerNorm(hidden_dim),
             nn.SiLU(),
             nn.Dropout(dropout),
@@ -634,117 +585,6 @@ class CandidateAwareCountHead(nn.Module):
             features = torch.zeros_like(features)
         return features
 
-    def _query_mean_x(
-        self,
-        pred_points: torch.Tensor | None,
-        valid_prob_full: torch.Tensor | None,
-        b: int,
-        q: int,
-        *,
-        device: torch.device,
-        dtype: torch.dtype,
-    ) -> torch.Tensor:
-        """Return a B x Q query mean-x estimate for fifth-candidate evidence."""
-        if pred_points is None:
-            return torch.full((b, q), 0.5, device=device, dtype=dtype)
-        if pred_points.ndim != 4 or pred_points.shape[:2] != (b, q) or pred_points.shape[-1] != 2:
-            raise ValueError(
-                "pred_points must have shape B x Q x K x 2 for Count Head fifth-candidate evidence, "
-                f"got {tuple(pred_points.shape)} vs B,Q={(b, q)}."
-            )
-        x = pred_points.to(device=device, dtype=dtype).clamp(0.0, 1.0)[..., 0]
-        if valid_prob_full is None:
-            return x.mean(dim=-1)
-        weight = valid_prob_full.to(device=device, dtype=dtype).clamp(0.0, 1.0)
-        return (x * weight).sum(dim=-1) / weight.sum(dim=-1).clamp_min(1e-6)
-
-    def _fifth_candidate_features(
-        self,
-        pred_logits: torch.Tensor,
-        pred_valid_logits: torch.Tensor | None,
-        pred_points: torch.Tensor | None,
-    ) -> torch.Tensor:
-        """Return explicit fifth-candidate evidence for Count Head calibration."""
-        if pred_logits.ndim == 3 and pred_logits.shape[-1] == 1:
-            pred_logits = pred_logits.squeeze(-1)
-        if pred_logits.ndim != 2:
-            raise ValueError(
-                f"pred_logits must have shape B x Q for fifth-candidate evidence, got {tuple(pred_logits.shape)}."
-            )
-        b, q = pred_logits.shape
-        device, dtype = pred_logits.device, pred_logits.dtype
-        exist_prob = pred_logits.sigmoid()
-
-        valid_prob_full = None
-        if pred_valid_logits is None:
-            valid_mean = torch.ones((b, q), device=device, dtype=dtype)
-            visible_support = torch.ones_like(valid_mean)
-            visible_points = torch.ones_like(valid_mean)
-        else:
-            if pred_valid_logits.ndim == 4 and pred_valid_logits.shape[-1] == 1:
-                pred_valid_logits = pred_valid_logits.squeeze(-1)
-            if pred_valid_logits.ndim != 3 or pred_valid_logits.shape[:2] != (b, q):
-                raise ValueError(
-                    "pred_valid_logits must have shape B x Q x K for Count Head fifth-candidate evidence, "
-                    f"got {tuple(pred_valid_logits.shape)} vs B,Q={(b, q)}."
-                )
-            valid_prob_full = pred_valid_logits.sigmoid().to(dtype=dtype)
-            valid_mean_3d, visible_support_3d, visible_points_3d, _ = self._visible_segment_stats(
-                valid_prob_full,
-                valid_thr=float(getattr(self, "visible_valid_thr", 0.5)),
-                support_points=float(getattr(self, "visible_support_points", 12.0)),
-            )
-            valid_mean = valid_mean_3d.squeeze(-1)
-            visible_support = visible_support_3d.squeeze(-1)
-            visible_points = visible_points_3d.squeeze(-1)
-
-        lane_quality = (exist_prob * valid_mean * visible_support).clamp(0.0, 1.0)
-        topk = min(5, q)
-        top_values, top_idx = lane_quality.topk(k=topk, dim=1)
-        if topk < 5:
-            pad_values = torch.zeros((b, 5 - topk), device=device, dtype=dtype)
-            pad_idx = torch.zeros((b, 5 - topk), device=device, dtype=torch.long)
-            top_values = torch.cat((top_values, pad_values), dim=1)
-            top_idx = torch.cat((top_idx, pad_idx), dim=1)
-
-        fourth_quality = top_values[:, 3]
-        fifth_quality = top_values[:, 4]
-        fifth_idx = top_idx[:, 4:5]
-        fifth_visible_points = visible_points.gather(dim=1, index=fifth_idx).squeeze(1)
-        fifth_support = visible_support.gather(dim=1, index=fifth_idx).squeeze(1)
-        fifth_visible_mean = valid_mean.gather(dim=1, index=fifth_idx).squeeze(1)
-
-        query_x = self._query_mean_x(pred_points, valid_prob_full, b, q, device=device, dtype=dtype)
-        top4_idx = top_idx[:, :4]
-        top4_x = query_x.gather(dim=1, index=top4_idx)
-        fifth_x = query_x.gather(dim=1, index=fifth_idx).squeeze(1)
-        top4_min = top4_x.min(dim=1).values
-        top4_max = top4_x.max(dim=1).values
-        outside_left = fifth_x < top4_min
-        outside_right = fifth_x > top4_max
-        outside_gap = torch.where(
-            outside_left,
-            (top4_min - fifth_x).clamp_min(0.0),
-            torch.where(outside_right, (fifth_x - top4_max).clamp_min(0.0), torch.zeros_like(fifth_x)),
-        )
-        edge_side = outside_right.to(dtype=dtype) - outside_left.to(dtype=dtype)
-        support_den = max(float(getattr(self, "visible_support_points", 12.0)), 1.0)
-        fifth_visible_points_norm = fifth_visible_points / support_den
-
-        return torch.stack(
-            (
-                fifth_quality,
-                fourth_quality,
-                fourth_quality - fifth_quality,
-                fifth_visible_points_norm.clamp(0.0, 2.0),
-                fifth_support,
-                fifth_visible_mean,
-                outside_gap,
-                edge_side,
-            ),
-            dim=1,
-        )
-
     def _cardinality_context(
         self,
         query_embed: torch.Tensor,
@@ -757,19 +597,6 @@ class CandidateAwareCountHead(nn.Module):
             return query_embed.new_zeros((query_embed.shape[0], self.count_cls.in_features))
         features = self._cardinality_features(pred_logits, pred_valid_logits, pred_quality_logits)
         return self.cardinality_residual(features.to(device=query_embed.device, dtype=query_embed.dtype))
-
-    def _fifth_candidate_context(
-        self,
-        query_embed: torch.Tensor,
-        pred_logits: torch.Tensor | None,
-        pred_valid_logits: torch.Tensor | None,
-        pred_points: torch.Tensor | None,
-    ) -> torch.Tensor:
-        """Return default-off fifth-candidate Count Head evidence."""
-        if not bool(getattr(self, "use_fifth_candidate_evidence", False)) or pred_logits is None:
-            return query_embed.new_zeros((query_embed.shape[0], self.count_cls.in_features))
-        features = self._fifth_candidate_features(pred_logits, pred_valid_logits, pred_points)
-        return self.fifth_candidate_residual(features.to(device=query_embed.device, dtype=query_embed.dtype))
 
     def _candidate_context(
         self,
@@ -827,12 +654,6 @@ class CandidateAwareCountHead(nn.Module):
             pred_logits=pred_logits,
             pred_valid_logits=pred_valid_logits,
             pred_quality_logits=pred_quality_logits,
-        )
-        fused = fused + self._fifth_candidate_context(
-            query_embed,
-            pred_logits=pred_logits,
-            pred_valid_logits=pred_valid_logits,
-            pred_points=pred_points,
         )
         return fused
 
@@ -892,14 +713,15 @@ class GCSLaneHead(nn.Module):
         self,
         c1=128,
         num_queries=12,
-        num_points=32,
+        num_points=56,
         num_decoder_layers=3,
         nhead=8,
         point_mode="free",
         fixed_y_start=TUSIMPLE_OFFICIAL_BOTTOM_Y_NORM,
-        fixed_y_end=0.25,
+        fixed_y_end=160.0 / 720.0,
         use_fifthness=False,
-        use_count_fifth_evidence=False,
+        xloc_bins=0,
+        xloc_offset=True,
     ):
         """Initialize the GCS lane query decoder."""
         super().__init__()
@@ -929,7 +751,12 @@ class GCSLaneHead(nn.Module):
         self.fixed_y_start = float(fixed_y_start)
         self.fixed_y_end = float(fixed_y_end)
         self.use_fifthness = bool(use_fifthness)
-        self.use_count_fifth_evidence = bool(use_count_fifth_evidence)
+        self.xloc_bins = int(xloc_bins or 0)
+        self.xloc_offset = bool(xloc_offset)
+        if self.xloc_bins == 1 or self.xloc_bins < 0:
+            raise ValueError(f"GCSLaneHead xloc_bins must be 0 or >=2, got {self.xloc_bins}.")
+        if self.xloc_bins > 1 and self.point_mode != "fixed_y":
+            raise ValueError("GCSLaneHead xloc_bins is only supported for fixed_y x-only lane heads.")
         if not (0.0 <= self.fixed_y_end < self.fixed_y_start <= 1.0):
             raise ValueError(
                 f"Expected 0 <= fixed_y_end < fixed_y_start <= 1, got "
@@ -971,7 +798,6 @@ class GCSLaneHead(nn.Module):
             hidden_dim=256,
             dropout=0.1,
             topq=8,
-            use_fifth_candidate_evidence=self.use_count_fifth_evidence,
         )
         self.point_embed = nn.Embedding(num_points, c1)
         self.point_coord_mlp = nn.Sequential(
@@ -991,6 +817,20 @@ class GCSLaneHead(nn.Module):
             nn.ReLU(inplace=True),
             nn.Linear(c1, 1),
         )
+        if self.xloc_bins > 1:
+            self.xloc_bin_mlp = nn.Sequential(
+                nn.Linear(c1, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, num_points * self.xloc_bins),
+            )
+            if self.xloc_offset:
+                self.xloc_offset_mlp = nn.Sequential(
+                    nn.Linear(c1, c1),
+                    nn.ReLU(inplace=True),
+                    nn.Linear(c1, num_points),
+                )
         self.exist_mlp = nn.Sequential(
             nn.Linear(c1, c1),
             nn.ReLU(inplace=True),
@@ -1013,6 +853,7 @@ class GCSLaneHead(nn.Module):
         self._init_point_valid_head()
         self._init_point_refine_head()
         self._init_point_valid_refine_head()
+        self._init_xloc_heads()
         self._init_quality_head()
         if self.use_fifthness:
             self._init_fifthness_head()
@@ -1063,6 +904,17 @@ class GCSLaneHead(nn.Module):
         final = self.point_valid_refine_mlp[-1]
         nn.init.normal_(final.weight, mean=0.0, std=5e-3)
         nn.init.zeros_(final.bias)
+
+    def _init_xloc_heads(self):
+        """Initialize optional x-bin/offset localization heads near a neutral state."""
+        if hasattr(self, "xloc_bin_mlp"):
+            final = self.xloc_bin_mlp[-1]
+            nn.init.normal_(final.weight, mean=0.0, std=1e-3)
+            nn.init.zeros_(final.bias)
+        if hasattr(self, "xloc_offset_mlp"):
+            final = self.xloc_offset_mlp[-1]
+            nn.init.normal_(final.weight, mean=0.0, std=1e-3)
+            nn.init.zeros_(final.bias)
 
     def _init_quality_head(self):
         """Initialize lane-quality logits near the BCE decision boundary."""
@@ -1157,6 +1009,11 @@ class GCSLaneHead(nn.Module):
         decoder_macs = b * layers * (self_attn_macs + cross_attn_macs + ffn_macs)
         point_mlp_macs = b * q * (2 * d * d + d * (k * point_dims))
         point_valid_mlp_macs = b * q * (d * d + d * k)
+        xloc_mlp_macs = 0
+        if int(getattr(self, "xloc_bins", 0) or 0) > 1:
+            xloc_mlp_macs = b * q * (2 * d * d + d * (k * int(self.xloc_bins)))
+            if bool(getattr(self, "xloc_offset", False)):
+                xloc_mlp_macs += b * q * (d * d + d * k)
         sample_macs = b * q * k * min(3, len(xs)) * d * 4
         coord_mlp_macs = b * q * k * (2 * d + d * d)
         refine_mlp_macs = b * q * k * ((2 * d) * d + d)
@@ -1170,6 +1027,7 @@ class GCSLaneHead(nn.Module):
                 decoder_macs
                 + point_mlp_macs
                 + point_valid_mlp_macs
+                + xloc_mlp_macs
                 + 2 * sample_macs
                 + 2 * coord_mlp_macs
                 + refine_mlp_macs
@@ -1273,6 +1131,12 @@ class GCSLaneHead(nn.Module):
             "pred_valid_logits": pred_valid_logits,
             "pred_quality_logits": pred_quality_logits,
         }
+        if hasattr(self, "xloc_bin_mlp"):
+            out["pred_x_bin_logits"] = self.xloc_bin_mlp(hs).view(
+                b, self.num_queries, self.num_points, self.xloc_bins
+            )
+            if hasattr(self, "xloc_offset_mlp"):
+                out["pred_x_bin_offsets"] = self.xloc_offset_mlp(hs).view(b, self.num_queries, self.num_points)
         if hasattr(self, "fifthness_mlp"):
             out["pred_fifthness_logits"] = self.fifthness_mlp(hs).squeeze(-1)
         if hasattr(self, "count_head"):

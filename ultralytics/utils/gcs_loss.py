@@ -43,19 +43,18 @@ class GCSLoss(nn.Module):
         line_iou_width_px: float | None = None,
         geometry_curvature: float | None = None,
         geometry_curvature_beta_px: float | None = None,
+        xloc_cls: float | None = None,
+        xloc_offset: float | None = None,
+        xloc_offset_beta_px: float | None = None,
         count_head_warmup_epochs: float | None = None,
         count_min_gt_points: int | None = None,
         count_boundary_gt5_pos_weight: float | None = None,
-        count_cumulative: float | None = None,
-        count_cumulative_label_smoothing: float | None = None,
         quality_dist_thr_px: float | None = None,
         quality_neg_weight: float | None = None,
         quality_hard_negative_weight: float | None = None,
         quality_duplicate_negative_weight: float | None = None,
         quality_hard_negative_from_head: bool | str | None = None,
         quality_gt5_edge_floor: float | None = None,
-        quality_pairwise: float | None = None,
-        quality_pairwise_margin: float | None = None,
         fifthness: float | None = None,
         fifthness_pairwise: float | None = None,
         fifthness_margin: float | None = None,
@@ -131,6 +130,15 @@ class GCSLoss(nn.Module):
             if geometry_curvature_beta_px is not None
             else self._arg(args, "gcs_geometry_curvature_beta_px", 5.0)
         )
+        self.xloc_cls_gain = float(xloc_cls if xloc_cls is not None else self._arg(args, "gcs_xloc_cls", 0.0))
+        self.xloc_offset_gain = float(
+            xloc_offset if xloc_offset is not None else self._arg(args, "gcs_xloc_offset", 0.0)
+        )
+        self.xloc_offset_beta_px = float(
+            xloc_offset_beta_px
+            if xloc_offset_beta_px is not None
+            else self._arg(args, "gcs_xloc_offset_beta_px", 3.0)
+        )
         self.point_mode = self._infer_point_mode(model, args)
         self.count_cls_gain = float(
             lambda_count_cls if lambda_count_cls is not None else self._arg(args, "gcs_count_cls", 0.3)
@@ -172,14 +180,6 @@ class GCSLoss(nn.Module):
             quality_gt5_edge_floor
             if quality_gt5_edge_floor is not None
             else self._arg(args, "gcs_quality_gt5_edge_floor", 0.0)
-        )
-        self.quality_pairwise_gain = float(
-            quality_pairwise if quality_pairwise is not None else self._arg(args, "gcs_quality_pairwise", 0.0)
-        )
-        self.quality_pairwise_margin = float(
-            quality_pairwise_margin
-            if quality_pairwise_margin is not None
-            else self._arg(args, "gcs_quality_pairwise_margin", 0.2)
         )
         self.fifthness_gain = float(fifthness if fifthness is not None else self._arg(args, "gcs_fifthness", 0.0))
         self.fifthness_pairwise_gain = float(
@@ -228,14 +228,6 @@ class GCSLoss(nn.Module):
             count_boundary_gt5_pos_weight
             if count_boundary_gt5_pos_weight is not None
             else self._arg(args, "gcs_count_boundary_gt5_pos_weight", 1.15)
-        )
-        self.count_cumulative_gain = float(
-            count_cumulative if count_cumulative is not None else self._arg(args, "gcs_count_cumulative", 0.0)
-        )
-        self.count_cumulative_label_smoothing = float(
-            count_cumulative_label_smoothing
-            if count_cumulative_label_smoothing is not None
-            else self._arg(args, "gcs_count_cumulative_label_smoothing", 0.0)
         )
         self.count_adjacent_margin = float(self._arg(args, "gcs_count_adjacent_margin", 0.2))
         self.count_adjacent_margin_gain = float(self._arg(args, "gcs_count_adjacent_margin_gain", 0.0))
@@ -409,18 +401,17 @@ class GCSLoss(nn.Module):
             "gcs_point_invalid_x": self.point_invalid_x_gain,
             "gcs_count_cls": self.count_cls_gain,
             "gcs_count_boundary": self.count_boundary_gain,
-            "gcs_count_cumulative": self.count_cumulative_gain,
             "gcs_count_adjacent_margin": self.count_adjacent_margin,
             "gcs_count_adjacent_margin_gain": self.count_adjacent_margin_gain,
             "gcs_count_sum": self.count_sum_gain,
             "gcs_quality": self.quality_gain,
-            "gcs_quality_pairwise": self.quality_pairwise_gain,
-            "gcs_quality_pairwise_margin": self.quality_pairwise_margin,
             "gcs_fifthness": self.fifthness_gain,
             "gcs_fifthness_pairwise": self.fifthness_pairwise_gain,
             "gcs_fifthness_margin": self.fifthness_margin,
             "gcs_fifthness_negative_score_thr": self.fifthness_negative_score_thr,
             "gcs_geometry_curvature": self.geometry_curvature_gain,
+            "gcs_xloc_cls": self.xloc_cls_gain,
+            "gcs_xloc_offset": self.xloc_offset_gain,
             "gcs_quality_dist_thr_px": self.quality_dist_thr_px,
             "gcs_quality_hard_negative_weight": self.quality_hard_negative_weight,
             "gcs_quality_duplicate_negative_weight": self.quality_duplicate_negative_weight,
@@ -449,7 +440,6 @@ class GCSLoss(nn.Module):
             "gcs_hard_negative_quality_thr": self.hard_negative_quality_thr,
             "gcs_hard_negative_visible_thr": self.hard_negative_visible_thr,
             "gcs_count_boundary_label_smoothing": self.count_boundary_label_smoothing,
-            "gcs_count_cumulative_label_smoothing": self.count_cumulative_label_smoothing,
             "gcs_fifthness_negative_score_thr": self.fifthness_negative_score_thr,
             "gcs_point_valid_gt5_edge_continuity_thr": self.point_valid_gt5_edge_continuity_thr,
             "gcs_point_valid_gt5_edge_segment_thr": self.point_valid_gt5_edge_segment_thr,
@@ -508,6 +498,8 @@ class GCSLoss(nn.Module):
             raise ValueError(
                 f"gcs_geometry_curvature_beta_px must be > 0, got {self.geometry_curvature_beta_px}."
             )
+        if self.xloc_offset_beta_px <= 0.0:
+            raise ValueError(f"gcs_xloc_offset_beta_px must be > 0, got {self.xloc_offset_beta_px}.")
         if self.quality_gain > 0.0 and self.quality_dist_thr_px <= 0.0:
             raise ValueError(f"gcs_quality_dist_thr_px must be > 0 when gcs_quality is enabled, got {self.quality_dist_thr_px}.")
         self.exist_quality_alpha = float(
@@ -526,13 +518,16 @@ class GCSLoss(nn.Module):
         if self.point_mode != "fixed_y" and (
             self.line_iou_gain > 0.0
             or self.geometry_curvature_gain > 0.0
+            or self.xloc_cls_gain > 0.0
+            or self.xloc_offset_gain > 0.0
             or self.exist_quality_lane_iou_alpha > 0.0
             or self.quality_gain > 0.0
         ):
             raise ValueError(
                 "Current GCS LineIoU implementation is fixed-y only because it compares horizontal strips at shared "
                 "y anchors. Set gcs_line_iou=0.0, gcs_geometry_curvature=0.0, "
-                "gcs_exist_quality_lane_iou_alpha=0.0, and gcs_quality=0.0 for free-point mode, or implement a "
+                "gcs_xloc_cls=0.0, gcs_xloc_offset=0.0, gcs_exist_quality_lane_iou_alpha=0.0, "
+                "and gcs_quality=0.0 for free-point mode, or implement a "
                 "free-point LineIoU/curvature path that first resamples lanes onto common y anchors."
             )
         self.exist_quality_mode = str(
@@ -1646,6 +1641,101 @@ class GCSLoss(nn.Module):
         invalid_x_loss = torch.stack(invalid_x_losses).mean()
         return visible_loss + self.point_invalid_x_gain * invalid_x_loss
 
+    def xloc_loss(
+        self,
+        preds: dict[str, torch.Tensor],
+        pred_points: torch.Tensor,
+        gt_points: list[torch.Tensor],
+        gt_valid: list[torch.Tensor],
+        indices: list[tuple[torch.Tensor, torch.Tensor]],
+        hard_loss_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Optional fixed-y x-bin classification plus within-bin offset supervision."""
+        if self.xloc_cls_gain <= 0.0 and self.xloc_offset_gain <= 0.0:
+            return self._zero_like(pred_points)
+        if not self._is_fixed_y():
+            raise ValueError("gcs_xloc_cls/gcs_xloc_offset require fixed_y point mode.")
+
+        pred_x_bin_logits = preds.get("pred_x_bin_logits")
+        if pred_x_bin_logits is None:
+            raise ValueError(
+                "GCS xloc loss is enabled but pred_x_bin_logits is missing. "
+                "Use an xloc-enabled GCSLaneHead YAML, or set gcs_xloc_cls=0.0 and gcs_xloc_offset=0.0."
+            )
+        if pred_x_bin_logits.ndim != 4 or pred_x_bin_logits.shape[:3] != pred_points.shape[:3]:
+            raise ValueError(
+                "pred_x_bin_logits must have shape B x Q x K x bins matching pred_points, "
+                f"got {tuple(pred_x_bin_logits.shape)} vs {tuple(pred_points.shape[:3])}."
+            )
+        bins = int(pred_x_bin_logits.shape[-1])
+        if bins < 2:
+            raise ValueError(f"pred_x_bin_logits must use at least 2 bins, got {bins}.")
+
+        pred_x_bin_offsets = preds.get("pred_x_bin_offsets")
+        if self.xloc_offset_gain > 0.0:
+            if pred_x_bin_offsets is None:
+                raise ValueError(
+                    "GCS xloc offset loss is enabled but pred_x_bin_offsets is missing. "
+                    "Use an xloc-offset-enabled GCSLaneHead YAML, or set gcs_xloc_offset=0.0."
+                )
+            if pred_x_bin_offsets.shape != pred_points.shape[:3]:
+                raise ValueError(
+                    "pred_x_bin_offsets must have shape B x Q x K matching pred_points, "
+                    f"got {tuple(pred_x_bin_offsets.shape)} vs {tuple(pred_points.shape[:3])}."
+                )
+
+        cls_losses = []
+        offset_losses = []
+        device, dtype = pred_points.device, pred_points.dtype
+        scale_x = self._pixel_scale_for(pred_points).to(device=device, dtype=dtype)[..., 0].reshape(())
+        for b, (src_idx, tgt_idx) in enumerate(indices):
+            if src_idx.numel() == 0:
+                continue
+            target = gt_points[b].to(device=device, dtype=dtype)[tgt_idx]
+            valid = gt_valid[b].to(device=device, dtype=dtype)[tgt_idx]
+            valid_mask = valid > 0.5
+            if not bool(valid_mask.any()):
+                continue
+
+            target_x = target[..., 0].clamp(0.0, 1.0)
+            target_bin = torch.floor(target_x * bins).clamp(0, bins - 1).to(dtype=torch.long)
+            lane_weights = self._matched_target_weights(
+                gt_points[b],
+                gt_valid[b],
+                tgt_idx,
+                device=device,
+                dtype=dtype,
+                hard_image=self._hard_mask_value(hard_loss_mask, b),
+                term="point",
+            )
+            lane_den = valid.sum(dim=1).clamp_min(1.0)
+
+            if self.xloc_cls_gain > 0.0:
+                logits = pred_x_bin_logits[b, src_idx]
+                cls = F.cross_entropy(logits.reshape(-1, bins), target_bin.reshape(-1), reduction="none").reshape_as(
+                    target_x
+                )
+                lane_cls = (cls * valid).sum(dim=1) / lane_den
+                cls_losses.append((lane_cls * lane_weights).sum() / lane_weights.sum().clamp_min(1.0))
+
+            if self.xloc_offset_gain > 0.0:
+                centers = (target_bin.to(dtype=dtype) + 0.5) / float(bins)
+                target_offset = target_x - centers
+                pred_offset = torch.tanh(pred_x_bin_offsets[b, src_idx]) * (0.5 / float(bins))
+                offset_delta_px = (pred_offset - target_offset) * scale_x
+                offset = F.smooth_l1_loss(
+                    offset_delta_px,
+                    torch.zeros_like(offset_delta_px),
+                    reduction="none",
+                    beta=float(self.xloc_offset_beta_px),
+                )
+                lane_offset = (offset * valid).sum(dim=1) / lane_den
+                offset_losses.append((lane_offset * lane_weights).sum() / lane_weights.sum().clamp_min(1.0))
+
+        cls_loss = torch.stack(cls_losses).mean() if cls_losses else self._zero_like(pred_points)
+        offset_loss = torch.stack(offset_losses).mean() if offset_losses else self._zero_like(pred_points)
+        return self.xloc_cls_gain * cls_loss + self.xloc_offset_gain * offset_loss
+
     def curvature_loss(
         self,
         pred_points: torch.Tensor,
@@ -1888,17 +1978,6 @@ class GCSLoss(nn.Module):
         else:
             neg_loss = self._zero_like(pred_points)
         loss = pos_loss + neg_loss
-        if (
-            self.quality_pairwise_gain > 0.0
-            and fifth_positive_mask is not None
-            and fifth_negative_mask is not None
-        ):
-            loss = loss + self.quality_pairwise_gain * self._pairwise_margin_loss(
-                pred_quality_logits,
-                fifth_positive_mask,
-                fifth_negative_mask,
-                margin=float(self.quality_pairwise_margin),
-            )
         return loss
 
     def point_valid_loss(
@@ -2096,11 +2175,6 @@ class GCSLoss(nn.Module):
             self.count_cls_weights, device=pred_count_logits.device, dtype=torch.float32
         )
         count_loss = F.cross_entropy(pred_count_logits.float(), gt_count_cls, weight=class_weight)
-        if self.count_cumulative_gain > 0.0:
-            count_loss = count_loss + self.count_cumulative_gain * self.count_cumulative_loss(
-                pred_count_logits,
-                gt_count,
-            )
         if self.count_adjacent_margin_gain > 0.0:
             count_loss = count_loss + self.count_adjacent_margin_gain * self.count_adjacent_margin_loss(
                 pred_count_logits, gt_count_cls, gt_count
@@ -2134,31 +2208,6 @@ class GCSLoss(nn.Module):
         else:
             boundary_loss = boundary_loss_elem.mean()
         return count_loss + self.count_boundary_gain * boundary_loss
-
-    def count_cumulative_loss(self, pred_count_logits: torch.Tensor, gt_count: torch.Tensor) -> torch.Tensor:
-        """Add cumulative count>=3/4/5 supervision from the existing B x 4 Count Head logits."""
-        logits = pred_count_logits.float()
-        gt_count = gt_count.to(device=logits.device)
-        cumulative_logits = torch.stack(
-            (
-                torch.logsumexp(logits[:, 1:], dim=1) - logits[:, 0],
-                torch.logsumexp(logits[:, 2:], dim=1) - torch.logsumexp(logits[:, :2], dim=1),
-                logits[:, 3] - torch.logsumexp(logits[:, :3], dim=1),
-            ),
-            dim=1,
-        )
-        targets = torch.stack(
-            (
-                gt_count.ge(3).float(),
-                gt_count.ge(4).float(),
-                gt_count.ge(5).float(),
-            ),
-            dim=1,
-        ).to(device=logits.device, dtype=logits.dtype)
-        smoothing = min(max(float(self.count_cumulative_label_smoothing), 0.0), 1.0)
-        if smoothing > 0.0:
-            targets = targets * (1.0 - smoothing) + 0.5 * smoothing
-        return F.binary_cross_entropy_with_logits(cumulative_logits, targets)
 
     def count_adjacent_margin_loss(
         self, pred_count_logits: torch.Tensor, gt_count_cls: torch.Tensor, gt_count: torch.Tensor
@@ -2345,11 +2394,7 @@ class GCSLoss(nn.Module):
             pred_logits, pred_points, pred_valid_logits, gt_points, gt_valid, indices
         )
         fifth_positive_mask = fifth_negative_mask = None
-        if (
-            self.quality_pairwise_gain > 0.0
-            or self.fifthness_gain > 0.0
-            or self.fifthness_pairwise_gain > 0.0
-        ):
+        if self.fifthness_gain > 0.0 or self.fifthness_pairwise_gain > 0.0:
             fifth_positive_mask, fifth_negative_mask = self.competitive_fifth_masks(
                 pred_logits,
                 pred_points,
@@ -2372,6 +2417,14 @@ class GCSLoss(nn.Module):
         )
         point_loss = self.point_loss(
             pred_points, gt_points, gt_valid, indices, pred_valid_logits, hard_loss_mask=hard_loss_mask
+        )
+        point_loss = point_loss + self.xloc_loss(
+            preds,
+            pred_points,
+            gt_points,
+            gt_valid,
+            indices,
+            hard_loss_mask=hard_loss_mask,
         )
         point_valid_loss = self.point_valid_loss(
             pred_valid_logits,

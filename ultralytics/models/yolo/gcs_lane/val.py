@@ -156,7 +156,7 @@ class GCSLaneValidator:
         if self.args is None:
             raise ValueError("GCSLaneValidator requires args or an explicit dataloader.")
 
-        data_path = self._path_value(self._arg(self.args, "data", None)) or str(ROOT.parent / "data/tusimple_gcs_fixed_y_960x544.yaml")
+        data_path = self._path_value(self._arg(self.args, "data", None)) or str(ROOT.parent / "data/tusimple_gcs_fixed_y_k56_960x544.yaml")
         data = check_det_dataset(data_path)
         image_dir = self._path_value(self._arg(self.args, "val_images", None)) or data.get("val") or data.get("test")
         label_dir = self._path_value(self._arg(self.args, "val_gcs_labels", None))

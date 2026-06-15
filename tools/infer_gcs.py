@@ -28,7 +28,9 @@ from ultralytics.utils.gcs_postprocess import (
 from ultralytics.utils.torch_utils import select_device
 
 
-DEFAULT_WEIGHTS = ROOT / "runs" / "gcs_lane" / "overfit20" / "weights" / "best.pt"
+DEFAULT_WEIGHTS = (
+    ROOT / "runs" / "gcs_lane" / "gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4" / "weights" / "official_best.pt"
+)
 
 
 def weight_run_dir(weights: str | Path) -> Path | None:
@@ -73,7 +75,7 @@ def warn_max_det_mismatch(weights: str | Path, max_det: int, context: str) -> No
 
 def dataset_defaults(dataset: str) -> dict[str, Path]:
     """Return conventional inference paths for a converted GCS dataset."""
-    root = ROOT / "datasets" / ("tusimple_fixed_y_960x544" if dataset.lower() == "tusimple" else dataset.lower())
+    root = ROOT / "datasets" / ("tusimple_fixed_y_k56_960x544" if dataset.lower() == "tusimple" else dataset.lower())
     return {"source": root / "images" / "val"}
 
 

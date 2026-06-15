@@ -120,6 +120,9 @@ gcs_line_iou: 0.3 # (float) GCS whole-lane LineIoU loss gain
 gcs_line_iou_width_px: 15.0 # (float) half-width in pixels used to expand lane points for LineIoU
 gcs_geometry_curvature: 0.0 # (float) fixed-y GT5 edge-lane curvature auxiliary loss gain; 0 disables
 gcs_geometry_curvature_beta_px: 5.0 # (float) SmoothL1 beta in pixels for the GT5 edge curvature auxiliary loss
+gcs_xloc_cls: 0.0 # (float) fixed-y x-bin classification auxiliary gain folded into point_loss; 0 disables
+gcs_xloc_offset: 0.0 # (float) fixed-y within-bin x-offset auxiliary gain folded into point_loss; 0 disables
+gcs_xloc_offset_beta_px: 3.0 # (float) SmoothL1 beta in pixels for the xloc within-bin offset auxiliary
 gcs_count_cls: 0.3 # (float) explicit image-level Count Head count=2/3/4/5 CE loss gain
 gcs_count_sum: 0.03 # (float) exist-count consistency loss gain for sum(sigmoid(pred_logits)) ~= GT lane count
 gcs_count_sum_normalize: True # (bool) normalize count_sum_loss by GT lane count
@@ -127,8 +130,6 @@ gcs_quality: 0.4 # (float) lane-level Quality Head BCE loss gain
 gcs_quality_dist_thr_px: 20.0 # (float) pixel threshold for quality target point-inlier score
 gcs_quality_neg_weight: 0.5 # (float) relative weight for unmatched-query quality negatives
 gcs_quality_gt5_edge_floor: 0.0 # (float) minimum matched Quality Head target for left/right GT5 edge lanes; 0 disables
-gcs_quality_pairwise: 0.0 # (float) competitive Quality Head pairwise ranking gain; 0 disables
-gcs_quality_pairwise_margin: 0.2 # (float) logit margin for competitive Quality Head ranking
 gcs_fifthness: 0.0 # (float) optional fifth-candidate verifier BCE gain; 0 disables
 gcs_fifthness_pairwise: 0.0 # (float) optional fifthness verifier pairwise ranking gain; 0 disables
 gcs_fifthness_margin: 0.2 # (float) logit margin for fifthness verifier pairwise ranking
@@ -150,8 +151,6 @@ gcs_count_cls_w5: 1.8 # (float) Count Head CE class weight for 5-lane images
 gcs_count_boundary: 0.05 # (float) Count Boundary BCE gain for count>=4 and count>=5 calibration inside count_cls_loss
 gcs_count_boundary_label_smoothing: 0.05 # (float) label smoothing for Count Boundary count>=4/count>=5 targets
 gcs_count_boundary_gt5_pos_weight: 1.15 # (float) extra Count Boundary BCE weight for count>=5 positive targets; 1 disables
-gcs_count_cumulative: 0.0 # (float) cumulative count>=3/4/5 supervision gain from Bx4 Count Head logits; 0 disables
-gcs_count_cumulative_label_smoothing: 0.0 # (float) label smoothing for cumulative count>=3/4/5 targets
 gcs_count_adjacent_margin: 0.2 # (float) target-vs-neighbor Count Head logit margin for adjacent count classes
 gcs_count_adjacent_margin_gain: 0.0 # (float) adjacent count margin gain inside count_cls_loss; 0 disables
 gcs_count_adjacent_margin_gt45_weight: 1.0 # (float) extra adjacent-margin sample weight for GT4/GT5 images; 1 disables

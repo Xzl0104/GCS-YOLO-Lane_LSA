@@ -24,8 +24,8 @@ from ultralytics.utils.gcs_postprocess import GCS_DEFAULT_MAX_DET, draw_gcs_lane
 
 
 DEFAULT_WEIGHTS = ROOT / "runs" / "baseline" / "yolo11s_seg_tusimple-2" / "weights" / "best.pt"
-DEFAULT_SOURCE = ROOT / "datasets" / "tusimple_fixed_y_960x544" / "images" / "val"
-DEFAULT_LABELS = ROOT / "datasets" / "tusimple_fixed_y_960x544" / "labels_gcs" / "val"
+DEFAULT_SOURCE = ROOT / "datasets" / "tusimple_fixed_y_k56_960x544" / "images" / "val"
+DEFAULT_LABELS = ROOT / "datasets" / "tusimple_fixed_y_k56_960x544" / "labels_gcs" / "val"
 DEFAULT_DATA = ROOT / "data" / "tusimple_yolo.yaml"
 
 MASK_COLORS = (
@@ -59,7 +59,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-images", type=int, default=0, help="Limit number of images. 0 means all.")
     parser.add_argument("--device", default="0", help="Inference device, e.g. 0 or cpu.")
     parser.add_argument("--half", action="store_true", help="Use FP16 on CUDA.")
-    parser.add_argument("--num-points", type=int, default=32, help="Number of structured points per decoded lane.")
+    parser.add_argument("--num-points", type=int, default=56, help="Number of structured points per decoded lane.")
     parser.add_argument("--mask-thr", type=float, default=0.5, help="Binary threshold for predicted masks.")
     parser.add_argument("--min-area", type=int, default=40, help="Minimum mask area in pixels after binarization.")
     parser.add_argument("--min-row-pixels", type=int, default=2, help="Minimum foreground pixels needed to keep a row.")
@@ -303,7 +303,7 @@ def evaluate(
     max_images: int = 0,
     device: str = "0",
     half: bool = False,
-    num_points: int = 32,
+    num_points: int = 56,
     mask_thr: float = 0.5,
     min_area: int = 40,
     min_row_pixels: int = 2,

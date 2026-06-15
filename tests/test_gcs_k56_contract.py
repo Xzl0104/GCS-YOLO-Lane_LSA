@@ -50,6 +50,7 @@ def test_k56_data_and_model_contract_match():
     )
     head_args = model["head"][-1][3]
 
+    assert len(head_args) == 7
     assert data["point_mode"] == "fixed_y"
     assert data["num_points"] == 56
     assert head_args[0] == 12
@@ -57,6 +58,24 @@ def test_k56_data_and_model_contract_match():
     assert head_args[4] == "fixed_y"
     assert math.isclose(float(data["fixed_y"][0]), float(head_args[5]))
     assert math.isclose(float(data["fixed_y"][1]), float(head_args[6]))
+
+
+def test_k56_xloc_v1_model_contract_is_opt_in_xloc_only():
+    model = yaml.safe_load(
+        (ROOT / "ultralytics" / "cfg" / "models" / "gcs" / "gcs-yolo-lane-s-q12-k56-xloc-v1.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    head_args = model["head"][-1][3]
+
+    assert head_args[0] == 12
+    assert head_args[1] == 56
+    assert head_args[4] == "fixed_y"
+    assert math.isclose(float(head_args[5]), 710.0 / 720.0)
+    assert math.isclose(float(head_args[6]), 160.0 / 720.0)
+    assert head_args[7] is False
+    assert head_args[8] == 64
+    assert head_args[9] is True
 
 
 def test_k56_train_command_infers_k56_label_dirs_from_data_yaml():
@@ -160,15 +179,13 @@ def test_hsample_endpoint_analysis_counts_ultra_short_and_anchor_hits():
 
     summary = endpoint_analysis.analyze_records(
         records,
-        k32_start=710.0 / 720.0,
-        k32_end=180.0 / 720.0,
         k56_start=710.0 / 720.0,
         k56_end=160.0 / 720.0,
     )
 
     assert summary["lanes"] == 2
     assert summary["ultra_short_lanes_1_to_3_h_samples"] == 2
-    assert summary["k32"]["zero_anchor_lanes"] == 1
+    assert summary["k56"]["zero_anchor_lanes"] == 0
     assert summary["k56"]["one_anchor_lanes"] == 1
     assert summary["ultra_short_examples"][0]["raw_file"] == "clips/a/1/20.jpg"
 

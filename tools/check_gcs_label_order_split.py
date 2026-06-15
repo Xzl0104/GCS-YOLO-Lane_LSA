@@ -25,7 +25,7 @@ REQUIRED_KEYS = ("lanes", "lane_valid", "num_lanes")
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Check GCS label point order and TuSimple split grouping.")
-    parser.add_argument("--dataset-root", default="datasets/tusimple_fixed_y_960x544", help="Converted dataset root.")
+    parser.add_argument("--dataset-root", default="datasets/tusimple_fixed_y_k56_960x544", help="Converted dataset root.")
     parser.add_argument("--dataset", default="tusimple", choices=sorted(DATASET_IMAGE_SHAPES))
     parser.add_argument("--splits", nargs="+", default=["train", "val", "test"], help="Splits to inspect.")
     parser.add_argument(

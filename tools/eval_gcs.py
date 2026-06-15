@@ -42,14 +42,16 @@ from ultralytics.utils.gcs_postprocess import (
 from ultralytics.utils.torch_utils import select_device
 
 
-DEFAULT_WEIGHTS = ROOT / "runs" / "gcs_lane" / "overfit20" / "weights" / "best.pt"
-DEFAULT_SOURCE = ROOT / "datasets" / "tusimple_fixed_y_960x544" / "images" / "val"
-DEFAULT_LABELS = ROOT / "datasets" / "tusimple_fixed_y_960x544" / "labels_gcs" / "val"
+DEFAULT_WEIGHTS = (
+    ROOT / "runs" / "gcs_lane" / "gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4" / "weights" / "official_best.pt"
+)
+DEFAULT_SOURCE = ROOT / "datasets" / "tusimple_fixed_y_k56_960x544" / "images" / "val"
+DEFAULT_LABELS = ROOT / "datasets" / "tusimple_fixed_y_k56_960x544" / "labels_gcs" / "val"
 
 
 def dataset_defaults(dataset: str, split: str = "val") -> dict[str, Path]:
     """Return conventional validation paths for a converted GCS dataset."""
-    root = ROOT / "datasets" / ("tusimple_fixed_y_960x544" if dataset.lower() == "tusimple" else dataset.lower())
+    root = ROOT / "datasets" / ("tusimple_fixed_y_k56_960x544" if dataset.lower() == "tusimple" else dataset.lower())
     return {
         "source": root / "images" / split,
         "labels": root / "labels_gcs" / split,
@@ -59,8 +61,7 @@ def dataset_defaults(dataset: str, split: str = "val") -> dict[str, Path]:
 def default_data_yaml(dataset: str) -> Path:
     """Prefer the fixed-y GCS data yaml used by current experiments when it exists."""
     candidates = [
-        ROOT / "data" / f"{dataset}_gcs_fixed_y_960x544.yaml",
-        ROOT / "data" / f"{dataset}_gcs_stratified_960x544.yaml",
+        ROOT / "data" / f"{dataset}_gcs_fixed_y_k56_960x544.yaml",
         ROOT / "data" / f"{dataset}_gcs.yaml",
     ]
     for path in candidates:

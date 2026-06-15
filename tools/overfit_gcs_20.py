@@ -26,10 +26,10 @@ from ultralytics.utils.gcs_shape import DATASET_IMAGE_SHAPES, normalize_imgsz, s
 from ultralytics.utils.gcs_postprocess import GCS_DEFAULT_MAX_DET
 
 
-DEFAULT_MODEL = ROOT / "ultralytics" / "cfg" / "models" / "gcs" / "gcs-yolo-lane-s-q12.yaml"
-DEFAULT_DATA = ROOT / "data" / "tusimple_gcs_fixed_y_960x544.yaml"
-DEFAULT_TRAIN_IMAGES = ROOT / "datasets" / "tusimple_fixed_y_960x544" / "images" / "train"
-DEFAULT_TRAIN_LABELS = ROOT / "datasets" / "tusimple_fixed_y_960x544" / "labels_gcs" / "train"
+DEFAULT_MODEL = ROOT / "ultralytics" / "cfg" / "models" / "gcs" / "gcs-yolo-lane-s-q12-k56.yaml"
+DEFAULT_DATA = ROOT / "data" / "tusimple_gcs_fixed_y_k56_960x544.yaml"
+DEFAULT_TRAIN_IMAGES = ROOT / "datasets" / "tusimple_fixed_y_k56_960x544" / "images" / "train"
+DEFAULT_TRAIN_LABELS = ROOT / "datasets" / "tusimple_fixed_y_k56_960x544" / "labels_gcs" / "train"
 DEFAULT_LOSS_GAINS = {
     "exist_loss": 1.0,
     "point_loss": 5.0,
@@ -44,9 +44,9 @@ DEFAULT_LOSS_GAINS = {
 def dataset_defaults(dataset: str) -> dict[str, Path]:
     """Return conventional local paths for a converted GCS dataset."""
     name = dataset.lower()
-    root = ROOT / "datasets" / ("tusimple_fixed_y_960x544" if name == "tusimple" else name)
+    root = ROOT / "datasets" / ("tusimple_fixed_y_k56_960x544" if name == "tusimple" else name)
     return {
-        "data": ROOT / "data" / ("tusimple_gcs_fixed_y_960x544.yaml" if name == "tusimple" else f"{name}_gcs.yaml"),
+        "data": ROOT / "data" / ("tusimple_gcs_fixed_y_k56_960x544.yaml" if name == "tusimple" else f"{name}_gcs.yaml"),
         "train_images": root / "images" / "train",
         "train_labels": root / "labels_gcs" / "train",
     }

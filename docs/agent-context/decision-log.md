@@ -4,9 +4,11 @@ This file records non-trivial decisions about architecture, training, evaluation
 
 Every non-trivial decision should include decision, why, alternatives considered, tradeoffs accepted, validation evidence, and whether the decision affects mainline or only an experiment.
 
+Entries are point-in-time records. Statements in older entries that describe K32 as current are historical and are superseded for active code/config work by the 2026-06-16 K56-only cleanup decision.
+
 ---
 
-## Decision: Use Q=12 as the default model
+## Decision: Use Q=12/K56 as the default model
 
 Status: current mainline
 
@@ -15,28 +17,29 @@ Decision:
 Use:
 
 ```text
-ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12.yaml
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml
 ```
 
 as the default model config.
 
 Why:
 
-Q=12 provides more lane query candidates than Q=8 and is better aligned with candidate coverage needs in complex TuSimple scenes.
+Q=12 provides more lane query candidates than Q=8, and K56 aligns fixed-y anchors to the TuSimple official h-samples `710..160` at step `10`. The K56 path fixes the measured K32 representation bottleneck while preserving the Q12 candidate-capacity direction.
 
 Alternatives considered:
 
+- historical Q12/K32 config
 - Q=8 legacy config
 - Q=10 experimental configs
-- larger Q values
+- larger Q or K values
 
 Tradeoff:
 
-Q=12 increases candidate capacity and compute compared with Q=8, but remains manageable and is the current stable default.
+Q12/K56 increases point count and compute relative to the historical K32 path, but it is now the only active code/config path. Historical K32 results remain useful for comparison, but their YAML/data configs are no longer active source.
 
 Validation evidence:
 
-Current project contracts and checks are centered on Q=12 outputs.
+Current project contracts and checks are centered on Q12/K56 outputs. See the 2026-06-16 K32 cleanup decision below for the active validation plan and cleanup scope.
 
 Mainline or experiment:
 
@@ -1713,7 +1716,7 @@ Implement the `Q12-K56` path as an explicit experiment with a separate data YAML
 
 Mainline or experiment:
 
-Experimental candidate. The current mainline remains `Q12-K32`; no improvement is claimed without future official-val evidence.
+Historical experimental candidate decision. At that time the current mainline remained `Q12-K32`; this was superseded for active code/config work by the 2026-06-16 K56-only cleanup decision.
 
 ## 2026-06-13: Implement Q12-K56 official h-sample branch and launch remote baseline
 
@@ -4960,7 +4963,7 @@ max_det: 5
 
 Mainline or experiment:
 
-Experimental K56 reference and support tooling. K32 remains current mainline; test remains protected. The next safe action is an official-val K56 min-points grid plus GT3/GT4/GT5 joint low-FP analysis, not another exact rerun of the rejected K56 Count/Quality or curvature recipes.
+Historical experimental K56 reference and support-tooling decision, superseded by the 2026-06-16 K56-only cleanup for current mainline status. Test remains protected.
 
 ## 2026-06-14: Treat K56 min-points as val-only and reject low-FP joint fine-tune
 
@@ -5025,7 +5028,7 @@ Keeping the min-points row as validation-only preserves a potentially useful pos
 
 Mainline or experiment:
 
-Experimental K56 decision. K32 remains the mainline; K56 is not promoted.
+Historical experimental K56 decision, superseded by the 2026-06-16 K56-only cleanup for current mainline status. The min-points row remains validation-only and is not a final/promotable official-test claim.
 
 ## 2026-06-14: Record user-requested diagnostic-only K56 official-test audit
 
@@ -5079,7 +5082,7 @@ optional output: pred_fifthness_logits: B x Q
 training knobs: gcs_fifthness*, gcs_quality_pairwise*, gcs_count_cumulative*
 ```
 
-Keep the default K32 and K56 model output contracts unchanged. The new fifthness output appears only when the opt-in fifthness YAML enables it. The existing `pred_count_logits: B x 4` and `pred_count_boundary_logits: B x 2` contracts remain intact.
+Keep the default K56 model output contract unchanged. The new fifthness output appears only when the opt-in fifthness YAML enables it. The existing `pred_count_logits: B x 4` and `pred_count_boundary_logits: B x 2` contracts remain intact.
 
 Why:
 
@@ -5171,7 +5174,7 @@ Alternatives considered:
 
 Tradeoff:
 
-The new switch adds one experiment knob. It preserves the original default contract and checkpoint compatibility, but requires another official-val gate before any improvement claim. It does not change decode, official metrics, labels, inference-time GT usage, or the default K32/K56 model output contract.
+The new switch adds one experiment knob. It preserves the original default contract and checkpoint compatibility, but requires another official-val gate before any improvement claim. It does not change decode, official metrics, labels, inference-time GT usage, or the default K56 model output contract.
 
 Validation evidence:
 
@@ -5566,7 +5569,7 @@ Alternatives considered:
 
 Tradeoff:
 
-This adds a small default-off decode surface and more provenance fields. It keeps default K32/K56 outputs and default decode behavior unchanged, and it makes the next official-val experiment actually test the intended verifier. It does not claim any official ACC improvement by itself.
+This adds a small default-off decode surface and more provenance fields. It keeps default K56 outputs and default decode behavior unchanged, and it makes the next official-val experiment actually test the intended verifier. It does not claim any official ACC improvement by itself.
 
 Validation evidence:
 
@@ -5999,7 +6002,7 @@ Alternatives considered:
 
 Tradeoff:
 
-The branch adds one more experiment YAML, but it preserves the default K32/K56 contracts and avoids conflating Count Head evidence with fifthness verifier outputs. It does not change decode, official metrics, labels, loss defaults, or test policy.
+The branch adds one more experiment YAML, but it preserves the default K56 contracts and avoids conflating Count Head evidence with fifthness verifier outputs. It does not change decode, official metrics, labels, loss defaults, or test policy.
 
 Validation evidence:
 
@@ -6104,7 +6107,7 @@ The completed FT8 gate `gcs_yolo_lane_s_q12_k56_countff_supp_ft8_seed1_b32w4` di
 
 What remains:
 
-The run name and official-val evidence remain documented as rejected audit history. The current-code knobs retained for future controlled work are `gcs_count_cumulative*`, `gcs_quality_pairwise*`, `gcs_fifthness*`, fifthness decode plumbing, adjacent Count margin, and the `count5ev-v1` isolation YAML. The `countff_supp` CLI/config/loss path is no longer a current-code option.
+The run name and official-val evidence remain documented as rejected audit history. At the time of this decision, the current-code knobs retained for future controlled work were `gcs_count_cumulative*`, `gcs_quality_pairwise*`, `gcs_fifthness*`, fifthness decode plumbing, adjacent Count margin, and the `count5ev-v1` isolation YAML. This retained-knob list is superseded by the 2026-06-16 cleanup decision below: `gcs_count_cumulative*`, `gcs_quality_pairwise*`, and `count5ev-v1` are no longer current-code options.
 
 Artifact cleanup:
 
@@ -6157,3 +6160,200 @@ git diff --check
 Mainline or experiment:
 
 Workflow and research-integrity policy. No algorithm behavior or official metrics are changed.
+
+## 2026-06-15: Add K56 xloc-v1 fixed-y x-localization auxiliary
+
+Decision:
+
+Add a default-off K56 model config and training-side auxiliary losses:
+
+```text
+model = ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-xloc-v1.yaml
+gcs_xloc_cls = 0.0
+gcs_xloc_offset = 0.0
+gcs_xloc_offset_beta_px = 3.0
+```
+
+The opt-in YAML emits:
+
+```text
+pred_x_bin_logits: B x Q x K x bins
+pred_x_bin_offsets: B x Q x K
+```
+
+and uses `xloc_bins=64`, `xloc_offset=True`. The losses are folded into `point_loss`, require fixed-y mode, and fail fast if enabled against a model that does not emit the needed xloc outputs. The default K56 YAML does not emit xloc outputs.
+
+Why:
+
+K56 already aligns y anchors exactly to TuSimple official h-samples and the existing fixed-y head predicts only x, so "stop regressing y" is already satisfied. The remaining localization lever is horizontal error. TuSimple official Accuracy is sensitive to x error, so a controlled x-bin classification plus within-bin offset auxiliary is a small, attributable way to test whether lowering ordinary GT3/GT4/GT5 x error can move beyond the current K56 parent.
+
+Alternatives considered:
+
+- Change decode to use a softargmax/distribution x prediction immediately.
+- Replace the continuous point regression head with a distribution-only head.
+- Add another GT5 Count/Quality calibration gate.
+- Keep the default fixed-y point loss only.
+
+Tradeoff:
+
+The first implementation does not change inference coordinates, decode, official metrics, or test usage, so it may underuse the distribution signal at inference time. The accepted tradeoff is attribution: a first official-val gate can isolate whether xloc supervision helps training before any decode-side distribution candidate is introduced.
+
+Validation evidence:
+
+```text
+D:/miniconda3/envs/lsa_yolo/python.exe -m py_compile ultralytics/nn/modules/gcs_lane.py ultralytics/utils/gcs_loss.py ultralytics/models/yolo/gcs_lane/train.py tools/train_gcs.py tools/check_model.py tests/test_gcs_count_aware.py tests/test_gcs_k56_contract.py
+D:/miniconda3/envs/lsa_yolo/python.exe -m pytest tests/test_gcs_count_aware.py tests/test_gcs_k56_contract.py -q -p no:cacheprovider --basetemp .tmp_pytest/xloc_v1
+D:/miniconda3/envs/lsa_yolo/python.exe tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-xloc-v1.yaml --imgsz 544 960 --batch 1
+D:/miniconda3/envs/lsa_yolo/python.exe tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml --imgsz 544 960 --batch 1
+D:/miniconda3/envs/lsa_yolo/python.exe tools/check_gcs_algorithm_contract.py
+D:/miniconda3/envs/lsa_yolo/python.exe tools/check_gcs_count_head_topk_contract.py
+D:/miniconda3/envs/lsa_yolo/python.exe tools/check_gcs_decode_meta_contract.py
+D:/miniconda3/envs/lsa_yolo/python.exe scripts/verify_loss_cleanup.py
+D:/miniconda3/envs/lsa_yolo/python.exe scripts/check_gcs_agent_setup.py
+git diff --check
+```
+
+The targeted pytest run passed `74 passed, 1 skipped`. The xloc shape check produced the normal K56 outputs plus `pred_x_bin_logits` and `pred_x_bin_offsets`; the default K56 shape check preserved the normal six-output contract.
+
+Next official-val gate:
+
+Run an 8-epoch remote FT from the K56 parent epoch152 `official_best.pt`:
+
+```text
+run = gcs_yolo_lane_s_q12_k56_xloc_v1_ft8_seed1_b32w4
+model = ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-xloc-v1.yaml
+gcs_xloc_cls = 0.10
+gcs_xloc_offset = 0.03
+gcs_xloc_offset_beta_px = 3.0
+lr0 = 0.00005
+lrf = 0.2
+batch = 32
+workers = 4
+```
+
+Do not combine this first gate with fifthness/count5 evidence, min-points retuning, or test evaluation. Do not start full/e180 unless official-val improves over the K56 parent while keeping FP/FN, `rate_4_to_5`, and GT5 `rate_5_to_4` controlled.
+
+Mainline or experiment:
+
+Default-off experimental model/loss candidate. No official ACC improvement is claimed until the remote official-val short gate completes.
+
+---
+
+## 2026-06-16: Adopt K56 as the sole active code/config path and remove K32 source configs
+
+Decision:
+
+Make the Q12/K56 fixed-y TuSimple path the only active code/config default:
+
+```text
+model = ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml
+data = data/tusimple_gcs_fixed_y_k56_960x544.yaml
+root = datasets/tusimple_fixed_y_k56_960x544
+point_mode = fixed_y
+fixed_y_start = 710 / 720
+fixed_y_end = 160 / 720
+K = 56
+```
+
+Remove the active K32/Q8 YAMLs and legacy K32 dataset configs from source. Keep historical K32 documentation, experiment summaries, and metric comparisons as audit history only.
+
+Why:
+
+The K32 representation was already measured as a limiting path for the `0.97` objective: its official-val label oracle was `0.956249`, while K56 official-h-sample labels reached oracle `0.998256` and the formal K56 parent reached official-val `0.959315`. The user explicitly requested removing K32 code while preserving documentation history.
+
+Alternatives considered:
+
+- Keep K32 as a runnable fallback beside K56.
+- Leave old YAMLs in place but stop referencing them.
+- Promote K56 in docs only while retaining K32 defaults in code.
+- Remove historical K32 docs and summaries too.
+
+Tradeoff:
+
+Removing K32 active configs reduces reproduction convenience for old K32 runs, but prevents future agents and scripts from accidentally launching or validating against the wrong label contract. The accepted tradeoff is to preserve K32 evidence in documentation while requiring fresh controlled source changes if an old K32 mechanism ever returns.
+
+Validation evidence:
+
+Local validation passed after the cleanup:
+
+```text
+D:\miniconda3\envs\lsa_yolo\python.exe -m py_compile <changed Python files>
+D:\miniconda3\envs\lsa_yolo\python.exe scripts/check_gcs_agent_setup.py
+D:\miniconda3\envs\lsa_yolo\python.exe tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml --imgsz 544 960 --batch 1
+D:\miniconda3\envs\lsa_yolo\python.exe tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-fifthness-v1.yaml --imgsz 544 960 --batch 1
+D:\miniconda3\envs\lsa_yolo\python.exe tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-count5ev-v1.yaml --imgsz 544 960 --batch 1
+D:\miniconda3\envs\lsa_yolo\python.exe tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-xloc-v1.yaml --imgsz 544 960 --batch 1
+D:\miniconda3\envs\lsa_yolo\python.exe tools/check_gcs_algorithm_contract.py
+D:\miniconda3\envs\lsa_yolo\python.exe tools/check_gcs_count_head_topk_contract.py
+D:\miniconda3\envs\lsa_yolo\python.exe tools/check_gcs_decode_meta_contract.py
+D:\miniconda3\envs\lsa_yolo\python.exe scripts/verify_loss_cleanup.py
+D:\miniconda3\envs\lsa_yolo\python.exe -m pytest tests/test_gcs_count_aware.py tests/test_gcs_k56_contract.py -q -p no:cacheprovider --basetemp .tmp_pytest/k56_only
+git diff --check
+```
+
+The focused pytest run passed `74 passed, 1 skipped`. K56 model-shape checks preserved the default six-output contract, fifthness-v1 emitted only the optional `pred_fifthness_logits`, count5ev-v1 kept the normal six-output contract at that point in time, and xloc-v1 emitted only the optional xloc outputs. A read-only review found no active model/data YAML defaults pointing to removed K32 configs; its stale old-run `DEFAULT_WEIGHTS` findings were fixed by pointing GCS eval/sweep/diagnostic helpers at the K56 parent `official_best.pt`. The later 2026-06-16 cleanup below removed the `count5ev-v1` YAML from current source.
+
+No formal training, official-val sweep, or official-test run is implied by this source cleanup.
+
+Mainline or experiment:
+
+Mainline source/config cleanup and documentation synchronization. K56 is active by default, but it still has no final/promotable official-test claim.
+
+---
+
+## 2026-06-16: Remove rejected count-cumulative, Quality-pairwise, and count5ev current-code paths
+
+Decision:
+
+Remove the following default-off mechanisms from current source/config while preserving their historical experiment records in documentation:
+
+```text
+gcs_count_cumulative
+gcs_count_cumulative_label_smoothing
+gcs_quality_pairwise
+gcs_quality_pairwise_margin
+Count Head fifth-candidate evidence
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-count5ev-v1.yaml
+```
+
+Keep `gcs_fifthness*` and fifthness decode plumbing as the only current fifth-candidate verifier path, and keep `gcs_xloc*` as the current K56 x-localization auxiliary candidate.
+
+Why:
+
+The user explicitly requested fully deleting these unused mechanisms from current code while keeping documentation records. The completed official-val evidence did not justify using the mixed fifthness/count-cumulative/Quality-pairwise recipe, and the `count5ev-v1` isolation attempt is no longer an active current-code direction. Keeping the historical records preserves research provenance without leaving runnable knobs that future agents may accidentally reuse.
+
+What changed:
+
+- Removed `gcs_count_cumulative*` from default config, CLI forwarding, trainer defaults, loss initialization, Count Head loss, and tests.
+- Removed `gcs_quality_pairwise*` from default config, CLI forwarding, trainer defaults, Quality Head loss, and tests.
+- Removed Count Head fifth-candidate evidence modules, `GCSLaneHead(use_count_fifth_evidence=...)`, and the `count5ev-v1` YAML.
+- Updated `fifthness-v1` and `xloc-v1` YAML positional arguments after removing `use_count_fifth_evidence`.
+- Updated active docs so `count5ev-v1`, `gcs_count_cumulative*`, and `gcs_quality_pairwise*` are no longer listed as current options.
+
+Tradeoff:
+
+Deleting these paths prevents exact source-level reruns of the incomplete `count5ev-v1` isolation hypothesis without reintroducing code from history. The accepted tradeoff is a cleaner current codebase and fewer misleading default-off knobs.
+
+Validation evidence:
+
+Local validation passed after this cleanup:
+
+```text
+D:\miniconda3\envs\lsa_yolo\python.exe -m py_compile ultralytics\nn\modules\gcs_lane.py ultralytics\utils\gcs_loss.py ultralytics\models\yolo\gcs_lane\train.py tools\train_gcs.py tests\test_gcs_count_aware.py tests\test_gcs_k56_contract.py
+D:\miniconda3\envs\lsa_yolo\python.exe -m pytest tests\test_gcs_count_aware.py tests\test_gcs_k56_contract.py -q -p no:cacheprovider --basetemp .tmp_pytest/remove_count5ev_cumpair
+D:\miniconda3\envs\lsa_yolo\python.exe tools\check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml --imgsz 544 960 --batch 1
+D:\miniconda3\envs\lsa_yolo\python.exe tools\check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-fifthness-v1.yaml --imgsz 544 960 --batch 1
+D:\miniconda3\envs\lsa_yolo\python.exe tools\check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-xloc-v1.yaml --imgsz 544 960 --batch 1
+D:\miniconda3\envs\lsa_yolo\python.exe tools\check_gcs_count_head_topk_contract.py
+D:\miniconda3\envs\lsa_yolo\python.exe tools\check_gcs_decode_meta_contract.py
+D:\miniconda3\envs\lsa_yolo\python.exe tools\check_gcs_algorithm_contract.py
+D:\miniconda3\envs\lsa_yolo\python.exe scripts\verify_loss_cleanup.py
+D:\miniconda3\envs\lsa_yolo\python.exe scripts\check_gcs_agent_setup.py
+git diff --check
+```
+
+The focused pytest run passed `70 passed, 1 skipped`. The default K56 model kept the required six-output contract, fifthness-v1 emitted only the optional `pred_fifthness_logits`, and xloc-v1 emitted only `pred_x_bin_logits` plus `pred_x_bin_offsets` in addition to the default outputs. The active-source residual scan found no live `gcs_count_cumulative*`, `gcs_quality_pairwise*`, Count Head fifth-candidate evidence, or `count5ev-v1` source/config/CLI/test path outside preserved documentation history. `scripts/verify_loss_cleanup.py` now also guards against these removed experiment tokens returning to active source files unless an explicit restoration-experiment bypass is used.
+
+Mainline or experiment:
+
+Mainline source/config cleanup. No official-val improvement is claimed, no test evidence is used, and historical rejected/incomplete run records remain documentation-only.

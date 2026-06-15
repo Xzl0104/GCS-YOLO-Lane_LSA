@@ -52,7 +52,7 @@ from ultralytics.utils.torch_utils import select_device  # noqa: E402
 
 DEFAULT_ARCHIVE = ROOT / "archive"
 DEFAULT_WEIGHTS = (
-    ROOT / "runs" / "gcs_lane" / "gcs_yolo_lane_s_tusimple_fixed_y_visible_iou_full" / "weights" / "best.pt"
+    ROOT / "runs" / "gcs_lane" / "gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4" / "weights" / "official_best.pt"
 )
 
 

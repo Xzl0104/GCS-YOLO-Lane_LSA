@@ -52,6 +52,7 @@ CONTEXT_FILES = (
     "decision-log.md",
     "multi-agent-usage.md",
     "implementation-manual.md",
+    "environment.md",
 )
 XHIGH_POLICY = {
     "gcs_explorer": "gpt-5.5",
@@ -374,8 +375,8 @@ def check_delegation_templates() -> None:
 
 def check_project_contract_paths() -> None:
     required = (
-        "ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12.yaml",
-        "data/tusimple_gcs_fixed_y_960x544.yaml",
+        "ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml",
+        "data/tusimple_gcs_fixed_y_k56_960x544.yaml",
         "tools/train_gcs.py",
         "tools/infer_gcs.py",
         "tools/eval_gcs.py",

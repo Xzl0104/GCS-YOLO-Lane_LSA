@@ -6,9 +6,8 @@ The model is expected to output lane instances as ordered 2D point sequences, no
 
 ## Main Files
 
-- Default model: `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12.yaml`
-- Legacy Q=8 model: `ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml`
-- Data config: `data/tusimple_gcs_fixed_y_960x544.yaml`
+- Default model: `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml`
+- Data config: `data/tusimple_gcs_fixed_y_k56_960x544.yaml`
 - Training entry: `tools/train_gcs.py`
 - Inference entry: `tools/infer_gcs.py`
 - Custom GCS eval: `tools/eval_gcs.py`
@@ -24,19 +23,13 @@ The model is expected to output lane instances as ordered 2D point sequences, no
 
 ## Current Default Direction
 
-The current default line uses Q=12, fixed-y labels, Count Head with Count Boundary calibration, Quality Head, candidate-aware decode, strict official-val selection, and protected test usage.
+The current default line uses Q=12/K56 fixed-y labels aligned to TuSimple official h-samples, Count Head with Count Boundary calibration, Quality Head, candidate-aware decode, strict official-val selection, and protected test usage.
 
 The default line is not a research ban. Old or removed mechanisms can return as controlled experimental candidates when they are explicit, configurable, traceable, and evaluated on official-val without test leakage.
 
 ## Data Summary
 
 Current TuSimple fixed-y data root:
-
-```text
-datasets/tusimple_fixed_y_960x544
-```
-
-Active experimental K56 TuSimple data root:
 
 ```text
 datasets/tusimple_fixed_y_k56_960x544
@@ -52,7 +45,7 @@ test:  2782
 
 The official-val subset is aligned with the current validation split and must stay separate from test-driven tuning.
 
-The K56 experimental labels keep the same split sizes and align fixed-y anchors exactly to TuSimple official h-samples `710..160` at step `10`.
+The K56 labels keep the same split sizes and align fixed-y anchors exactly to TuSimple official h-samples `710..160` at step `10`. K56 is now the sole active code/config path; older K32 records are retained only as historical evidence.
 
 Use `tools/check_gcs_label_order_split.py --expect-fixed-y 56,710/720,160/720` to verify exact K56 fixed-y artifacts. Use `tools/analyze_tusimple_hsample_endpoints.py` to audit raw TuSimple h-sample endpoint and ultra-short-lane coverage before changing label or decode semantics.
 

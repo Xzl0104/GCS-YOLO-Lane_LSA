@@ -14,10 +14,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from ultralytics import YOLO
-from ultralytics.nn.modules import GCSLaneHead, LSEM, LaneBiFPN, LaneFeatureProjection
+from ultralytics.nn.modules import GCSLaneHead, LSEM, LaneBiFPN
 from ultralytics.utils.gcs_shape import DATASET_IMAGE_SHAPES, normalize_imgsz, shape_str
 
-DEFAULT_CFG = ROOT / "ultralytics" / "cfg" / "models" / "gcs" / "gcs-yolo-lane-s-q12.yaml"
+DEFAULT_CFG = ROOT / "ultralytics" / "cfg" / "models" / "gcs" / "gcs-yolo-lane-s-q12-k56.yaml"
 
 
 def parse_args():
@@ -50,16 +50,10 @@ def main():
 
     has_lsem = any(isinstance(m, LSEM) for m in model.modules())
     has_bifpn = any(isinstance(m, LaneBiFPN) for m in model.modules())
-    has_projection = any(isinstance(m, LaneFeatureProjection) for m in model.modules())
     has_head = isinstance(model.model[-1], GCSLaneHead)
     head = model.model[-1] if has_head else None
 
-    cfg_stem = cfg.stem.lower()
-    expects_no_lsem = "no-lsem" in cfg_stem
-    expects_projection = "proj-no-bifpn" in cfg_stem
-    valid_lsem = not has_lsem if expects_no_lsem else has_lsem
-    valid_fusion = has_projection if expects_projection else has_bifpn
-    if not (valid_lsem and valid_fusion and has_head):
+    if not (has_lsem and has_bifpn and has_head):
         raise RuntimeError("GCS-YOLO-Lane registration check failed.")
 
     img_h, img_w = normalize_imgsz(args.imgsz, dataset=args.dataset)
@@ -80,6 +74,10 @@ def main():
     }
     if bool(getattr(head, "use_fifthness", False)):
         expected.add("pred_fifthness_logits")
+    if int(getattr(head, "xloc_bins", 0) or 0) > 1:
+        expected.add("pred_x_bin_logits")
+        if bool(getattr(head, "xloc_offset", False)):
+            expected.add("pred_x_bin_offsets")
     if not isinstance(y, dict):
         raise RuntimeError(f"Expected GCSLaneHead to return a dict, got {type(y).__name__}.")
     missing = sorted(expected - set(y))
@@ -119,6 +117,18 @@ def main():
             "pred_fifthness_logits must have shape B x Q matching pred_points when fifthness is enabled, "
             f"got {tuple(y['pred_fifthness_logits'].shape)} vs {tuple(y['pred_points'].shape[:2])}."
         )
+    if int(getattr(head, "xloc_bins", 0) or 0) > 1:
+        expected_x_logits_shape = (*y["pred_points"].shape[:3], int(head.xloc_bins))
+        if tuple(y["pred_x_bin_logits"].shape) != expected_x_logits_shape:
+            raise RuntimeError(
+                "pred_x_bin_logits must have shape B x Q x K x bins for xloc-enabled heads, "
+                f"got {tuple(y['pred_x_bin_logits'].shape)} vs {expected_x_logits_shape}."
+            )
+        if bool(getattr(head, "xloc_offset", False)) and y["pred_x_bin_offsets"].shape != y["pred_points"].shape[:3]:
+            raise RuntimeError(
+                "pred_x_bin_offsets must have shape B x Q x K for xloc-offset-enabled heads, "
+                f"got {tuple(y['pred_x_bin_offsets'].shape)} vs {tuple(y['pred_points'].shape[:3])}."
+            )
     if getattr(head, "point_mode", "free") == "fixed_y":
         if int(getattr(head, "point_dims", 2)) != 1:
             raise RuntimeError("fixed_y GCSLaneHead must use point_dims=1 for x-only prediction.")
@@ -139,11 +149,11 @@ def main():
         print(f"input shape: {shape_str((img_h, img_w))} (W x H), stored as H,W={(img_h, img_w)}")
         print(f"registered LSEM: {has_lsem}")
         print(f"registered LaneBiFPN: {has_bifpn}")
-        print(f"registered LaneFeatureProjection: {has_projection}")
         print(f"registered GCSLaneHead: {has_head}")
         print(f"GCSLaneHead point_mode: {getattr(head, 'point_mode', None)}")
         print(f"GCSLaneHead point_dims: {getattr(head, 'point_dims', None)}")
         print(f"GCSLaneHead use_fifthness: {getattr(head, 'use_fifthness', None)}")
+        print(f"GCSLaneHead xloc_bins: {getattr(head, 'xloc_bins', None)}")
 
     print(type(y))
     for k, v in y.items():

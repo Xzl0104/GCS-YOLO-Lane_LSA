@@ -21,24 +21,24 @@ from gcs_tools.tusimple_official_eval import (  # noqa: E402
     normalize_tusimple_gt_record,
     read_tusimple_json_lines,
 )
-from gcs_tools.label_utils import fixed_y_anchors  # noqa: E402
+from gcs_tools.label_utils import (  # noqa: E402
+    TUSIMPLE_OFFICIAL_BOTTOM_Y_NORM,
+    TUSIMPLE_OFFICIAL_TOP_Y_NORM,
+    fixed_y_anchors,
+)
 
 
 DEFAULT_SAVE = ROOT / "runs" / "gcs_lane" / "tusimple_hsample_endpoint_summary.json"
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Analyze TuSimple official h_sample endpoint and ultra-short lane coverage for fixed-y contracts."
-    )
+    parser = argparse.ArgumentParser(description="Analyze TuSimple official h_sample coverage for the K56 fixed-y contract.")
     parser.add_argument("--archive-root", default="archive", help="TuSimple archive root used when --gt-json is omitted.")
     parser.add_argument("--gt-json", default=None, help="TuSimple json-lines GT file. Defaults to official val/test path.")
     parser.add_argument("--split", default="val", choices=("train", "val", "test"), help="Split used for default GT lookup.")
     parser.add_argument("--save", default=str(DEFAULT_SAVE), help="Summary JSON path.")
-    parser.add_argument("--k32-start", type=float, default=710.0 / 720.0)
-    parser.add_argument("--k32-end", type=float, default=0.25)
-    parser.add_argument("--k56-start", type=float, default=710.0 / 720.0)
-    parser.add_argument("--k56-end", type=float, default=160.0 / 720.0)
+    parser.add_argument("--k56-start", type=float, default=TUSIMPLE_OFFICIAL_BOTTOM_Y_NORM)
+    parser.add_argument("--k56-end", type=float, default=TUSIMPLE_OFFICIAL_TOP_Y_NORM)
     return parser.parse_args()
 
 
@@ -75,16 +75,13 @@ def _coverage(valid_y: set[int], anchors: set[int]) -> int:
     return len(valid_y.intersection(anchors))
 
 
-def analyze_records(records: list[dict], *, k32_start: float, k32_end: float, k56_start: float, k56_end: float) -> dict:
+def analyze_records(records: list[dict], *, k56_start: float, k56_end: float) -> dict:
     """Summarize official h_sample lane lengths and fixed-y anchor coverage."""
-    k32_anchors = set(_anchor_pixels(32, k32_start, k32_end))
     k56_anchors = set(_anchor_pixels(56, k56_start, k56_end))
 
     lane_len_hist: Counter[int] = Counter()
     endpoint_hist: Counter[str] = Counter()
-    k32_cover_hist: Counter[int] = Counter()
     k56_cover_hist: Counter[int] = Counter()
-    k32_lost_endpoint_hist: Counter[str] = Counter()
     k56_lost_endpoint_hist: Counter[str] = Counter()
     ultra_short_examples: list[dict] = []
     total_lanes = 0
@@ -103,15 +100,9 @@ def analyze_records(records: list[dict], *, k32_start: float, k32_end: float, k5
             top_y, bottom_y = min(valid_y), max(valid_y)
             endpoint_hist[f"{top_y}->{bottom_y}"] += 1
 
-            k32_cover = _coverage(valid_set, k32_anchors)
             k56_cover = _coverage(valid_set, k56_anchors)
-            k32_cover_hist[k32_cover] += 1
             k56_cover_hist[k56_cover] += 1
 
-            if top_y not in k32_anchors:
-                k32_lost_endpoint_hist[f"top:{top_y}"] += 1
-            if bottom_y not in k32_anchors:
-                k32_lost_endpoint_hist[f"bottom:{bottom_y}"] += 1
             if top_y not in k56_anchors:
                 k56_lost_endpoint_hist[f"top:{top_y}"] += 1
             if bottom_y not in k56_anchors:
@@ -122,7 +113,6 @@ def analyze_records(records: list[dict], *, k32_start: float, k32_end: float, k5
                     {
                         "raw_file": str(gt.get("raw_file", "")),
                         "valid_h_samples": valid_y,
-                        "k32_anchor_hits": sorted(valid_set.intersection(k32_anchors), reverse=True),
                         "k56_anchor_hits": sorted(valid_set.intersection(k56_anchors), reverse=True),
                     }
                 )
@@ -135,13 +125,6 @@ def analyze_records(records: list[dict], *, k32_start: float, k32_end: float, k5
         "official_endpoint_hist": endpoint_hist,
         "ultra_short_lanes_1_to_3_h_samples": int(one_to_three),
         "ultra_short_lane_rate": round(float(one_to_three) / max(total_lanes, 1), 8),
-        "k32": {
-            "anchors_px": sorted(k32_anchors, reverse=True),
-            "coverage_hist": k32_cover_hist,
-            "zero_anchor_lanes": int(k32_cover_hist.get(0, 0)),
-            "one_anchor_lanes": int(k32_cover_hist.get(1, 0)),
-            "lost_endpoint_hist": k32_lost_endpoint_hist,
-        },
         "k56": {
             "anchors_px": sorted(k56_anchors, reverse=True),
             "coverage_hist": k56_cover_hist,
@@ -172,8 +155,6 @@ def main() -> None:
     records = read_tusimple_json_lines(gt_json)
     summary = analyze_records(
         records,
-        k32_start=float(args.k32_start),
-        k32_end=float(args.k32_end),
         k56_start=float(args.k56_start),
         k56_end=float(args.k56_end),
     )

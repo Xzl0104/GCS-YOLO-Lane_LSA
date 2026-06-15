@@ -35,8 +35,6 @@ GCS_MAINLINE_COUNT_SUM_GAIN = 0.03
 GCS_MAINLINE_QUALITY_GAIN = 0.4
 GCS_MAINLINE_QUALITY_NEG_WEIGHT = 0.5
 GCS_MAINLINE_QUALITY_GT5_EDGE_FLOOR = 0.0
-GCS_MAINLINE_QUALITY_PAIRWISE = 0.0
-GCS_MAINLINE_QUALITY_PAIRWISE_MARGIN = 0.2
 GCS_MAINLINE_FIFTHNESS = 0.0
 GCS_MAINLINE_FIFTHNESS_PAIRWISE = 0.0
 GCS_MAINLINE_FIFTHNESS_MARGIN = 0.2
@@ -44,8 +42,6 @@ GCS_MAINLINE_FIFTHNESS_NEGATIVE_TOPK = 2
 GCS_MAINLINE_FIFTHNESS_NEGATIVE_SCORE_THR = 0.1
 GCS_MAINLINE_FIFTHNESS_INCLUDE_GT5_NEGATIVES = False
 GCS_MAINLINE_COUNT_CLS_WEIGHTS = (0.5, 1.2, 1.4, 1.8)
-GCS_MAINLINE_COUNT_CUMULATIVE = 0.0
-GCS_MAINLINE_COUNT_CUMULATIVE_LABEL_SMOOTHING = 0.0
 GCS_MAINLINE_POINT_VALID_GT5_POS_WEIGHT = 2.0
 GCS_MAINLINE_GT5_EDGE_LOSS_WEIGHT = 1.15
 GCS_MAINLINE_COUNT_BOUNDARY_GAIN = 0.05
@@ -63,6 +59,9 @@ GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT_THR = 0.65
 GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT_MIN_POINTS = 5
 GCS_MAINLINE_GEOMETRY_CURVATURE_GAIN = 0.0
 GCS_MAINLINE_GEOMETRY_CURVATURE_BETA_PX = 5.0
+GCS_MAINLINE_XLOC_CLS = 0.0
+GCS_MAINLINE_XLOC_OFFSET = 0.0
+GCS_MAINLINE_XLOC_OFFSET_BETA_PX = 3.0
 
 
 def _parse_number_list(value: Any, cast=float) -> list:
@@ -266,8 +265,8 @@ class GCSLaneTrainer(BaseTrainer):
         """Initialize the GCS lane trainer."""
         overrides = dict(overrides or {})
         overrides["task"] = "gcs_lane"
-        overrides.setdefault("model", str(ROOT / "cfg/models/gcs/gcs-yolo-lane-s-q12.yaml"))
-        overrides.setdefault("data", str(ROOT.parent / "data/tusimple_gcs_fixed_y_960x544.yaml"))
+        overrides.setdefault("model", str(ROOT / "cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml"))
+        overrides.setdefault("data", str(ROOT.parent / "data/tusimple_gcs_fixed_y_k56_960x544.yaml"))
         # The current main GCS config uses 12 lane queries. Four-image mosaic can still raise TuSimple GT lanes
         # above the query budget, so keep mosaic off unless requested.
         overrides.setdefault("mosaic", 0.0)
@@ -282,8 +281,6 @@ class GCSLaneTrainer(BaseTrainer):
         overrides.setdefault("gcs_quality", GCS_MAINLINE_QUALITY_GAIN)
         overrides.setdefault("gcs_quality_neg_weight", GCS_MAINLINE_QUALITY_NEG_WEIGHT)
         overrides.setdefault("gcs_quality_gt5_edge_floor", GCS_MAINLINE_QUALITY_GT5_EDGE_FLOOR)
-        overrides.setdefault("gcs_quality_pairwise", GCS_MAINLINE_QUALITY_PAIRWISE)
-        overrides.setdefault("gcs_quality_pairwise_margin", GCS_MAINLINE_QUALITY_PAIRWISE_MARGIN)
         overrides.setdefault("gcs_fifthness", GCS_MAINLINE_FIFTHNESS)
         overrides.setdefault("gcs_fifthness_pairwise", GCS_MAINLINE_FIFTHNESS_PAIRWISE)
         overrides.setdefault("gcs_fifthness_margin", GCS_MAINLINE_FIFTHNESS_MARGIN)
@@ -295,11 +292,6 @@ class GCSLaneTrainer(BaseTrainer):
         overrides.setdefault("gcs_fifthness_decode_rank_weight", 1.0)
         for idx, weight in enumerate(GCS_MAINLINE_COUNT_CLS_WEIGHTS, start=2):
             overrides.setdefault(f"gcs_count_cls_w{idx}", weight)
-        overrides.setdefault("gcs_count_cumulative", GCS_MAINLINE_COUNT_CUMULATIVE)
-        overrides.setdefault(
-            "gcs_count_cumulative_label_smoothing",
-            GCS_MAINLINE_COUNT_CUMULATIVE_LABEL_SMOOTHING,
-        )
         overrides.setdefault("gcs_point_valid_gt5_pos_weight", GCS_MAINLINE_POINT_VALID_GT5_POS_WEIGHT)
         overrides.setdefault("gcs_gt5_edge_loss_weight", GCS_MAINLINE_GT5_EDGE_LOSS_WEIGHT)
         overrides.setdefault("gcs_count_boundary", GCS_MAINLINE_COUNT_BOUNDARY_GAIN)
@@ -323,6 +315,9 @@ class GCSLaneTrainer(BaseTrainer):
         )
         overrides.setdefault("gcs_geometry_curvature", GCS_MAINLINE_GEOMETRY_CURVATURE_GAIN)
         overrides.setdefault("gcs_geometry_curvature_beta_px", GCS_MAINLINE_GEOMETRY_CURVATURE_BETA_PX)
+        overrides.setdefault("gcs_xloc_cls", GCS_MAINLINE_XLOC_CLS)
+        overrides.setdefault("gcs_xloc_offset", GCS_MAINLINE_XLOC_OFFSET)
+        overrides.setdefault("gcs_xloc_offset_beta_px", GCS_MAINLINE_XLOC_OFFSET_BETA_PX)
         overrides.setdefault("gcs_hard_sampling", False)
         overrides.setdefault("gcs_hard_lane_counts", "")
         overrides.setdefault("gcs_hard_sampling_boost_by_count", "")
@@ -1004,7 +999,7 @@ class GCSLaneTrainer(BaseTrainer):
         if not loadable:
             LOGGER.warning(
                 "No pretrained tensors were transferred. Check that the weight file is a YOLO11/YOLO11-seg "
-                "checkpoint with the same scale as the GCS YAML, e.g. yolo11s-seg.pt for gcs-yolo-lane-s-q12.yaml."
+                "checkpoint with the same scale as the GCS YAML, e.g. yolo11s-seg.pt for gcs-yolo-lane-s-q12-k56.yaml."
             )
 
     def get_validator(self):

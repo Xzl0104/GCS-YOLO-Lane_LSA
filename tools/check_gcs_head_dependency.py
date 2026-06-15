@@ -20,8 +20,10 @@ from ultralytics.utils.gcs_shape import DATASET_IMAGE_SHAPES, assert_gcs_shape, 
 from ultralytics.utils.torch_utils import select_device
 
 
-DEFAULT_WEIGHTS = ROOT / "runs" / "gcs_lane" / "gcs_yolo_lane_s_tusimple_refquery_e220" / "weights" / "best.pt"
-DEFAULT_SOURCE = ROOT / "datasets" / "tusimple_fixed_y_960x544" / "images" / "val"
+DEFAULT_WEIGHTS = (
+    ROOT / "runs" / "gcs_lane" / "gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4" / "weights" / "official_best.pt"
+)
+DEFAULT_SOURCE = ROOT / "datasets" / "tusimple_fixed_y_k56_960x544" / "images" / "val"
 
 
 def parse_args() -> argparse.Namespace:
