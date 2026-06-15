@@ -141,6 +141,8 @@ pred_fifthness_logits: B x Q
 
 Default K32 and K56 model configs must not emit `pred_fifthness_logits`; `tools/check_model.py` treats it as optional only when the head enables `use_fifthness`.
 
+The optional fifthness logits are ignored by decode unless the explicit default-off decode switch is enabled. When enabled, fifthness may only gate or re-rank the selected fifth lane and fifth-lane rescue candidates; selected ranks 1-4 keep the default `exist * visible_segment_mean_valid * visible_support_score` ordering.
+
 The candidate-aware Count Head uses the same short-lane visibility semantics as decode when building count evidence:
 
 ```text
@@ -224,6 +226,16 @@ gcs_fifthness_include_gt5_negatives = False
 gcs_count_cumulative = 0.0
 gcs_count_cumulative_label_smoothing = 0.0
 ```
+
+Current default-off inference/decode experimental knobs:
+
+```text
+gcs_use_fifthness_decode = False
+gcs_fifthness_decode_thr = 0.0
+gcs_fifthness_decode_rank_weight = 1.0
+```
+
+When `gcs_use_fifthness_decode=True`, `decode_gcs_predictions()` requires `pred_fifthness_logits` and fails fast if the model does not emit them. Historical official-val selection summaries that do not record these fields are treated as selecting the old defaults (`False/0.0/1.0`) for final-test provenance checks.
 
 `gcs_count_adjacent_margin_gain` enables a default-off training-side margin term inside `count_cls_loss` that pushes the GT count logit above neighboring count classes. It is intended for controlled GT3/GT4/GT5 calibration experiments and does not add a new logged loss item.
 

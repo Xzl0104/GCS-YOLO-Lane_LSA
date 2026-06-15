@@ -640,6 +640,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gcs-decode-rescue-candidate-min-points", type=int, default=4)
     parser.add_argument("--gcs-decode-final-min-points", type=int, default=6)
     parser.add_argument("--gcs-decode-fifth-min-points", type=int, default=5)
+    parser.add_argument(
+        "--gcs-use-fifthness-decode",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Use optional pred_fifthness_logits only when choosing/rescuing selected rank 5.",
+    )
+    parser.add_argument("--gcs-fifthness-decode-thr", type=float, default=0.0)
+    parser.add_argument("--gcs-fifthness-decode-rank-weight", type=float, default=1.0)
     parser.add_argument("--gcs-line-nms-min-overlap", type=int, default=6)
     parser.add_argument("--gcs-line-nms-rescue-dist-px", type=float, default=30.0)
     parser.add_argument("--gcs-quality-rescue-5th", action=argparse.BooleanOptionalAction, default=True, help="Enable quality-gated fifth-lane rescue when pred_quality_logits are present.")
@@ -1143,6 +1151,9 @@ def main() -> None:
         "gcs_decode_rescue_candidate_min_points": args.gcs_decode_rescue_candidate_min_points,
         "gcs_decode_final_min_points": args.gcs_decode_final_min_points,
         "gcs_decode_fifth_min_points": args.gcs_decode_fifth_min_points,
+        "gcs_use_fifthness_decode": args.gcs_use_fifthness_decode,
+        "gcs_fifthness_decode_thr": args.gcs_fifthness_decode_thr,
+        "gcs_fifthness_decode_rank_weight": args.gcs_fifthness_decode_rank_weight,
         "gcs_line_nms_min_overlap": args.gcs_line_nms_min_overlap,
         "gcs_line_nms_rescue_dist_px": args.gcs_line_nms_rescue_dist_px,
         "gcs_quality_rescue_5th": args.gcs_quality_rescue_5th,

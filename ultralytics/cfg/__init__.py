@@ -222,6 +222,7 @@ CFG_FLOAT_KEYS = frozenset(
         "gcs_decode_rescue_candidate_conf",
         "gcs_decode_rescue_candidate_point_valid_thr",
         "gcs_line_nms_rescue_dist_px",
+        "gcs_fifthness_decode_rank_weight",
         "gcs_quality_rescue_count5_thr",
         "gcs_quality_rescue_conf_thr",
         "gcs_quality_rescue_mean_valid_thr",
@@ -345,6 +346,7 @@ CFG_FRACTION_KEYS = frozenset(
         "gcs_quality_gt5_edge_floor",
         "gcs_count_cumulative_label_smoothing",
         "gcs_fifthness_negative_score_thr",
+        "gcs_fifthness_decode_thr",
         "gcs_hard_negative_quality_thr",
         "gcs_hard_negative_visible_thr",
         "gcs_duplicate_iou_thr",
@@ -460,6 +462,7 @@ CFG_BOOL_KEYS = frozenset(
         "gcs_quality_hard_negative_from_head",
         "gcs_hard_negative_visible_segment",
         "gcs_fifthness_include_gt5_negatives",
+        "gcs_use_fifthness_decode",
     }
 )
 

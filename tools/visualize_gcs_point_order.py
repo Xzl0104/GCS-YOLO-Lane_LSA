@@ -167,6 +167,8 @@ def predict_raw_lanes(
     )
     pred_quality_logits = preds.get("pred_quality_logits")
     pred_quality_logits = pred_quality_logits[0].detach().float().cpu() if pred_quality_logits is not None else None
+    pred_fifthness_logits = preds.get("pred_fifthness_logits")
+    pred_fifthness_logits = pred_fifthness_logits[0].detach().float().cpu() if pred_fifthness_logits is not None else None
     if logits.ndim == 2 and logits.shape[-1] == 1:
         logits = logits.squeeze(-1)
     scores = logits.sigmoid()
@@ -177,6 +179,7 @@ def predict_raw_lanes(
         pred_count_logits=pred_count_logits,
         pred_count_boundary_logits=pred_count_boundary_logits,
         pred_quality_logits=pred_quality_logits,
+        pred_fifthness_logits=pred_fifthness_logits,
         image_shape=image.shape[:2],
         score_thr=conf,
         point_valid_thr=point_valid_thr,

@@ -170,7 +170,25 @@ data:  data/tusimple_gcs_fixed_y_k56_960x544.yaml
 goal:  reduce both GT5 5->4 drops and GT4/GT3 false fifth-lane pressure
 ```
 
-This candidate is opt-in. The YAML enables the optional `pred_fifthness_logits: B x Q` head and Count Head fifth-candidate evidence; the training losses remain default-off until non-zero gains are passed explicitly. Use official-val only for selection and do not use the diagnostic K56 test audit to choose gains. By default, fifthness negatives come from GT3/GT4 unmatched outside candidates; `--gcs-fifthness-include-gt5-negatives True` is an explicit follow-up switch for also mining GT5 same-image unmatched outside false fifth candidates.
+This candidate is opt-in. The YAML enables the optional `pred_fifthness_logits: B x Q` head and Count Head fifth-candidate evidence; the training losses and fifthness decode remain default-off until non-zero gains or explicit decode switches are passed. Use official-val only for selection and do not use the diagnostic K56 test audit to choose gains. By default, fifthness negatives come from GT3/GT4 unmatched outside candidates; `--gcs-fifthness-include-gt5-negatives True` is an explicit follow-up switch for also mining GT5 same-image unmatched outside false fifth candidates.
+
+The 2026-06-15 reliability audit closed the missing inference loop: `pred_fifthness_logits` can now be consumed by decode with:
+
+```text
+--use-fifthness-decode
+--fifthness-decode-thr <0.0-1.0>
+--fifthness-decode-rank-weight <explicit-weight>
+```
+
+For trainer-owned official-val sweeps, use the corresponding `tools/train_gcs.py` flags:
+
+```text
+--gcs-use-fifthness-decode
+--gcs-fifthness-decode-thr <0.0-1.0>
+--gcs-fifthness-decode-rank-weight <explicit-weight>
+```
+
+These decode knobs affect only the selected fifth lane and fifth-lane rescue candidates. They require a model that emits `pred_fifthness_logits`; enabling them against the default K56 model must fail rather than silently fall back.
 
 The first short gate is rejected:
 
@@ -231,6 +249,58 @@ best official-val: epoch 6, official_acc=0.959319, FP=0.047429, FN=0.027089
 parent reference: official_acc=0.959315, FP=0.045225, FN=0.028466
 diagnosis: count_acc_4=0.833333, count_acc_5=0.932432, rate_4_to_5=0.121212, rate_5_to_4=0.067568, gt5_output5_rate=0.932432, gt5_valid_points_fail_rate=0.013514
 decision: not promotable; the tiny ACC delta is not meaningful because FP and GT4-to-5 pressure worsened
+```
+
+Decision after combining both short gates with the server evidence: do not start K56/fifthness full/e180 training from either exact recipe. The smallest safe next step is an official-val-only fifthness decode sweep or a new short gate with explicit lower-FP false-fifth pressure, preserving `--gcs-official-best --gcs-official-best-top-k 5`.
+
+Official-val-only fifthness decode sweep template for an existing fifthness checkpoint:
+
+```bash
+python tools/sweep_tusimple_official.py \
+  --weights runs/gcs_lane/gcs_yolo_lane_s_q12_k56_fifthness_gt5neg_ft8_seed1_b32w4/weights/official_best.pt \
+  --split val \
+  --gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
+  --archive-root runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset \
+  --imgsz 544 960 \
+  --confs 0.005 \
+  --point-valid-thrs 0.35 0.40 \
+  --nms-dist-pxs 18 \
+  --max-dets 5 \
+  --candidate-min-points 5 \
+  --final-min-points 6 7 8 9 \
+  --fifth-min-points 4 5 6 \
+  --use-fifthness-decode \
+  --fifthness-decode-thr <explicit-threshold> \
+  --fifthness-decode-rank-weight <explicit-weight>
+```
+
+Short closed-loop training gate template, only after choosing a new hypothesis that explicitly targets lower `rate_4_to_5`/FP:
+
+```bash
+python tools/train_gcs.py \
+  --model ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-fifthness-v1.yaml \
+  --data data/tusimple_gcs_fixed_y_k56_960x544.yaml \
+  --imgsz 544 960 \
+  --name <new-k56-fifthness-closed-loop-ft8-or-ft12-name> \
+  --pretrained runs/gcs_lane/gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4/weights/official_best.pt \
+  --epochs 8 \
+  --batch 32 \
+  --workers 4 \
+  --seed 1 \
+  --lr0 <explicit-lr0> \
+  --lrf <explicit-lrf> \
+  --gcs-fifthness <explicit-gain> \
+  --gcs-fifthness-pairwise <explicit-gain> \
+  --gcs-quality-pairwise <explicit-gain> \
+  --gcs-count-cumulative <explicit-gain> \
+  --gcs-use-fifthness-decode \
+  --gcs-fifthness-decode-thr <explicit-threshold> \
+  --gcs-fifthness-decode-rank-weight <explicit-weight> \
+  --gcs-official-best \
+  --gcs-official-best-period 1 \
+  --gcs-official-best-top-k 5 \
+  --gcs-official-best-gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
+  --gcs-official-best-archive-root runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset
 ```
 
 Command retained for reproducibility only:

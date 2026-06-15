@@ -5512,3 +5512,79 @@ This is a reliability and experiment-planning diagnostic. It does not change lab
 Mainline or experiment:
 
 Mainline diagnostic guardrail. Any future one-anchor implementation remains a separate default-off data/decode experiment and must include guards against degenerate one-point false positives before training.
+
+## 2026-06-15: Close default-off fifthness decode loop and reject full/e180 escalation
+
+Decision:
+
+Keep K56 fifthness-v1 as a default-off experimental path, but do not start full/e180 training from the completed `fifthness_v1` or `fifthness_gt5neg` short gates. Add explicit default-off fifthness decode plumbing so the optional `pred_fifthness_logits: B x Q` verifier can be evaluated in inference, validation, official-val sweep, diagnosis, and predictor paths.
+
+What changed:
+
+```text
+decode:
+- decode_gcs_predictions accepts pred_fifthness_logits
+- gcs_use_fifthness_decode defaults False
+- gcs_fifthness_decode_thr defaults 0.0
+- gcs_fifthness_decode_rank_weight defaults 1.0
+- enabling fifthness decode without pred_fifthness_logits raises ValueError
+- fifthness only gates/re-ranks selected rank 5 and fifth-lane rescue candidates
+- selected ranks 1-4 keep the default exist/visible-segment rank policy
+
+evaluation/provenance:
+- official eval, official sweep, GCS eval, inference, predictor, validator, GT5 diagnosis, and legacy analysis tools pass optional fifthness logits
+- official sweep CSV/config/save-dir record fifthness decode parameters
+- final-test provenance checks compare fifthness decode settings
+- historical selection summaries missing fifthness fields are treated as selecting old defaults False/0.0/1.0
+```
+
+Why:
+
+The reliability audit found that the first two fifthness short gates mainly tested training-side auxiliary supervision and Count Head fifth-candidate evidence. The verifier logits were not consumed by decode, ranking, count policy, official-val sweep, final-test provenance, or diagnosis. Therefore those runs did not fully test the intended "fifth-candidate verifier/head" hypothesis.
+
+Official-val evidence still does not justify full/e180:
+
+```text
+K56 parent: official_acc=0.959315, FP=0.045225, FN=0.028466,
+rate_4_to_5=0.075758, rate_5_to_4=0.148649
+
+fifthness_v1_ft8: official_acc=0.959006, FP=0.046097, FN=0.029155,
+rate_4_to_5=0.106061, rate_5_to_4=0.121622
+
+fifthness_gt5neg_ft8: official_acc=0.959319, FP=0.047429, FN=0.027089,
+rate_4_to_5=0.121212, rate_5_to_4=0.067568
+```
+
+The GT5-negative gate improved GT5 retention but increased false fifth-lane pressure, so it fails the joint objective of reducing both GT5 `5->4` and GT4 `4->5`.
+
+Alternatives considered:
+
+- Start full/e180 from `fifthness_gt5neg` because its ACC is numerically `+0.000004` above parent.
+- Treat the first two gates as definitive fifthness evidence without checking decode consumption.
+- Leave fifthness logits training-side only.
+- Enable fifthness decode by default.
+
+Tradeoff:
+
+This adds a small default-off decode surface and more provenance fields. It keeps default K32/K56 outputs and default decode behavior unchanged, and it makes the next official-val experiment actually test the intended verifier. It does not claim any official ACC improvement by itself.
+
+Validation evidence:
+
+```text
+D:/miniconda3/envs/lsa_yolo/python.exe -m py_compile ultralytics/utils/gcs_postprocess.py ultralytics/models/yolo/gcs_lane/val.py ultralytics/models/yolo/gcs_lane/predict.py ultralytics/models/yolo/gcs_lane/train.py tools/train_gcs.py tools/infer_gcs.py tools/eval_tusimple_official.py tools/sweep_tusimple_official.py tools/diagnose_gcs_gt5.py tools/eval_gcs.py tools/sweep_gcs_conf.py tools/analyze_gcs_oracle.py tools/analyze_gcs_errors.py tools/diagnose_gcs_count_errors.py tools/visualize_gcs_point_order.py tests/test_gcs_fifthness_decode.py tests/test_gcs_boundary_decode_plumbing.py
+D:/miniconda3/envs/lsa_yolo/python.exe -m pytest tests/test_gcs_boundary_decode_plumbing.py tests/test_gcs_fifthness_decode.py -q -p no:cacheprovider --basetemp .tmp_pytest/fifthness_protocol_reviewfix
+D:/miniconda3/envs/lsa_yolo/python.exe -m pytest tests/test_gcs_count_aware.py -q -p no:cacheprovider --basetemp .tmp_pytest/fifthness_countaware_regression
+D:/miniconda3/envs/lsa_yolo/python.exe tools/check_gcs_decode_meta_contract.py
+D:/miniconda3/envs/lsa_yolo/python.exe tools/check_gcs_algorithm_contract.py
+D:/miniconda3/envs/lsa_yolo/python.exe tools/check_gcs_count_head_topk_contract.py
+D:/miniconda3/envs/lsa_yolo/python.exe scripts/verify_loss_cleanup.py
+D:/miniconda3/envs/lsa_yolo/python.exe scripts/check_gcs_agent_setup.py
+D:/miniconda3/envs/lsa_yolo/python.exe tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml --imgsz 544 960 --batch 1
+D:/miniconda3/envs/lsa_yolo/python.exe tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-fifthness-v1.yaml --imgsz 544 960 --batch 1
+```
+
+The new tests cover default-off unchanged decode, fail-fast missing logits, Q and Qx1 fifthness shapes, selected-rank-5-only re-ranking, wrong-shape rejection, final-test fifthness provenance mismatch rejection, and legacy selection-summary missing-field rejection.
+
+Mainline or experiment:
+
+Mainline reliability plumbing for a default-off experimental candidate. No official-val improvement is claimed until a closed-loop fifthness decode sweep or short gate beats the K56 parent while controlling FP and `rate_4_to_5`.

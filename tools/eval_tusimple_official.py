@@ -131,6 +131,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rescue-candidate-min-points", type=int, default=4, help="Rescue candidate-pool visible-anchor floor before final Top-K.")
     parser.add_argument("--final-min-points", type=int, default=6, help="Final visible-anchor floor for selected ranks 1-4.")
     parser.add_argument("--fifth-min-points", type=int, default=5, help="Final visible-anchor floor for selected rank 5.")
+    parser.add_argument("--use-fifthness-decode", action=argparse.BooleanOptionalAction, default=False, help="Use optional pred_fifthness_logits only for selected rank 5.")
+    parser.add_argument("--fifthness-decode-thr", type=float, default=0.0, help="Minimum fifthness probability for selected rank 5 when enabled.")
+    parser.add_argument("--fifthness-decode-rank-weight", type=float, default=1.0, help="Exponent applied to fifthness probability in selected-rank-5 scoring.")
     parser.add_argument("--line-nms-min-overlap", type=int, default=6, help="Minimum shared visible anchors for lane-NMS duplicate suppression.")
     parser.add_argument("--line-nms-rescue-dist-px", type=float, default=30.0, help="Duplicate distance used when rescuing lanes from pre-NMS candidates.")
     parser.add_argument("--quality-rescue-5th", action=argparse.BooleanOptionalAction, default=True, help="Enable quality-gated fifth-lane rescue when pred_quality_logits are present.")
@@ -369,6 +372,9 @@ def _selection_best_excerpt(best: dict) -> dict:
         "candidate_min_points",
         "final_min_points",
         "fifth_min_points",
+        "use_fifthness_decode",
+        "fifthness_decode_thr",
+        "fifthness_decode_rank_weight",
     }
     return {k: best[k] for k in sorted(keys) if k in best}
 
@@ -400,6 +406,9 @@ def validate_test_evaluation_protocol(
     rescue_candidate_min_points: int,
     final_min_points: int,
     fifth_min_points: int,
+    use_fifthness_decode: bool = False,
+    fifthness_decode_thr: float = 0.0,
+    fifthness_decode_rank_weight: float = 1.0,
 ) -> dict:
     """Enforce final-test provenance while allowing explicitly labeled diagnostic test audits."""
     normalized_split = str(split).strip().lower()
@@ -495,19 +504,45 @@ def validate_test_evaluation_protocol(
     _compare_selection_value(mismatches, name="candidate_min_points", selected=best.get("candidate_min_points"), current=candidate_min_points)
     _compare_selection_value(mismatches, name="final_min_points", selected=best.get("final_min_points"), current=final_min_points)
     _compare_selection_value(mismatches, name="fifth_min_points", selected=best.get("fifth_min_points"), current=fifth_min_points)
+    _compare_selection_value(
+        mismatches,
+        name="use_fifthness_decode",
+        selected=best.get("use_fifthness_decode", False),
+        current=use_fifthness_decode,
+    )
+    _compare_selection_value(
+        mismatches,
+        name="fifthness_decode_thr",
+        selected=best.get("fifthness_decode_thr", 0.0),
+        current=fifthness_decode_thr,
+    )
+    _compare_selection_value(
+        mismatches,
+        name="fifthness_decode_rank_weight",
+        selected=best.get("fifthness_decode_rank_weight", 1.0),
+        current=fifthness_decode_rank_weight,
+    )
 
+    fifthness_config_defaults = {
+        "use_fifthness_decode": False,
+        "fifthness_decode_thr": 0.0,
+        "fifthness_decode_rank_weight": 1.0,
+    }
     scalar_config = {
         "use_count_head_decode": use_count_head_decode,
         "count_head_temperature": count_head_temperature,
         "candidate_score_thr": candidate_score_thr,
         "candidate_point_valid_thr": candidate_point_valid_thr,
+        "use_fifthness_decode": use_fifthness_decode,
+        "fifthness_decode_thr": fifthness_decode_thr,
+        "fifthness_decode_rank_weight": fifthness_decode_rank_weight,
         "enable_rescue_candidate_pool": enable_rescue_candidate_pool,
         "rescue_candidate_conf": rescue_candidate_score_thr,
         "rescue_candidate_point_valid_thr": rescue_candidate_point_valid_thr,
         "rescue_candidate_min_points": rescue_candidate_min_points,
     }
     for key, current in scalar_config.items():
-        selected = config.get(key)
+        selected = config.get(key, fifthness_config_defaults.get(key))
         if isinstance(selected, (str, int, float, bool)) or selected is None:
             _compare_selection_value(mismatches, name=key, selected=selected, current=current)
 
@@ -633,6 +668,9 @@ def predict_tusimple_records(
     rescue_candidate_min_points: int = 4,
     final_min_points: int = 6,
     fifth_min_points: int = 5,
+    use_fifthness_decode: bool = False,
+    fifthness_decode_thr: float = 0.0,
+    fifthness_decode_rank_weight: float = 1.0,
     line_nms_min_overlap: int = 6,
     line_nms_rescue_dist_px: float = 30.0,
     quality_rescue_5th: bool = True,
@@ -709,6 +747,7 @@ def predict_tusimple_records(
         pred_count = preds.get("pred_count_logits")
         pred_count_boundary = preds.get("pred_count_boundary_logits")
         pred_quality = preds.get("pred_quality_logits")
+        pred_fifthness = preds.get("pred_fifthness_logits")
         decoded, decode_meta = decode_gcs_predictions(
             preds["pred_points"][0],
             preds["pred_logits"][0],
@@ -716,6 +755,7 @@ def predict_tusimple_records(
             pred_count_logits=pred_count[0] if pred_count is not None else None,
             pred_count_boundary_logits=pred_count_boundary[0] if pred_count_boundary is not None else None,
             pred_quality_logits=pred_quality[0] if pred_quality is not None else None,
+            pred_fifthness_logits=pred_fifthness[0] if pred_fifthness is not None else None,
             image_shape=original_shape,
             score_thr=conf,
             point_valid_thr=point_valid_thr,
@@ -770,6 +810,9 @@ def predict_tusimple_records(
             soft_count_prior_weight=soft_count_prior_weight,
             soft_count_duplicate_penalty=soft_count_duplicate_penalty,
             soft_count_invalid_penalty=soft_count_invalid_penalty,
+            use_fifthness_decode=use_fifthness_decode,
+            fifthness_decode_thr=fifthness_decode_thr,
+            fifthness_decode_rank_weight=fifthness_decode_rank_weight,
             return_meta=True,
         )
         tusimple_lanes = gcs_lanes_to_tusimple_lanes(
@@ -843,6 +886,9 @@ def evaluate_tusimple_official(
     rescue_candidate_min_points: int = 4,
     final_min_points: int = 6,
     fifth_min_points: int = 5,
+    use_fifthness_decode: bool = False,
+    fifthness_decode_thr: float = 0.0,
+    fifthness_decode_rank_weight: float = 1.0,
     line_nms_min_overlap: int = 6,
     line_nms_rescue_dist_px: float = 30.0,
     quality_rescue_5th: bool = True,
@@ -909,6 +955,9 @@ def evaluate_tusimple_official(
         rescue_candidate_min_points=rescue_candidate_min_points,
         final_min_points=final_min_points,
         fifth_min_points=fifth_min_points,
+        use_fifthness_decode=use_fifthness_decode,
+        fifthness_decode_thr=fifthness_decode_thr,
+        fifthness_decode_rank_weight=fifthness_decode_rank_weight,
     )
     archive_root = find_tusimple_archive_root(archive_root)
     gt_path = Path(gt_json) if gt_json else default_tusimple_gt_json(archive_root, split=split)
@@ -976,6 +1025,9 @@ def evaluate_tusimple_official(
             rescue_candidate_min_points=rescue_candidate_min_points,
             final_min_points=final_min_points,
             fifth_min_points=fifth_min_points,
+            use_fifthness_decode=use_fifthness_decode,
+            fifthness_decode_thr=fifthness_decode_thr,
+            fifthness_decode_rank_weight=fifthness_decode_rank_weight,
             line_nms_min_overlap=line_nms_min_overlap,
             line_nms_rescue_dist_px=line_nms_rescue_dist_px,
             quality_rescue_5th=quality_rescue_5th,
@@ -1065,6 +1117,9 @@ def evaluate_tusimple_official(
             "rescue_candidate_min_points": int(rescue_candidate_min_points),
             "final_min_points": int(final_min_points),
             "fifth_min_points": int(fifth_min_points),
+            "use_fifthness_decode": bool(use_fifthness_decode),
+            "fifthness_decode_thr": float(fifthness_decode_thr),
+            "fifthness_decode_rank_weight": float(fifthness_decode_rank_weight),
             "line_nms_min_overlap": int(line_nms_min_overlap),
             "line_nms_rescue_dist_px": float(line_nms_rescue_dist_px),
             "quality_rescue_5th": bool(quality_rescue_5th),

@@ -74,6 +74,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rescue-candidate-min-points", type=int, default=4)
     parser.add_argument("--final-min-points", type=int, default=6)
     parser.add_argument("--fifth-min-points", type=int, default=5)
+    parser.add_argument("--use-fifthness-decode", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--fifthness-decode-thr", type=float, default=0.0)
+    parser.add_argument("--fifthness-decode-rank-weight", type=float, default=1.0)
     parser.add_argument("--line-nms-min-overlap", type=int, default=6)
     parser.add_argument("--line-nms-rescue-dist-px", type=float, default=30.0)
     last_lane_group = parser.add_mutually_exclusive_group()
@@ -334,6 +337,7 @@ def decoded_query_set(
     pred_valid_logits: torch.Tensor | None,
     pred_count_logits: torch.Tensor | None,
     pred_quality_logits: torch.Tensor | None,
+    pred_fifthness_logits: torch.Tensor | None,
     image_shape: tuple[int, int],
     conf: float,
     point_valid_thr: float,
@@ -350,6 +354,7 @@ def decoded_query_set(
         pred_valid_logits=pred_valid_logits,
         pred_count_logits=pred_count_logits,
         pred_quality_logits=pred_quality_logits,
+        pred_fifthness_logits=pred_fifthness_logits,
         image_shape=image_shape,
         conf=conf,
         point_valid_thr=point_valid_thr,
@@ -369,6 +374,7 @@ def decoded_lanes(
     pred_valid_logits: torch.Tensor | None,
     pred_count_logits: torch.Tensor | None,
     pred_quality_logits: torch.Tensor | None,
+    pred_fifthness_logits: torch.Tensor | None,
     image_shape: tuple[int, int],
     conf: float,
     point_valid_thr: float,
@@ -388,6 +394,7 @@ def decoded_lanes(
         pred_count_logits=pred_count_logits,
         pred_count_boundary_logits=pred_count_boundary_logits,
         pred_quality_logits=pred_quality_logits,
+        pred_fifthness_logits=pred_fifthness_logits,
         image_shape=image_shape,
         score_thr=conf,
         point_valid_thr=point_valid_thr,
@@ -422,6 +429,9 @@ def no_count_head_decode_kwargs(args: argparse.Namespace, decode_kwargs: dict) -
         "final_min_points": int(decode_kwargs.get("final_min_points", args.min_points)),
         "line_nms_min_overlap": int(args.line_nms_min_overlap),
         "line_nms_rescue_dist_px": float(args.line_nms_rescue_dist_px),
+        "use_fifthness_decode": bool(decode_kwargs.get("use_fifthness_decode", False)),
+        "fifthness_decode_thr": float(decode_kwargs.get("fifthness_decode_thr", 0.0)),
+        "fifthness_decode_rank_weight": float(decode_kwargs.get("fifthness_decode_rank_weight", 1.0)),
     }
     if bool(decode_kwargs.get("use_count_head_decode", True)):
         out["fifth_min_points"] = int(decode_kwargs.get("fifth_min_points", min(out["final_min_points"], 5)))
@@ -452,6 +462,7 @@ def deletion_stage(
     pred_valid_logits: torch.Tensor | None,
     pred_count_logits: torch.Tensor | None,
     pred_quality_logits: torch.Tensor | None,
+    pred_fifthness_logits: torch.Tensor | None,
     image_shape: tuple[int, int],
     args: argparse.Namespace,
     count_calibration: dict | None,
@@ -480,6 +491,7 @@ def deletion_stage(
         pred_valid_logits,
         None,
         pred_quality_logits,
+        pred_fifthness_logits,
         image_shape,
         conf=args.conf,
         point_valid_thr=args.point_valid_thr,
@@ -498,6 +510,7 @@ def deletion_stage(
         pred_valid_logits,
         None,
         pred_quality_logits,
+        pred_fifthness_logits,
         image_shape,
         conf=args.conf,
         point_valid_thr=args.point_valid_thr,
@@ -517,6 +530,7 @@ def deletion_stage(
             pred_valid_logits,
             None,
             pred_quality_logits,
+            pred_fifthness_logits,
             image_shape,
             conf=args.conf,
             point_valid_thr=args.point_valid_thr,
@@ -535,6 +549,7 @@ def deletion_stage(
         pred_valid_logits,
         pred_count_logits,
         pred_quality_logits,
+        pred_fifthness_logits,
         image_shape,
         conf=args.conf,
         point_valid_thr=args.point_valid_thr,
@@ -878,6 +893,8 @@ def main() -> None:
         )
         pred_quality = preds.get("pred_quality_logits")
         pred_quality = pred_quality[0].detach().float() if pred_quality is not None else None
+        pred_fifthness = preds.get("pred_fifthness_logits")
+        pred_fifthness = pred_fifthness[0].detach().float() if pred_fifthness is not None else None
 
         candidates = rank_query_candidates(
             pred_points=pred_points,
@@ -894,6 +911,7 @@ def main() -> None:
             pred_valid,
             pred_count,
             pred_quality,
+            pred_fifthness,
             image_shape,
             conf=args.conf,
             point_valid_thr=args.point_valid_thr,
@@ -940,6 +958,7 @@ def main() -> None:
             pred_valid,
             pred_count,
             pred_quality,
+            pred_fifthness,
             image_shape,
             args,
             count_calibration,

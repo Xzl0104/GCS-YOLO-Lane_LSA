@@ -290,6 +290,9 @@ class GCSLaneTrainer(BaseTrainer):
         overrides.setdefault("gcs_fifthness_negative_topk", GCS_MAINLINE_FIFTHNESS_NEGATIVE_TOPK)
         overrides.setdefault("gcs_fifthness_negative_score_thr", GCS_MAINLINE_FIFTHNESS_NEGATIVE_SCORE_THR)
         overrides.setdefault("gcs_fifthness_include_gt5_negatives", GCS_MAINLINE_FIFTHNESS_INCLUDE_GT5_NEGATIVES)
+        overrides.setdefault("gcs_use_fifthness_decode", False)
+        overrides.setdefault("gcs_fifthness_decode_thr", 0.0)
+        overrides.setdefault("gcs_fifthness_decode_rank_weight", 1.0)
         for idx, weight in enumerate(GCS_MAINLINE_COUNT_CLS_WEIGHTS, start=2):
             overrides.setdefault(f"gcs_count_cls_w{idx}", weight)
         overrides.setdefault("gcs_count_cumulative", GCS_MAINLINE_COUNT_CUMULATIVE)
@@ -1213,6 +1216,13 @@ class GCSLaneTrainer(BaseTrainer):
             rescue_candidate_min_points=int(getattr(self.args, "gcs_decode_rescue_candidate_min_points", 4) or 4),
             final_min_points=int(getattr(self.args, "gcs_decode_final_min_points", 6) or 6),
             fifth_min_points=int(getattr(self.args, "gcs_decode_fifth_min_points", 5) or 5),
+            use_fifthness_decode=bool(getattr(self.args, "gcs_use_fifthness_decode", False)),
+            fifthness_decode_thr=float(getattr(self.args, "gcs_fifthness_decode_thr", 0.0) or 0.0),
+            fifthness_decode_rank_weight=(
+                1.0
+                if getattr(self.args, "gcs_fifthness_decode_rank_weight", 1.0) is None
+                else float(getattr(self.args, "gcs_fifthness_decode_rank_weight", 1.0))
+            ),
             line_nms_min_overlap=int(getattr(self.args, "gcs_line_nms_min_overlap", 6) or 6),
             line_nms_rescue_dist_px=float(getattr(self.args, "gcs_line_nms_rescue_dist_px", 30.0) or 0.0),
             quality_rescue_5th=bool(getattr(self.args, "gcs_quality_rescue_5th", True)),

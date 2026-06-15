@@ -113,6 +113,24 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--max-det", type=int, default=GCS_DEFAULT_MAX_DET, help="Maximum decoded lane queries per image.")
     parser.add_argument("--line-nms-min-overlap", type=int, default=6, help="Minimum shared visible anchors for lane-NMS duplicate suppression.")
+    parser.add_argument(
+        "--use-fifthness-decode",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Use optional pred_fifthness_logits only for selected rank 5.",
+    )
+    parser.add_argument(
+        "--fifthness-decode-thr",
+        type=float,
+        default=0.0,
+        help="Minimum fifthness probability for selected rank 5 when enabled.",
+    )
+    parser.add_argument(
+        "--fifthness-decode-rank-weight",
+        type=float,
+        default=1.0,
+        help="Exponent applied to fifthness probability in selected-rank-5 scoring.",
+    )
     parser.add_argument("--max-images", type=int, default=0, help="Limit validation images. 0 means all.")
     parser.add_argument("--test-max-images", type=int, default=0, help="Limit test images for --run-test. 0 means all.")
     parser.add_argument("--warmup", type=int, default=20, help="Number of untimed warmup forwards.")
@@ -480,6 +498,9 @@ def evaluate_conf_grid(
     nms_dist_pxs: list[float],
     point_valid_thrs: list[float],
     line_nms_min_overlap: int = 6,
+    use_fifthness_decode: bool = False,
+    fifthness_decode_thr: float = 0.0,
+    fifthness_decode_rank_weight: float = 1.0,
 ) -> dict:
     """Run one forward pass per image and evaluate all confidence thresholds."""
     images = collect_images(source, max_images=max_images)
@@ -515,6 +536,7 @@ def evaluate_conf_grid(
         pred_count = preds.get("pred_count_logits")
         pred_count_boundary = preds.get("pred_count_boundary_logits")
         pred_quality = preds.get("pred_quality_logits")
+        pred_fifthness = preds.get("pred_fifthness_logits")
         for point_valid_thr in point_valid_thrs:
             for nms_dist_px in nms_dist_pxs:
                 for conf in confs:
@@ -534,6 +556,7 @@ def evaluate_conf_grid(
                             pred_count_boundary[0] if pred_count_boundary is not None else None
                         ),
                         pred_quality_logits=pred_quality[0] if pred_quality is not None else None,
+                        pred_fifthness_logits=pred_fifthness[0] if pred_fifthness is not None else None,
                         image_shape=img.shape[:2],
                         score_thr=conf,
                         point_valid_thr=point_valid_thr,
@@ -543,6 +566,9 @@ def evaluate_conf_grid(
                         candidate_score_thr=conf,
                         candidate_point_valid_thr=point_valid_thr,
                         line_nms_min_overlap=line_nms_min_overlap,
+                        use_fifthness_decode=use_fifthness_decode,
+                        fifthness_decode_thr=fifthness_decode_thr,
+                        fifthness_decode_rank_weight=fifthness_decode_rank_weight,
                     )
                     update_state(
                         states[(point_valid_thr, nms_dist_px, conf)],
@@ -654,6 +680,9 @@ def main() -> None:
         nms_dist_pxs=nms_dist_pxs,
         point_valid_thrs=point_valid_thrs,
         line_nms_min_overlap=args.line_nms_min_overlap,
+        use_fifthness_decode=args.use_fifthness_decode,
+        fifthness_decode_thr=args.fifthness_decode_thr,
+        fifthness_decode_rank_weight=args.fifthness_decode_rank_weight,
     )
     rows = val_result["rows"]
     best = select_best(rows, args.select_by)
@@ -689,6 +718,9 @@ def main() -> None:
             "nms_dist_pxs": nms_dist_pxs,
             "point_valid_thrs": point_valid_thrs,
             "line_nms_min_overlap": int(args.line_nms_min_overlap),
+            "use_fifthness_decode": bool(args.use_fifthness_decode),
+            "fifthness_decode_thr": float(args.fifthness_decode_thr),
+            "fifthness_decode_rank_weight": float(args.fifthness_decode_rank_weight),
             "ape_threshold_px": float(args.ape_thr),
             "match_gate_px": float(args.ape_thr if args.match_gate_px is None else args.match_gate_px),
             "max_x_dist": float(args.max_x_dist),
@@ -733,6 +765,9 @@ def main() -> None:
             nms_dist_pxs=[float(best["nms_dist_px"])],
             point_valid_thrs=[float(best["point_valid_thr"])],
             line_nms_min_overlap=args.line_nms_min_overlap,
+            use_fifthness_decode=args.use_fifthness_decode,
+            fifthness_decode_thr=args.fifthness_decode_thr,
+            fifthness_decode_rank_weight=args.fifthness_decode_rank_weight,
         )
         test_rows = test_result["rows"]
         write_csv(save_dir / "conf_sweep_test_best.csv", test_rows)
@@ -743,6 +778,9 @@ def main() -> None:
             "conf": float(best["conf"]),
             "nms_dist_px": float(best["nms_dist_px"]),
             "point_valid_thr": float(best["point_valid_thr"]),
+            "use_fifthness_decode": bool(args.use_fifthness_decode),
+            "fifthness_decode_thr": float(args.fifthness_decode_thr),
+            "fifthness_decode_rank_weight": float(args.fifthness_decode_rank_weight),
             "min_overlap": int(args.min_overlap),
             "min_points": int(args.min_points),
             "min_gt_cover_ratio": float(args.min_gt_cover_ratio),

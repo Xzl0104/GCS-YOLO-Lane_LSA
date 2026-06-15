@@ -424,6 +424,156 @@ class CountBoundaryDecodePlumbingTest(unittest.TestCase):
             )
             self.assertEqual(info["selection_summary_type"], "official_sweep_summary")
 
+    def test_final_test_rejects_fifthness_decode_selection_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            weights = tmp_path / "run" / "weights" / "official_best.pt"
+            weights.parent.mkdir(parents=True)
+            weights.write_bytes(b"fake")
+            summary = tmp_path / "sweep_summary.json"
+            summary.write_text(
+                json.dumps(
+                    {
+                        "best": {
+                            "official_acc": 0.95,
+                            "images": 363,
+                            "conf": 0.005,
+                            "point_valid_thr": 0.35,
+                            "nms_dist_px": 18.0,
+                            "max_det": 5,
+                            "min_points": 6,
+                            "rank_min_points": "none",
+                            "candidate_min_points": 5,
+                            "final_min_points": 6,
+                            "fifth_min_points": 5,
+                            "use_fifthness_decode": True,
+                            "fifthness_decode_thr": 0.55,
+                            "fifthness_decode_rank_weight": 1.0,
+                        },
+                        "config": {
+                            "split": "val",
+                            "gt_json": "runs/gcs_lane/official_val/labels/val.json",
+                            "weights": str(weights),
+                            "imgsz": [544, 960],
+                            "max_images": 0,
+                            "use_count_head_decode": True,
+                            "count_head_temperature": 1.0,
+                            "candidate_score_thr": 0.05,
+                            "candidate_point_valid_thr": 0.20,
+                            "use_fifthness_decode": True,
+                            "fifthness_decode_thr": 0.55,
+                            "fifthness_decode_rank_weight": 1.0,
+                            "rescue_candidate_conf": 0.005,
+                            "rescue_candidate_point_valid_thr": 0.08,
+                            "rescue_candidate_min_points": 4,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "use_fifthness_decode"):
+                eval_tusimple_official.validate_test_evaluation_protocol(
+                    split="test",
+                    selection_summary=summary,
+                    diagnostic_only_test=False,
+                    weights=weights,
+                    pred_json=None,
+                    conf=0.005,
+                    point_valid_thr=0.35,
+                    nms_dist_px=18.0,
+                    max_det=5,
+                    min_points=6,
+                    max_images=0,
+                    rank_min_points=None,
+                    use_count_head_decode=True,
+                    count_head_temperature=1.0,
+                    candidate_score_thr=0.05,
+                    candidate_point_valid_thr=0.20,
+                    candidate_min_points=5,
+                    enable_rescue_candidate_pool=True,
+                    rescue_candidate_score_thr=0.005,
+                    rescue_candidate_point_valid_thr=0.08,
+                    rescue_candidate_min_points=4,
+                    final_min_points=6,
+                    fifth_min_points=5,
+                    use_fifthness_decode=False,
+                    fifthness_decode_thr=0.55,
+                    fifthness_decode_rank_weight=1.0,
+                )
+
+    def test_final_test_rejects_enabling_fifthness_decode_from_legacy_summary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            weights = tmp_path / "run" / "weights" / "official_best.pt"
+            weights.parent.mkdir(parents=True)
+            weights.write_bytes(b"fake")
+            summary = tmp_path / "legacy_summary.json"
+            summary.write_text(
+                json.dumps(
+                    {
+                        "best": {
+                            "official_acc": 0.95,
+                            "images": 363,
+                            "conf": 0.005,
+                            "point_valid_thr": 0.35,
+                            "nms_dist_px": 18.0,
+                            "max_det": 5,
+                            "min_points": 6,
+                            "rank_min_points": "none",
+                            "candidate_min_points": 5,
+                            "final_min_points": 6,
+                            "fifth_min_points": 5,
+                        },
+                        "config": {
+                            "split": "val",
+                            "gt_json": "runs/gcs_lane/official_val/labels/val.json",
+                            "weights": str(weights),
+                            "imgsz": [544, 960],
+                            "max_images": 0,
+                            "use_count_head_decode": True,
+                            "count_head_temperature": 1.0,
+                            "candidate_score_thr": 0.05,
+                            "candidate_point_valid_thr": 0.20,
+                            "rescue_candidate_conf": 0.005,
+                            "rescue_candidate_point_valid_thr": 0.08,
+                            "rescue_candidate_min_points": 4,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "use_fifthness_decode"):
+                eval_tusimple_official.validate_test_evaluation_protocol(
+                    split="test",
+                    selection_summary=summary,
+                    diagnostic_only_test=False,
+                    weights=weights,
+                    pred_json=None,
+                    conf=0.005,
+                    point_valid_thr=0.35,
+                    nms_dist_px=18.0,
+                    max_det=5,
+                    min_points=6,
+                    max_images=0,
+                    rank_min_points=None,
+                    use_count_head_decode=True,
+                    count_head_temperature=1.0,
+                    candidate_score_thr=0.05,
+                    candidate_point_valid_thr=0.20,
+                    candidate_min_points=5,
+                    enable_rescue_candidate_pool=True,
+                    rescue_candidate_score_thr=0.005,
+                    rescue_candidate_point_valid_thr=0.08,
+                    rescue_candidate_min_points=4,
+                    final_min_points=6,
+                    fifth_min_points=5,
+                    use_fifthness_decode=True,
+                    fifthness_decode_thr=0.0,
+                    fifthness_decode_rank_weight=1.0,
+                )
+
     def test_diagnostic_test_eval_marks_output_not_for_selection(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -558,6 +708,26 @@ class CountBoundaryDecodePlumbingTest(unittest.TestCase):
         self.assertEqual(row["candidate_min_points"], 7)
         self.assertEqual(row["final_min_points"], 8)
         self.assertEqual(row["fifth_min_points"], 4)
+        self.assertFalse(row["use_fifthness_decode"])
+        self.assertEqual(row["fifthness_decode_thr"], 0.0)
+        self.assertEqual(row["fifthness_decode_rank_weight"], 1.0)
+
+    def test_official_sweep_save_dir_records_nondefault_fifthness_decode(self):
+        path = sweep_tusimple_official.resolve_save_dir(
+            None,
+            "fake.pt",
+            "val",
+            0,
+            [6],
+            ["none"],
+            use_fifthness_decode=True,
+            fifthness_decode_thr=0.55,
+            fifthness_decode_rank_weight=0.0,
+        )
+
+        self.assertIn("fifthdec1", str(path))
+        self.assertIn("fthr0p55", str(path))
+        self.assertIn("fw0", str(path))
 
     def test_official_sweep_and_training_reject_test_selection(self):
         with self.assertRaisesRegex(ValueError, "tools/eval_tusimple_official.py --split test"):

@@ -164,6 +164,8 @@ def main() -> None:
         pred_logits = preds["pred_logits"][0].detach().float()
         pred_valid_0 = pred_valid[0].detach().float() if pred_valid is not None else None
         pred_quality_0 = pred_quality[0].detach().float() if pred_quality is not None else None
+        pred_fifthness = preds.get("pred_fifthness_logits")
+        pred_fifthness_0 = pred_fifthness[0].detach().float() if pred_fifthness is not None else None
         pred_count_0 = pred_count[0].detach().float() if pred_count is not None else None
         pred_count_boundary_0 = (
             pred_count_boundary[0].detach().float() if pred_count_boundary is not None else None
@@ -193,6 +195,7 @@ def main() -> None:
             pred_count_logits=pred_count_0,
             pred_count_boundary_logits=pred_count_boundary_0,
             pred_quality_logits=pred_quality_0,
+            pred_fifthness_logits=pred_fifthness_0,
             image_shape=img.shape[:2],
             score_thr=args.conf,
             point_valid_thr=args.point_valid_thr,

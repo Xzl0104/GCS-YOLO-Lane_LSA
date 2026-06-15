@@ -160,6 +160,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rescue-candidate-min-points", type=int, default=4, help="Rescue candidate-pool visible-anchor floor before final Top-K.")
     parser.add_argument("--final-min-points", type=int, default=6, help="Final visible-anchor floor for selected ranks 1-4.")
     parser.add_argument("--fifth-min-points", type=int, default=5, help="Final visible-anchor floor for selected rank 5.")
+    parser.add_argument("--use-fifthness-decode", action=argparse.BooleanOptionalAction, default=False, help="Use optional pred_fifthness_logits only for selected rank 5.")
+    parser.add_argument("--fifthness-decode-thr", type=float, default=0.0, help="Minimum fifthness probability for selected rank 5 when enabled.")
+    parser.add_argument("--fifthness-decode-rank-weight", type=float, default=1.0, help="Exponent applied to fifthness probability in selected-rank-5 scoring.")
     parser.add_argument("--line-nms-min-overlap", type=int, default=6, help="Minimum shared visible anchors for lane-NMS duplicate suppression.")
     parser.add_argument("--line-nms-rescue-dist-px", type=float, default=30.0, help="Duplicate distance used when rescuing lanes from pre-NMS candidates.")
     quality_group = parser.add_mutually_exclusive_group()
@@ -763,6 +766,9 @@ def evaluate(
     rescue_candidate_min_points: int = 4,
     final_min_points: int = 6,
     fifth_min_points: int = 5,
+    use_fifthness_decode: bool = False,
+    fifthness_decode_thr: float = 0.0,
+    fifthness_decode_rank_weight: float = 1.0,
     line_nms_min_overlap: int = 6,
     line_nms_rescue_dist_px: float = 30.0,
     quality_rescue_5th: bool = True,
@@ -859,6 +865,7 @@ def evaluate(
         pred_count = preds.get("pred_count_logits")
         pred_count_boundary = preds.get("pred_count_boundary_logits")
         pred_quality = preds.get("pred_quality_logits")
+        pred_fifthness = preds.get("pred_fifthness_logits")
         count_meta = count_head_decode_meta(
             pred_count[0] if pred_count is not None else None,
             pred_count_boundary[0] if pred_count_boundary is not None else None,
@@ -874,6 +881,7 @@ def evaluate(
             pred_count_logits=pred_count[0] if pred_count is not None else None,
             pred_count_boundary_logits=pred_count_boundary[0] if pred_count_boundary is not None else None,
             pred_quality_logits=pred_quality[0] if pred_quality is not None else None,
+            pred_fifthness_logits=pred_fifthness[0] if pred_fifthness is not None else None,
             image_shape=img.shape[:2],
             score_thr=conf,
             point_valid_thr=point_valid_thr,
@@ -908,6 +916,9 @@ def evaluate(
             soft_count_prior_weight=soft_count_prior_weight,
             soft_count_duplicate_penalty=soft_count_duplicate_penalty,
             soft_count_invalid_penalty=soft_count_invalid_penalty,
+            use_fifthness_decode=use_fifthness_decode,
+            fifthness_decode_thr=fifthness_decode_thr,
+            fifthness_decode_rank_weight=fifthness_decode_rank_weight,
         )
         metrics, matches = match_lanes(
             lanes,
@@ -986,6 +997,9 @@ def evaluate(
             "rescue_candidate_min_points": int(rescue_candidate_min_points),
             "final_min_points": int(final_min_points),
             "fifth_min_points": int(fifth_min_points),
+            "use_fifthness_decode": bool(use_fifthness_decode),
+            "fifthness_decode_thr": float(fifthness_decode_thr),
+            "fifthness_decode_rank_weight": float(fifthness_decode_rank_weight),
             "line_nms_min_overlap": int(line_nms_min_overlap),
             "line_nms_rescue_dist_px": float(line_nms_rescue_dist_px),
             "quality_rescue_5th": bool(quality_rescue_5th),

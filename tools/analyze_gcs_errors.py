@@ -210,6 +210,8 @@ def main() -> None:
         )
         pred_quality_t = preds.get("pred_quality_logits")
         pred_quality_t = pred_quality_t[0].detach().float().cpu() if pred_quality_t is not None else None
+        pred_fifthness_t = preds.get("pred_fifthness_logits")
+        pred_fifthness_t = pred_fifthness_t[0].detach().float().cpu() if pred_fifthness_t is not None else None
         if pred_logits_t.ndim == 2 and pred_logits_t.shape[-1] == 1:
             pred_logits_t = pred_logits_t.squeeze(-1)
         scores = pred_logits_t.sigmoid().cpu().numpy().astype(np.float32)
@@ -259,6 +261,7 @@ def main() -> None:
             pred_count_logits=pred_count_t,
             pred_count_boundary_logits=pred_count_boundary_t,
             pred_quality_logits=pred_quality_t,
+            pred_fifthness_logits=pred_fifthness_t,
             image_shape=img.shape[:2],
             score_thr=args.conf,
             point_valid_thr=args.point_valid_thr,

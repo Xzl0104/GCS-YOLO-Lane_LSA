@@ -154,6 +154,9 @@ def parse_args() -> argparse.Namespace:
         default=[5],
         help="Final visible-anchor floor values for selected rank 5.",
     )
+    parser.add_argument("--use-fifthness-decode", action=argparse.BooleanOptionalAction, default=False, help="Use optional pred_fifthness_logits only for selected rank 5.")
+    parser.add_argument("--fifthness-decode-thr", type=float, default=0.0, help="Minimum fifthness probability for selected rank 5 when enabled.")
+    parser.add_argument("--fifthness-decode-rank-weight", type=float, default=1.0, help="Exponent applied to fifthness probability in selected-rank-5 scoring.")
     parser.add_argument("--line-nms-min-overlap", type=int, default=6, help="Minimum shared visible anchors for lane-NMS duplicate suppression.")
     parser.add_argument("--line-nms-rescue-dist-px", type=float, default=30.0, help="Duplicate distance used when rescuing lanes from pre-NMS candidates.")
     parser.add_argument("--quality-rescue-5th", action=argparse.BooleanOptionalAction, default=True, help="Enable quality-gated fifth-lane rescue when pred_quality_logits are present.")
@@ -419,6 +422,9 @@ def resolve_save_dir(
     candidate_min_points: int | list[int] | tuple[int, ...] = 5,
     final_min_points: int | list[int] | tuple[int, ...] = 6,
     fifth_min_points: int | list[int] | tuple[int, ...] = 5,
+    use_fifthness_decode: bool = False,
+    fifthness_decode_thr: float = 0.0,
+    fifthness_decode_rank_weight: float = 1.0,
 ) -> Path:
     if save_dir is not None and str(save_dir).strip():
         return Path(save_dir)
@@ -435,6 +441,12 @@ def resolve_save_dir(
     rank_tags = sorted({_rank_min_points_tag(parse_rank_min_points(x)) for x in rank_min_points})
     if rank_tags != ["none"]:
         tag += f"_rankmin{len(rank_tags)}"
+    if bool(use_fifthness_decode) or float(fifthness_decode_thr) != 0.0 or float(fifthness_decode_rank_weight) != 1.0:
+        tag += (
+            f"_fifthdec{int(bool(use_fifthness_decode))}"
+            f"_fthr{_fmt_float_for_path(float(fifthness_decode_thr))}"
+            f"_fw{_fmt_float_for_path(float(fifthness_decode_rank_weight))}"
+        )
     if max_images and max_images > 0:
         tag += f"_maximg{int(max_images)}"
     run_dir = _weight_run_dir(weights)
@@ -498,6 +510,9 @@ def sweep_combinations(args: argparse.Namespace) -> list[dict]:
                 "candidate_min_points": int(candidate_min_points),
                 "final_min_points": int(final_min_points),
                 "fifth_min_points": int(fifth_min_points),
+                "use_fifthness_decode": bool(getattr(args, "use_fifthness_decode", False)),
+                "fifthness_decode_thr": float(getattr(args, "fifthness_decode_thr", 0.0)),
+                "fifthness_decode_rank_weight": float(getattr(args, "fifthness_decode_rank_weight", 1.0)),
                 "last_lane_rescue_point_valid_thr": float(last_lane_pvalid),
                 "last_lane_rescue_min_points": int(last_lane_min_points),
                 "last_lane_rescue_mean_valid_thr": float(last_lane_mean_valid),
@@ -774,6 +789,9 @@ def summarize_state(
         "candidate_min_points": int(combo["candidate_min_points"]),
         "final_min_points": int(combo["final_min_points"]),
         "fifth_min_points": int(combo["fifth_min_points"]),
+        "use_fifthness_decode": bool(combo.get("use_fifthness_decode", False)),
+        "fifthness_decode_thr": round(float(combo.get("fifthness_decode_thr", 0.0)), 6),
+        "fifthness_decode_rank_weight": round(float(combo.get("fifthness_decode_rank_weight", 1.0)), 6),
         "official_acc": round(official_acc, 6),
         "official_fp": round(official_fp, 6),
         "official_fn": round(official_fn, 6),
@@ -953,6 +971,7 @@ def run_sweep(args: argparse.Namespace) -> dict:
         pred_count = preds.get("pred_count_logits")
         pred_count_boundary = preds.get("pred_count_boundary_logits")
         pred_quality = preds.get("pred_quality_logits")
+        pred_fifthness = preds.get("pred_fifthness_logits")
         pred_quality_scores = pred_quality[0].detach().float().sigmoid().cpu() if pred_quality is not None else None
         t1 = time.perf_counter()
         for combo, state in zip(combos, states):
@@ -963,6 +982,7 @@ def run_sweep(args: argparse.Namespace) -> dict:
                 pred_count_logits=pred_count[0] if pred_count is not None else None,
                 pred_count_boundary_logits=pred_count_boundary[0] if pred_count_boundary is not None else None,
                 pred_quality_logits=pred_quality[0] if pred_quality is not None else None,
+                pred_fifthness_logits=pred_fifthness[0] if pred_fifthness is not None else None,
                 image_shape=original_shape,
                 score_thr=combo["conf"],
                 point_valid_thr=combo["point_valid_thr"],
@@ -1017,6 +1037,9 @@ def run_sweep(args: argparse.Namespace) -> dict:
                 soft_count_prior_weight=float(args.soft_count_prior_weight),
                 soft_count_duplicate_penalty=float(args.soft_count_duplicate_penalty),
                 soft_count_invalid_penalty=float(args.soft_count_invalid_penalty),
+                use_fifthness_decode=bool(combo.get("use_fifthness_decode", False)),
+                fifthness_decode_thr=float(combo.get("fifthness_decode_thr", 0.0)),
+                fifthness_decode_rank_weight=float(combo.get("fifthness_decode_rank_weight", 1.0)),
                 return_meta=True,
             )
             tusimple_lanes = gcs_lanes_to_tusimple_lanes(
@@ -1065,6 +1088,9 @@ def run_sweep(args: argparse.Namespace) -> dict:
         args.candidate_min_points,
         args.final_min_points,
         args.fifth_min_points,
+        args.use_fifthness_decode,
+        args.fifthness_decode_thr,
+        args.fifthness_decode_rank_weight,
     )
     save_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1079,6 +1105,9 @@ def run_sweep(args: argparse.Namespace) -> dict:
         "candidate_min_points",
         "final_min_points",
         "fifth_min_points",
+        "use_fifthness_decode",
+        "fifthness_decode_thr",
+        "fifthness_decode_rank_weight",
         "official_acc",
         "official_fp",
         "official_fn",
@@ -1172,6 +1201,9 @@ def run_sweep(args: argparse.Namespace) -> dict:
             "rescue_candidate_min_points": int(args.rescue_candidate_min_points),
             "final_min_points": _scalar_or_list(_int_values(args.final_min_points, name="final_min_points")),
             "fifth_min_points": _scalar_or_list(_int_values(args.fifth_min_points, name="fifth_min_points")),
+            "use_fifthness_decode": bool(args.use_fifthness_decode),
+            "fifthness_decode_thr": float(args.fifthness_decode_thr),
+            "fifthness_decode_rank_weight": float(args.fifthness_decode_rank_weight),
             "line_nms_min_overlap": int(args.line_nms_min_overlap),
             "line_nms_rescue_dist_px": float(args.line_nms_rescue_dist_px),
             "quality_rescue_5th": bool(args.quality_rescue_5th),

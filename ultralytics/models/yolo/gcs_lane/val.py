@@ -363,6 +363,19 @@ class GCSLaneValidator:
         """Return final visible-anchor floor for selected rank 5."""
         return int(self._arg(self.args, "gcs_decode_fifth_min_points", 5) or 5)
 
+    def _use_fifthness_decode(self) -> bool:
+        """Return whether optional fifthness logits should affect only selected rank 5."""
+        return bool(self._arg(self.args, "gcs_use_fifthness_decode", False))
+
+    def _fifthness_decode_thr(self) -> float:
+        """Return selected-rank-5 fifthness gate threshold."""
+        return float(self._arg(self.args, "gcs_fifthness_decode_thr", 0.0) or 0.0)
+
+    def _fifthness_decode_rank_weight(self) -> float:
+        """Return selected-rank-5 fifthness rank-score exponent."""
+        value = self._arg(self.args, "gcs_fifthness_decode_rank_weight", 1.0)
+        return 1.0 if value is None else float(value)
+
     def _line_nms_rescue_dist_px(self) -> float:
         """Return duplicate distance used for pre-NMS rescue."""
         return float(self._arg(self.args, "gcs_line_nms_rescue_dist_px", 30.0) or 0.0)
@@ -656,6 +669,9 @@ class GCSLaneValidator:
         pred_quality_logits = preds.get("pred_quality_logits")
         if pred_quality_logits is not None:
             pred_quality_logits = pred_quality_logits.detach()
+        pred_fifthness_logits = preds.get("pred_fifthness_logits")
+        if pred_fifthness_logits is not None:
+            pred_fifthness_logits = pred_fifthness_logits.detach()
         if pred_logits.ndim == 3 and pred_logits.shape[-1] == 1:
             pred_logits = pred_logits.squeeze(-1)
         h, w = int(batch["img"].shape[-2]), int(batch["img"].shape[-1])
@@ -681,6 +697,9 @@ class GCSLaneValidator:
                     pred_count_boundary_logits[i] if pred_count_boundary_logits is not None else None
                 ),
                 pred_quality_logits=pred_quality_logits[i] if pred_quality_logits is not None else None,
+                pred_fifthness_logits=(
+                    pred_fifthness_logits[i] if pred_fifthness_logits is not None else None
+                ),
                 image_shape=(h, w),
                 score_thr=conf,
                 point_valid_thr=point_valid_thr,
@@ -733,6 +752,9 @@ class GCSLaneValidator:
                 soft_count_prior_weight=self._soft_count_prior_weight(),
                 soft_count_duplicate_penalty=self._soft_count_duplicate_penalty(),
                 soft_count_invalid_penalty=self._soft_count_invalid_penalty(),
+                use_fifthness_decode=self._use_fifthness_decode(),
+                fifthness_decode_thr=self._fifthness_decode_thr(),
+                fifthness_decode_rank_weight=self._fifthness_decode_rank_weight(),
                 return_meta=True,
             )
             gt_lanes, gt_valid = self._valid_gt_lanes(gt_lanes_t, gt_valid_t)
