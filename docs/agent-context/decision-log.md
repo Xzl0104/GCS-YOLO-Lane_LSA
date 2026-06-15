@@ -5966,3 +5966,71 @@ Do not run full/e180 for this recipe. Use the retained epoch 4/7 contrast as dia
 Mainline or experiment:
 
 Rejected experimental short gate. No full-training or mainline promotion, and no test evidence was used.
+
+## 2026-06-15: Add K56 count5ev-v1 Count Head evidence isolation YAML
+
+Decision:
+
+Add a default-off K56 model config:
+
+```text
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-count5ev-v1.yaml
+```
+
+It sets the final `GCSLaneHead` booleans to:
+
+```text
+use_fifthness = false
+use_count_fifth_evidence = true
+```
+
+so the model enables Count Head fifth-candidate evidence without emitting `pred_fifthness_logits`.
+
+Why:
+
+The rejected fifthness-v1 gates mixed two changes: optional fifthness verifier output/training and Count Head fifth-candidate evidence. Their official-val results therefore cannot isolate whether Count Head evidence alone helps GT4/GT5 count calibration. The new YAML gives a smaller, attributable official-val gate before adding verifier losses or fifthness decode.
+
+Alternatives considered:
+
+- Continue `gcs_yolo_lane_s_q12_k56_countff_supp_ft8_seed1_b32w4` to full/e180.
+- Reuse `gcs-yolo-lane-s-q12-k56-fifthness-v1.yaml` with fifthness losses set to zero.
+- Add another Count loss without isolating the model evidence path.
+- Add an opt-in count-evidence-only YAML.
+
+Tradeoff:
+
+The branch adds one more experiment YAML, but it preserves the default K32/K56 contracts and avoids conflating Count Head evidence with fifthness verifier outputs. It does not change decode, official metrics, labels, loss defaults, or test policy.
+
+Validation evidence:
+
+```text
+D:/miniconda3/envs/lsa_yolo/python.exe -m py_compile tests/test_gcs_count_aware.py
+D:/miniconda3/envs/lsa_yolo/python.exe -m pytest tests/test_gcs_count_aware.py -q -p no:cacheprovider --basetemp .tmp_pytest/count5ev_v1
+D:/miniconda3/envs/lsa_yolo/python.exe tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-count5ev-v1.yaml --imgsz 544 960 --batch 1
+D:/miniconda3/envs/lsa_yolo/python.exe tools/check_gcs_count_head_topk_contract.py
+D:/miniconda3/envs/lsa_yolo/python.exe tools/check_gcs_decode_meta_contract.py
+D:/miniconda3/envs/lsa_yolo/python.exe tools/check_gcs_algorithm_contract.py
+D:/miniconda3/envs/lsa_yolo/python.exe scripts/verify_loss_cleanup.py
+D:/miniconda3/envs/lsa_yolo/python.exe scripts/check_gcs_agent_setup.py
+D:/miniconda3/envs/lsa_yolo/python.exe tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml --imgsz 544 960 --batch 1
+git diff --check
+```
+
+Next official-val gate:
+
+Run an 8-epoch remote FT from the K56 parent epoch152 `official_best.pt`:
+
+```text
+model = ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-count5ev-v1.yaml
+run = gcs_yolo_lane_s_q12_k56_count5ev_v1_ft8_seed1_b32w4
+lr0 = 0.00005
+lrf = 0.2
+batch = 32
+workers = 4
+```
+
+Do not start full/e180 unless the short gate improves or at least matches the K56 parent while keeping FP controlled, lowering `rate_4_to_5`, and avoiding GT5 `rate_5_to_4` regression.
+
+Mainline or experiment:
+
+Default-off experimental model config. No official ACC improvement is claimed until the remote official-val short gate completes.

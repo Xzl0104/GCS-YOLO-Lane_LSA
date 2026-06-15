@@ -312,6 +312,32 @@ def test_gcs_lane_head_default_has_no_fifthness_output():
     assert head.count_head.use_fifth_candidate_evidence is False
 
 
+def test_gcs_lane_head_count_fifth_evidence_keeps_fifthness_output_off():
+    torch.manual_seed(14)
+    head = GCSLaneHead(
+        c1=16,
+        num_queries=6,
+        num_points=8,
+        num_decoder_layers=1,
+        nhead=4,
+        point_mode="fixed_y",
+        use_fifthness=False,
+        use_count_fifth_evidence=True,
+    )
+    head.min_spatial_tokens = 0
+    feats = [
+        torch.randn(1, 16, 8, 16),
+        torch.randn(1, 16, 4, 8),
+        torch.randn(1, 16, 3, 4),
+        torch.randn(1, 16, 2, 3),
+    ]
+    out = head(feats)
+    assert "pred_fifthness_logits" not in out
+    assert out["pred_count_logits"].shape == (1, 4)
+    assert out["pred_count_boundary_logits"].shape == (1, 2)
+    assert head.count_head.use_fifth_candidate_evidence is True
+
+
 def test_gcs_lane_head_count_backward_isolated_from_shared_branches():
     torch.manual_seed(2)
     head = GCSLaneHead(

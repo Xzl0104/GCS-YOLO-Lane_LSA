@@ -172,6 +172,49 @@ goal:  reduce both GT5 5->4 drops and GT4/GT3 false fifth-lane pressure
 
 This candidate is opt-in. The YAML enables the optional `pred_fifthness_logits: B x Q` head and Count Head fifth-candidate evidence; the training losses and fifthness decode remain default-off until non-zero gains or explicit decode switches are passed. Use official-val only for selection and do not use the diagnostic K56 test audit to choose gains. By default, fifthness negatives come from GT3/GT4 unmatched outside candidates; `--gcs-fifthness-include-gt5-negatives True` is an explicit follow-up switch for also mining GT5 same-image unmatched outside false fifth candidates.
 
+K56 count5ev-v1 default-off Count Head evidence isolation candidate:
+
+```text
+model: ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-count5ev-v1.yaml
+data:  data/tusimple_gcs_fixed_y_k56_960x544.yaml
+goal:  isolate Count Head fifth-candidate evidence without emitting `pred_fifthness_logits`
+```
+
+This candidate is opt-in. The YAML enables `use_count_fifth_evidence=True` while keeping `use_fifthness=False`, so it must preserve the normal six model outputs. Use it to test whether fifth-candidate evidence alone improves Count Head GT4/GT5 calibration before adding fifthness verifier losses or fifthness decode.
+
+Local shape check before any remote run:
+
+```bash
+python tools/check_model.py \
+  --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-count5ev-v1.yaml \
+  --imgsz 544 960 \
+  --batch 1
+```
+
+Remote official-val short gate from the K56 epoch152 parent:
+
+```bash
+python tools/train_gcs.py \
+  --model ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-count5ev-v1.yaml \
+  --data data/tusimple_gcs_fixed_y_k56_960x544.yaml \
+  --imgsz 544 960 \
+  --name gcs_yolo_lane_s_q12_k56_count5ev_v1_ft8_seed1_b32w4 \
+  --pretrained runs/gcs_lane/gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4/weights/official_best.pt \
+  --epochs 8 \
+  --batch 32 \
+  --workers 4 \
+  --seed 1 \
+  --lr0 0.00005 \
+  --lrf 0.2 \
+  --gcs-official-best \
+  --gcs-official-best-period 1 \
+  --gcs-official-best-top-k 5 \
+  --gcs-official-best-gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
+  --gcs-official-best-archive-root runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset
+```
+
+Do not start full/e180 unless the short gate improves or at least matches the K56 parent while keeping FP controlled, lowering `rate_4_to_5`, and avoiding GT5 `rate_5_to_4` regression.
+
 The 2026-06-15 reliability audit closed the missing inference loop: `pred_fifthness_logits` can now be consumed by decode with:
 
 ```text
@@ -790,6 +833,7 @@ python tools/check_gcs_algorithm_contract.py
 ```bash
 python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12.yaml --imgsz 544 960
 python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-fifthness-v1.yaml --imgsz 544 960 --batch 1
+python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-count5ev-v1.yaml --imgsz 544 960 --batch 1
 ```
 
 ## Head Dependency Check

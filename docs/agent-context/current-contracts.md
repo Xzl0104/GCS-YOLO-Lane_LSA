@@ -70,6 +70,14 @@ ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-fifthness-v1.yaml
 
 This model YAML is opt-in and enables an optional fifthness verifier head plus Count Head fifth-candidate evidence. It is not the K56 default. The first `gcs_yolo_lane_s_q12_k56_fifthness_v1_ft8_seed1_b32w4` short gate is rejected: best official-val was epoch 5 `0.959006`, below the K56 parent `0.959315`, with worse FP/FN and high GT4-to-5 pressure. The follow-up `gcs_yolo_lane_s_q12_k56_fifthness_gt5neg_ft8_seed1_b32w4` gate is also not promotable: best official-val was epoch 6 `0.959319`, only `+0.000004` over parent, but FP worsened to `0.047429` and `rate_4_to_5` rose to `0.121212`. A 2026-06-15 official-val fifthness score audit found useful but insufficient separation: GT5 selected rank-5 matched scores had median `0.960218`, while GT4 unmatched false-fifth scores had median `0.841094` and max `0.942222`; thresholds low enough to retain GT5 keep too many false fifths, and high thresholds reproduce the GT5 `5->4` tradeoff. The enhanced audit CSV also records Count Head `P4/P5/margin`; on the same server rerun, GT4 unmatched false-fifth samples had median `P5=0.996325` and median margin `0.992650`, indicating many false fifths are Count Head count=5 overconfidence cases. The follow-up default-K56 adjacent Count margin gate `gcs_yolo_lane_s_q12_k56_countadj_lowmargin_ft8_seed1_b32w4` was stopped after epoch 4 and is rejected: independent official-val reproduced `0.958843`, below parent `0.959315`, and `rate_4_to_5=0.090909` worsened versus parent `0.075758`. The candidate-specific Count false-fifth suppression gate `gcs_yolo_lane_s_q12_k56_countff_supp_ft8_seed1_b32w4` completed 8 epochs and is also not promotable: official_best epoch 7 reached `0.959496`, but FP worsened to `0.047062`, FN to `0.031680`, and GT5 `rate_5_to_4` to `0.175676`; the more balanced epoch 4 row was only `+0.000057` ACC over parent. Do not start full/e180 from these checkpoints.
 
+Default-off K56 Count Head fifth-candidate evidence isolation experiment:
+
+```text
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-count5ev-v1.yaml
+```
+
+This model YAML is opt-in and enables Count Head fifth-candidate evidence without enabling the fifthness verifier head. It must preserve the normal six-output contract and must not emit `pred_fifthness_logits`. Its purpose is to isolate whether direct fifth-candidate evidence in the Count Head helps GT4/GT5 count calibration, because the earlier fifthness-v1 gates mixed Count Head evidence with an auxiliary fifthness output and fifthness training losses.
+
 ## Label Contract
 
 Current label mode:
@@ -140,6 +148,7 @@ pred_fifthness_logits: B x Q
 ```
 
 Default K32 and K56 model configs must not emit `pred_fifthness_logits`; `tools/check_model.py` treats it as optional only when the head enables `use_fifthness`.
+The opt-in `gcs-yolo-lane-s-q12-k56-count5ev-v1.yaml` config also must not emit `pred_fifthness_logits`; it only enables Count Head fifth-candidate evidence.
 
 The optional fifthness logits are ignored by decode unless the explicit default-off decode switch is enabled. When enabled, fifthness may only gate or re-rank the selected fifth lane and fifth-lane rescue candidates; selected ranks 1-4 keep the default `exist * visible_segment_mean_valid * visible_support_score` ordering.
 
