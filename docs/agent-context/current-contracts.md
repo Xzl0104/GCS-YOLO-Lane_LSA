@@ -60,7 +60,9 @@ ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-dec4.yaml
 ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-bifpn192.yaml
 ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-bifpn256.yaml
 ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-cqcalib.yaml
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-dec4-cqcalib.yaml
 ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-strip-p23.yaml
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-dec4-bifpn256-cqcalib-strip-p23.yaml
 ```
 
 All K56 variants keep `Q=12`, `K=56`, fixed-y anchors `710/720 -> 160/720`, and `--imgsz 544 960`. They differ only in the named architecture candidate.
@@ -180,7 +182,7 @@ Current default-preserving/default-off training-side experimental knobs:
 gcs_count_adjacent_margin = 0.2
 gcs_count_adjacent_margin_gain = 0.0
 gcs_count_adjacent_margin_gt45_weight = 1.0
-gcs_quality_point_weight ablations = 0.8 or 1.0
+gcs_quality_point_weight ablations = 0.8 tried and rejected; 1.0 only with a new false-fifth-lane guardrail
 gcs_quality_gt5_edge_floor = 0.0
 gcs_quality_hard_negative_from_head = False
 gcs_hard_negative_visible_segment = False
@@ -199,7 +201,7 @@ gcs_point_valid_gt5_edge_segment_min_points = 5
 quality_target = gcs_quality_point_weight * point_score + (1 - gcs_quality_point_weight) * line_iou_score
 ```
 
-The default `0.5` preserves existing behavior. K56 ablations should try `0.8` first because K56 anchors align to TuSimple official h-samples; `1.0` is only a follow-up if official-val and GT5 diagnosis support it. This is training-side target construction only and does not change decode, use GT during inference, fabricate lanes, or alter official metrics.
+The default `0.5` preserves existing behavior. The 2026-06-16 K56 `0.8` gate tested the official point-inlier hypothesis and is not promotable: it improved GT5 `quality_too_low` but reduced official-val Accuracy and increased GT4->5 pressure. The 2026-06-17 `qpoint08+dec4+cqcalib` follow-up is also not promotable: it lowered GT4->5 pressure but increased GT5 underprediction and reduced official-val Accuracy. Do not run `1.0` as the next gate under the same hypothesis unless a new false-fifth-lane guardrail is added. This is training-side target construction only and does not change decode, use GT during inference, fabricate lanes, or alter official metrics.
 
 `gcs_quality_gt5_edge_floor` is a default-off training-side candidate that floors matched Quality Head targets only for real left/right edge lanes in GT5 images. It is intended to test whether true short GT5 edge lanes are being assigned quality targets too low to survive quality-gated fifth-lane decode behavior.
 

@@ -56,9 +56,20 @@ def test_k56_experimental_model_variants_keep_q12_k56_contract():
             "bifpn_channels": 128,
             "count_quality_calib_dim": 64,
         },
+        "gcs-yolo-lane-s-q12-k56-dec4-cqcalib.yaml": {
+            "decoder_layers": 4,
+            "bifpn_channels": 128,
+            "count_quality_calib_dim": 64,
+        },
         "gcs-yolo-lane-s-q12-k56-strip-p23.yaml": {
             "decoder_layers": 3,
             "bifpn_channels": 128,
+            "strip_levels": "p2,p3",
+        },
+        "gcs-yolo-lane-s-q12-k56-dec4-bifpn256-cqcalib-strip-p23.yaml": {
+            "decoder_layers": 4,
+            "bifpn_channels": 256,
+            "count_quality_calib_dim": 64,
             "strip_levels": "p2,p3",
         },
     }

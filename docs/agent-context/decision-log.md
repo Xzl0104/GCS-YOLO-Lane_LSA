@@ -4893,8 +4893,248 @@ D:\miniconda3\envs\lsa_yolo\python.exe tools\check_model.py --cfg ultralytics\cf
 
 The first pytest attempt failed only because pytest could not access `C:\Users\Xue\AppData\Local\Temp\pytest-of-Xue`; rerunning with a workspace temp directory passed `49 passed, 1 skipped`.
 
-No official-val metric exists yet for these new candidates, and no test evidence was used.
+At the time this candidate-support change landed, no official-val metric existed yet for the new candidates and no test evidence was used. The later 2026-06-16 ordered candidate gate below records the completed official-val results.
 
 Mainline or experiment:
 
 Experimental candidates only. Mainline defaults and output contracts remain unchanged.
+
+## 2026-06-16: Reject K56 Quality target point-inlier 0.8 gate
+
+Decision:
+
+Do not promote the K56 Quality target point-inlier weighting gate:
+
+```text
+run: gcs_yolo_lane_s_q12_k56_qpoint08_ft8_seed1_b32w4
+parent: runs/gcs_lane/gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4/weights/official_best.pt
+knob: gcs_quality_point_weight=0.8
+epochs: 8
+batch/workers: 32/4
+remote source HEAD: b1cc91e6afb653397b1b69ebefda6903b126ea12
+```
+
+Do not try `gcs_quality_point_weight=1.0` under the same hypothesis. A follow-up point-only target experiment would need a new explicit guardrail for false fifth-lane pressure.
+
+Why:
+
+The run tested the smallest K56 Quality-target change: shift matched Quality Head target construction from the default `0.5 * point_score + 0.5 * line_iou_score` toward the TuSimple official point-inlier signal, while keeping the baseline K56 model, decode, data split, and official metric unchanged.
+
+The desired outcome was to improve official-val Accuracy beyond the K56 parent `0.959315`, preferably reach `>=0.9600`, raise the matched/unmatched Quality gap above `0.12`, reduce GT5 `quality_too_low` to `<=3/74`, and avoid increasing GT4->5 pressure above the parent `rate_4_to_5=0.075758`.
+
+The candidate improved one GT5 diagnostic but failed the promotion metric and the false-fifth-lane guardrail:
+
+```text
+parent official_best: official_acc=0.959315, FP=0.045225, FN=0.028466, rate_4_to_5=0.075758
+qpoint08 best:        official_acc=0.956912, FP=0.049954, FN=0.028926, rate_4_to_5=0.106061
+```
+
+The Quality gap target was also missed:
+
+```text
+matched_pred_quality_mean=0.952401
+unmatched_pred_quality_mean=0.833728
+gap=0.118673
+target > 0.12
+```
+
+Alternatives considered:
+
+- Promote the run because GT5 `quality_too_low` improved from `6/74` to `3/74`.
+- Try `gcs_quality_point_weight=1.0` immediately.
+- Treat the result as evidence to continue Quality-target-only tuning.
+- Move to the already-supported structural candidates one at a time.
+
+Tradeoff:
+
+Rejecting the gate gives up a clean GT5 diagnostic improvement, but preserves the project rule that official-val Accuracy is the promotion surface. The result indicates that point-inlier weighting alone can make true fifth lanes survive more often, but it also raises false fifth-lane pressure in GT4 scenes. Continuing to `1.0` without a new constraint is likely to amplify that tradeoff.
+
+Validation evidence:
+
+Training-time official best and independent official-val sweep agreed:
+
+```text
+official_best_summary: runs/gcs_lane/gcs_yolo_lane_s_q12_k56_qpoint08_ft8_seed1_b32w4/official_best_summary.json
+independent 64-combo sweep: runs/gcs_lane/gcs_yolo_lane_s_q12_k56_qpoint08_ft8_seed1_b32w4/analysis_official_best_val_sweep64/tusimple_official_sweep_summary.json
+official_acc=0.956912
+FP=0.049954
+FN=0.028926
+conf=0.005
+point_valid_thr=0.35
+nms_dist_px=18.0
+max_det=5
+min_points=6
+rank_min_points=none
+```
+
+GT5 official-val diagnosis:
+
+```text
+GT5 diagnosis: runs/gcs_lane/gcs_yolo_lane_s_q12_k56_qpoint08_ft8_seed1_b32w4/analysis_official_best_gt5_diag_val/gt5_rank_diagnostics_summary.json
+images=74
+kept=65
+count_head_under_predict=5
+quality_too_low=3
+rank_score_low=1
+gt5_candidate_pool_shortfall_rate=0.0
+gt5_valid_points_fail_rate=0.0
+gt5_top5_suppressed_by_nms_rate=0.0
+gt5_rank5_score_low_rate=0.013514
+```
+
+No test metric was used. The run stayed on official-val and `--imgsz 544 960`.
+
+Mainline or experiment:
+
+Validation-only experiment. Mainline defaults remain `gcs_quality_point_weight=0.5`, and K56 epoch152 remains the official-val reference.
+
+## 2026-06-16: Reject ordered K56 qpoint08/cqcalib/dec4/BiFPN/strip gates
+
+Decision:
+
+Do not promote any candidate from the ordered K56 gate:
+
+```text
+order: qpoint08 -> cqcalib -> dec4 -> bifpn192 -> bifpn256/strip-p23
+parent: runs/gcs_lane/gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4/weights/official_best.pt
+parent official_acc: 0.959315
+remote source HEAD: b1cc91e6afb653397b1b69ebefda6903b126ea12
+selection surface: official-val only
+```
+
+Do not run or promote the combined `dec4+bifpn256+cqcalib+strip-p23` YAML from this evidence. The single-variable gates did not identify a compatible improvement, and the capacity/attention changes mostly destabilized Quality/GT5 retention.
+
+Official-val result table:
+
+```text
+candidate    run                                               acc       delta     FP        FN        rate_4_to_5  gt5_out5  GT5 diagnosis
+parent       gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4    0.959315  +0.000000 0.045225  0.028466  0.075758    0.851351  kept=63/74, count_under=5, quality_low=6
+qpoint08     gcs_yolo_lane_s_q12_k56_qpoint08_ft8_seed1_b32w4  0.956912  -0.002403 0.049954  0.028926  0.106061    0.878378  kept=65/74, count_under=5, quality_low=3
+cqcalib      gcs_yolo_lane_s_q12_k56_cqcalib_arch_ft8_seed1_b32w4 0.956004 -0.003311 0.050184 0.034894 0.045455    0.797297  kept=59/74, count_under=7, quality_low=6
+dec4         gcs_yolo_lane_s_q12_k56_dec4_ft8_seed1_b32w4      0.956595  -0.002720 0.064463  0.034894  0.121212    0.945946  kept=70/74, count_under=1, quality_low=3
+bifpn192     gcs_yolo_lane_s_q12_k56_bifpn192_ft8_seed1_b32w4  0.946124  -0.013191 0.066988  0.056703  0.045455    0.148649  kept=11/74, count_under=2, quality_low=61
+bifpn256_b8  gcs_yolo_lane_s_q12_k56_bifpn256_ft8_seed1_b8w4  0.933101  -0.026214 0.091001  0.083104  0.000000    0.067568  kept=4/74, quality_low=70
+strip-p23    gcs_yolo_lane_s_q12_k56_strip_p23_ft8_seed1_b32w4 0.948057  -0.011258 0.067677  0.052571  0.075758    0.783784  kept=58/74, quality_low=16
+```
+
+Why:
+
+The ordered gate tested the user's intended smallest-to-larger sequence: first Quality target alignment, then Count/Quality structural calibration, decoder depth, BiFPN width, and lane-aware strip attention. Every single candidate missed the promotion surface, `official_acc > 0.959315`, and none reached the preferred `>=0.9600` target.
+
+The failures are directional:
+
+- `qpoint08` and `dec4` improved true GT5 retention but raised false fifth-lane pressure. This confirms the GT5-vs-GT4 boundary tradeoff rather than solving it.
+- `cqcalib` reduced false fifth-lane pressure, but it lost GT5 retention and official Accuracy.
+- `bifpn192` and `bifpn256` severely damaged Quality Head behavior. For `bifpn256`, `batch=32` OOMed even after automatic `batch=16` retry; a `batch=8` run completed but still collapsed GT5 Quality.
+- `strip-p23` was less destructive than BiFPN width increases, but it still regressed official Accuracy and GT5 output.
+
+Validation evidence:
+
+Each completed candidate has:
+
+```text
+official_best_summary.json
+analysis_official_best_val_sweep64/tusimple_official_sweep_summary.json
+analysis_official_best_gt5_diag_val/gt5_rank_diagnostics_summary.json
+```
+
+The independent sweeps used validation split only, `--imgsz 544 960`, `conf=0.005..0.10`, `point_valid_thr=0.20..0.35`, `nms_dist_px=18.0`, `max_det=5`, `min_points=6`, and `rank_min_points=none/5:5`. A text-artifact scan over the ordered candidate run directories and logs found no `--split test`, `split: test`, `split=test`, `test_label.json`, or `test_set` hits.
+
+Artifacts:
+
+```text
+qpoint08 sweep: runs/gcs_lane/gcs_yolo_lane_s_q12_k56_qpoint08_ft8_seed1_b32w4/analysis_official_best_val_sweep64/tusimple_official_sweep_summary.json
+cqcalib sweep: runs/gcs_lane/gcs_yolo_lane_s_q12_k56_cqcalib_arch_ft8_seed1_b32w4/analysis_official_best_val_sweep64/tusimple_official_sweep_summary.json
+dec4 sweep: runs/gcs_lane/gcs_yolo_lane_s_q12_k56_dec4_ft8_seed1_b32w4/analysis_official_best_val_sweep64/tusimple_official_sweep_summary.json
+bifpn192 sweep: runs/gcs_lane/gcs_yolo_lane_s_q12_k56_bifpn192_ft8_seed1_b32w4/analysis_official_best_val_sweep64/tusimple_official_sweep_summary.json
+bifpn256 sweep: runs/gcs_lane/gcs_yolo_lane_s_q12_k56_bifpn256_ft8_seed1_b8w4/analysis_official_best_val_sweep64/tusimple_official_sweep_summary.json
+strip-p23 sweep: runs/gcs_lane/gcs_yolo_lane_s_q12_k56_strip_p23_ft8_seed1_b32w4/analysis_official_best_val_sweep64/tusimple_official_sweep_summary.json
+```
+
+Mainline or experiment:
+
+Validation-only experiments. Mainline defaults remain unchanged, and the K56 parent epoch152 remains the official-val reference. The next experiment should not be broader capacity stacking; it should directly constrain Count/Quality consistency across the GT4/GT5 boundary.
+
+## 2026-06-17: Reject K56 qpoint08+dec4+cqcalib combo gate
+
+Decision:
+
+Do not promote the combined K56 gate:
+
+```text
+run: gcs_yolo_lane_s_q12_k56_qpoint08_dec4_cqcalib_ft8_seed1_b32w4
+model: ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-dec4-cqcalib.yaml
+training knob: gcs_quality_point_weight=0.8
+parent: runs/gcs_lane/gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4/weights/official_best.pt
+remote source HEAD: e9c6b963a2a1aa73d703677ff2f1f1d9a7431997
+selection surface: official-val only
+```
+
+This gate combines the three requested mechanisms that individually had complementary-looking diagnostics:
+
+```text
+qpoint08: Quality target point-inlier weighting, gcs_quality_point_weight=0.8
+dec4: decoder_layers=4
+cqcalib: count_quality_calib_dim=64
+```
+
+Do not continue stacking these three mechanisms as the next path.
+
+Why:
+
+The hypothesis was that `qpoint08` and `dec4` could recover real GT5 lanes while `cqcalib` could suppress false fifth lanes. The combined run did suppress GT4->5 pressure, but it did so by making Count Head too conservative on real GT5 images:
+
+```text
+parent official_best: official_acc=0.959315, FP=0.045225, FN=0.028466, rate_4_to_5=0.075758, rate_5_to_4=0.148649, gt5_output5_rate=0.851351
+combo official_best:  official_acc=0.956884, FP=0.044628, FN=0.034894, rate_4_to_5=0.060606, rate_5_to_4=0.175676, gt5_output5_rate=0.824324
+```
+
+GT5 diagnosis confirms the new failure mode:
+
+```text
+GT5 kept=61/74
+count_head_under_predict=10/74
+quality_too_low=2/74
+valid_points_fail=1/74
+candidate_pool_shortfall=0
+GT5 NMS suppression=1/74
+rank5_score_low=0
+```
+
+The combination improved the Quality Head side but worsened the Count Head GT5 boundary. Official Accuracy dropped by `0.002431` versus the K56 parent, so the candidate is not promotable.
+
+Alternatives considered:
+
+- Promote because `rate_4_to_5` improved from `0.075758` to `0.060606`.
+- Continue the same stack for more epochs.
+- Run the larger `dec4+bifpn256+cqcalib+strip-p23` YAML.
+- Treat this as evidence for a more targeted Count/Quality consistency objective instead of capacity stacking.
+
+Tradeoff:
+
+Rejecting the combo gives up the lower false-fifth-lane pressure, but preserves the project rule that official-val Accuracy is the promotion surface. The result narrows the next useful direction: a future candidate must prevent GT5 count-under while preserving GT4->5 suppression, instead of simply stacking Quality target weighting, decoder depth, and query-token calibration.
+
+Validation evidence:
+
+Training-time official best and independent official-val sweep agreed:
+
+```text
+official_best_summary: runs/gcs_lane/gcs_yolo_lane_s_q12_k56_qpoint08_dec4_cqcalib_ft8_seed1_b32w4/official_best_summary.json
+independent 64-combo sweep: runs/gcs_lane/gcs_yolo_lane_s_q12_k56_qpoint08_dec4_cqcalib_ft8_seed1_b32w4/analysis_official_best_val_sweep64/tusimple_official_sweep_summary.json
+GT5 diagnosis: runs/gcs_lane/gcs_yolo_lane_s_q12_k56_qpoint08_dec4_cqcalib_ft8_seed1_b32w4/analysis_official_best_gt5_diag_val/gt5_rank_diagnostics_summary.json
+official_acc=0.956884
+FP=0.044628
+FN=0.034894
+conf=0.005
+point_valid_thr=0.35
+nms_dist_px=18.0
+max_det=5
+min_points=6
+rank_min_points=none
+```
+
+A text-artifact scan of the combo run found no `--split test`, `split: test`, `split=test`, `test_label.json`, or `test_set` hits. No test metric was used.
+
+Mainline or experiment:
+
+Validation-only experiment. Mainline defaults remain unchanged, and the K56 parent epoch152 remains the official-val reference.

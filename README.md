@@ -83,27 +83,41 @@ workers=4
 
 The run completed on `2026-06-14` at 180/180 epochs with no NaN, shape error, traceback, or test-split leakage found in run artifacts. Independent official-val sweep of `weights/official_best.pt` reproduced the training-time selection: epoch 152, `official_acc=0.959315`, `FP=0.045225`, `FN=0.028466`, `official_score=0.957841`, using `conf=0.005`, `point_valid_thr=0.35`, `nms_dist_px=18.0`, `max_det=5`, `min_points=6`, and `rank_min_points=none`. This exceeds the current-code K32 audit `0.953756` by `+0.005559` and legacy `0.959224` by `+0.000091`, but it is not promoted or test-ready because the margin is tiny and the 0.97 objective remains unmet. Final retained official Top-K is `152=0.959315`, `170=0.959247`, `166=0.959244`, `168=0.959217`, `165=0.959215`; ordinary val best remains epoch 142 with `val/f1=0.962083`.
 
-Independent GT5 diagnosis on official-val found 63/74 GT5 images kept; remaining GT5 drops are `count_head_under_predict=5` and `quality_too_low=6`, with candidate-pool shortfall, GT5 NMS suppression, and rank-score-low all at zero. Two K56 Count/Quality fine-tune gates from the epoch152 parent were stopped early because they regressed official-val: `gcs_yolo_lane_s_q12_k56_cqcalib_ft12_seed1_b32w4` best `0.953415`, and `gcs_yolo_lane_s_q12_k56_cqcalib_lr1e4_ft8_seed1_b32w4` best `0.957787`. Do not rerun those exact recipes as the next path.
-
-The current code adds explicit, validation-only K56 candidates for the next official-val gates:
+Independent GT5 diagnosis on official-val found 63/74 GT5 images kept; remaining GT5 drops are `count_head_under_predict=5` and `quality_too_low=6`, with candidate-pool shortfall, GT5 NMS suppression, and rank-score-low all at zero. Two K56 Count/Quality fine-tune gates from the epoch152 parent were stopped early because they regressed official-val: `gcs_yolo_lane_s_q12_k56_cqcalib_ft12_seed1_b32w4` best `0.953415`, and `gcs_yolo_lane_s_q12_k56_cqcalib_lr1e4_ft8_seed1_b32w4` best `0.957787`. The 2026-06-16 ordered K56 candidate gate also failed to beat the parent:
 
 ```text
-Quality target ablation: --gcs-quality-point-weight 0.8, then 1.0 only if 0.8 helps
+parent:     official_acc=0.959315, rate_4_to_5=0.075758, gt5_output5_rate=0.851351
+qpoint08:   official_acc=0.956912, rate_4_to_5=0.106061, gt5_output5_rate=0.878378
+cqcalib:    official_acc=0.956004, rate_4_to_5=0.045455, gt5_output5_rate=0.797297
+dec4:       official_acc=0.956595, rate_4_to_5=0.121212, gt5_output5_rate=0.945946
+bifpn192:   official_acc=0.946124, rate_4_to_5=0.045455, gt5_output5_rate=0.148649
+bifpn256:   official_acc=0.933101, rate_4_to_5=0.000000, gt5_output5_rate=0.067568, batch=8 after batch=32 OOM
+strip-p23:  official_acc=0.948057, rate_4_to_5=0.075758, gt5_output5_rate=0.783784
+qpoint08+dec4+cqcalib: official_acc=0.956884, rate_4_to_5=0.060606, gt5_output5_rate=0.824324
+```
+
+Do not promote or stack these recipes. The `qpoint08+dec4+cqcalib` follow-up lowered false fifth-lane pressure but raised real GT5 underprediction (`count_head_under_predict=10/74`), so it is also rejected. Do not rerun `gcs_quality_point_weight=1.0` from the same hypothesis without a new guardrail for false fifth-lane pressure. The strongest reference remains the K56 parent `official_best.pt` from epoch 152.
+
+The current code retains explicit, validation-only K56 structural candidates for reproducibility:
+
+```text
 decoder_layers=4:        ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-dec4.yaml
 LaneBiFPN channels=192:  ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-bifpn192.yaml
 LaneBiFPN channels=256:  ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-bifpn256.yaml
 Count/Quality calib:     ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-cqcalib.yaml
+decoder+calib combo:     ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-dec4-cqcalib.yaml
 post-BiFPN strip P2/P3:  ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-strip-p23.yaml
+combined candidate:      ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-dec4-bifpn256-cqcalib-strip-p23.yaml
 ```
 
-Recommended order: first gate `--gcs-quality-point-weight 0.8` from the K56 epoch152 parent; then a structural Count/Quality calibration candidate; then `decoder_layers=4`; then `LaneBiFPN=192`. Treat `256` and extra strip attention as later capacity checks unless official-val evidence supports expanding the search.
+The completed gate order was `qpoint08 -> cqcalib -> dec4 -> bifpn192 -> bifpn256/strip-p23`, followed by `qpoint08+dec4+cqcalib`. Official-val rejected every candidate, so the combined candidate should not be run as the next path without a new hypothesis that specifically fixes the observed Count/Quality tradeoff.
 
 Use the local RTX 4060 8GB workstation for smoke, contract, label/oracle, and model-shape checks only. Run formal training and official-val evaluation on the remote server.
 
 Default-preserving/default-off training knobs remain available for controlled experiments:
 
 ```text
-gcs_quality_point_weight ablations = 0.8 or 1.0
+gcs_quality_point_weight = 0.5 default; 0.8 tried and rejected on 2026-06-16; 1.0 is not the next gate without a new hypothesis
 gcs_quality_gt5_edge_floor = 0.0
 gcs_quality_hard_negative_from_head = False
 gcs_hard_negative_visible_segment = False

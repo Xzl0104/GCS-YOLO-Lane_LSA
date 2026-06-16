@@ -100,9 +100,9 @@ python tools/train_gcs.py \
   --gcs-official-best-archive-root runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset
 ```
 
-Recommended next K56 official-val gates:
+Completed K56 Quality target gate:
 
-1. Gate Quality target point-inlier weighting first. This is the smallest change and keeps the K56 model architecture unchanged:
+The 2026-06-16 `gcs_quality_point_weight=0.8` run is kept for reproducibility. It used the smallest architecture-preserving change from the K56 epoch152 parent:
 
 ```bash
 python tools/train_gcs.py \
@@ -123,19 +123,84 @@ python tools/train_gcs.py \
   --gcs-official-best-archive-root runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset
 ```
 
-Success criteria: official-val `official_acc > 0.959315`, preferably `>=0.9600`; matched/unmatched Quality gap `>0.12`; GT5 diagnosis `quality_too_low <=3/74`; `count_head_under_predict <=5/74`; no candidate-pool shortfall, GT5 NMS suppression, or rank5-score-low regression; and no GT4->5 increase above the epoch152 baseline `0.075758`. Only try `--gcs-quality-point-weight 1.0` if the `0.8` gate improves official-val or the GT5 diagnostic tradeoff without raising false fifth-lane pressure.
+Result: not promotable. Training-time and independent 64-combo official-val both selected `official_acc=0.956912`, `FP=0.049954`, `FN=0.028926`, below the K56 parent `0.959315`. It improved GT5 diagnosis to `kept=65/74`, `quality_too_low=3/74`, `count_head_under_predict=5/74`, with candidate shortfall, GT5 NMS suppression, and diagnostic valid-points failure at zero, but it missed the matched/unmatched Quality gap target (`0.118673 < 0.12`) and raised `rate_4_to_5` to `0.106061` versus parent `0.075758`. Do not try `--gcs-quality-point-weight 1.0` as the next gate under the same hypothesis.
 
-2. If the target ablation is not sufficient, test one explicit structural candidate at a time:
+Official-val artifacts:
 
 ```text
-Count/Quality shared calibration: ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-cqcalib.yaml
-decoder_layers=4:                ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-dec4.yaml
-LaneBiFPN channels=192:          ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-bifpn192.yaml
-LaneBiFPN channels=256:          ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-bifpn256.yaml
-post-BiFPN strip P2/P3:          ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-strip-p23.yaml
+run: runs/gcs_lane/gcs_yolo_lane_s_q12_k56_qpoint08_ft8_seed1_b32w4
+official_best_summary: runs/gcs_lane/gcs_yolo_lane_s_q12_k56_qpoint08_ft8_seed1_b32w4/official_best_summary.json
+independent 64-combo sweep: runs/gcs_lane/gcs_yolo_lane_s_q12_k56_qpoint08_ft8_seed1_b32w4/analysis_official_best_val_sweep64/tusimple_official_sweep_summary.json
+GT5 diagnosis: runs/gcs_lane/gcs_yolo_lane_s_q12_k56_qpoint08_ft8_seed1_b32w4/analysis_official_best_gt5_diag_val/gt5_rank_diagnostics_summary.json
+remote source HEAD: b1cc91e6afb653397b1b69ebefda6903b126ea12
 ```
 
-Priority after the Quality target gate: `cqcalib`, then `dec4`, then `bifpn192`. Treat `bifpn256` and `strip-p23` as later checks unless `bifpn192` or Count/Quality evidence justifies more capacity or attention search. All are validation-only candidates until official-val selects one; do not use test.
+Completed K56 ordered candidate gates:
+
+The 2026-06-16 ordered gate `qpoint08 -> cqcalib -> dec4 -> bifpn192 -> bifpn256/strip-p23` was run on official-val only. All candidates used the K56 epoch152 parent unless noted, `--imgsz 544 960`, the same official-val GT/archive, independent 64-combo official-val sweeps, and GT5 diagnosis. None is promotable:
+
+```text
+parent:    gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4, official_acc=0.959315
+qpoint08:  gcs_yolo_lane_s_q12_k56_qpoint08_ft8_seed1_b32w4, official_acc=0.956912
+cqcalib:   gcs_yolo_lane_s_q12_k56_cqcalib_arch_ft8_seed1_b32w4, official_acc=0.956004
+dec4:      gcs_yolo_lane_s_q12_k56_dec4_ft8_seed1_b32w4, official_acc=0.956595
+bifpn192:  gcs_yolo_lane_s_q12_k56_bifpn192_ft8_seed1_b32w4, official_acc=0.946124
+bifpn256:  gcs_yolo_lane_s_q12_k56_bifpn256_ft8_seed1_b8w4, official_acc=0.933101
+strip-p23: gcs_yolo_lane_s_q12_k56_strip_p23_ft8_seed1_b32w4, official_acc=0.948057
+```
+
+Key failure modes:
+
+```text
+qpoint08 improved GT5 output and quality_too_low but raised GT4->5 false fifth pressure.
+cqcalib reduced GT4->5 pressure but regressed ACC and GT5 output.
+dec4 improved GT5 output most, but raised GT4->5 pressure and lost ACC.
+bifpn192 and bifpn256 caused severe Quality/GT5 collapse; bifpn256 also OOMed at batch=32 and required batch=8.
+strip-p23 preserved GT4->5 pressure but lost ACC and GT5 output.
+```
+
+Do not stack these candidates or run the combined `dec4+bifpn256+cqcalib+strip-p23` YAML as the next path from this evidence. A new path should target Quality/Count calibration without letting true-GT5 recall and false fifth-lane pressure trade off against each other.
+
+Completed K56 qpoint08+dec4+cqcalib combo gate:
+
+The 2026-06-17 follow-up explicitly combined the three least-destructive mechanisms requested for a joint test: `gcs_quality_point_weight=0.8`, `decoder_layers=4`, and `count_quality_calib_dim=64`. It used the separate structural YAML below, not the failed BiFPN/strip combined YAML:
+
+```text
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-dec4-cqcalib.yaml
+```
+
+Reproduction command:
+
+```bash
+python tools/train_gcs.py \
+  --model ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-dec4-cqcalib.yaml \
+  --data data/tusimple_gcs_fixed_y_k56_960x544.yaml \
+  --imgsz 544 960 \
+  --name gcs_yolo_lane_s_q12_k56_qpoint08_dec4_cqcalib_ft8_seed1_b32w4 \
+  --pretrained runs/gcs_lane/gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4/weights/official_best.pt \
+  --epochs 8 \
+  --batch 32 \
+  --workers 4 \
+  --seed 1 \
+  --gcs-quality-point-weight 0.8 \
+  --gcs-official-best \
+  --gcs-official-best-period 1 \
+  --gcs-official-best-top-k 5 \
+  --gcs-official-best-gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
+  --gcs-official-best-archive-root runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset
+```
+
+Result: not promotable. Training-time official best and independent 64-combo official-val both selected epoch 8 with `official_acc=0.956884`, `FP=0.044628`, `FN=0.034894`, below the K56 parent `0.959315`. It reduced `rate_4_to_5` to `0.060606`, but worsened GT5 retention: `gt5_output5_rate=0.824324`, `rate_5_to_4=0.175676`, and GT5 diagnosis `count_head_under_predict=10/74`, `quality_too_low=2/74`, `valid_points_fail=1/74`. This means the combination suppressed false fifth lanes partly by becoming too conservative on real GT5 images. Do not continue stacking `qpoint08`, `dec4`, and `cqcalib` as the next path.
+
+Official-val artifacts:
+
+```text
+run: runs/gcs_lane/gcs_yolo_lane_s_q12_k56_qpoint08_dec4_cqcalib_ft8_seed1_b32w4
+official_best_summary: runs/gcs_lane/gcs_yolo_lane_s_q12_k56_qpoint08_dec4_cqcalib_ft8_seed1_b32w4/official_best_summary.json
+independent 64-combo sweep: runs/gcs_lane/gcs_yolo_lane_s_q12_k56_qpoint08_dec4_cqcalib_ft8_seed1_b32w4/analysis_official_best_val_sweep64/tusimple_official_sweep_summary.json
+GT5 diagnosis: runs/gcs_lane/gcs_yolo_lane_s_q12_k56_qpoint08_dec4_cqcalib_ft8_seed1_b32w4/analysis_official_best_gt5_diag_val/gt5_rank_diagnostics_summary.json
+remote source HEAD: e9c6b963a2a1aa73d703677ff2f1f1d9a7431997
+```
 
 Completed K56 remote baseline state:
 
@@ -417,7 +482,9 @@ python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12
 python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-bifpn192.yaml --imgsz 544 960 --batch 1
 python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-bifpn256.yaml --imgsz 544 960 --batch 1
 python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-cqcalib.yaml --imgsz 544 960 --batch 1
+python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-dec4-cqcalib.yaml --imgsz 544 960 --batch 1
 python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-strip-p23.yaml --imgsz 544 960 --batch 1
+python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-dec4-bifpn256-cqcalib-strip-p23.yaml --imgsz 544 960 --batch 1
 ```
 
 ## Head Dependency Check
