@@ -230,9 +230,9 @@ def check_count_head_visible_segment_evidence() -> None:
     high = torch.logit(torch.tensor(0.95))
     low = torch.logit(torch.tensor(0.05))
     pred_logits = torch.full((1, 6), float(high))
-    pred_valid_logits = torch.full((1, 6, 32), float(low))
+    pred_valid_logits = torch.full((1, 6, 56), float(low))
     pred_valid_logits[0, 0:4, :] = float(high)
-    pred_valid_logits[0, 4, 20:26] = float(high)
+    pred_valid_logits[0, 4, 34:40] = float(high)
 
     valid_prob = pred_valid_logits.sigmoid()
     visible_mean, visible_support, visible_points, all_anchor_mean = head._visible_segment_stats(valid_prob)
@@ -385,10 +385,10 @@ def check_quality_rank_and_rescue() -> None:
     _assert(len(high_p5) == 5, f"high-quality fifth rescue should output 5 lanes, got {len(high_p5)}")
     _assert(any(lane.get("quality_rescue_5th") for lane in high_p5), "rescued fifth lane should be marked")
 
-    points32 = _lane_points(5, points=32)
-    short_edge_valid = _valid_logits([32, 32, 32, 32, 5], points=32)
+    points56 = _lane_points(5, points=56)
+    short_edge_valid = _valid_logits([56, 56, 56, 56, 5], points=56)
     short_edge, short_meta = decode_gcs_predictions(
-        pred_points=points32,
+        pred_points=points56,
         pred_logits=torch.full((5,), 6.0),
         pred_valid_logits=short_edge_valid,
         pred_quality_logits=torch.full((5,), 5.0),
@@ -415,8 +415,11 @@ def check_quality_rank_and_rescue() -> None:
         quality_rescue_dist_px=24.0,
         return_meta=True,
     )
-    rescued = [lane for lane in short_edge if lane.get("quality_rescue_5th")]
-    _assert(len(short_edge) == 5 and rescued, f"short visible edge lane should pass quality rescue: {short_meta}")
+    rescued = [lane for lane in short_edge if lane.get("edge_last_lane_rescue")]
+    _assert(short_meta["edge_count4_to5_upgrade"], f"short visible edge lane should be edge-upgrade eligible: {short_meta}")
+    _assert(short_meta["edge_count4_to5_upgrade_success"], f"short visible edge lane should complete edge upgrade: {short_meta}")
+    _assert(len(short_edge) == 5 and rescued, f"short visible edge lane should pass gated edge rescue: {short_meta}")
+    _assert(not any(lane.get("quality_rescue_5th") for lane in short_edge), "edge upgrade should not masquerade as quality rescue")
     _assert(int(rescued[0]["query"]) == 4, f"expected real short edge query 4 to be rescued, got {rescued}")
     _assert(float(rescued[0]["mean_valid_score"]) > 0.9, "rank gate should use visible-segment mean valid")
     _assert(float(rescued[0]["mean_valid_score_all"]) < 0.2, "diagnostics should retain all-anchor mean valid")

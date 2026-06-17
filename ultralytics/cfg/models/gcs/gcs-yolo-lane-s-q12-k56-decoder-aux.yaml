@@ -1,14 +1,10 @@
-# GCS-YOLO-Lane fixed-y x-only variant.
-# The lane head predicts x at shared bottom-to-top y anchors and returns Kx2 points.
+# GCS-YOLO-Lane Q12-K56 decoder auxiliary supervision candidate.
+# Exposes intermediate decoder layer outputs as aux_outputs for default-off gcs_decoder_aux loss.
 
 nc: 1
 imgsz: [544, 960]
 depth_multiple: 0.50
 width_multiple: 0.50
-
-# Head args:
-# num_queries=8, num_points=32, decoder_layers=3, nhead=8,
-# point_mode=fixed_y, fixed_y_start=0.9861111111111112 (TuSimple h=710/720), fixed_y_end=0.25
 
 backbone:
   - [-1, 1, Conv, [64, 3, 2]]
@@ -27,4 +23,4 @@ backbone:
 
 head:
   - [[2, 5, 8, 12], 1, LaneBiFPN, [128]]
-  - [-1, 1, GCSLaneHead, [8, 32, 3, 8, fixed_y, 0.9861111111111112, 0.25]]
+  - [-1, 1, GCSLaneHead, [12, 56, 3, 8, fixed_y, 0.9861111111111112, 0.2222222222222222, 0, false, true]]

@@ -33,8 +33,8 @@ from ultralytics.utils.torch_utils import select_device
 
 
 DEFAULT_WEIGHTS = ROOT / "runs" / "gcs_lane" / "gcs_yolo_lane_s_tusimple_refquery_e220" / "weights" / "best.pt"
-DEFAULT_SOURCE = ROOT / "datasets" / "tusimple_fixed_y_960x544" / "images" / "test"
-DEFAULT_LABELS = ROOT / "datasets" / "tusimple_fixed_y_960x544" / "labels_gcs" / "test"
+DEFAULT_SOURCE = ROOT / "datasets" / "tusimple_fixed_y_k56_960x544" / "images" / "val"
+DEFAULT_LABELS = ROOT / "datasets" / "tusimple_fixed_y_k56_960x544" / "labels_gcs" / "val"
 
 
 def parse_args() -> argparse.Namespace:
@@ -68,7 +68,29 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", default="cpu", help="Inference device, e.g. cpu or 0.")
     parser.add_argument("--half", action="store_true", help="Use FP16 on CUDA.")
     parser.add_argument("--save-dir", default="runs/gcs_lane/error_analysis", help="Output directory.")
+    parser.add_argument(
+        "--allow-test-diagnostics",
+        action="store_true",
+        help="Allow diagnostic analysis on a test path. Use only after final selection, never for iteration.",
+    )
     return parser.parse_args()
+
+
+def path_has_test_component(value: str | Path | None) -> bool:
+    """Return whether a source/label path explicitly targets a test split."""
+    if value is None or not str(value).strip():
+        return False
+    parts = [p.lower() for p in Path(value).parts]
+    return "test" in parts or "test_set" in parts
+
+
+def reject_test_diagnostics(value: str | Path | None, *, field: str, allow: bool) -> None:
+    """Guard diagnostic tools against accidental test-set iteration."""
+    if not allow and path_has_test_component(value):
+        raise ValueError(
+            f"{field} points at a test split: {value}. "
+            "Diagnostics default to validation; pass --allow-test-diagnostics only for final-selected test review."
+        )
 
 
 def stat(values: list[float]) -> dict:
@@ -154,6 +176,8 @@ def write_csv(path: Path, rows: list[dict], fields: list[str]) -> None:
 @torch.inference_mode()
 def main() -> None:
     args = parse_args()
+    reject_test_diagnostics(args.source, field="--source", allow=bool(args.allow_test_diagnostics))
+    reject_test_diagnostics(args.labels, field="--labels", allow=bool(args.allow_test_diagnostics))
     imgsz = normalize_imgsz(args.imgsz, dataset=args.dataset)
     device = select_device(args.device, verbose=False)
     model = load_gcs_model(args.weights, device=device, half=args.half, gcs_imgsz=imgsz)
@@ -210,6 +234,8 @@ def main() -> None:
         )
         pred_quality_t = preds.get("pred_quality_logits")
         pred_quality_t = pred_quality_t[0].detach().float().cpu() if pred_quality_t is not None else None
+        pred_survival_t = preds.get("pred_survival_logits")
+        pred_survival_t = pred_survival_t[0].detach().float().cpu() if pred_survival_t is not None else None
         if pred_logits_t.ndim == 2 and pred_logits_t.shape[-1] == 1:
             pred_logits_t = pred_logits_t.squeeze(-1)
         scores = pred_logits_t.sigmoid().cpu().numpy().astype(np.float32)
@@ -259,6 +285,7 @@ def main() -> None:
             pred_count_logits=pred_count_t,
             pred_count_boundary_logits=pred_count_boundary_t,
             pred_quality_logits=pred_quality_t,
+            pred_survival_logits=pred_survival_t,
             image_shape=img.shape[:2],
             score_thr=args.conf,
             point_valid_thr=args.point_valid_thr,

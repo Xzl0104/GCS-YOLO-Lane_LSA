@@ -43,14 +43,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--split",
         default="val",
-        choices=("train", "val", "test"),
+        choices=("train", "val"),
         help="Dataset split to sweep when --source is not provided.",
     )
     parser.add_argument("--weights", default=str(DEFAULT_WEIGHTS), help="GCS checkpoint .pt.")
     parser.add_argument("--source", default=None, help="Validation image directory/list. Defaults to data yaml val.")
     parser.add_argument("--labels", default=None, help="Validation labels_gcs directory. Empty means infer from images.")
-    parser.add_argument("--test-source", default=None, help="Optional test image directory/list for --run-test.")
-    parser.add_argument("--test-labels", default=None, help="Optional test labels_gcs directory for --run-test.")
     parser.add_argument(
         "--imgsz",
         nargs="+",
@@ -114,7 +112,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-det", type=int, default=GCS_DEFAULT_MAX_DET, help="Maximum decoded lane queries per image.")
     parser.add_argument("--line-nms-min-overlap", type=int, default=6, help="Minimum shared visible anchors for lane-NMS duplicate suppression.")
     parser.add_argument("--max-images", type=int, default=0, help="Limit validation images. 0 means all.")
-    parser.add_argument("--test-max-images", type=int, default=0, help="Limit test images for --run-test. 0 means all.")
     parser.add_argument("--warmup", type=int, default=20, help="Number of untimed warmup forwards.")
     parser.add_argument("--device", default="0", help="Inference device, e.g. 0 or cpu.")
     parser.add_argument("--half", action="store_true", help="Use FP16 on CUDA.")
@@ -129,9 +126,26 @@ def parse_args() -> argparse.Namespace:
         choices=("f1", "fitness"),
         help="Criterion for best conf. fitness = f1 - 0.001*lane_count_mae - 0.0001*ape_mean_px.",
     )
-    parser.add_argument("--run-test", action="store_true", help="Also evaluate test split using the best val conf.")
     parser.add_argument("--save-records", action="store_true", help="Save per-image records for each threshold.")
     return parser.parse_args()
+
+
+def path_has_test_component(value: str | Path | None) -> bool:
+    """Return whether a source/label path explicitly targets a test split."""
+    if value is None or not str(value).strip():
+        return False
+    parts = [p.lower() for p in Path(value).parts]
+    return "test" in parts or "test_set" in parts
+
+
+def reject_test_source(value: str | Path | None, *, field: str) -> None:
+    """Reject test paths in this threshold-sweep tool."""
+    if path_has_test_component(value):
+        raise ValueError(
+            f"{field} points at a test split: {value}. "
+            "Do not use sweep_gcs_conf.py for test evaluation or parameter search; use final-test evaluation only "
+            "after official-val selection."
+        )
 
 
 def default_data_yaml(dataset: str) -> Path:
@@ -426,7 +440,6 @@ def resolve_sweep_save_dir(
     nms_dist_pxs: list[float],
     max_det: int,
     max_images: int,
-    run_test: bool,
     min_points: int = 6,
     min_overlap: int = 6,
     min_gt_cover_ratio: float = 0.3,
@@ -450,8 +463,6 @@ def resolve_sweep_save_dir(
         )
     if max_images and max_images > 0:
         tag_parts.append(f"maximg{int(max_images)}")
-    if run_test:
-        tag_parts.append("run_test")
     run_dir = _weight_run_dir(weights)
     if run_dir is not None:
         return run_dir / "conf_sweep" / "_".join(tag_parts)
@@ -515,6 +526,7 @@ def evaluate_conf_grid(
         pred_count = preds.get("pred_count_logits")
         pred_count_boundary = preds.get("pred_count_boundary_logits")
         pred_quality = preds.get("pred_quality_logits")
+        pred_survival = preds.get("pred_survival_logits")
         for point_valid_thr in point_valid_thrs:
             for nms_dist_px in nms_dist_pxs:
                 for conf in confs:
@@ -534,6 +546,7 @@ def evaluate_conf_grid(
                             pred_count_boundary[0] if pred_count_boundary is not None else None
                         ),
                         pred_quality_logits=pred_quality[0] if pred_quality is not None else None,
+                        pred_survival_logits=pred_survival[0] if pred_survival is not None else None,
                         image_shape=img.shape[:2],
                         score_thr=conf,
                         point_valid_thr=point_valid_thr,
@@ -611,6 +624,8 @@ def main() -> None:
     labels = args.labels or labels_from_source(source)
     if not source:
         raise ValueError(f"{args.split!r} source is required via --source or data yaml {args.split}.")
+    reject_test_source(source, field="--source")
+    reject_test_source(labels, field="--labels")
 
     device = select_device(args.device, verbose=False)
     model = load_gcs_model(args.weights, device=device, half=args.half, gcs_imgsz=imgsz)
@@ -667,7 +682,6 @@ def main() -> None:
         nms_dist_pxs=nms_dist_pxs,
         max_det=args.max_det,
         max_images=args.max_images,
-        run_test=args.run_test,
         min_points=args.min_points,
         min_overlap=args.min_overlap,
         min_gt_cover_ratio=args.min_gt_cover_ratio,
@@ -707,51 +721,6 @@ def main() -> None:
     if args.save_records:
         output["val_records_by_conf"] = val_result["records_by_conf"]
 
-    if args.run_test:
-        test_source = args.test_source or data.get("test")
-        if not test_source:
-            raise ValueError("--run-test requested but no test split is available. Pass --test-source.")
-        test_labels = args.test_labels or labels_from_source(test_source)
-        test_result = evaluate_conf_grid(
-            model=model,
-            source=test_source,
-            labels=test_labels,
-            imgsz=imgsz,
-            confs=[float(best["conf"])],
-            ape_thr=args.ape_thr,
-            max_det=args.max_det,
-            max_images=args.test_max_images,
-            device=device,
-            half=args.half,
-            save_records=args.save_records,
-            match_gate_px=args.match_gate_px,
-            max_x_dist=args.max_x_dist,
-            min_overlap=args.min_overlap,
-            min_points=args.min_points,
-            min_gt_cover_ratio=args.min_gt_cover_ratio,
-            min_pred_cover_ratio=args.min_pred_cover_ratio,
-            nms_dist_pxs=[float(best["nms_dist_px"])],
-            point_valid_thrs=[float(best["point_valid_thr"])],
-            line_nms_min_overlap=args.line_nms_min_overlap,
-        )
-        test_rows = test_result["rows"]
-        write_csv(save_dir / "conf_sweep_test_best.csv", test_rows)
-        output["test_at_best_conf"] = test_rows[0]
-        output["test_config"] = {
-            "source": str(Path(test_source).resolve()),
-            "labels": None if test_labels is None else str(Path(test_labels).resolve()),
-            "conf": float(best["conf"]),
-            "nms_dist_px": float(best["nms_dist_px"]),
-            "point_valid_thr": float(best["point_valid_thr"]),
-            "min_overlap": int(args.min_overlap),
-            "min_points": int(args.min_points),
-            "min_gt_cover_ratio": float(args.min_gt_cover_ratio),
-            "min_pred_cover_ratio": float(args.min_pred_cover_ratio),
-            "max_images": int(args.test_max_images),
-        }
-        if args.save_records:
-            output["test_records_by_conf"] = test_result["records_by_conf"]
-
     (save_dir / "conf_sweep_summary.json").write_text(json.dumps(output, indent=2), encoding="utf-8")
     print_rows(rows)
     print(
@@ -759,13 +728,6 @@ def main() -> None:
         f"pvalid={best['point_valid_thr']:.2f}  "
         f"f1={best['f1']:.6f}  lane_count_mae={best['lane_count_mae']:.6f}"
     )
-    if args.run_test:
-        test = output["test_at_best_conf"]
-        print(
-            f"test @ conf={best['conf']:.2f}, nms={best['nms_dist_px']:.1f}, "
-            f"pvalid={best['point_valid_thr']:.2f}: "
-            f"f1={test['f1']:.6f} lane_count_mae={test['lane_count_mae']:.6f}"
-        )
     print(f"saved to: {save_dir.resolve()}")
 
 

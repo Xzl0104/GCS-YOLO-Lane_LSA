@@ -32,7 +32,10 @@ ALLOWED_LOSSES = (
     "line_iou_loss",
     "count_cls_loss",
     "count_sum_loss",
+    "visible_count_sum_loss",
     "quality_loss",
+    "survival_loss",
+    "decoder_aux_loss",
 )
 
 
@@ -242,6 +245,7 @@ def check_decode_quality_rank_and_rescue() -> None:
         fifth_min_points=5,
         quality_rescue_5th=True,
         quality_rescue_count5_thr=0.30,
+        edge_count4_to5_upgrade=False,
         return_meta=True,
     )
     _assert(meta["count_head_policy_count"] == 4, "fixture should keep Count Head policy at K=4")
@@ -272,6 +276,7 @@ def check_decode_quality_rank_and_rescue() -> None:
         fifth_min_points=5,
         quality_rescue_5th=True,
         quality_rescue_count5_thr=0.30,
+        edge_count4_to5_upgrade=False,
         return_meta=True,
     )
     _assert(len(low_p5) == 4, "low P5 must not force a fifth output")
@@ -396,6 +401,7 @@ def check_edge_last_lane_rescue_and_count_upgrade() -> None:
     _assert(meta["count_head_raw_count"] == 4, "fixture should keep raw Count Head at K=4")
     _assert(not meta["soft_count_decision_enabled"], "fixture should keep soft-count disabled")
     _assert(meta["edge_count4_to5_upgrade"], "near P4/P5 plus outside edge candidate should upgrade K=4 to K=5")
+    _assert(meta["edge_count4_to5_upgrade_success"], "edge K=4 to K=5 upgrade should be explicitly marked successful")
     _assert(meta["edge_last_lane_rescue_active"], "edge upgrade should activate edge rescue for this decode")
     _assert(meta["edge_last_lane_rescue_success_count"] == 1, "edge rescue success should be recorded")
     _assert(len(lanes) == 5, "edge rescue should fill the promoted fifth output")

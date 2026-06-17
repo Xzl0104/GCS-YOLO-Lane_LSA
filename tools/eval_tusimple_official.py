@@ -426,6 +426,7 @@ def predict_tusimple_records(
         pred_count = preds.get("pred_count_logits")
         pred_count_boundary = preds.get("pred_count_boundary_logits")
         pred_quality = preds.get("pred_quality_logits")
+        pred_survival = preds.get("pred_survival_logits")
         decoded, decode_meta = decode_gcs_predictions(
             preds["pred_points"][0],
             preds["pred_logits"][0],
@@ -433,6 +434,7 @@ def predict_tusimple_records(
             pred_count_logits=pred_count[0] if pred_count is not None else None,
             pred_count_boundary_logits=pred_count_boundary[0] if pred_count_boundary is not None else None,
             pred_quality_logits=pred_quality[0] if pred_quality is not None else None,
+            pred_survival_logits=pred_survival[0] if pred_survival is not None else None,
             image_shape=original_shape,
             score_thr=conf,
             point_valid_thr=point_valid_thr,

@@ -1,4 +1,4 @@
-# GCS-YOLO-Lane Q12 ablation: no LSEM.
+# GCS-YOLO-Lane Q12-K56 ablation: no LSEM.
 # The two LSEM layers are replaced by nn.Identity to preserve backbone indices
 # and keep YOLO11 pretrained backbone remapping identical to the main Q12 YAML.
 
@@ -27,4 +27,4 @@ backbone:
 
 head:
   - [[2, 5, 8, 12], 1, LaneBiFPN, [128]] # 13-P2/P3/P4/P5 bidirectional fusion
-  - [-1, 1, GCSLaneHead, [12, 32, 3, 8, fixed_y, 0.9861111111111112, 0.25]] # 14
+  - [-1, 1, GCSLaneHead, [12, 56, 3, 8, fixed_y, 0.9861111111111112, 0.2222222222222222]] # 14

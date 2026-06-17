@@ -25,19 +25,35 @@ from ultralytics.utils.gcs_shape import normalize_imgsz, shape_str
 
 TUSIMPLE_OFFICIAL_TOP_Y_NORM = 160.0 / 720.0
 DEFAULT_OUTPUT_ROOT = ROOT / "datasets" / "tusimple_fixed_y_k56_960x544"
-DEFAULT_REFERENCE_ROOT = ROOT / "datasets" / "tusimple_fixed_y_960x544"
 DEFAULT_SUMMARY = ROOT / "runs" / "gcs_lane" / "tusimple_fixed_y_k56_official_h_samples.json"
+DEFAULT_VAL_GT_JSON = (
+    ROOT
+    / "runs"
+    / "gcs_lane"
+    / "tusimple_official_val_363_folder_aware_seed20260602_subset"
+    / "labels"
+    / "tusimple_official_val_363_folder_aware_seed20260602.json"
+)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Build the TuSimple Q12-K56 fixed-y dataset from original TuSimple JSON and images, "
-            "using the current converted dataset only as the train/val split reference."
+            "using an official-val raw_file JSON as the default train/val split manifest."
         )
     )
     parser.add_argument("--archive-root", default="archive/TUSimple", help="TuSimple root or archive directory.")
-    parser.add_argument("--reference-root", default=str(DEFAULT_REFERENCE_ROOT), help="Existing split reference root.")
+    parser.add_argument(
+        "--val-gt-json",
+        default=str(DEFAULT_VAL_GT_JSON),
+        help="Official-val json-lines file whose raw_file entries define the validation split.",
+    )
+    parser.add_argument(
+        "--reference-root",
+        default=None,
+        help="Optional legacy converted split reference root. Explicit migration aid only; not used by default.",
+    )
     parser.add_argument("--output-root", default=str(DEFAULT_OUTPUT_ROOT), help="Destination converted dataset root.")
     parser.add_argument("--imgsz", nargs="+", type=int, default=[544, 960], help="Output image shape as H W.")
     parser.add_argument("--num-points", type=int, default=56, help="Fixed-y point count per lane.")
@@ -100,6 +116,29 @@ def reference_raw_file_split(reference_root: Path) -> dict[str, str]:
             if previous is not None and previous != split:
                 raise ValueError(f"raw_file appears in both {previous} and {split}: {raw_file}")
             mapping[raw_file] = split
+    return mapping
+
+
+def val_gt_raw_file_split(val_gt_json: Path) -> dict[str, str]:
+    """Return raw_file -> split using an official-val JSON as the validation manifest."""
+    if not val_gt_json.exists():
+        raise FileNotFoundError(f"Official-val split manifest not found: {val_gt_json}")
+    mapping: dict[str, str] = {}
+    with val_gt_json.open("r", encoding="utf-8") as f:
+        for lineno, line in enumerate(f, start=1):
+            line = line.strip()
+            if not line:
+                continue
+            payload = json.loads(line)
+            raw_file = normalized_raw_file(str(payload.get("raw_file", "")))
+            if not raw_file:
+                raise ValueError(f"{val_gt_json}:{lineno} is missing raw_file")
+            previous = mapping.get(raw_file)
+            if previous is not None:
+                raise ValueError(f"raw_file appears more than once in official-val manifest: {raw_file}")
+            mapping[raw_file] = "val"
+    if not mapping:
+        raise ValueError(f"Official-val split manifest is empty: {val_gt_json}")
     return mapping
 
 
@@ -205,33 +244,44 @@ def main() -> None:
         raise ValueError("This K56 builder is intentionally pinned to --num-points 56.")
 
     archive_root = find_archive_root(ROOT / args.archive_root if not Path(args.archive_root).is_absolute() else args.archive_root)
-    reference_root = ROOT / args.reference_root if not Path(args.reference_root).is_absolute() else Path(args.reference_root)
+    reference_root = (
+        ROOT / args.reference_root if args.reference_root and not Path(args.reference_root).is_absolute() else Path(args.reference_root)
+    ) if args.reference_root else None
+    val_gt_json = ROOT / args.val_gt_json if not Path(args.val_gt_json).is_absolute() else Path(args.val_gt_json)
     output_root = ROOT / args.output_root if not Path(args.output_root).is_absolute() else Path(args.output_root)
     img_shape = normalize_imgsz(args.imgsz)
 
     ensure_dataset_dirs(output_root, include_test=True)
     removed = clear_output_splits(output_root, ("train", "val", "test")) if args.overwrite else {}
 
-    ref_split = reference_raw_file_split(reference_root)
+    ref_split = reference_raw_file_split(reference_root) if reference_root is not None else val_gt_raw_file_split(val_gt_json)
     split_samples: dict[str, list[Any]] = {"train": [], "val": [], "test": []}
     missing_reference: list[str] = []
 
     for sample in load_train_samples(archive_root):
         raw_file = normalized_raw_file(sample.raw_file)
-        split = ref_split.get(raw_file)
-        if split is None:
+        if reference_root is not None and raw_file not in ref_split:
             missing_reference.append(raw_file)
             continue
+        split = ref_split.get(raw_file, "train")
         split_samples[split].append(sample)
     if missing_reference:
         raise ValueError(f"{len(missing_reference)} train JSON samples are missing from the reference split. First: {missing_reference[0]}")
-    rebuilt_train_val = len(split_samples["train"]) + len(split_samples["val"])
-    if rebuilt_train_val != len(ref_split):
-        raise FileNotFoundError(
-            "Archive train JSON did not cover the reference train/val split: "
-            f"rebuilt={rebuilt_train_val}, reference={len(ref_split)}. "
-            "Check that archive/TUSimple/train_set contains the original TuSimple label_data_*.json files."
-        )
+    if reference_root is not None:
+        rebuilt_train_val = len(split_samples["train"]) + len(split_samples["val"])
+        if rebuilt_train_val != len(ref_split):
+            raise FileNotFoundError(
+                "Archive train JSON did not cover the reference train/val split: "
+                f"rebuilt={rebuilt_train_val}, reference={len(ref_split)}. "
+                "Check that archive/TUSimple/train_set contains the original TuSimple label_data_*.json files."
+            )
+    else:
+        missing_val = sorted(raw_file for raw_file, split in ref_split.items() if split == "val" and raw_file not in sample_raw_file_set(split_samples["val"]))
+        if missing_val:
+            raise FileNotFoundError(
+                "Archive train JSON did not cover the official-val split manifest: "
+                f"missing={len(missing_val)}, first={missing_val[0]}"
+            )
 
     split_samples["test"] = load_test_samples(archive_root)
     if not split_samples["test"]:
@@ -239,7 +289,7 @@ def main() -> None:
     split_overlap_counts = assert_disjoint_raw_file_splits(split_samples)
 
     print(f"archive_root: {archive_root}")
-    print(f"reference_root: {reference_root}")
+    print(f"split_manifest: {reference_root if reference_root is not None else val_gt_json}")
     print(f"output_root: {output_root}")
     print(f"image shape: {shape_str(img_shape)} (W x H), stored as H,W={img_shape}")
     print(f"fixed_y: [{float(args.fixed_y_start)}, {float(args.fixed_y_end)}], num_points={int(args.num_points)}")
@@ -268,6 +318,7 @@ def main() -> None:
     summary = {
         "archive_root": archive_root,
         "reference_root": reference_root,
+        "val_gt_json": val_gt_json if reference_root is None else None,
         "output_root": output_root,
         "img_shape_hw": list(img_shape),
         "point_mode": "fixed_y",
@@ -280,7 +331,7 @@ def main() -> None:
             "count": 56,
             "order": "bottom_to_top",
         },
-        "split_source": "reference_raw_file_membership",
+        "split_source": "reference_raw_file_membership" if reference_root is not None else "official_val_gt_json_raw_file_membership",
         "reference_raw_files": len(ref_split),
         "splits": {
             split: {

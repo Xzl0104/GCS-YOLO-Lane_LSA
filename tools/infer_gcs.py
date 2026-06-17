@@ -73,7 +73,7 @@ def warn_max_det_mismatch(weights: str | Path, max_det: int, context: str) -> No
 
 def dataset_defaults(dataset: str) -> dict[str, Path]:
     """Return conventional inference paths for a converted GCS dataset."""
-    root = ROOT / "datasets" / ("tusimple_fixed_y_960x544" if dataset.lower() == "tusimple" else dataset.lower())
+    root = ROOT / "datasets" / ("tusimple_fixed_y_k56_960x544" if dataset.lower() == "tusimple" else dataset.lower())
     return {"source": root / "images" / "val"}
 
 
@@ -483,13 +483,31 @@ def _json_lane(lane: dict) -> dict:
         "anchor_valid_count_score",
         "smooth_factor",
         "jump_factor",
+        "quality_score",
+        "quality_head_score",
+        "survival_score",
+        "survival_head_score",
+        "gate_score",
+        "rescue_candidate_gate_score",
+        "last_lane_rescue_candidate_gate_score",
+        "edge_last_lane_rescue_candidate_gate_score",
+        "edge_count4_to5_candidate_gate_score",
         "count_head_raw_count",
         "count_head_policy_count",
         "count_head_margin",
         "count_head_shortfall",
     ):
-        if key in lane:
+        if key in lane and lane[key] is not None:
             item[key] = round(float(lane[key]), 6)
+    for key in (
+        "gate_source",
+        "rescue_candidate_gate_source",
+        "last_lane_rescue_candidate_gate_source",
+        "edge_last_lane_rescue_candidate_gate_source",
+        "edge_count4_to5_candidate_gate_source",
+    ):
+        if key in lane and lane[key] is not None:
+            item[key] = lane[key]
     if "point_valid" in lane:
         item["point_valid"] = np.asarray(lane["point_valid"], dtype=float).round(3).tolist()
     if "point_valid_scores" in lane:
@@ -602,6 +620,7 @@ def run_inference(
         pred_count = preds.get("pred_count_logits")
         pred_count_boundary = preds.get("pred_count_boundary_logits")
         pred_quality = preds.get("pred_quality_logits")
+        pred_survival = preds.get("pred_survival_logits")
         lanes = decode_gcs_predictions(
             preds["pred_points"][0],
             preds["pred_logits"][0],
@@ -609,6 +628,7 @@ def run_inference(
             pred_count_logits=pred_count[0] if pred_count is not None else None,
             pred_count_boundary_logits=pred_count_boundary[0] if pred_count_boundary is not None else None,
             pred_quality_logits=pred_quality[0] if pred_quality is not None else None,
+            pred_survival_logits=pred_survival[0] if pred_survival is not None else None,
             image_shape=img.shape[:2],
             score_thr=conf,
             point_valid_thr=point_valid_thr,

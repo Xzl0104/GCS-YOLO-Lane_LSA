@@ -5,6 +5,8 @@ import csv
 from pathlib import Path
 import yaml
 
+from ultralytics.utils.gcs_loss import GCSLoss
+
 
 MAX_METRICS = {"val/precision", "val/recall", "val/f1"}
 
@@ -49,26 +51,18 @@ def trend(rows: list[dict[str, float]], key: str, window: int) -> float:
 
 
 def print_metric_summary(rows: list[dict[str, float]]) -> None:
-    keys = [
-        "train/exist_loss",
-        "train/point_loss",
-        "train/point_valid_loss",
-        "train/line_iou_loss",
-        "train/count_cls_loss",
-        "train/quality_loss",
-        "val/exist_loss",
-        "val/point_loss",
-        "val/point_valid_loss",
-        "val/line_iou_loss",
-        "val/count_cls_loss",
-        "val/quality_loss",
-        "val/precision",
-        "val/recall",
-        "val/f1",
-        "val/ape_mean_px",
-        "val/lane_count_mae",
-        "val/total_loss",
-    ]
+    keys = (
+        [f"train/{name}" for name in GCSLoss.loss_names]
+        + [f"val/{name}" for name in GCSLoss.loss_names]
+        + [
+            "val/precision",
+            "val/recall",
+            "val/f1",
+            "val/ape_mean_px",
+            "val/lane_count_mae",
+            "val/total_loss",
+        ]
+    )
     print("Metric Summary")
     for key in keys:
         if key not in rows[0]:

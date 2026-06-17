@@ -20,24 +20,48 @@ from gcs_tools.tusimple_official_eval import (  # noqa: E402
     read_tusimple_json_lines,
 )
 
-DEFAULT_DATASET_ROOT = ROOT / "datasets" / "tusimple_fixed_y_960x544"
-DEFAULT_OUTPUT = ROOT / "runs" / "gcs_lane" / "tusimple_official_trainval_500_test_ratio_seed20260529.json"
+DEFAULT_DATASET_ROOT = ROOT / "datasets" / "tusimple_fixed_y_k56_960x544"
+DEFAULT_OUTPUT = ROOT / "runs" / "gcs_lane" / "tusimple_official_trainval_500_trainval_ratio_seed20260529.json"
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Build a small TuSimple official-GT json subset from current train/val split by test lane-count ratio."
+        description="Build a small TuSimple official-GT json subset from the current train/val split."
     )
     parser.add_argument("--archive-root", default=str(ROOT / "archive" / "TUSimple"), help="Path to archive/ or archive/TUSimple.")
     parser.add_argument("--dataset-root", default=str(DEFAULT_DATASET_ROOT), help="Converted GCS dataset root with labels_gcs splits.")
     parser.add_argument("--pool-json", default=None, help="Official train/val json-lines pool. Defaults to TuSimple train_val json.")
-    parser.add_argument("--reference-json", default=None, help="Json-lines used for target lane-count ratio. Defaults to official test labels.")
+    parser.add_argument(
+        "--reference-json",
+        default=None,
+        help="Json-lines used for target lane-count ratio. Defaults to the train/val pool; test labels are rejected by default.",
+    )
+    parser.add_argument(
+        "--allow-test-reference",
+        action="store_true",
+        help="Allow --reference-json to point at official test labels. Use only for frozen historical split reproduction.",
+    )
     parser.add_argument("--source-splits", nargs="+", default=["val", "train"], choices=("train", "val"), help="Converted splits used as the sampling pool.")
     parser.add_argument("--num-images", type=int, default=500, help="Number of records to sample.")
     parser.add_argument("--seed", type=int, default=20260529, help="Deterministic sampling seed.")
     parser.add_argument("--output", default=str(DEFAULT_OUTPUT), help="Output TuSimple official json-lines path.")
     parser.add_argument("--summary", default=None, help="Optional summary json path. Defaults to <output>.summary.json.")
     return parser.parse_args()
+
+
+def same_resolved_path(left: Path, right: Path) -> bool:
+    """Return whether two paths resolve to the same location without requiring them to exist."""
+    return Path(left).resolve(strict=False) == Path(right).resolve(strict=False)
+
+
+def reject_test_reference(reference_json: Path, test_json: Path, *, allow: bool) -> None:
+    """Reject official test labels as subset-construction reference unless explicitly allowed."""
+    if same_resolved_path(reference_json, test_json) and not allow:
+        raise ValueError(
+            "Refusing to use official test labels as a subset reference. "
+            "Use a train/val reference, pass --target-hist where supported, or add --allow-test-reference only "
+            "for frozen historical split reproduction."
+        )
 
 
 def lane_count(record: dict) -> int:
@@ -105,7 +129,9 @@ def main() -> None:
     archive_root = find_tusimple_archive_root(args.archive_root)
     dataset_root = Path(args.dataset_root)
     pool_json = Path(args.pool_json) if args.pool_json else default_tusimple_gt_json(archive_root, split="train")
-    reference_json = Path(args.reference_json) if args.reference_json else default_tusimple_gt_json(archive_root, split="test")
+    reference_json = Path(args.reference_json) if args.reference_json else pool_json
+    test_json = default_tusimple_gt_json(archive_root, split="test")
+    reject_test_reference(reference_json, test_json, allow=bool(args.allow_test_reference))
     output = Path(args.output)
     summary_path = Path(args.summary) if args.summary else output.with_suffix(".summary.json")
 
@@ -156,6 +182,7 @@ def main() -> None:
         "dataset_root": str(dataset_root.resolve()),
         "pool_json": str(pool_json.resolve()),
         "reference_json": str(reference_json.resolve()),
+        "reference_uses_test_labels": bool(same_resolved_path(reference_json, test_json)),
         "source_splits": list(args.source_splits),
         "seed": int(args.seed),
         "num_images": int(args.num_images),

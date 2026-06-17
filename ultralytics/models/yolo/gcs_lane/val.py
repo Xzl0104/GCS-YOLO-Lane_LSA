@@ -24,18 +24,11 @@ from ultralytics.utils.gcs_postprocess import (
     summarize_decode_count_state,
     update_decode_count_state,
 )
+from ultralytics.utils.gcs_loss import GCSLoss
 from ultralytics.utils.torch_utils import select_device
 
 
-LOSS_NAMES = (
-    "exist_loss",
-    "point_loss",
-    "point_valid_loss",
-    "line_iou_loss",
-    "count_cls_loss",
-    "count_sum_loss",
-    "quality_loss",
-)
+LOSS_NAMES = GCSLoss.loss_names
 LOSS_GAIN_ARGS = (
     "gcs_exist",
     "gcs_point",
@@ -43,7 +36,10 @@ LOSS_GAIN_ARGS = (
     "gcs_line_iou",
     "gcs_count_cls",
     "gcs_count_sum",
+    "gcs_visible_count_sum",
     "gcs_quality",
+    "gcs_survival",
+    "gcs_decoder_aux",
 )
 DEFAULT_LOSS_GAINS = (
     1.0,
@@ -51,8 +47,11 @@ DEFAULT_LOSS_GAINS = (
     0.5,
     0.3,
     0.3,
-    0.02,
-    0.3,
+    0.03,
+    0.0,
+    0.4,
+    0.0,
+    0.0,
 )
 METRIC_NAMES = (
     "precision",
@@ -153,7 +152,9 @@ class GCSLaneValidator:
         if self.args is None:
             raise ValueError("GCSLaneValidator requires args or an explicit dataloader.")
 
-        data_path = self._path_value(self._arg(self.args, "data", None)) or str(ROOT.parent / "data/tusimple_gcs_fixed_y_960x544.yaml")
+        data_path = self._path_value(self._arg(self.args, "data", None)) or str(
+            ROOT.parent / "data/tusimple_gcs_fixed_y_k56_960x544.yaml"
+        )
         data = check_det_dataset(data_path)
         image_dir = self._path_value(self._arg(self.args, "val_images", None)) or data.get("val") or data.get("test")
         label_dir = self._path_value(self._arg(self.args, "val_gcs_labels", None))
@@ -653,6 +654,9 @@ class GCSLaneValidator:
         pred_quality_logits = preds.get("pred_quality_logits")
         if pred_quality_logits is not None:
             pred_quality_logits = pred_quality_logits.detach()
+        pred_survival_logits = preds.get("pred_survival_logits")
+        if pred_survival_logits is not None:
+            pred_survival_logits = pred_survival_logits.detach()
         if pred_logits.ndim == 3 and pred_logits.shape[-1] == 1:
             pred_logits = pred_logits.squeeze(-1)
         h, w = int(batch["img"].shape[-2]), int(batch["img"].shape[-1])
@@ -678,6 +682,7 @@ class GCSLaneValidator:
                     pred_count_boundary_logits[i] if pred_count_boundary_logits is not None else None
                 ),
                 pred_quality_logits=pred_quality_logits[i] if pred_quality_logits is not None else None,
+                pred_survival_logits=pred_survival_logits[i] if pred_survival_logits is not None else None,
                 image_shape=(h, w),
                 score_thr=conf,
                 point_valid_thr=point_valid_thr,
@@ -833,6 +838,11 @@ class GCSLaneValidator:
                 batch = self._preprocess_batch(batch, device, image_size)
                 preds = model(batch["img"])
                 _, items = model.loss(batch, preds)
+                if int(items.numel()) != len(LOSS_NAMES):
+                    raise RuntimeError(
+                        "GCS validation loss item count mismatch: "
+                        f"got {int(items.numel())}, expected {len(LOSS_NAMES)} ({LOSS_NAMES})."
+                    )
                 loss_sum += items.detach()
                 self._update_metric_state(metric_state, preds, batch)
                 batches += 1

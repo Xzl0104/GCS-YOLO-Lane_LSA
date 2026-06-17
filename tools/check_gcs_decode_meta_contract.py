@@ -136,8 +136,8 @@ def check_top5_nms_suppression_meta() -> None:
 
 
 def check_short_visible_segment_rank_metadata() -> None:
-    points = _lane_points([100, 250, 400, 550, 700], points=32)
-    valid_logits = torch.full((5, 32), 10.0)
+    points = _lane_points([100, 250, 400, 550, 700], points=56)
+    valid_logits = torch.full((5, 56), 10.0)
     valid_logits[4, 5:] = -10.0
     lanes = decode_gcs_predictions(
         pred_points=points,

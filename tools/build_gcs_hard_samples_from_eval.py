@@ -16,7 +16,10 @@ if str(ROOT) not in sys.path:
 os.chdir(ROOT)
 
 
-DEFAULT_DATASET_ROOT = ROOT / "datasets" / "tusimple_fixed_y_960x544"
+DEFAULT_DATASET_ROOT = ROOT / "datasets" / "tusimple_fixed_y_k56_960x544"
+PRESET_TRANSITIONS = {
+    "k56_viscountsum_hardsamples": "4->5,5->2,5->3,5->4",
+}
 
 
 def parse_list(value: str) -> list[str]:
@@ -47,6 +50,56 @@ def is_test_summary(payload: dict, summary_path: Path) -> bool:
     gt_json = str(config.get("gt_json", "")).replace("\\", "/").lower()
     path_text = summary_path.as_posix().lower()
     return split == "test" or "test_label" in gt_json or "/test/" in path_text or "\\test\\" in str(summary_path).lower()
+
+
+def summary_split(payload: dict) -> str:
+    """Return the lower-case split recorded in an eval summary config, if present."""
+    config = payload.get("config") if isinstance(payload.get("config"), dict) else {}
+    return str(config.get("split", "")).strip().lower()
+
+
+def validate_preset_scope(args: argparse.Namespace, payload: dict, summary_path: Path) -> None:
+    """Enforce train-only scope for training hard-sample presets."""
+    if args.preset != "k56_viscountsum_hardsamples" or bool(getattr(args, "allow_non_train_preset", False)):
+        return
+    split = summary_split(payload)
+    if split != "train":
+        raise SystemExit(
+            "Preset k56_viscountsum_hardsamples is training-side hard-sample mining and requires "
+            f"an eval summary with config.split='train'; got split={split or '<missing>'} from {summary_path}. "
+            "Use --allow-non-train-preset only for analysis manifests that will not be used as gcs_hard_loss_file."
+        )
+    target_splits = parse_list(getattr(args, "target_splits", "train"))
+    if target_splits != ["train"]:
+        raise SystemExit(
+            "Preset k56_viscountsum_hardsamples requires --target-splits train so exported failures stay "
+            f"bound to the training split; got {target_splits!r}. Use --allow-non-train-preset only for analysis manifests."
+        )
+    if not bool(getattr(args, "require_target_match", False)):
+        raise SystemExit(
+            "Preset k56_viscountsum_hardsamples requires --require-target-match so the exported train failures "
+            "are auditable against the target training split."
+        )
+    if not str(getattr(args, "dataset_root", "") or "").strip():
+        raise SystemExit(
+            "Preset k56_viscountsum_hardsamples requires --dataset-root for target split matching. "
+            "Use --allow-non-train-preset only for analysis manifests."
+        )
+
+
+def validate_preset_target_audit(
+    args: argparse.Namespace, unique_rows: list[dict], target_match_audit: dict | None
+) -> None:
+    """Require all train hard-sample preset rows to match the target training split."""
+    if args.preset != "k56_viscountsum_hardsamples" or bool(getattr(args, "allow_non_train_preset", False)):
+        return
+    if not unique_rows or target_match_audit is None:
+        return
+    if int(target_match_audit["unmatched_unique_samples"]) > 0:
+        raise SystemExit(
+            "Preset k56_viscountsum_hardsamples requires every exported failure to match the target train split. "
+            f"Audit: {json.dumps(target_match_audit, ensure_ascii=False)}"
+        )
 
 
 def default_output_path(summary_path: Path, fmt: str) -> Path:
@@ -97,7 +150,7 @@ def scalar_to_str(value: Any) -> str:
 def label_raw_file(label_path: Path) -> str:
     """Read raw_file from one GCS .npz label if present."""
     try:
-        with np.load(label_path, allow_pickle=True) as data:
+        with np.load(label_path, allow_pickle=False) as data:
             if "raw_file" not in data:
                 return ""
             return scalar_to_str(data["raw_file"])
@@ -105,7 +158,7 @@ def label_raw_file(label_path: Path) -> str:
         return ""
 
 
-def collect_dataset_split_ids(dataset_root: Path, split: str) -> set[str]:
+def collect_dataset_split_ids(dataset_root: Path, split: str, *, raw_file_only: bool = False) -> set[str]:
     """Collect sample id variants from labels_gcs/<split> for target-hit auditing."""
     label_dir = dataset_root / "labels_gcs" / split
     image_dir = dataset_root / "images" / split
@@ -114,6 +167,9 @@ def collect_dataset_split_ids(dataset_root: Path, split: str) -> set[str]:
     ids: set[str] = set()
     for label_path in sorted(label_dir.glob("*.npz")):
         raw_file = label_raw_file(label_path)
+        if raw_file_only:
+            ids.update(sample_id_variants(raw_file))
+            continue
         for value in (
             raw_file,
             label_path,
@@ -126,9 +182,18 @@ def collect_dataset_split_ids(dataset_root: Path, split: str) -> set[str]:
     return ids
 
 
-def audit_target_matches(rows: list[dict], dataset_root: Path, target_splits: list[str]) -> dict:
+def audit_target_matches(
+    rows: list[dict],
+    dataset_root: Path,
+    target_splits: list[str],
+    *,
+    raw_file_only: bool = False,
+) -> dict:
     """Report how many exported failures can actually be sampled from target splits."""
-    split_ids = {split: collect_dataset_split_ids(dataset_root, split) for split in target_splits}
+    split_ids = {
+        split: collect_dataset_split_ids(dataset_root, split, raw_file_only=raw_file_only)
+        for split in target_splits
+    }
     split_match_counts: Counter[str] = Counter()
     unmatched: list[str] = []
     matched_any = 0
@@ -144,6 +209,7 @@ def audit_target_matches(rows: list[dict], dataset_root: Path, target_splits: li
     return {
         "dataset_root": str(dataset_root),
         "target_splits": target_splits,
+        "raw_file_only": bool(raw_file_only),
         "matched_unique_samples": int(matched_any),
         "unmatched_unique_samples": int(len(unmatched)),
         "split_match_counts": dict(sorted(split_match_counts.items())),
@@ -162,13 +228,53 @@ def extract_records(payload: dict, summary_path: Path) -> list[dict]:
     return records
 
 
-def record_raw_file(record: dict) -> str:
+def record_raw_file(record: dict, *, require_raw_file: bool = False) -> str:
     """Return the best available image identifier from official or custom eval records."""
+    raw_file = normalize_sample_id(record.get("raw_file", ""))
+    if raw_file:
+        return raw_file
+    if require_raw_file:
+        return ""
     for key in ("raw_file", "image", "im_file", "file"):
         value = normalize_sample_id(record.get(key, ""))
         if value:
             return value
     return ""
+
+
+def is_path_like_raw_file(value: str) -> bool:
+    """Require TuSimple-style raw_file ids for train preset manifests."""
+    text = normalize_sample_id(value)
+    return bool(text) and ("/" in text or text.startswith("clips/"))
+
+
+def manifest_provenance(
+    args: argparse.Namespace,
+    payload: dict,
+    summary_path: Path,
+    unique_rows: list[dict],
+    target_match_audit: dict | None,
+) -> dict:
+    """Return sidecar fields used by training to reject leakage-prone hard manifests."""
+    split = summary_split(payload)
+    target_splits = parse_list(getattr(args, "target_splits", "train"))
+    analysis_only = bool(
+        getattr(args, "allow_non_train_preset", False)
+        or getattr(args, "allow_test", False)
+        or (getattr(args, "preset", "") == "k56_viscountsum_hardsamples" and split != "train")
+    )
+    return {
+        "builder": "build_gcs_hard_samples_from_eval.py",
+        "source_split": split,
+        "target_splits": target_splits,
+        "require_target_match": bool(getattr(args, "require_target_match", False)),
+        "allow_non_train_preset": bool(getattr(args, "allow_non_train_preset", False)),
+        "test_summary_allowed": bool(getattr(args, "allow_test", False)),
+        "analysis_only": bool(analysis_only),
+        "manifest_unique_samples": int(len(unique_rows)),
+        "target_match_audit": target_match_audit,
+        "eval_summary": str(summary_path),
+    }
 
 
 def parse_args() -> argparse.Namespace:
@@ -179,8 +285,19 @@ def parse_args() -> argparse.Namespace:
         default="4->3,4->5,3->5",
         help="Comma-separated GT->pred lane-count failures to export.",
     )
+    parser.add_argument(
+        "--preset",
+        choices=tuple(sorted(PRESET_TRANSITIONS)),
+        default="",
+        help="Optional named transition preset. k56_viscountsum_hardsamples exports only train GT4 false fifth and GT5 underpredict failures.",
+    )
     parser.add_argument("--output", default=None, help="Output txt/json manifest. Defaults next to --eval-summary.")
     parser.add_argument("--format", choices=("txt", "json"), default="txt")
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite an existing manifest and sidecar. Without this, existing outputs are preserved.",
+    )
     parser.add_argument(
         "--dataset-root",
         default=str(DEFAULT_DATASET_ROOT),
@@ -201,6 +318,14 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Allow building from a test split summary. Avoid this for training to prevent test leakage.",
     )
+    parser.add_argument(
+        "--allow-non-train-preset",
+        action="store_true",
+        help=(
+            "Allow k56_viscountsum_hardsamples on non-train summaries for analysis only. "
+            "Do not use the result as gcs_hard_loss_file."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -211,19 +336,27 @@ def main() -> None:
     if is_test_summary(payload, summary_path) and not args.allow_test:
         raise SystemExit(
             "Refusing to build hard samples from a likely test summary. "
-            "Use a validation/official-val summary, or pass --allow-test only for analysis artifacts."
+            "Use a non-test summary, or pass --allow-test only for analysis artifacts."
         )
+    validate_preset_scope(args, payload, summary_path)
 
-    transitions = parse_transitions(args.transitions)
+    transition_spec = PRESET_TRANSITIONS[args.preset] if args.preset else args.transitions
+    transitions = parse_transitions(transition_spec)
     records = extract_records(payload, summary_path)
     rows = []
     transition_counts: Counter[str] = Counter()
+    require_raw_file = args.preset == "k56_viscountsum_hardsamples"
     for record in records:
         gt = int(record.get("gt_lanes", -1))
         pred = int(record.get("pred_lanes", -1))
         if (gt, pred) not in transitions:
             continue
-        raw_file = record_raw_file(record)
+        raw_file = record_raw_file(record, require_raw_file=require_raw_file)
+        if require_raw_file and (not raw_file or not is_path_like_raw_file(raw_file)):
+            raise SystemExit(
+                "Preset k56_viscountsum_hardsamples requires each exported record to contain a path-like raw_file. "
+                f"Bad record: {json.dumps(record, ensure_ascii=False)[:500]}"
+            )
         if not raw_file:
             continue
         metrics = record.get("metrics") if isinstance(record.get("metrics"), dict) else {}
@@ -248,12 +381,12 @@ def main() -> None:
         unique_rows.append(row)
 
     output = Path(args.output) if args.output else default_output_path(summary_path, args.format)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    if args.format == "json":
-        output.write_text(json.dumps(unique_rows, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    else:
-        output.write_text("\n".join(row["raw_file"] for row in unique_rows) + ("\n" if unique_rows else ""), encoding="utf-8")
-
+    summary_path_out = output.with_suffix(output.suffix + ".summary.json")
+    if not args.overwrite and (output.exists() or summary_path_out.exists()):
+        raise SystemExit(
+            f"Refusing to overwrite existing hard-sample output or sidecar: {output}, {summary_path_out}. "
+            "Pass --overwrite only when replacing the manifest intentionally."
+        )
     target_match_audit = None
     dataset_root_arg = str(args.dataset_root or "").strip()
     if dataset_root_arg:
@@ -263,25 +396,36 @@ def main() -> None:
         target_splits = parse_list(args.target_splits)
         if not target_splits:
             raise SystemExit("--target-splits must name at least one split when --dataset-root is set.")
-        target_match_audit = audit_target_matches(unique_rows, dataset_root, target_splits)
+        target_match_audit = audit_target_matches(
+            unique_rows,
+            dataset_root,
+            target_splits,
+            raw_file_only=require_raw_file and bool(args.require_target_match),
+        )
         if args.require_target_match and unique_rows and int(target_match_audit["matched_unique_samples"]) <= 0:
             raise SystemExit(
                 "Exported failures do not match any sample in target splits. "
                 f"Audit: {json.dumps(target_match_audit, ensure_ascii=False)}"
             )
+        validate_preset_target_audit(args, unique_rows, target_match_audit)
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    if args.format == "json":
+        output.write_text(json.dumps(unique_rows, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    else:
+        output.write_text("\n".join(row["raw_file"] for row in unique_rows) + ("\n" if unique_rows else ""), encoding="utf-8")
 
     summary = {
         "eval_summary": str(summary_path),
         "output": str(output),
         "transitions": sorted(f"{a}->{b}" for a, b in transitions),
+        "preset": args.preset,
         "input_records": len(records),
         "records": len(rows),
         "unique_samples": len(unique_rows),
         "transition_counts": dict(sorted(transition_counts.items())),
-        "test_summary_allowed": bool(args.allow_test),
-        "target_match_audit": target_match_audit,
+        **manifest_provenance(args, payload, summary_path, unique_rows, target_match_audit),
     }
-    summary_path_out = output.with_suffix(output.suffix + ".summary.json")
     summary_path_out.write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 

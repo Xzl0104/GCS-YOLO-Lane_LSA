@@ -16,6 +16,7 @@ os.chdir(ROOT)
 
 from gcs_tools.label_utils import (
     TUSIMPLE_OFFICIAL_BOTTOM_Y_NORM,
+    TUSIMPLE_OFFICIAL_TOP_Y_NORM,
     resample_polyline,
     sample_polyline_fixed_y,
 )
@@ -33,7 +34,7 @@ from ultralytics.utils.gcs_shape import DATASET_IMAGE_SHAPES, normalize_imgsz, s
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Convert TuSimple labels to GCS structured npz labels.")
     parser.add_argument("--archive-root", default="archive/TUSimple", help="TuSimple root or archive directory.")
-    parser.add_argument("--output-root", default="datasets/tusimple_fixed_y_960x544", help="Converted dataset root.")
+    parser.add_argument("--output-root", default="datasets/tusimple_fixed_y_k56_960x544", help="Converted dataset root.")
     parser.add_argument(
         "--dataset",
         default="tusimple",
@@ -49,7 +50,7 @@ def parse_args() -> argparse.Namespace:
         help="Output image shape as H W. Defaults to TuSimple 544 960.",
     )
     parser.add_argument("--img-size", type=int, default=None, help="Legacy square output size.")
-    parser.add_argument("--num-points", type=int, default=32, help="Fixed number of points per lane.")
+    parser.add_argument("--num-points", type=int, default=56, help="Fixed number of points per lane.")
     parser.add_argument(
         "--point-mode",
         choices=("free", "fixed_y"),
@@ -62,7 +63,12 @@ def parse_args() -> argparse.Namespace:
         default=TUSIMPLE_OFFICIAL_BOTTOM_Y_NORM,
         help="Bottom normalized y anchor for fixed_y mode. Defaults to TuSimple h=710 over H=720.",
     )
-    parser.add_argument("--fixed-y-end", type=float, default=0.25, help="Top normalized y anchor for fixed_y mode.")
+    parser.add_argument(
+        "--fixed-y-end",
+        type=float,
+        default=TUSIMPLE_OFFICIAL_TOP_Y_NORM,
+        help="Top normalized y anchor for fixed_y mode. Defaults to TuSimple h=160 over H=720.",
+    )
     parser.add_argument("--val-ratio", type=float, default=0.1, help="Validation ratio from training labels.")
     parser.add_argument("--split-seed", type=int, default=0, help="Seed for deterministic train/val split.")
     split_group = parser.add_mutually_exclusive_group()
@@ -89,7 +95,7 @@ def build_gcs_arrays(
     num_points: int,
     point_mode: str = "free",
     fixed_y_start: float = TUSIMPLE_OFFICIAL_BOTTOM_Y_NORM,
-    fixed_y_end: float = 0.25,
+    fixed_y_end: float = TUSIMPLE_OFFICIAL_TOP_Y_NORM,
 ) -> dict[str, np.ndarray]:
     img_h, img_w = img_shape
     point_mode = str(point_mode).lower()

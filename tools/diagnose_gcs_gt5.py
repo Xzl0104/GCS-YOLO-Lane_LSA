@@ -24,6 +24,7 @@ from gcs_tools.tusimple_official_eval import (  # noqa: E402
     read_tusimple_json_lines,
     tusimple_image_path,
 )
+from gcs_tools.tusimple_split_guard import reject_tusimple_test_search_gt_json  # noqa: E402
 from tools.infer_gcs import count_calibration_from_args, count_head_decode_kwargs_from_args, load_gcs_model, preprocess_image  # noqa: E402
 from ultralytics.utils.gcs_postprocess import (  # noqa: E402
     GCS_DEFAULT_MAX_DET,
@@ -138,6 +139,10 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     if args.split == "test":
         raise SystemExit("GT5 diagnosis rejects --split test. Use --split val for diagnosis; reserve test for final official evaluation only.")
+    try:
+        reject_tusimple_test_search_gt_json(args.gt_json, context="GT5 diagnosis")
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
     return args
 
 
@@ -331,6 +336,7 @@ def decoded_query_set(
     pred_valid_logits: torch.Tensor | None,
     pred_count_logits: torch.Tensor | None,
     pred_quality_logits: torch.Tensor | None,
+    pred_survival_logits: torch.Tensor | None,
     image_shape: tuple[int, int],
     conf: float,
     point_valid_thr: float,
@@ -347,6 +353,7 @@ def decoded_query_set(
         pred_valid_logits=pred_valid_logits,
         pred_count_logits=pred_count_logits,
         pred_quality_logits=pred_quality_logits,
+        pred_survival_logits=pred_survival_logits,
         image_shape=image_shape,
         conf=conf,
         point_valid_thr=point_valid_thr,
@@ -366,6 +373,7 @@ def decoded_lanes(
     pred_valid_logits: torch.Tensor | None,
     pred_count_logits: torch.Tensor | None,
     pred_quality_logits: torch.Tensor | None,
+    pred_survival_logits: torch.Tensor | None,
     image_shape: tuple[int, int],
     conf: float,
     point_valid_thr: float,
@@ -385,6 +393,7 @@ def decoded_lanes(
         pred_count_logits=pred_count_logits,
         pred_count_boundary_logits=pred_count_boundary_logits,
         pred_quality_logits=pred_quality_logits,
+        pred_survival_logits=pred_survival_logits,
         image_shape=image_shape,
         score_thr=conf,
         point_valid_thr=point_valid_thr,
@@ -449,6 +458,7 @@ def deletion_stage(
     pred_valid_logits: torch.Tensor | None,
     pred_count_logits: torch.Tensor | None,
     pred_quality_logits: torch.Tensor | None,
+    pred_survival_logits: torch.Tensor | None,
     image_shape: tuple[int, int],
     args: argparse.Namespace,
     count_calibration: dict | None,
@@ -477,6 +487,7 @@ def deletion_stage(
         pred_valid_logits,
         None,
         pred_quality_logits,
+        pred_survival_logits,
         image_shape,
         conf=args.conf,
         point_valid_thr=args.point_valid_thr,
@@ -495,6 +506,7 @@ def deletion_stage(
         pred_valid_logits,
         None,
         pred_quality_logits,
+        pred_survival_logits,
         image_shape,
         conf=args.conf,
         point_valid_thr=args.point_valid_thr,
@@ -514,6 +526,7 @@ def deletion_stage(
             pred_valid_logits,
             None,
             pred_quality_logits,
+            pred_survival_logits,
             image_shape,
             conf=args.conf,
             point_valid_thr=args.point_valid_thr,
@@ -532,6 +545,7 @@ def deletion_stage(
         pred_valid_logits,
         pred_count_logits,
         pred_quality_logits,
+        pred_survival_logits,
         image_shape,
         conf=args.conf,
         point_valid_thr=args.point_valid_thr,
@@ -597,6 +611,20 @@ def rank5_primary_drop_reason(
     return rank5_candidate_reason(rank5, deletion, args, required_min_points)
 
 
+def top5_gate_drop_reason(count_head_meta: dict | None, args: argparse.Namespace) -> str | None:
+    """Return a source-specific low-gate reason for the top-5 candidate."""
+    if count_head_meta is None:
+        return None
+    top5_quality = count_head_meta.get("top5_candidate_quality_before_nms")
+    top5_gate = count_head_meta.get("top5_candidate_gate_score_before_nms")
+    gate_source = str(count_head_meta.get("top5_candidate_gate_source_before_nms") or "quality")
+    quality_thr = float(getattr(args, "quality_rescue_quality_thr", 0.55))
+    gate_value = top5_gate if top5_gate is not None else top5_quality
+    if gate_value is None or float(gate_value) >= quality_thr:
+        return None
+    return "survival_too_low" if gate_source == "survival" else "quality_too_low"
+
+
 def gt5_output_drop_reason(
     final_pred_lanes: int,
     rank5: dict | None,
@@ -618,10 +646,9 @@ def gt5_output_drop_reason(
         return "candidate_pool_shortfall"
     if rank5 is not None and int(rank5["valid_points"]) < int(required_min_points):
         return "valid_points_fail"
-    top5_quality = None if count_head_meta is None else count_head_meta.get("top5_candidate_quality_before_nms")
-    quality_thr = float(getattr(args, "quality_rescue_quality_thr", 0.55))
-    if top5_quality is not None and float(top5_quality) < quality_thr:
-        return "quality_too_low"
+    low_gate_reason = top5_gate_drop_reason(count_head_meta, args)
+    if low_gate_reason is not None:
+        return low_gate_reason
     if count_head_meta is not None and bool(count_head_meta.get("top5_suppressed_by_nms", False)):
         return "nms_suppressed"
     if rank5 is not None and (
@@ -868,6 +895,8 @@ def main() -> None:
         )
         pred_quality = preds.get("pred_quality_logits")
         pred_quality = pred_quality[0].detach().float() if pred_quality is not None else None
+        pred_survival = preds.get("pred_survival_logits")
+        pred_survival = pred_survival[0].detach().float() if pred_survival is not None else None
 
         candidates = rank_query_candidates(
             pred_points=pred_points,
@@ -884,6 +913,7 @@ def main() -> None:
             pred_valid,
             pred_count,
             pred_quality,
+            pred_survival,
             image_shape,
             conf=args.conf,
             point_valid_thr=args.point_valid_thr,
@@ -930,6 +960,7 @@ def main() -> None:
             pred_valid,
             pred_count,
             pred_quality,
+            pred_survival,
             image_shape,
             args,
             count_calibration,
@@ -995,10 +1026,25 @@ def main() -> None:
             "edge_last_lane_rescue_candidate_quality": count_meta.get(
                 "edge_last_lane_rescue_candidate_quality"
             ),
+            "edge_last_lane_rescue_candidate_survival": count_meta.get(
+                "edge_last_lane_rescue_candidate_survival"
+            ),
+            "edge_last_lane_rescue_candidate_gate_score": count_meta.get(
+                "edge_last_lane_rescue_candidate_gate_score"
+            ),
+            "edge_last_lane_rescue_candidate_gate_source": count_meta.get(
+                "edge_last_lane_rescue_candidate_gate_source"
+            ),
             "edge_count4_to5_upgrade": int(bool(count_meta.get("edge_count4_to5_upgrade", False))),
             "edge_count4_to5_upgrade_reason": str(
                 count_meta.get("edge_count4_to5_upgrade_reason", "not_attempted")
             ),
+            "edge_count4_to5_candidate_survival": count_meta.get("edge_count4_to5_candidate_survival"),
+            "edge_count4_to5_candidate_gate_score": count_meta.get("edge_count4_to5_candidate_gate_score"),
+            "edge_count4_to5_candidate_gate_source": count_meta.get("edge_count4_to5_candidate_gate_source"),
+            "top5_candidate_survival_before_nms": count_meta.get("top5_candidate_survival_before_nms"),
+            "top5_candidate_gate_score_before_nms": count_meta.get("top5_candidate_gate_score_before_nms"),
+            "top5_candidate_gate_source_before_nms": count_meta.get("top5_candidate_gate_source_before_nms"),
             "rank5_query": None if rank5 is None else int(rank5["query"]),
             "rank5_required_min_points": int(required_min_points),
             "rank5_kept": int(deletion == "kept"),
@@ -1075,8 +1121,17 @@ def main() -> None:
         "edge_last_lane_rescue_candidate_outside_gap_px",
         "edge_last_lane_rescue_candidate_valid_points",
         "edge_last_lane_rescue_candidate_quality",
+        "edge_last_lane_rescue_candidate_survival",
+        "edge_last_lane_rescue_candidate_gate_score",
+        "edge_last_lane_rescue_candidate_gate_source",
         "edge_count4_to5_upgrade",
         "edge_count4_to5_upgrade_reason",
+        "edge_count4_to5_candidate_survival",
+        "edge_count4_to5_candidate_gate_score",
+        "edge_count4_to5_candidate_gate_source",
+        "top5_candidate_survival_before_nms",
+        "top5_candidate_gate_score_before_nms",
+        "top5_candidate_gate_source_before_nms",
         "rank5_query",
         "rank5_required_min_points",
         "rank5_kept",
@@ -1152,6 +1207,11 @@ def main() -> None:
     candidate_reason_counts = Counter(str(x["rank5_candidate_reason"]) for x in rows)
     primary_reason_counts = Counter(str(x["rank5_primary_drop_reason"]) for x in rows)
     output_reason_counts = Counter(str(x["gt5_output_drop_reason"]) for x in rows)
+    gate_drop_source_counts = Counter(
+        str(x.get("top5_candidate_gate_source_before_nms") or "missing")
+        for x in rows
+        if str(x.get("gt5_output_drop_reason")) in {"quality_too_low", "survival_too_low"}
+    )
     last_lane_rescue_reason_counts = Counter(
         str(x["last_lane_rescue_reason"])
         for x in rows
@@ -1183,6 +1243,12 @@ def main() -> None:
     ) / total_rows
     gt5_rank5_score_low_rate = sum(
         int(str(x.get("gt5_output_drop_reason")) == "rank_score_low") for x in rows
+    ) / total_rows
+    gt5_quality_too_low_rate = sum(
+        int(str(x.get("gt5_output_drop_reason")) == "quality_too_low") for x in rows
+    ) / total_rows
+    gt5_survival_too_low_rate = sum(
+        int(str(x.get("gt5_output_drop_reason")) == "survival_too_low") for x in rows
     ) / total_rows
     gt5_unknown_shortfall_rate = sum(
         int(str(x.get("gt5_output_drop_reason")) == "unknown_shortfall") for x in rows
@@ -1245,6 +1311,7 @@ def main() -> None:
         "rank5_candidate_reason_counts": {k: int(v) for k, v in sorted(candidate_reason_counts.items())},
         "rank5_primary_drop_reason_counts": {k: int(v) for k, v in sorted(primary_reason_counts.items())},
         "gt5_output_drop_reason_counts": {k: int(v) for k, v in sorted(output_reason_counts.items())},
+        "gt5_output_drop_gate_source_counts": {k: int(v) for k, v in sorted(gate_drop_source_counts.items())},
         "last_lane_rescue_attempt_count": int(sum(x["last_lane_rescue_attempt_count"] for x in rows)),
         "last_lane_rescue_success_count": int(sum(x["last_lane_rescue_success_count"] for x in rows)),
         "last_lane_rescue_reason_counts": {
@@ -1268,6 +1335,8 @@ def main() -> None:
         "gt5_valid_points_fail_rate": round(float(gt5_valid_points_fail_rate), 6),
         "gt5_top5_suppressed_by_nms_rate": round(float(gt5_top5_suppressed_by_nms_rate), 6),
         "gt5_rank5_score_low_rate": round(float(gt5_rank5_score_low_rate), 6),
+        "gt5_quality_too_low_rate": round(float(gt5_quality_too_low_rate), 6),
+        "gt5_survival_too_low_rate": round(float(gt5_survival_too_low_rate), 6),
         "gt5_unknown_shortfall_rate": round(float(gt5_unknown_shortfall_rate), 6),
         "s5": {
             "mean": None if not s5_values else round(float(np.mean(s5_values)), 6),

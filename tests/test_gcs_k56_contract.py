@@ -1,18 +1,32 @@
 from __future__ import annotations
 
+import json
 import math
 from pathlib import Path
 from types import SimpleNamespace
 
+import cv2
 import numpy as np
 import pytest
 import torch
 import yaml
 
 from gcs_tools.label_utils import fixed_y_anchors
+from tools import analyze_gcs_errors
+from tools import analyze_gcs_oracle
+from tools import analyze_gcs_results_csv
+from tools import build_gcs_hard_samples_from_eval as hard_samples
+from tools import build_tusimple_official_folder_balanced_subset as folder_subset_builder
+from tools import build_tusimple_official_subset as subset_builder
+from tools import check_model
 from tools import check_tusimple_fixed_y_label_oracle as oracle
+from tools import diagnose_gcs_gt5 as gt5_diag
 from tools import rebuild_tusimple_fixed_y_k56_from_reference_split as builder
+from tools import sweep_gcs_conf
+from tools import sweep_tusimple_official
 from tools import train_gcs
+from ultralytics.cfg import TASK2DATA, TASK2MODEL
+from ultralytics.data.dataset_gcs import GCSLaneDataset
 from ultralytics.models.yolo.gcs_lane.train import GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT
 from ultralytics.utils.gcs_loss import GCSLoss
 
@@ -46,8 +60,109 @@ def test_k56_data_and_model_contract_match():
     assert math.isclose(float(data["fixed_y"][1]), float(head_args[6]))
 
 
+def test_check_model_enforces_named_candidate_output_flags():
+    check_model.enforce_candidate_yaml_contract(
+        "gcs-yolo-lane-s-q12-k56-survival", SimpleNamespace(survival_head_enabled=True, decoder_aux_outputs=False)
+    )
+    check_model.enforce_candidate_yaml_contract(
+        "gcs-yolo-lane-s-q12-k56-decoder-aux", SimpleNamespace(survival_head_enabled=False, decoder_aux_outputs=True)
+    )
+    with pytest.raises(RuntimeError, match="survival_head_enabled"):
+        check_model.enforce_candidate_yaml_contract(
+            "gcs-yolo-lane-s-q12-k56-survival",
+            SimpleNamespace(survival_head_enabled=False, decoder_aux_outputs=False),
+        )
+    with pytest.raises(RuntimeError, match="decoder_aux_outputs"):
+        check_model.enforce_candidate_yaml_contract(
+            "gcs-yolo-lane-s-q12-k56-decoder-aux",
+            SimpleNamespace(survival_head_enabled=False, decoder_aux_outputs=False),
+        )
+
+
+def test_train_cli_rejects_named_candidate_without_matching_loss_gain():
+    with pytest.raises(SystemExit, match="--gcs-survival > 0"):
+        train_gcs.validate_named_candidate_training_args(
+            "ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-survival.yaml",
+            SimpleNamespace(gcs_survival=0.0, gcs_decoder_aux=0.0),
+        )
+    with pytest.raises(SystemExit, match="--gcs-decoder-aux > 0"):
+        train_gcs.validate_named_candidate_training_args(
+            "ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-decoder-aux.yaml",
+            SimpleNamespace(gcs_survival=0.0, gcs_decoder_aux=0.0),
+        )
+    train_gcs.validate_named_candidate_training_args(
+        "ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-survival.yaml",
+        SimpleNamespace(gcs_survival=0.2, gcs_decoder_aux=0.0),
+    )
+    train_gcs.validate_named_candidate_training_args(
+        "ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-decoder-aux.yaml",
+        SimpleNamespace(gcs_survival=0.0, gcs_decoder_aux=0.1),
+    )
+
+
+def test_gcs_mainline_defaults_point_to_k56():
+    assert train_gcs.DEFAULT_MODEL.name == "gcs-yolo-lane-s-q12-k56.yaml"
+    defaults = train_gcs.dataset_defaults("tusimple")
+    assert defaults["data"].name == "tusimple_gcs_fixed_y_k56_960x544.yaml"
+    assert defaults["train_images"].as_posix().endswith("datasets/tusimple_fixed_y_k56_960x544/images/train")
+    assert str(TASK2DATA["gcs_lane"]).replace("\\", "/").endswith("data/tusimple_gcs_fixed_y_k56_960x544.yaml")
+    assert str(TASK2MODEL["gcs_lane"]).replace("\\", "/").endswith(
+        "ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml"
+    )
+
+
+def test_generic_tusimple_aliases_are_k56():
+    for filename in (
+        "tusimple_gcs_fixed_y_960x544.yaml",
+        "tusimple_gcs.yaml",
+        "tusimple_gcs_stratified_960x544.yaml",
+    ):
+        data = yaml.safe_load((ROOT / "data" / filename).read_text(encoding="utf-8"))
+        assert "tusimple_fixed_y_k56_960x544" in data["train"]
+        assert data["point_mode"] == "fixed_y"
+        assert data["num_points"] == 56
+        assert math.isclose(float(data["fixed_y"][1]), 160.0 / 720.0)
+
+    for filename in ("tusimple_yolo.yaml", "tusimple_yolo_stratified_960x544.yaml"):
+        data = yaml.safe_load((ROOT / "data" / filename).read_text(encoding="utf-8"))
+        assert "tusimple_fixed_y_k56_960x544" in data["train"]
+
+
+def test_test_protection_defaults_do_not_target_test_split(monkeypatch):
+    assert analyze_gcs_errors.DEFAULT_SOURCE.as_posix().endswith("datasets/tusimple_fixed_y_k56_960x544/images/val")
+    assert analyze_gcs_errors.DEFAULT_LABELS.as_posix().endswith("datasets/tusimple_fixed_y_k56_960x544/labels_gcs/val")
+    assert analyze_gcs_oracle.DEFAULT_SOURCE.as_posix().endswith("datasets/tusimple_fixed_y_k56_960x544/images/val")
+    assert analyze_gcs_oracle.DEFAULT_LABELS.as_posix().endswith("datasets/tusimple_fixed_y_k56_960x544/labels_gcs/val")
+
+    test_source = ROOT / "datasets" / "tusimple_fixed_y_k56_960x544" / "images" / "test"
+    with pytest.raises(ValueError, match="test split"):
+        analyze_gcs_errors.reject_test_diagnostics(test_source, field="--source", allow=False)
+    analyze_gcs_errors.reject_test_diagnostics(test_source, field="--source", allow=True)
+
+    with pytest.raises(ValueError, match="test evaluation"):
+        sweep_gcs_conf.reject_test_source(test_source, field="--source")
+    monkeypatch.setattr("sys.argv", ["sweep_gcs_conf.py", "--split", "test"])
+    with pytest.raises(SystemExit):
+        sweep_gcs_conf.parse_args()
+
+
+def test_subset_builders_reject_test_reference_by_default():
+    test_json = ROOT / "archive" / "TUSimple" / "test_label.json"
+    for module in (subset_builder, folder_subset_builder):
+        with pytest.raises(ValueError, match="official test labels"):
+            module.reject_test_reference(test_json, test_json, allow=False)
+        module.reject_test_reference(test_json, test_json, allow=True)
+
+
 def test_k56_experimental_model_variants_keep_q12_k56_contract():
     variants = {
+        "gcs-yolo-lane-s-q12.yaml": {"decoder_layers": 3, "bifpn_channels": 128},
+        "gcs-yolo-lane-s-q12-no-lsem.yaml": {"decoder_layers": 3, "bifpn_channels": 128},
+        "gcs-yolo-lane-s-q12-proj-no-bifpn.yaml": {
+            "decoder_layers": 3,
+            "bifpn_channels": 128,
+            "projection_only": True,
+        },
         "gcs-yolo-lane-s-q12-k56-dec4.yaml": {"decoder_layers": 4, "bifpn_channels": 128},
         "gcs-yolo-lane-s-q12-k56-bifpn192.yaml": {"decoder_layers": 3, "bifpn_channels": 192},
         "gcs-yolo-lane-s-q12-k56-bifpn256.yaml": {"decoder_layers": 3, "bifpn_channels": 256},
@@ -72,6 +187,18 @@ def test_k56_experimental_model_variants_keep_q12_k56_contract():
             "count_quality_calib_dim": 64,
             "strip_levels": "p2,p3",
         },
+        "gcs-yolo-lane-s-q12-k56-survival.yaml": {
+            "decoder_layers": 3,
+            "bifpn_channels": 128,
+            "survival_head": True,
+            "decoder_aux_loss": False,
+        },
+        "gcs-yolo-lane-s-q12-k56-decoder-aux.yaml": {
+            "decoder_layers": 3,
+            "bifpn_channels": 128,
+            "survival_head": False,
+            "decoder_aux_loss": True,
+        },
     }
 
     for filename, expected in variants.items():
@@ -79,26 +206,458 @@ def test_k56_experimental_model_variants_keep_q12_k56_contract():
             (ROOT / "ultralytics" / "cfg" / "models" / "gcs" / filename).read_text(encoding="utf-8")
         )
         bifpn_layers = [layer for layer in model["head"] if layer[2] == "LaneBiFPN"]
+        projection_layers = [layer for layer in model["head"] if layer[2] == "LaneFeatureProjection"]
         gcs_layers = [layer for layer in model["head"] if layer[2] == "GCSLaneHead"]
         strip_layers = [layer for layer in model["head"] if layer[2] == "LaneStripPyramidAttention"]
-        assert len(bifpn_layers) == 1
+        if expected.get("projection_only"):
+            assert bifpn_layers == []
+            assert len(projection_layers) == 1
+            assert projection_layers[0][3][0] == expected["bifpn_channels"]
+        else:
+            assert len(bifpn_layers) == 1
+            assert bifpn_layers[0][3][0] == expected["bifpn_channels"]
         assert len(gcs_layers) == 1
-        assert bifpn_layers[0][3][0] == expected["bifpn_channels"]
 
         head_args = gcs_layers[0][3]
         assert head_args[:4] == [12, 56, expected["decoder_layers"], 8]
         assert head_args[4] == "fixed_y"
         assert math.isclose(float(head_args[5]), 710.0 / 720.0)
         assert math.isclose(float(head_args[6]), 160.0 / 720.0)
-        if "count_quality_calib_dim" in expected:
-            assert head_args[7] == expected["count_quality_calib_dim"]
+        expected_calib = expected.get("count_quality_calib_dim", 0)
+        if len(head_args) > 7:
+            assert head_args[7] == expected_calib
         else:
-            assert len(head_args) == 7
+            assert expected_calib == 0
+        expected_survival = expected.get("survival_head", False)
+        expected_decoder_aux = expected.get("decoder_aux_loss", False)
+        if len(head_args) > 8:
+            assert bool(head_args[8]) is expected_survival
+            assert bool(head_args[9]) is expected_decoder_aux
+        else:
+            assert expected_survival is False
+            assert expected_decoder_aux is False
         if "strip_levels" in expected:
             assert len(strip_layers) == 1
             assert strip_layers[0][3][0] == expected["strip_levels"]
         else:
             assert strip_layers == []
+
+
+def test_k56_viscountsum_hardsample_preset_is_train_failure_scope():
+    transitions = hard_samples.parse_transitions(
+        hard_samples.PRESET_TRANSITIONS["k56_viscountsum_hardsamples"]
+    )
+    assert transitions == {(4, 5), (5, 2), (5, 3), (5, 4)}
+    assert hard_samples.parse_list("train") == ["train"]
+    assert hard_samples.is_test_summary({"config": {"split": "test"}}, ROOT / "runs" / "summary.json")
+    assert not hard_samples.is_test_summary({"config": {"split": "train"}}, ROOT / "runs" / "summary.json")
+
+    args = SimpleNamespace(
+        preset="k56_viscountsum_hardsamples",
+        allow_non_train_preset=False,
+        require_target_match=True,
+        dataset_root="datasets/tusimple_fixed_y_k56_960x544",
+    )
+    with pytest.raises(SystemExit, match="requires.*split='train'"):
+        hard_samples.validate_preset_scope(args, {"config": {"split": "val"}}, ROOT / "runs" / "summary.json")
+
+    no_match = SimpleNamespace(**{**vars(args), "require_target_match": False})
+    with pytest.raises(SystemExit, match="requires --require-target-match"):
+        hard_samples.validate_preset_scope(no_match, {"config": {"split": "train"}}, ROOT / "runs" / "summary.json")
+
+    bad_target = SimpleNamespace(**{**vars(args), "target_splits": "val"})
+    with pytest.raises(SystemExit, match="requires --target-splits train"):
+        hard_samples.validate_preset_scope(bad_target, {"config": {"split": "train"}}, ROOT / "runs" / "summary.json")
+
+    allow_analysis = SimpleNamespace(**{**vars(args), "allow_non_train_preset": True, "require_target_match": False})
+    hard_samples.validate_preset_scope(allow_analysis, {"config": {"split": "val"}}, ROOT / "runs" / "summary.json")
+
+    with pytest.raises(SystemExit, match="every exported failure"):
+        hard_samples.validate_preset_target_audit(
+            args,
+            [{"raw_file": "clips/train/missing.jpg"}],
+            {"unmatched_unique_samples": 1},
+        )
+
+
+def test_k56_hardsample_preset_does_not_write_failed_target_audit(monkeypatch, tmp_path):
+    summary_path = tmp_path / "train_summary.json"
+    output = tmp_path / "out" / "hard.txt"
+    dataset_root = tmp_path / "dataset"
+    label_dir = dataset_root / "labels_gcs" / "train"
+    image_dir = dataset_root / "images" / "train"
+    label_dir.mkdir(parents=True)
+    image_dir.mkdir(parents=True)
+    np.savez(label_dir / "present.npz", raw_file=np.array("clips/train/present.jpg"))
+    summary_path.write_text(
+        json.dumps(
+            {
+                "config": {"split": "train"},
+                "records": [{"raw_file": "clips/train/missing.jpg", "gt_lanes": 4, "pred_lanes": 5}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "build_gcs_hard_samples_from_eval.py",
+            "--eval-summary",
+            str(summary_path),
+            "--preset",
+            "k56_viscountsum_hardsamples",
+            "--dataset-root",
+            str(dataset_root),
+            "--target-splits",
+            "train",
+            "--require-target-match",
+            "--output",
+            str(output),
+        ],
+    )
+
+    with pytest.raises(SystemExit, match="Exported failures do not match|every exported failure"):
+        hard_samples.main()
+
+    assert not output.exists()
+    assert not output.with_suffix(output.suffix + ".summary.json").exists()
+
+
+def test_k56_hardsample_raw_file_manifest_hits_dataset_batch(monkeypatch, tmp_path):
+    summary_path = tmp_path / "train_summary.json"
+    output = tmp_path / "out" / "hard.txt"
+    dataset_root = tmp_path / "dataset"
+    image_dir = dataset_root / "images" / "train"
+    label_dir = dataset_root / "labels_gcs" / "train"
+    image_dir.mkdir(parents=True)
+    label_dir.mkdir(parents=True)
+
+    cv2.imwrite(str(image_dir / "present.jpg"), np.zeros((8, 16, 3), dtype=np.uint8))
+    y = np.linspace(0.9, 0.2, 6, dtype=np.float32)
+    lanes = np.stack(
+        [
+            np.stack((np.full_like(y, x), y), axis=-1)
+            for x in (0.2, 0.4, 0.6, 0.8)
+        ],
+        axis=0,
+    )
+    lane_valid = np.ones((4, 6), dtype=np.float32)
+    raw_file = "clips/train/present/20.jpg"
+    np.savez(
+        label_dir / "present.npz",
+        lanes=lanes,
+        lane_valid=lane_valid,
+        num_lanes=np.array(4),
+        point_mode=np.array("free"),
+        raw_file=np.array(raw_file),
+    )
+    summary_path.write_text(
+        json.dumps(
+            {
+                "config": {"split": "train"},
+                "records": [{"raw_file": raw_file, "gt_lanes": 4, "pred_lanes": 5}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "build_gcs_hard_samples_from_eval.py",
+            "--eval-summary",
+            str(summary_path),
+            "--preset",
+            "k56_viscountsum_hardsamples",
+            "--dataset-root",
+            str(dataset_root),
+            "--target-splits",
+            "train",
+            "--require-target-match",
+            "--output",
+            str(output),
+        ],
+    )
+
+    hard_samples.main()
+
+    assert output.read_text(encoding="utf-8").strip() == raw_file
+    sidecar = json.loads(output.with_suffix(output.suffix + ".summary.json").read_text(encoding="utf-8"))
+    assert sidecar["builder"] == "build_gcs_hard_samples_from_eval.py"
+    assert sidecar["preset"] == "k56_viscountsum_hardsamples"
+    assert sidecar["source_split"] == "train"
+    assert sidecar["target_splits"] == ["train"]
+    assert sidecar["require_target_match"] is True
+    assert sidecar["analysis_only"] is False
+    assert sidecar["test_summary_allowed"] is False
+    assert sidecar["target_match_audit"]["raw_file_only"] is True
+    assert sidecar["target_match_audit"]["unmatched_unique_samples"] == 0
+    dataset = GCSLaneDataset(img_path=image_dir, label_dir=label_dir, imgsz=[8, 16], augment=False)
+    batch = GCSLaneDataset.collate_fn([dataset[0]])
+    criterion = GCSLoss(
+        model={
+            "gcs_point_mode": "free",
+            "gcs_imgsz": [8, 16],
+            "gcs_line_iou": 0.0,
+            "gcs_quality": 0.0,
+            "gcs_exist_quality_lane_iou_alpha": 0.0,
+            "gcs_hard_loss_file": str(output),
+        }
+    )
+
+    mask = criterion.hard_loss_mask(batch, 1, torch.device("cpu"), gt_valid=batch["lane_valid"])
+
+    assert batch["raw_file"] == [raw_file]
+    assert mask.tolist() == [True]
+
+
+def test_k56_hardsample_builder_refuses_overwrite(monkeypatch, tmp_path):
+    summary_path = tmp_path / "train_summary.json"
+    output = tmp_path / "hard.txt"
+    dataset_root = tmp_path / "dataset"
+    label_dir = dataset_root / "labels_gcs" / "train"
+    label_dir.mkdir(parents=True)
+    raw_file = "clips/train/present/20.jpg"
+    np.savez(label_dir / "present.npz", raw_file=np.array(raw_file))
+    summary_path.write_text(
+        json.dumps(
+            {
+                "config": {"split": "train"},
+                "records": [{"raw_file": raw_file, "gt_lanes": 4, "pred_lanes": 5}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    argv = [
+        "build_gcs_hard_samples_from_eval.py",
+        "--eval-summary",
+        str(summary_path),
+        "--preset",
+        "k56_viscountsum_hardsamples",
+        "--dataset-root",
+        str(dataset_root),
+        "--target-splits",
+        "train",
+        "--require-target-match",
+        "--output",
+        str(output),
+    ]
+    monkeypatch.setattr("sys.argv", argv)
+    hard_samples.main()
+    monkeypatch.setattr("sys.argv", argv)
+
+    with pytest.raises(SystemExit, match="Refusing to overwrite"):
+        hard_samples.main()
+
+
+def test_k56_hardsample_preset_requires_raw_file_for_target_audit(monkeypatch, tmp_path):
+    summary_path = tmp_path / "train_summary.json"
+    output = tmp_path / "hard.txt"
+    dataset_root = tmp_path / "dataset"
+    label_dir = dataset_root / "labels_gcs" / "train"
+    image_dir = dataset_root / "images" / "train"
+    label_dir.mkdir(parents=True)
+    image_dir.mkdir(parents=True)
+    np.savez(label_dir / "present.npz", raw_file=np.array("clips/train/present/20.jpg"))
+    summary_path.write_text(
+        json.dumps(
+            {
+                "config": {"split": "train"},
+                "records": [{"image": str(image_dir / "present.jpg"), "gt_lanes": 4, "pred_lanes": 5}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "build_gcs_hard_samples_from_eval.py",
+            "--eval-summary",
+            str(summary_path),
+            "--preset",
+            "k56_viscountsum_hardsamples",
+            "--dataset-root",
+            str(dataset_root),
+            "--target-splits",
+            "train",
+            "--require-target-match",
+            "--output",
+            str(output),
+        ],
+    )
+
+    with pytest.raises(SystemExit, match="path-like raw_file"):
+        hard_samples.main()
+
+    assert not output.exists()
+    assert not output.with_suffix(output.suffix + ".summary.json").exists()
+
+
+def test_train_rejects_analysis_only_hard_manifest_sidecar(tmp_path):
+    manifest = tmp_path / "hard.txt"
+    manifest.write_text("clips/train/present/20.jpg\n", encoding="utf-8")
+    manifest.with_suffix(manifest.suffix + ".summary.json").write_text(
+        json.dumps(
+            {
+                "builder": "build_gcs_hard_samples_from_eval.py",
+                "preset": "k56_viscountsum_hardsamples",
+                "source_split": "val",
+                "target_splits": ["train"],
+                "require_target_match": True,
+                "analysis_only": True,
+                "test_summary_allowed": False,
+                "target_match_audit": {"raw_file_only": True, "unmatched_unique_samples": 0},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit, match="analysis_only"):
+        train_gcs.validate_hard_manifest_sidecar(manifest, flag="--gcs-hard-loss-file")
+
+
+def test_train_requires_hard_loss_file_for_hard_weighted_visible_count_sum():
+    args = SimpleNamespace(
+        gcs_visible_count_sum=0.2,
+        gcs_visible_count_sum_hard_weight=2.0,
+        gcs_hard_loss_file="",
+        gcs_hard_sample_file="",
+    )
+    with pytest.raises(SystemExit, match="requires --gcs-hard-loss-file"):
+        train_gcs.validate_training_hard_manifest_args(args)
+
+
+def test_train_requires_builder_sidecar_for_hard_weighted_visible_count_sum(tmp_path):
+    manifest = tmp_path / "hard.txt"
+    manifest.write_text("clips/train/present/20.jpg\n", encoding="utf-8")
+    args = SimpleNamespace(
+        gcs_visible_count_sum=0.2,
+        gcs_visible_count_sum_hard_weight=2.0,
+        gcs_hard_loss_file=str(manifest),
+        gcs_hard_sample_file="",
+    )
+
+    with pytest.raises(SystemExit, match="requires a build_gcs_hard_samples_from_eval.py sidecar"):
+        train_gcs.validate_training_hard_manifest_args(args)
+
+
+def test_train_rejects_wrong_builder_preset_for_hard_weighted_visible_count_sum(tmp_path):
+    manifest = tmp_path / "hard.txt"
+    manifest.write_text("clips/train/present/20.jpg\n", encoding="utf-8")
+    manifest.with_suffix(manifest.suffix + ".summary.json").write_text(
+        json.dumps(
+            {
+                "builder": "build_gcs_hard_samples_from_eval.py",
+                "preset": "",
+                "source_split": "train",
+                "target_splits": ["train"],
+                "require_target_match": True,
+                "analysis_only": False,
+                "test_summary_allowed": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    args = SimpleNamespace(
+        gcs_visible_count_sum=0.2,
+        gcs_visible_count_sum_hard_weight=2.0,
+        gcs_hard_loss_file=str(manifest),
+        gcs_hard_sample_file="",
+    )
+
+    with pytest.raises(SystemExit, match="sidecar preset must be k56_viscountsum_hardsamples"):
+        train_gcs.validate_training_hard_manifest_args(args)
+
+
+def test_train_rejects_zero_matched_builder_sidecar_for_hard_weighted_visible_count_sum(tmp_path):
+    manifest = tmp_path / "hard.txt"
+    manifest.write_text("", encoding="utf-8")
+    manifest.with_suffix(manifest.suffix + ".summary.json").write_text(
+        json.dumps(
+            {
+                "builder": "build_gcs_hard_samples_from_eval.py",
+                "preset": "k56_viscountsum_hardsamples",
+                "source_split": "train",
+                "target_splits": ["train"],
+                "require_target_match": True,
+                "analysis_only": False,
+                "test_summary_allowed": False,
+                "target_match_audit": {
+                    "raw_file_only": True,
+                    "matched_unique_samples": 0,
+                    "unmatched_unique_samples": 0,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    args = SimpleNamespace(
+        gcs_visible_count_sum=0.2,
+        gcs_visible_count_sum_hard_weight=2.0,
+        gcs_hard_loss_file=str(manifest),
+        gcs_hard_sample_file="",
+    )
+
+    with pytest.raises(SystemExit, match="no matched train hard samples"):
+        train_gcs.validate_training_hard_manifest_args(args)
+
+
+def test_train_treats_zero_hard_weight_as_weighted_visible_count_sum(tmp_path):
+    manifest = tmp_path / "hard.txt"
+    manifest.write_text("clips/train/present/20.jpg\n", encoding="utf-8")
+    args = SimpleNamespace(
+        gcs_visible_count_sum=0.2,
+        gcs_visible_count_sum_hard_weight=0.0,
+        gcs_hard_loss_file=str(manifest),
+        gcs_hard_sample_file="",
+    )
+
+    with pytest.raises(SystemExit, match="requires a build_gcs_hard_samples_from_eval.py sidecar"):
+        train_gcs.validate_training_hard_manifest_args(args)
+
+
+def test_official_search_tools_reject_explicit_test_gt_json(monkeypatch):
+    test_json = ROOT / "archive" / "TUSimple" / "test_label.json"
+    with pytest.raises(ValueError, match="test GT json"):
+        sweep_tusimple_official.validate_official_sweep_gt_json(test_json)
+
+    monkeypatch.setattr("sys.argv", ["diagnose_gcs_gt5.py", "--split", "val", "--gt-json", str(test_json)])
+    with pytest.raises(SystemExit, match="test GT json"):
+        gt5_diag.parse_args()
+
+
+def test_results_csv_summary_lists_current_gcs_loss_contract(capsys):
+    row = {"epoch": 1.0}
+    for prefix in ("train", "val"):
+        for name in GCSLoss.loss_names:
+            row[f"{prefix}/{name}"] = 0.1
+
+    analyze_gcs_results_csv.print_metric_summary([row])
+
+    out = capsys.readouterr().out
+    for name in GCSLoss.loss_names:
+        assert f"train/{name}:" in out
+        assert f"val/{name}:" in out
+
+
+def test_gt5_diagnosis_splits_survival_and_quality_gate_failures():
+    args = SimpleNamespace(quality_rescue_quality_thr=0.55, exist_low_thr=0.1, s5_low_thr=0.1)
+    survival_meta = {
+        "count_head_policy_count": 5,
+        "candidate_pool_shortfall": 0,
+        "top5_candidate_gate_score_before_nms": 0.1,
+        "top5_candidate_gate_source_before_nms": "survival",
+        "top5_suppressed_by_nms": False,
+    }
+    quality_meta = {
+        **survival_meta,
+        "top5_candidate_gate_source_before_nms": "quality",
+    }
+    rank5 = {"valid_points": 6, "exist_score": 0.9, "rank_score": 0.8}
+
+    assert gt5_diag.top5_gate_drop_reason(survival_meta, args) == "survival_too_low"
+    assert gt5_diag.top5_gate_drop_reason(quality_meta, args) == "quality_too_low"
+    assert gt5_diag.gt5_output_drop_reason(4, rank5, "postprocess", args, 5, survival_meta) == "survival_too_low"
+    assert gt5_diag.gt5_output_drop_reason(4, rank5, "postprocess", args, 5, quality_meta) == "quality_too_low"
 
 
 def test_k56_train_command_infers_k56_label_dirs_from_data_yaml():
@@ -173,6 +732,22 @@ def test_k56_builder_rejects_split_raw_file_overlap():
 
     with pytest.raises(ValueError, match="raw_file overlap"):
         builder.assert_disjoint_raw_file_splits(split_samples)
+
+
+def test_k56_builder_uses_official_val_json_as_split_manifest(tmp_path):
+    val_json = tmp_path / "val.json"
+    val_json.write_text(
+        '{"raw_file":"clips/0601/0001/20.jpg","lanes":[],"h_samples":[]}\n'
+        '{"raw_file":"clips/0601/0002/20.jpg","lanes":[],"h_samples":[]}\n',
+        encoding="utf-8",
+    )
+
+    mapping = builder.val_gt_raw_file_split(val_json)
+
+    assert mapping == {
+        "clips/0601/0001/20.jpg": "val",
+        "clips/0601/0002/20.jpg": "val",
+    }
 
 
 def test_k56_label_oracle_requires_explicit_test_gt():

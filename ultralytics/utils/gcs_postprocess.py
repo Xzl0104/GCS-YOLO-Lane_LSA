@@ -500,9 +500,16 @@ def soft_count_decision(
 
     ranked = sorted(candidate_lanes, key=_lane_rank_score, reverse=True)
     scores_by_k: dict[int, float] = {}
+
+    def lane_soft_count_score(lane: dict) -> float:
+        score = lane.get("survival_score")
+        if score is None:
+            score = lane.get("quality_score")
+        return float(_lane_rank_score(lane) if score is None else score)
+
     for k in candidate_counts:
         top = ranked[:k]
-        quality_sum = sum(float(lane.get("quality_score", _lane_rank_score(lane))) for lane in top)
+        quality_sum = sum(lane_soft_count_score(lane) for lane in top)
         prior = float(np.log(max(float(prob[k - 2]), 1e-12)))
         dup = _soft_duplicate_penalty(
             top,
@@ -867,6 +874,22 @@ def _edge_side_and_gap(
     return None, gap, candidate_x
 
 
+def _lane_gate_score(lane: dict) -> tuple[str, float | None]:
+    """Return the confidence used by fifth-lane gates, preferring survival over geometry quality."""
+    survival = lane.get("survival_score")
+    if survival is not None:
+        return "survival", float(survival)
+    quality = lane.get("quality_score")
+    if quality is not None:
+        return "quality", float(quality)
+    return "missing", None
+
+
+def _gate_too_low_reason(gate_source: str) -> str:
+    """Return the diagnostic reason for a failed fifth-lane gate."""
+    return "survival_too_low" if str(gate_source) == "survival" else "quality_too_low"
+
+
 def _find_edge_rescue_candidate(
     selected: list[dict],
     rescue_candidates: list[dict],
@@ -885,6 +908,9 @@ def _find_edge_rescue_candidate(
     meta = {
         "edge_last_lane_rescue_reason": "no_candidate",
         "edge_last_lane_rescue_candidate_quality": None,
+        "edge_last_lane_rescue_candidate_survival": None,
+        "edge_last_lane_rescue_candidate_gate_score": None,
+        "edge_last_lane_rescue_candidate_gate_source": None,
         "edge_last_lane_rescue_candidate_valid_points": None,
         "edge_last_lane_rescue_candidate_min_dist": None,
         "edge_last_lane_rescue_candidate_side": None,
@@ -915,7 +941,13 @@ def _find_edge_rescue_candidate(
         meta["edge_last_lane_rescue_candidate_outside_gap_px"] = None if outside_gap is None else float(outside_gap)
         meta["edge_last_lane_rescue_candidate_valid_points"] = int(lane.get("valid_count", 0))
         quality_score = lane.get("quality_score")
+        gate_source, gate_score = _lane_gate_score(lane)
         meta["edge_last_lane_rescue_candidate_quality"] = None if quality_score is None else float(quality_score)
+        meta["edge_last_lane_rescue_candidate_survival"] = (
+            None if lane.get("survival_score") is None else float(lane.get("survival_score"))
+        )
+        meta["edge_last_lane_rescue_candidate_gate_score"] = gate_score
+        meta["edge_last_lane_rescue_candidate_gate_source"] = gate_source
         if float(lane.get("exist_score", lane.get("score", 0.0))) < float(edge_conf_thr):
             meta["edge_last_lane_rescue_reason"] = "conf_low"
             continue
@@ -925,11 +957,11 @@ def _find_edge_rescue_candidate(
         if float(lane.get("mean_valid_score", 0.0)) < float(edge_mean_valid_thr):
             meta["edge_last_lane_rescue_reason"] = "mean_valid_low"
             continue
-        if quality_score is None and float(edge_quality_thr) > 0.0:
+        if gate_score is None and float(edge_quality_thr) > 0.0:
             meta["edge_last_lane_rescue_reason"] = "missing_quality"
             continue
-        if quality_score is not None and float(quality_score) < float(edge_quality_thr):
-            meta["edge_last_lane_rescue_reason"] = "quality_too_low"
+        if gate_score is not None and float(gate_score) < float(edge_quality_thr):
+            meta["edge_last_lane_rescue_reason"] = _gate_too_low_reason(gate_source)
             continue
         min_dist = _lane_min_distance_to_selected(lane, selected, image_shape, min_overlap)
         meta["edge_last_lane_rescue_candidate_min_dist"] = None if not np.isfinite(min_dist) else float(min_dist)
@@ -959,6 +991,12 @@ def _find_edge_rescue_candidate(
     meta["edge_last_lane_rescue_candidate_quality"] = (
         None if best.get("quality_score") is None else float(best.get("quality_score"))
     )
+    gate_source, gate_score = _lane_gate_score(best)
+    meta["edge_last_lane_rescue_candidate_survival"] = (
+        None if best.get("survival_score") is None else float(best.get("survival_score"))
+    )
+    meta["edge_last_lane_rescue_candidate_gate_score"] = gate_score
+    meta["edge_last_lane_rescue_candidate_gate_source"] = gate_source
     meta["edge_last_lane_rescue_candidate_valid_points"] = int(best.get("valid_count", 0))
     meta["edge_last_lane_rescue_candidate_min_dist"] = best.get("edge_rescue_min_dist")
     meta["edge_last_lane_rescue_candidate_side"] = best.get("edge_rescue_side")
@@ -988,6 +1026,9 @@ def _edge_last_lane_rescue(
         "edge_last_lane_rescue_success_count": 0,
         "edge_last_lane_rescue_reason": "not_attempted",
         "edge_last_lane_rescue_candidate_quality": None,
+        "edge_last_lane_rescue_candidate_survival": None,
+        "edge_last_lane_rescue_candidate_gate_score": None,
+        "edge_last_lane_rescue_candidate_gate_source": None,
         "edge_last_lane_rescue_candidate_valid_points": None,
         "edge_last_lane_rescue_candidate_min_dist": None,
         "edge_last_lane_rescue_candidate_side": None,
@@ -1034,6 +1075,12 @@ def _edge_last_lane_rescue(
         meta["edge_last_lane_rescue_candidate_quality"] = (
             None if picked.get("quality_score") is None else float(picked.get("quality_score"))
         )
+        gate_source, gate_score = _lane_gate_score(picked)
+        meta["edge_last_lane_rescue_candidate_survival"] = (
+            None if picked.get("survival_score") is None else float(picked.get("survival_score"))
+        )
+        meta["edge_last_lane_rescue_candidate_gate_score"] = gate_score
+        meta["edge_last_lane_rescue_candidate_gate_source"] = gate_source
         meta["edge_last_lane_rescue_candidate_valid_points"] = int(picked.get("valid_count", 0))
         meta["edge_last_lane_rescue_candidate_min_dist"] = picked.get("edge_rescue_min_dist")
         meta["edge_last_lane_rescue_candidate_side"] = picked.get("edge_rescue_side")
@@ -1069,6 +1116,9 @@ def _edge_count4_to5_upgrade_eligible(
         "edge_count4_to5_candidate_side": None,
         "edge_count4_to5_candidate_valid_points": None,
         "edge_count4_to5_candidate_quality": None,
+        "edge_count4_to5_candidate_survival": None,
+        "edge_count4_to5_candidate_gate_score": None,
+        "edge_count4_to5_candidate_gate_source": None,
         "edge_count4_to5_candidate_min_dist": None,
     }
     if not enabled:
@@ -1109,6 +1159,9 @@ def _edge_count4_to5_upgrade_eligible(
         meta["edge_count4_to5_candidate_side"] = picked_meta.get("edge_last_lane_rescue_candidate_side")
         meta["edge_count4_to5_candidate_valid_points"] = picked_meta.get("edge_last_lane_rescue_candidate_valid_points")
         meta["edge_count4_to5_candidate_quality"] = picked_meta.get("edge_last_lane_rescue_candidate_quality")
+        meta["edge_count4_to5_candidate_survival"] = picked_meta.get("edge_last_lane_rescue_candidate_survival")
+        meta["edge_count4_to5_candidate_gate_score"] = picked_meta.get("edge_last_lane_rescue_candidate_gate_score")
+        meta["edge_count4_to5_candidate_gate_source"] = picked_meta.get("edge_last_lane_rescue_candidate_gate_source")
         meta["edge_count4_to5_candidate_min_dist"] = picked_meta.get("edge_last_lane_rescue_candidate_min_dist")
         return False, meta
     meta["edge_count4_to5_upgrade"] = True
@@ -1116,6 +1169,12 @@ def _edge_count4_to5_upgrade_eligible(
     meta["edge_count4_to5_candidate_side"] = picked.get("edge_rescue_side")
     meta["edge_count4_to5_candidate_valid_points"] = int(picked.get("valid_count", 0))
     meta["edge_count4_to5_candidate_quality"] = None if picked.get("quality_score") is None else float(picked.get("quality_score"))
+    gate_source, gate_score = _lane_gate_score(picked)
+    meta["edge_count4_to5_candidate_survival"] = (
+        None if picked.get("survival_score") is None else float(picked.get("survival_score"))
+    )
+    meta["edge_count4_to5_candidate_gate_score"] = gate_score
+    meta["edge_count4_to5_candidate_gate_source"] = gate_source
     meta["edge_count4_to5_candidate_min_dist"] = picked.get("edge_rescue_min_dist")
     return True, meta
 
@@ -1140,6 +1199,9 @@ def _last_required_lane_rescue(
         "last_lane_rescue_success_count": 0,
         "last_lane_rescue_reason": "not_attempted",
         "last_lane_rescue_candidate_quality": None,
+        "last_lane_rescue_candidate_survival": None,
+        "last_lane_rescue_candidate_gate_score": None,
+        "last_lane_rescue_candidate_gate_source": None,
         "last_lane_rescue_candidate_valid_points": None,
         "last_lane_rescue_candidate_min_dist": None,
     }
@@ -1160,7 +1222,13 @@ def _last_required_lane_rescue(
         saw_candidate = True
         meta["last_lane_rescue_candidate_valid_points"] = int(lane.get("valid_count", 0))
         quality_score = lane.get("quality_score")
+        gate_source, gate_score = _lane_gate_score(lane)
         meta["last_lane_rescue_candidate_quality"] = None if quality_score is None else float(quality_score)
+        meta["last_lane_rescue_candidate_survival"] = (
+            None if lane.get("survival_score") is None else float(lane.get("survival_score"))
+        )
+        meta["last_lane_rescue_candidate_gate_score"] = gate_score
+        meta["last_lane_rescue_candidate_gate_source"] = gate_source
         if float(lane.get("exist_score", lane.get("score", 0.0))) < float(rescue_conf_thr):
             meta["last_lane_rescue_reason"] = "conf_low"
             continue
@@ -1170,11 +1238,11 @@ def _last_required_lane_rescue(
         if float(lane.get("mean_valid_score", 0.0)) < float(rescue_mean_valid_thr):
             meta["last_lane_rescue_reason"] = "mean_valid_low"
             continue
-        if quality_score is None and float(rescue_quality_thr) > 0.0:
+        if gate_score is None and float(rescue_quality_thr) > 0.0:
             meta["last_lane_rescue_reason"] = "missing_quality"
             continue
-        if quality_score is not None and float(quality_score) < float(rescue_quality_thr):
-            meta["last_lane_rescue_reason"] = "quality_too_low"
+        if gate_score is not None and float(gate_score) < float(rescue_quality_thr):
+            meta["last_lane_rescue_reason"] = _gate_too_low_reason(gate_source)
             continue
 
         min_dist = float("inf")
@@ -1198,6 +1266,11 @@ def _last_required_lane_rescue(
         meta["last_lane_rescue_success_count"] = int(meta["last_lane_rescue_success_count"]) + 1
         meta["last_lane_rescue_reason"] = "rescued"
         meta["last_lane_rescue_candidate_quality"] = None if quality_score is None else float(quality_score)
+        meta["last_lane_rescue_candidate_survival"] = (
+            None if lane.get("survival_score") is None else float(lane.get("survival_score"))
+        )
+        meta["last_lane_rescue_candidate_gate_score"] = gate_score
+        meta["last_lane_rescue_candidate_gate_source"] = gate_source
         meta["last_lane_rescue_candidate_valid_points"] = int(lane.get("valid_count", 0))
         meta["last_lane_rescue_candidate_min_dist"] = None if not np.isfinite(min_dist) else float(min_dist)
         if len(out) >= target_count:
@@ -1230,6 +1303,9 @@ def _quality_gated_rescue_5th(
         "rescue_success": False,
         "rescue_reason": "not_attempted",
         "rescue_candidate_quality": None,
+        "rescue_candidate_survival": None,
+        "rescue_candidate_gate_score": None,
+        "rescue_candidate_gate_source": None,
         "rescue_candidate_valid_points": None,
         "rescue_candidate_min_dist": None,
     }
@@ -1254,9 +1330,15 @@ def _quality_gated_rescue_5th(
             continue
         saw_candidate = True
         quality_score = lane.get("quality_score")
+        gate_source, gate_score = _lane_gate_score(lane)
         meta["rescue_candidate_quality"] = None if quality_score is None else float(quality_score)
+        meta["rescue_candidate_survival"] = (
+            None if lane.get("survival_score") is None else float(lane.get("survival_score"))
+        )
+        meta["rescue_candidate_gate_score"] = gate_score
+        meta["rescue_candidate_gate_source"] = gate_source
         meta["rescue_candidate_valid_points"] = int(lane.get("valid_count", 0))
-        if quality_score is None:
+        if gate_score is None:
             meta["rescue_reason"] = "missing_quality"
             continue
         if float(lane.get("exist_score", lane.get("score", 0.0))) < float(rescue_conf_thr):
@@ -1265,8 +1347,8 @@ def _quality_gated_rescue_5th(
         if float(lane.get("mean_valid_score", 0.0)) < float(rescue_mean_valid_thr):
             meta["rescue_reason"] = "mean_valid_low"
             continue
-        if float(quality_score) < float(rescue_quality_thr):
-            meta["rescue_reason"] = "quality_too_low"
+        if float(gate_score) < float(rescue_quality_thr):
+            meta["rescue_reason"] = _gate_too_low_reason(gate_source)
             continue
         if int(lane.get("valid_count", 0)) < int(rescue_min_points):
             meta["rescue_reason"] = "valid_points_fail"
@@ -1287,7 +1369,12 @@ def _quality_gated_rescue_5th(
         lane["quality_rescue_min_dist"] = None if not np.isfinite(min_dist) else float(min_dist)
         meta["rescue_success"] = True
         meta["rescue_reason"] = "rescued"
-        meta["rescue_candidate_quality"] = float(quality_score)
+        meta["rescue_candidate_quality"] = None if quality_score is None else float(quality_score)
+        meta["rescue_candidate_survival"] = (
+            None if lane.get("survival_score") is None else float(lane.get("survival_score"))
+        )
+        meta["rescue_candidate_gate_score"] = gate_score
+        meta["rescue_candidate_gate_source"] = gate_source
         meta["rescue_candidate_valid_points"] = int(lane.get("valid_count", 0))
         meta["rescue_candidate_min_dist"] = None if not np.isfinite(min_dist) else float(min_dist)
         return [*selected, lane], meta
@@ -1391,6 +1478,7 @@ def _build_lane_candidates(
     scores: torch.Tensor,
     point_valid_scores: torch.Tensor | None,
     quality_scores: torch.Tensor | None,
+    survival_scores: torch.Tensor | None,
     query_indices: torch.Tensor,
     image_shape: tuple[int, int] | None,
     score_thr: float,
@@ -1413,6 +1501,7 @@ def _build_lane_candidates(
         lane_points = points[raw_idx][order_i]
         valid_scores_i = point_valid_scores[raw_idx][order_i] if point_valid_scores is not None else None
         quality_score_i = float(quality_scores[raw_idx]) if quality_scores is not None else None
+        survival_score_i = float(survival_scores[raw_idx]) if survival_scores is not None else None
         exist_score = float(scores[raw_idx])
         rank_quality = _lane_rank_quality(
             lane_points,
@@ -1451,6 +1540,9 @@ def _build_lane_candidates(
         if rank_quality["quality_score"] is not None:
             item["quality_score"] = float(rank_quality["quality_score"])
             item["quality_head_score"] = float(rank_quality["quality_score"])
+        if survival_score_i is not None:
+            item["survival_score"] = float(np.clip(float(survival_score_i), 0.0, 1.0))
+            item["survival_head_score"] = float(item["survival_score"])
         visible_mask = None
         if point_valid_scores is not None:
             visible_mask_t = rank_quality["visible_mask"]
@@ -1521,6 +1613,7 @@ def decode_gcs_predictions(
     pred_count_logits: torch.Tensor | None = None,
     pred_count_boundary_logits: torch.Tensor | None = None,
     pred_quality_logits: torch.Tensor | None = None,
+    pred_survival_logits: torch.Tensor | None = None,
     image_shape: tuple[int, int] | None = None,
     score_thr: float = 0.5,
     point_valid_thr: float = 0.5,
@@ -1590,7 +1683,9 @@ def decode_gcs_predictions(
         pred_count_logits: Optional count-head logits for count=2/3/4/5. When present and enabled, this
             predicts the final K; query scores only decide which K lanes survive.
         pred_count_boundary_logits: Optional count>=4/count>=5 logits used only to calibrate image-level K.
-        pred_quality_logits: Optional Q lane-quality logits retained for diagnostics and quality-gated rescue.
+        pred_quality_logits: Optional Q lane-quality logits retained for geometry diagnostics.
+        pred_survival_logits: Optional Q lane-survival logits. When present, fifth-lane gates use survival
+            confidence and keep Quality Head scores as geometry diagnostics.
             Top-K ranking uses ``exist * visible_segment_mean_valid * visible_support_score``.
         image_shape: Optional original image shape as (height, width). If provided, pixel points are added.
         score_thr: Existence probability threshold.
@@ -1667,11 +1762,20 @@ def decode_gcs_predictions(
                 "pred_quality_logits must have shape Q matching pred_points, "
                 f"got {tuple(pred_quality_logits.shape)} vs Q={pred_points.shape[0]}."
             )
+    if pred_survival_logits is not None:
+        if pred_survival_logits.ndim == 2 and pred_survival_logits.shape[-1] == 1:
+            pred_survival_logits = pred_survival_logits.squeeze(-1)
+        if pred_survival_logits.ndim != 1 or pred_survival_logits.shape[0] != pred_points.shape[0]:
+            raise ValueError(
+                "pred_survival_logits must have shape Q matching pred_points, "
+                f"got {tuple(pred_survival_logits.shape)} vs Q={pred_points.shape[0]}."
+            )
 
     points = pred_points.detach().float().cpu().clamp(0.0, 1.0)
     scores = pred_logits.detach().float().cpu().sigmoid()
     point_valid_scores = pred_valid_logits.detach().float().cpu().sigmoid() if pred_valid_logits is not None else None
     quality_scores = pred_quality_logits.detach().float().cpu().sigmoid() if pred_quality_logits is not None else None
+    survival_scores = pred_survival_logits.detach().float().cpu().sigmoid() if pred_survival_logits is not None else None
     query_indices = torch.arange(points.shape[0], dtype=torch.long)
     rank_min_points_cfg = _normalize_rank_min_points(rank_min_points)
     count_head_active = bool(use_count_head_decode)
@@ -1803,7 +1907,7 @@ def decode_gcs_predictions(
     max_allowed_count = int(max_det) if max_det is not None and int(max_det) > 0 else int(count_head_max_count)
     count5_prob_for_rescue = float(count_head_meta.get("count5_prob", 0.0)) if count_head_meta else 0.0
     quality_count5_upgrade_eligible = bool(
-        quality_scores is not None
+        (survival_scores is not None or quality_scores is not None)
         and quality_rescue_5th
         and count_head_active
         and count_head_meta
@@ -1836,6 +1940,9 @@ def decode_gcs_predictions(
         "top5_candidate_index_before_nms": None,
         "top5_candidate_score_before_nms": None,
         "top5_candidate_quality_before_nms": None,
+        "top5_candidate_survival_before_nms": None,
+        "top5_candidate_gate_score_before_nms": None,
+        "top5_candidate_gate_source_before_nms": None,
         "top5_candidate_valid_points_before_nms": None,
         "top5_suppressed_by_nms": False,
         "candidate_count_after_nms": 0,
@@ -1843,7 +1950,8 @@ def decode_gcs_predictions(
         "quality_rank_active": True,
         "quality_rank_source": "exist_visibility",
         "quality_head_available": bool(quality_scores is not None),
-        "quality_rescue_5th_enabled": bool(quality_scores is not None and quality_rescue_5th),
+        "survival_head_available": bool(survival_scores is not None),
+        "quality_rescue_5th_enabled": bool((survival_scores is not None or quality_scores is not None) and quality_rescue_5th),
         "last_lane_rescue_enabled": bool(last_lane_rescue),
         "last_lane_rescue_min_policy_count": int(last_lane_rescue_min_policy_count_i),
         "last_lane_rescue_score_thr": float(last_lane_rescue_conf_thr_i),
@@ -1865,6 +1973,7 @@ def decode_gcs_predictions(
         "edge_rescue_min_policy_count": int(edge_rescue_min_policy_count_i),
         "edge_count4_to5_upgrade_enabled": bool(edge_count4_to5_upgrade),
         "edge_count4_to5_upgrade": False,
+        "edge_count4_to5_upgrade_success": False,
         "edge_count4_to5_upgrade_reason": "not_attempted",
         "edge_count4_to5_prob_margin": float(edge_count4_to5_prob_margin),
         "edge_count4_to5_p4": None,
@@ -1872,11 +1981,17 @@ def decode_gcs_predictions(
         "edge_count4_to5_candidate_side": None,
         "edge_count4_to5_candidate_valid_points": None,
         "edge_count4_to5_candidate_quality": None,
+        "edge_count4_to5_candidate_survival": None,
+        "edge_count4_to5_candidate_gate_score": None,
+        "edge_count4_to5_candidate_gate_source": None,
         "edge_count4_to5_candidate_min_dist": None,
         "edge_last_lane_rescue_attempt_count": 0,
         "edge_last_lane_rescue_success_count": 0,
         "edge_last_lane_rescue_reason": "not_attempted",
         "edge_last_lane_rescue_candidate_quality": None,
+        "edge_last_lane_rescue_candidate_survival": None,
+        "edge_last_lane_rescue_candidate_gate_score": None,
+        "edge_last_lane_rescue_candidate_gate_source": None,
         "edge_last_lane_rescue_candidate_valid_points": None,
         "edge_last_lane_rescue_candidate_min_dist": None,
         "edge_last_lane_rescue_candidate_side": None,
@@ -1893,12 +2008,18 @@ def decode_gcs_predictions(
         "rescue_success": False,
         "rescue_reason": "not_attempted",
         "rescue_candidate_quality": None,
+        "rescue_candidate_survival": None,
+        "rescue_candidate_gate_score": None,
+        "rescue_candidate_gate_source": None,
         "rescue_candidate_valid_points": None,
         "rescue_candidate_min_dist": None,
         "last_lane_rescue_attempt_count": 0,
         "last_lane_rescue_success_count": 0,
         "last_lane_rescue_reason": "not_attempted",
         "last_lane_rescue_candidate_quality": None,
+        "last_lane_rescue_candidate_survival": None,
+        "last_lane_rescue_candidate_gate_score": None,
+        "last_lane_rescue_candidate_gate_source": None,
         "last_lane_rescue_candidate_valid_points": None,
         "last_lane_rescue_candidate_min_dist": None,
     }
@@ -1916,6 +2037,7 @@ def decode_gcs_predictions(
         scores,
         point_valid_scores,
         quality_scores,
+        survival_scores,
         query_indices,
         image_shape,
         score_thr=candidate_score_thr_i,
@@ -1928,6 +2050,7 @@ def decode_gcs_predictions(
             scores,
             point_valid_scores,
             quality_scores,
+            survival_scores,
             query_indices,
             image_shape,
             score_thr=rescue_candidate_score_thr_i,
@@ -1943,6 +2066,7 @@ def decode_gcs_predictions(
             scores,
             point_valid_scores,
             quality_scores,
+            survival_scores,
             query_indices,
             image_shape,
             score_thr=last_lane_rescue_conf_thr_i,
@@ -1958,6 +2082,7 @@ def decode_gcs_predictions(
             scores,
             point_valid_scores,
             quality_scores,
+            survival_scores,
             query_indices,
             image_shape,
             score_thr=float(edge_rescue_conf_thr),
@@ -2009,6 +2134,11 @@ def decode_gcs_predictions(
                 "top5_candidate_quality_before_nms": (
                     None if top5.get("quality_score") is None else float(top5.get("quality_score"))
                 ),
+                "top5_candidate_survival_before_nms": (
+                    None if top5.get("survival_score") is None else float(top5.get("survival_score"))
+                ),
+                "top5_candidate_gate_score_before_nms": _lane_gate_score(top5)[1],
+                "top5_candidate_gate_source_before_nms": _lane_gate_score(top5)[0],
                 "top5_candidate_valid_points_before_nms": int(top5.get("valid_count", 0)),
             }
         )
@@ -2086,6 +2216,7 @@ def decode_gcs_predictions(
         count_head_meta["effective_policy_count"] = int(policy_target_count)
         decode_meta.update(soft_meta)
         decode_meta["effective_policy_count"] = int(policy_target_count)
+    force_edge_upgrade_rescue = False
     if (
         bool(edge_count4_to5_upgrade)
         and count_head_active
@@ -2119,22 +2250,29 @@ def decode_gcs_predictions(
         if edge_upgrade_ok:
             policy_target_count = 5
             edge_last_lane_rescue_active = True
+            force_edge_upgrade_rescue = True
             decode_meta["effective_policy_count"] = 5
             decode_meta["candidate_target_count"] = max(int(decode_meta.get("candidate_target_count", 0)), 5)
             decode_meta["edge_last_lane_rescue_active"] = True
             if count_head_meta is not None:
                 count_head_meta["effective_policy_count"] = 5
     quality_rescue_available = bool(
-        quality_scores is not None
+        (survival_scores is not None or quality_scores is not None)
         and quality_rescue_5th
         and count_head_active
         and count_head_meta
     )
     quality_rescue_active = bool(
         quality_rescue_available
-        and ((policy_target_count == 5 and not (bool(last_lane_rescue) or edge_last_lane_rescue_active)) or quality_count5_upgrade_eligible)
+        and (
+            (
+                policy_target_count == 5
+                and not (bool(last_lane_rescue) or edge_last_lane_rescue_active or bool(force_edge_upgrade_rescue))
+            )
+            or quality_count5_upgrade_eligible
+        )
     )
-    base_target_count = 4 if quality_rescue_active else policy_target_count
+    base_target_count = 4 if (quality_rescue_active or bool(force_edge_upgrade_rescue)) else policy_target_count
     lanes = _select_topk_with_final_constraints(
         lanes,
         target_count=base_target_count,
@@ -2142,6 +2280,28 @@ def decode_gcs_predictions(
         rank_min_points=rank_min_points_cfg,
         fifth_min_points=fifth_min_points_i,
     )
+    if force_edge_upgrade_rescue:
+        before_edge_upgrade_rescue = len(lanes)
+        lanes, edge_lane_meta = _edge_last_lane_rescue(
+            selected=lanes,
+            rescue_candidates=edge_lanes,
+            target_count=policy_target_count,
+            image_shape=image_shape,
+            min_policy_count=edge_rescue_min_policy_count_i,
+            edge_conf_thr=float(edge_rescue_conf_thr),
+            edge_mean_valid_thr=float(edge_rescue_mean_valid_thr),
+            edge_quality_thr=float(edge_rescue_quality_thr),
+            edge_min_points=int(edge_rescue_min_points),
+            edge_outside_gap_px=float(edge_rescue_outside_gap_px),
+            edge_dist_px=float(edge_rescue_dist_px),
+            min_overlap=line_nms_min_overlap_i,
+        )
+        decode_meta.update(edge_lane_meta)
+        decode_meta["edge_count4_to5_upgrade_success"] = bool(
+            len(lanes) > before_edge_upgrade_rescue
+            and len(lanes) >= 5
+            and int(decode_meta.get("edge_last_lane_rescue_success_count", 0)) > 0
+        )
     if len(lanes) < base_target_count:
         if edge_last_lane_rescue_active and base_target_count >= edge_rescue_min_policy_count_i:
             lanes, edge_lane_meta = _edge_last_lane_rescue(
@@ -2159,6 +2319,10 @@ def decode_gcs_predictions(
                 min_overlap=line_nms_min_overlap_i,
             )
             decode_meta.update(edge_lane_meta)
+            if bool(force_edge_upgrade_rescue) and len(lanes) > 4:
+                decode_meta["effective_policy_count"] = 5
+                if count_head_meta is not None:
+                    count_head_meta["effective_policy_count"] = 5
         if len(lanes) < base_target_count and bool(last_lane_rescue) and base_target_count >= last_lane_rescue_min_policy_count_i:
             lanes, last_lane_meta = _last_required_lane_rescue(
                 selected=lanes,
@@ -2239,7 +2403,7 @@ def decode_gcs_predictions(
                 min_overlap=line_nms_min_overlap_i,
             )
             decode_meta.update(last_lane_meta)
-        if len(lanes) < policy_target_count and not bool(last_lane_rescue):
+        if len(lanes) < policy_target_count and not bool(last_lane_rescue) and not bool(force_edge_upgrade_rescue):
             lanes = count_aware_refill(
                 selected=lanes,
                 pre_nms_candidates=suppressed_lanes if nms_dist_px > 0.0 else pre_nms_lanes,

@@ -6,14 +6,16 @@ from pathlib import Path
 import numpy as np
 from tqdm import tqdm
 
+from gcs_tools.label_utils import TUSIMPLE_OFFICIAL_TOP_Y_NORM
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Resample fixed-y GCS labels to another shared y-anchor range.")
     parser.add_argument("--src", required=True, help="Source labels_gcs split directory.")
     parser.add_argument("--dst", required=True, help="Destination labels_gcs split directory.")
     parser.add_argument("--fixed-y-start", type=float, required=True, help="New bottom fixed-y anchor.")
-    parser.add_argument("--fixed-y-end", type=float, default=0.25, help="New top fixed-y anchor.")
-    parser.add_argument("--num-points", type=int, default=32, help="Number of fixed-y anchors.")
+    parser.add_argument("--fixed-y-end", type=float, default=TUSIMPLE_OFFICIAL_TOP_Y_NORM, help="New top fixed-y anchor.")
+    parser.add_argument("--num-points", type=int, default=56, help="Number of fixed-y anchors.")
     return parser.parse_args()
 
 

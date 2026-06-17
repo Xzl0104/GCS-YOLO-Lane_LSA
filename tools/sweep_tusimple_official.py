@@ -31,6 +31,7 @@ from gcs_tools.tusimple_official_eval import (  # noqa: E402
     read_tusimple_json_lines,
     tusimple_image_path,
 )
+from gcs_tools.tusimple_split_guard import reject_tusimple_test_search_gt_json  # noqa: E402
 from tools.infer_gcs import load_gcs_model, preprocess_image, warn_max_det_mismatch  # noqa: E402
 from ultralytics.utils.gcs_postprocess import (  # noqa: E402
     GCS_DEFAULT_MAX_DET,
@@ -60,6 +61,11 @@ def validate_official_sweep_split(split: str, *, context: str = "TuSimple offici
             "for one-shot final test evaluation."
         )
     return normalized
+
+
+def validate_official_sweep_gt_json(gt_json: str | Path | None, *, context: str = "TuSimple official sweep") -> None:
+    """Reject explicit test GT json paths for threshold/postprocess search."""
+    reject_tusimple_test_search_gt_json(gt_json, context=context)
 
 
 def parse_args() -> argparse.Namespace:
@@ -834,6 +840,7 @@ def select_best(rows: list[dict], args: argparse.Namespace) -> dict:
 @torch.inference_mode()
 def run_sweep(args: argparse.Namespace) -> dict:
     args.split = validate_official_sweep_split(args.split)
+    validate_official_sweep_gt_json(args.gt_json)
     archive_root = find_tusimple_archive_root(args.archive_root)
     gt_path = Path(args.gt_json) if args.gt_json else default_tusimple_gt_json(archive_root, split=args.split)
     gt_records = read_tusimple_json_lines(gt_path)
@@ -876,6 +883,7 @@ def run_sweep(args: argparse.Namespace) -> dict:
         pred_count = preds.get("pred_count_logits")
         pred_count_boundary = preds.get("pred_count_boundary_logits")
         pred_quality = preds.get("pred_quality_logits")
+        pred_survival = preds.get("pred_survival_logits")
         pred_quality_scores = pred_quality[0].detach().float().sigmoid().cpu() if pred_quality is not None else None
         t1 = time.perf_counter()
         for combo, state in zip(combos, states):
@@ -886,6 +894,7 @@ def run_sweep(args: argparse.Namespace) -> dict:
                 pred_count_logits=pred_count[0] if pred_count is not None else None,
                 pred_count_boundary_logits=pred_count_boundary[0] if pred_count_boundary is not None else None,
                 pred_quality_logits=pred_quality[0] if pred_quality is not None else None,
+                pred_survival_logits=pred_survival[0] if pred_survival is not None else None,
                 image_shape=original_shape,
                 score_thr=combo["conf"],
                 point_valid_thr=combo["point_valid_thr"],

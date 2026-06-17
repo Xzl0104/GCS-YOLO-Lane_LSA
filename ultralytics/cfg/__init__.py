@@ -63,7 +63,7 @@ TASK2DATA = {
     "classify": "imagenet10",
     "pose": "coco8-pose.yaml",
     "obb": "dota8.yaml",
-    "gcs_lane": str(ROOT.parent / "data/tusimple_gcs_fixed_y_960x544.yaml"),
+    "gcs_lane": str(ROOT.parent / "data/tusimple_gcs_fixed_y_k56_960x544.yaml"),
 }
 TASK2CALIBRATIONDATA = {
     "detect": "coco128.yaml",
@@ -71,7 +71,7 @@ TASK2CALIBRATIONDATA = {
     "classify": "imagenet100",
     "pose": "coco8-pose.yaml",
     "obb": "dota128.yaml",
-    "gcs_lane": str(ROOT.parent / "data/tusimple_gcs_fixed_y_960x544.yaml"),
+    "gcs_lane": str(ROOT.parent / "data/tusimple_gcs_fixed_y_k56_960x544.yaml"),
 }
 TASK2MODEL = {
     "detect": "yolo26n.pt",
@@ -79,7 +79,7 @@ TASK2MODEL = {
     "classify": "yolo26n-cls.pt",
     "pose": "yolo26n-pose.pt",
     "obb": "yolo26n-obb.pt",
-    "gcs_lane": str(ROOT / "cfg/models/gcs/gcs-yolo-lane-s-q12.yaml"),
+    "gcs_lane": str(ROOT / "cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml"),
 }
 TASK2METRIC = {
     "detect": "metrics/mAP50-95(B)",
@@ -270,6 +270,18 @@ CFG_FLOAT_KEYS = frozenset(
         "gcs_hard_sampling_boost",
         "gcs_hard_sample_boost",
         "gcs_gt5_oversample_weight",
+        "gcs_visible_count_sum",
+        "gcs_visible_count_sum_support_points",
+        "gcs_visible_count_sum_hard_weight",
+        "gcs_visible_count_boundary",
+        "gcs_visible_count_boundary_temperature",
+        "gcs_survival",
+        "gcs_survival_pos_weight",
+        "gcs_survival_neg_weight",
+        "gcs_survival_hard_negative_weight",
+        "gcs_survival_duplicate_negative_weight",
+        "gcs_decoder_aux",
+        "gcs_gt5_erasing_lane_margin_px",
         "gcs_official_best_score_fp_weight",
         "gcs_official_best_score_fn_weight",
         "gcs_official_best_count_acc3_weight",
@@ -359,6 +371,10 @@ CFG_FRACTION_KEYS = frozenset(
         "gcs_gt5_blur",
         "gcs_gt5_noise",
         "gcs_gt5_shadow",
+        "gcs_visible_count_sum_visible_thr",
+        "gcs_visible_count_sum_quality_weight",
+        "gcs_visible_count_sum_survival_weight",
+        "gcs_visible_count_boundary_label_smoothing",
     }
 )
 CFG_INT_KEYS = frozenset(
@@ -442,12 +458,14 @@ CFG_BOOL_KEYS = frozenset(
         "gcs_edge_last_lane_rescue",
         "gcs_edge_count4_to5_upgrade",
         "gcs_count_sum_normalize",
+        "gcs_visible_count_sum_normalize",
         "gcs_soft_count_decision",
         "end2end",
         "gcs_lane_count_balanced",
         "gcs_hard_sampling",
         "gcs_train_include_val",
         "gcs_gt5_extra_aug",
+        "gcs_gt5_lane_aware_erasing",
         "gcs_quality_hard_negative_from_head",
         "gcs_hard_negative_visible_segment",
     }

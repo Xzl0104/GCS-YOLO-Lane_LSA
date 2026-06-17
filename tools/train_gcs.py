@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
@@ -39,7 +40,7 @@ from ultralytics.utils.gcs_shape import DATASET_IMAGE_SHAPES, normalize_imgsz, s
 from ultralytics.utils.gcs_postprocess import GCS_DEFAULT_MAX_DET
 
 
-DEFAULT_MODEL = ROOT / "ultralytics" / "cfg" / "models" / "gcs" / "gcs-yolo-lane-s-q12.yaml"
+DEFAULT_MODEL = ROOT / "ultralytics" / "cfg" / "models" / "gcs" / "gcs-yolo-lane-s-q12-k56.yaml"
 
 
 def str2bool(value: str | bool) -> bool:
@@ -58,8 +59,8 @@ def dataset_defaults(dataset: str) -> dict[str, Path]:
     """Return conventional local paths for a converted GCS dataset."""
     name = dataset.lower()
     if name == "tusimple":
-        fixed_root = ROOT / "datasets" / "tusimple_fixed_y_960x544"
-        fixed_data = ROOT / "data" / "tusimple_gcs_fixed_y_960x544.yaml"
+        fixed_root = ROOT / "datasets" / "tusimple_fixed_y_k56_960x544"
+        fixed_data = ROOT / "data" / "tusimple_gcs_fixed_y_k56_960x544.yaml"
         if fixed_data.exists():
             return {
                 "data": fixed_data,
@@ -81,6 +82,110 @@ def dataset_defaults(dataset: str) -> dict[str, Path]:
 def resolve_data_yaml_path(value: str | Path) -> Path:
     path = Path(value)
     return path if path.is_absolute() else ROOT / path
+
+
+def validate_named_candidate_training_args(model: str | Path, args: argparse.Namespace) -> None:
+    """Catch named candidate commands that would train the wrong objective."""
+    stem = Path(str(model)).stem.lower()
+    if "survival" in stem and float(getattr(args, "gcs_survival", 0.0) or 0.0) <= 0.0:
+        raise SystemExit(
+            "ERROR: survival-head candidate YAMLs emit pred_survival_logits and decode will prefer Survival Head "
+            "for fifth-lane gates. Train them with --gcs-survival > 0, or use the base K56 YAML."
+        )
+    if "decoder-aux" in stem and float(getattr(args, "gcs_decoder_aux", 0.0) or 0.0) <= 0.0:
+        raise SystemExit(
+            "ERROR: decoder-aux candidate YAMLs emit aux_outputs but need --gcs-decoder-aux > 0 to train the "
+            "auxiliary decoder objective. Use the base K56 YAML if auxiliary supervision is disabled."
+        )
+
+
+def _manifest_sidecar_path(path: str | Path) -> Path:
+    manifest = Path(path)
+    return manifest.with_suffix(manifest.suffix + ".summary.json")
+
+
+def _float_arg(args: argparse.Namespace, name: str, default: float) -> float:
+    """Read a numeric argparse field without treating 0.0 as missing."""
+    value = getattr(args, name, None)
+    return float(default if value is None else value)
+
+
+def validate_hard_manifest_sidecar(
+    path: str | Path,
+    *,
+    flag: str,
+    require_builder_preset: str | None = None,
+) -> None:
+    """Reject hard manifests whose builder sidecar marks them as analysis/test artifacts."""
+    text = str(path or "").strip()
+    if not text:
+        return
+    sidecar = _manifest_sidecar_path(text)
+    if not sidecar.exists():
+        if require_builder_preset:
+            raise SystemExit(
+                f"ERROR: {flag} requires a build_gcs_hard_samples_from_eval.py sidecar for "
+                f"{require_builder_preset}: {sidecar}"
+            )
+        return
+    try:
+        payload = json.loads(sidecar.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"ERROR: {flag} sidecar is not valid JSON: {sidecar}") from exc
+    if payload.get("builder") != "build_gcs_hard_samples_from_eval.py":
+        if require_builder_preset:
+            raise SystemExit(
+                f"ERROR: {flag} sidecar must be produced by build_gcs_hard_samples_from_eval.py "
+                f"for {require_builder_preset}: {sidecar}"
+            )
+        return
+    if bool(payload.get("test_summary_allowed", False)):
+        raise SystemExit(
+            f"ERROR: {flag} sidecar allows test summaries and must not be used for training: {sidecar}"
+        )
+    if bool(payload.get("analysis_only", False)):
+        raise SystemExit(
+            f"ERROR: {flag} sidecar is marked analysis_only and must not be used for training: {sidecar}"
+        )
+    if require_builder_preset and payload.get("preset") != require_builder_preset:
+        raise SystemExit(
+            f"ERROR: {flag} sidecar preset must be {require_builder_preset} for hard-weighted "
+            f"visible_count_sum training: {sidecar}"
+        )
+    if payload.get("preset") != "k56_viscountsum_hardsamples":
+        return
+    audit = payload.get("target_match_audit") if isinstance(payload.get("target_match_audit"), dict) else {}
+    if str(payload.get("source_split", "")).lower() != "train":
+        raise SystemExit(f"ERROR: {flag} k56_viscountsum_hardsamples sidecar must have source_split=train: {sidecar}")
+    if list(payload.get("target_splits") or []) != ["train"]:
+        raise SystemExit(f"ERROR: {flag} k56_viscountsum_hardsamples sidecar must target only train: {sidecar}")
+    if not bool(payload.get("require_target_match", False)):
+        raise SystemExit(f"ERROR: {flag} k56_viscountsum_hardsamples sidecar must require target matching: {sidecar}")
+    if not bool(audit.get("raw_file_only", False)):
+        raise SystemExit(f"ERROR: {flag} k56_viscountsum_hardsamples sidecar must use raw_file-only audit: {sidecar}")
+    if int(audit.get("unmatched_unique_samples", 0) or 0) > 0:
+        raise SystemExit(f"ERROR: {flag} sidecar has unmatched train hard samples: {sidecar}")
+    if require_builder_preset and int(audit.get("matched_unique_samples", 0) or 0) <= 0:
+        raise SystemExit(f"ERROR: {flag} sidecar has no matched train hard samples: {sidecar}")
+
+
+def validate_training_hard_manifest_args(args: argparse.Namespace) -> None:
+    """Validate train-time hard sample manifests before building trainer overrides."""
+    visible_gain = _float_arg(args, "gcs_visible_count_sum", 0.0)
+    hard_weight = _float_arg(args, "gcs_visible_count_sum_hard_weight", 1.0)
+    hard_loss_file = str(getattr(args, "gcs_hard_loss_file", "") or "").strip()
+    requires_weighted_visible_manifest = visible_gain > 0.0 and abs(hard_weight - 1.0) > 1e-12
+    if requires_weighted_visible_manifest and not hard_loss_file:
+        raise SystemExit(
+            "ERROR: --gcs-visible-count-sum-hard-weight != 1.0 requires --gcs-hard-loss-file. "
+            "Otherwise k56_viscountsum_hardsamples silently becomes an all-sample visible_count_sum run."
+        )
+    validate_hard_manifest_sidecar(
+        hard_loss_file,
+        flag="--gcs-hard-loss-file",
+        require_builder_preset="k56_viscountsum_hardsamples" if requires_weighted_visible_manifest else None,
+    )
+    validate_hard_manifest_sidecar(getattr(args, "gcs_hard_sample_file", ""), flag="--gcs-hard-sample-file")
 
 
 def infer_gcs_label_dir_from_image_path(image_path: str | Path) -> Path:
@@ -263,6 +368,41 @@ def parse_args() -> argparse.Namespace:
         default=True,
         help="Normalize count_sum_loss by GT lane count.",
     )
+    parser.add_argument(
+        "--gcs-visible-count-sum",
+        type=float,
+        default=0.0,
+        help="Default-off visible-segment query count loss gain from exist/valid/quality evidence.",
+    )
+    parser.add_argument(
+        "--gcs-visible-count-sum-normalize",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Normalize visible_count_sum_loss by GT lane count.",
+    )
+    parser.add_argument("--gcs-visible-count-sum-visible-thr", type=float, default=0.5)
+    parser.add_argument("--gcs-visible-count-sum-support-points", type=float, default=12.0)
+    parser.add_argument(
+        "--gcs-visible-count-sum-quality-weight",
+        type=float,
+        default=0.0,
+        help="Blend pred_quality_logits into visible count evidence. Use >0 only for explicit candidates.",
+    )
+    parser.add_argument(
+        "--gcs-visible-count-sum-survival-weight",
+        type=float,
+        default=0.0,
+        help="Blend pred_survival_logits into visible count evidence. Requires a survival-head candidate YAML.",
+    )
+    parser.add_argument("--gcs-visible-count-boundary", type=float, default=0.25)
+    parser.add_argument("--gcs-visible-count-boundary-temperature", type=float, default=0.5)
+    parser.add_argument("--gcs-visible-count-boundary-label-smoothing", type=float, default=0.0)
+    parser.add_argument(
+        "--gcs-visible-count-sum-hard-weight",
+        type=float,
+        default=1.0,
+        help="Sample weight for --gcs-hard-loss-file hits inside visible_count_sum_loss.",
+    )
     parser.add_argument("--gcs-quality", type=float, default=GCS_MAINLINE_QUALITY_GAIN, help="Lane-level Quality Head BCE loss gain.")
     parser.add_argument("--gcs-quality-dist-thr-px", type=float, default=20.0, help="Pixel threshold for quality target point-inlier score.")
     parser.add_argument("--gcs-quality-neg-weight", type=float, default=GCS_MAINLINE_QUALITY_NEG_WEIGHT, help="Relative weight for unmatched-query quality negatives.")
@@ -285,6 +425,22 @@ def parse_args() -> argparse.Namespace:
         action=argparse.BooleanOptionalAction,
         default=GCS_MAINLINE_QUALITY_HARD_NEGATIVE_FROM_HEAD,
         help="Also mine Quality Head hard negatives directly from high pred_quality_logits on unmatched queries.",
+    )
+    parser.add_argument(
+        "--gcs-survival",
+        type=float,
+        default=0.0,
+        help="Default-off lane Survival Head BCE gain. Requires a survival-head candidate YAML.",
+    )
+    parser.add_argument("--gcs-survival-pos-weight", type=float, default=1.0)
+    parser.add_argument("--gcs-survival-neg-weight", type=float, default=0.5)
+    parser.add_argument("--gcs-survival-hard-negative-weight", type=float, default=1.0)
+    parser.add_argument("--gcs-survival-duplicate-negative-weight", type=float, default=1.5)
+    parser.add_argument(
+        "--gcs-decoder-aux",
+        type=float,
+        default=0.0,
+        help="Default-off auxiliary decoder supervision gain. Requires a decoder-aux candidate YAML.",
     )
     parser.add_argument(
         "--gcs-hard-negative-visible-segment",
@@ -716,6 +872,16 @@ def parse_args() -> argparse.Namespace:
     parser.set_defaults(gcs_gt5_extra_aug=True)
     parser.add_argument("--gcs-gt5-aug-min-lanes", type=int, default=5)
     parser.add_argument("--gcs-gt5-erasing", type=float, default=0.15)
+    parser.add_argument(
+        "--gcs-gt5-lane-aware-erasing",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "For GT5 extra erasing, resample erase boxes that overlap visible lane anchors or adjacent "
+            "visible anchor-to-anchor segments; labels stay unchanged."
+        ),
+    )
+    parser.add_argument("--gcs-gt5-erasing-lane-margin-px", type=float, default=8.0)
     parser.add_argument("--gcs-gt5-blur", type=float, default=0.15)
     parser.add_argument("--gcs-gt5-noise", type=float, default=0.15)
     parser.add_argument("--gcs-gt5-shadow", type=float, default=0.20)
@@ -878,6 +1044,8 @@ def resolve_existing_path(value: str, *, flag: str) -> str:
 
 def main() -> None:
     args = parse_args()
+    validate_named_candidate_training_args(args.model, args)
+    validate_training_hard_manifest_args(args)
     defaults = dataset_defaults(args.dataset)
     data_yaml = args.data or str(defaults["data"])
     inferred_label_dirs = infer_gcs_label_dirs_from_data(data_yaml)
@@ -893,7 +1061,7 @@ def main() -> None:
             # retaining epochN.pt checkpoint files; best.pt is still the ordinary val-F1 best.
             save_period = -1
     if args.gcs_official_best:
-        from tools.sweep_tusimple_official import validate_official_sweep_split
+        from tools.sweep_tusimple_official import validate_official_sweep_gt_json, validate_official_sweep_split
 
         try:
             args.gcs_official_best_split = validate_official_sweep_split(
@@ -906,6 +1074,13 @@ def main() -> None:
             args.gcs_official_best_gt_json,
             flag="--gcs-official-best-gt-json",
         )
+        try:
+            validate_official_sweep_gt_json(
+                args.gcs_official_best_gt_json,
+                context="Training official_best selection",
+            )
+        except ValueError as exc:
+            raise SystemExit(f"ERROR: {exc}") from exc
         args.gcs_official_best_archive_root = resolve_existing_path(
             args.gcs_official_best_archive_root,
             flag="--gcs-official-best-archive-root",
@@ -967,6 +1142,16 @@ def main() -> None:
         "gcs_count_cls": args.gcs_count_cls,
         "gcs_count_sum": args.gcs_count_sum,
         "gcs_count_sum_normalize": args.gcs_count_sum_normalize,
+        "gcs_visible_count_sum": args.gcs_visible_count_sum,
+        "gcs_visible_count_sum_normalize": args.gcs_visible_count_sum_normalize,
+        "gcs_visible_count_sum_visible_thr": args.gcs_visible_count_sum_visible_thr,
+        "gcs_visible_count_sum_support_points": args.gcs_visible_count_sum_support_points,
+        "gcs_visible_count_sum_quality_weight": args.gcs_visible_count_sum_quality_weight,
+        "gcs_visible_count_sum_survival_weight": args.gcs_visible_count_sum_survival_weight,
+        "gcs_visible_count_boundary": args.gcs_visible_count_boundary,
+        "gcs_visible_count_boundary_temperature": args.gcs_visible_count_boundary_temperature,
+        "gcs_visible_count_boundary_label_smoothing": args.gcs_visible_count_boundary_label_smoothing,
+        "gcs_visible_count_sum_hard_weight": args.gcs_visible_count_sum_hard_weight,
         "gcs_quality": args.gcs_quality,
         "gcs_quality_dist_thr_px": args.gcs_quality_dist_thr_px,
         "gcs_quality_neg_weight": args.gcs_quality_neg_weight,
@@ -975,6 +1160,12 @@ def main() -> None:
         "gcs_quality_hard_negative_weight": args.gcs_quality_hard_negative_weight,
         "gcs_quality_duplicate_negative_weight": args.gcs_quality_duplicate_negative_weight,
         "gcs_quality_hard_negative_from_head": args.gcs_quality_hard_negative_from_head,
+        "gcs_survival": args.gcs_survival,
+        "gcs_survival_pos_weight": args.gcs_survival_pos_weight,
+        "gcs_survival_neg_weight": args.gcs_survival_neg_weight,
+        "gcs_survival_hard_negative_weight": args.gcs_survival_hard_negative_weight,
+        "gcs_survival_duplicate_negative_weight": args.gcs_survival_duplicate_negative_weight,
+        "gcs_decoder_aux": args.gcs_decoder_aux,
         "gcs_hard_negative_visible_segment": args.gcs_hard_negative_visible_segment,
         "gcs_hard_negative_visible_thr": args.gcs_hard_negative_visible_thr,
         "gcs_hard_negative_visible_support_points": args.gcs_hard_negative_visible_support_points,
@@ -1104,6 +1295,8 @@ def main() -> None:
         "gcs_gt5_extra_aug": args.gcs_gt5_extra_aug,
         "gcs_gt5_aug_min_lanes": args.gcs_gt5_aug_min_lanes,
         "gcs_gt5_erasing": args.gcs_gt5_erasing,
+        "gcs_gt5_lane_aware_erasing": args.gcs_gt5_lane_aware_erasing,
+        "gcs_gt5_erasing_lane_margin_px": args.gcs_gt5_erasing_lane_margin_px,
         "gcs_gt5_blur": args.gcs_gt5_blur,
         "gcs_gt5_noise": args.gcs_gt5_noise,
         "gcs_gt5_shadow": args.gcs_gt5_shadow,

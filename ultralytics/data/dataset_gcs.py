@@ -51,6 +51,8 @@ class GCSLaneDataset(Dataset):
         gt5_extra_aug: bool = False,
         gt5_aug_min_lanes: int = 5,
         gt5_erasing: float = 0.0,
+        gt5_lane_aware_erasing: bool = False,
+        gt5_erasing_lane_margin_px: float = 8.0,
         gt5_blur: float = 0.0,
         gt5_noise: float = 0.0,
         gt5_shadow: float = 0.0,
@@ -78,6 +80,9 @@ class GCSLaneDataset(Dataset):
             gt5_extra_aug: Apply extra photometric multi-view augmentation to images with at least gt5_aug_min_lanes.
             gt5_aug_min_lanes: Minimum GT lane count that receives extra photometric augmentation.
             gt5_erasing: Additional erasing probability for gt5_extra_aug samples.
+            gt5_lane_aware_erasing: If True, avoid erasing visible lane anchors and adjacent visible
+                anchor-to-anchor segments in GT5 extra augmentation.
+            gt5_erasing_lane_margin_px: Pixel margin around visible lane anchors/segments protected from GT5 erasing.
             gt5_blur: Random blur probability for gt5_extra_aug samples.
             gt5_noise: Random Gaussian noise probability for gt5_extra_aug samples.
             gt5_shadow: Random shadow probability for gt5_extra_aug samples.
@@ -112,6 +117,8 @@ class GCSLaneDataset(Dataset):
         self.gt5_extra_aug = bool(gt5_extra_aug)
         self.gt5_aug_min_lanes = max(int(gt5_aug_min_lanes), 1)
         self.gt5_erasing = float(gt5_erasing)
+        self.gt5_lane_aware_erasing = bool(gt5_lane_aware_erasing)
+        self.gt5_erasing_lane_margin_px = float(gt5_erasing_lane_margin_px)
         self.gt5_blur = float(gt5_blur)
         self.gt5_noise = float(gt5_noise)
         self.gt5_shadow = float(gt5_shadow)
@@ -121,6 +128,10 @@ class GCSLaneDataset(Dataset):
             raise ValueError(f"scale must be in [0, 1], got {self.scale}.")
         if self.erasing < 0.0 or self.erasing > 1.0:
             raise ValueError(f"erasing must be in [0, 1], got {self.erasing}.")
+        if self.gt5_erasing_lane_margin_px < 0.0:
+            raise ValueError(
+                f"gt5_erasing_lane_margin_px must be >= 0, got {self.gt5_erasing_lane_margin_px}."
+            )
         for name, value in (
             ("gt5_erasing", self.gt5_erasing),
             ("gt5_blur", self.gt5_blur),
@@ -370,7 +381,19 @@ class GCSLaneDataset(Dataset):
         keep = ordered_valid.sum(axis=1) >= 2
         return ordered_lanes[keep].astype(np.float32), ordered_valid[keep].astype(np.float32)
 
-    def _load_label(self, label_file: Path) -> tuple[np.ndarray, np.ndarray]:
+    @staticmethod
+    def _label_scalar_to_str(value: Any) -> str:
+        """Convert scalar npz metadata such as raw_file into a plain string."""
+        value = np.asarray(value)
+        if value.shape == ():
+            value = value.item()
+        elif value.size == 1:
+            value = value.reshape(-1)[0].item()
+        if isinstance(value, bytes):
+            value = value.decode("utf-8")
+        return str(value)
+
+    def _load_label(self, label_file: Path) -> tuple[np.ndarray, np.ndarray, str]:
         """Load and validate one GCS npz label."""
         with np.load(label_file, allow_pickle=False) as data:
             self._require_label_keys(data, label_file)
@@ -378,6 +401,7 @@ class GCSLaneDataset(Dataset):
             lane_valid = data["lane_valid"]
             num_lanes = data["num_lanes"] if "num_lanes" in data else None
             point_mode = str(np.asarray(data["point_mode"]).item()) if "point_mode" in data else "free"
+            raw_file = self._label_scalar_to_str(data["raw_file"]) if "raw_file" in data else ""
 
         lanes, lane_valid = self._normalize_lanes(
             lanes,
@@ -399,12 +423,12 @@ class GCSLaneDataset(Dataset):
                 raise ValueError(
                     f"{label_file}: fixed_y lane y coordinates do not match dataset anchors, max_err={max_err:.6g}."
                 )
-        return lanes, lane_valid
+        return lanes, lane_valid, raw_file
 
     def _load_resized_sample(
         self,
         index: int,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, Path, Path, tuple[int, int]]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, Path, Path, str, tuple[int, int]]:
         """Load one image/label pair and resize the image to the configured GCS training shape."""
         img_file = self.im_files[index]
         label_file = self.label_files[index]
@@ -420,8 +444,8 @@ class GCSLaneDataset(Dataset):
             img = cv2.resize(img, (self.img_w, self.img_h), interpolation=cv2.INTER_LINEAR)
         assert_gcs_shape(img.shape[:2], self.imgsz, name="image", context=f"GCSLaneDataset({img_file})")
 
-        lanes, lane_valid = self._load_label(label_file)
-        return img, lanes, lane_valid, img_file, label_file, (h0, w0)
+        lanes, lane_valid, raw_file = self._load_label(label_file)
+        return img, lanes, lane_valid, img_file, label_file, raw_file, (h0, w0)
 
     @staticmethod
     def _empty_lane_arrays(num_points: int) -> tuple[np.ndarray, np.ndarray]:
@@ -434,7 +458,7 @@ class GCSLaneDataset(Dataset):
     def _load_mosaic(
         self,
         index: int,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, Path, Path, tuple[int, int]]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, Path, Path, str, tuple[int, int]]:
         """Create a GCS-safe four-tile mosaic and remap normalized lane points."""
         out_h, out_w = self.imgsz
         half_h = out_h // 2
@@ -457,14 +481,16 @@ class GCSLaneDataset(Dataset):
         num_points = 0
         first_img_file: Path | None = None
         first_label_file: Path | None = None
+        first_raw_file = ""
         first_shape = self.imgsz
 
         for tile, sample_index in zip(tiles, indices):
             x1, y1, x2, y2 = tile
             tile_w, tile_h = x2 - x1, y2 - y1
-            img, lanes, lane_valid, img_file, label_file, ori_shape = self._load_resized_sample(sample_index)
+            img, lanes, lane_valid, img_file, label_file, raw_file, ori_shape = self._load_resized_sample(sample_index)
             if first_img_file is None:
                 first_img_file, first_label_file, first_shape = img_file, label_file, ori_shape
+                first_raw_file = raw_file
             if lanes.ndim == 3:
                 num_points = lanes.shape[1]
 
@@ -490,7 +516,7 @@ class GCSLaneDataset(Dataset):
             lanes, lane_valid = self._empty_lane_arrays(num_points)
 
         assert_gcs_shape(out_img.shape[:2], self.imgsz, name="mosaic image", context="GCSLaneDataset._load_mosaic")
-        return out_img, lanes, lane_valid, first_img_file, first_label_file, first_shape
+        return out_img, lanes, lane_valid, first_img_file, first_label_file, first_raw_file, first_shape
 
     def close_mosaic(self, hyp: dict | None = None) -> None:
         """Disable mosaic augmentation for late training epochs."""
@@ -671,6 +697,94 @@ class GCSLaneDataset(Dataset):
         return img
 
     @staticmethod
+    def _visible_lane_anchor_boxes(
+        lanes: np.ndarray,
+        lane_valid: np.ndarray,
+        image_shape: tuple[int, int],
+        margin_px: float,
+    ) -> list[tuple[int, int, int, int]]:
+        """Return protected pixel boxes around visible normalized lane anchors and adjacent visible segments."""
+        if lanes.ndim != 3 or lanes.shape[-1] != 2 or lane_valid.shape != lanes.shape[:2]:
+            return []
+        h, w = int(image_shape[0]), int(image_shape[1])
+        margin = int(round(max(float(margin_px), 0.0)))
+        boxes: list[tuple[int, int, int, int]] = []
+        for lane, valid in zip(lanes, lane_valid):
+            visible_idx = np.flatnonzero(valid > 0.5)
+            if visible_idx.size == 0:
+                continue
+            split_points = np.flatnonzero(np.diff(visible_idx) > 1) + 1
+            for run in np.split(visible_idx, split_points):
+                if run.size == 0:
+                    continue
+                lane_pixels: list[tuple[int, int]] = []
+                for idx in run:
+                    x_norm, y_norm = lane[int(idx)]
+                    x = int(round(float(np.clip(x_norm, 0.0, 1.0)) * max(w - 1, 1)))
+                    y = int(round(float(np.clip(y_norm, 0.0, 1.0)) * max(h - 1, 1)))
+                    lane_pixels.append((x, y))
+                    boxes.append(
+                        (
+                            max(0, x - margin),
+                            max(0, y - margin),
+                            min(w, x + margin + 1),
+                            min(h, y + margin + 1),
+                        )
+                    )
+                for (x1, y1), (x2, y2) in zip(lane_pixels, lane_pixels[1:]):
+                    boxes.append(
+                        (
+                            max(0, min(x1, x2) - margin),
+                            max(0, min(y1, y2) - margin),
+                            min(w, max(x1, x2) + margin + 1),
+                            min(h, max(y1, y2) + margin + 1),
+                        )
+                    )
+        return boxes
+
+    @staticmethod
+    def _boxes_overlap(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> bool:
+        """Return True when two x1,y1,x2,y2 boxes overlap with positive area."""
+        return int(a[0]) < int(b[2]) and int(a[2]) > int(b[0]) and int(a[1]) < int(b[3]) and int(a[3]) > int(b[1])
+
+    def _apply_lane_aware_random_erasing(
+        self,
+        img: np.ndarray,
+        lanes: np.ndarray,
+        lane_valid: np.ndarray,
+        probability: float,
+    ) -> np.ndarray:
+        """Randomly erase one image rectangle while avoiding visible lane anchors and segments."""
+        prob = float(probability)
+        if prob <= 0.0 or random.random() >= prob:
+            return img
+
+        h, w = img.shape[:2]
+        protected = self._visible_lane_anchor_boxes(
+            lanes,
+            lane_valid,
+            (h, w),
+            margin_px=float(self.gt5_erasing_lane_margin_px),
+        )
+        area = float(h * w)
+        for _ in range(20):
+            target_area = random.uniform(0.02, 0.20) * area
+            aspect = random.uniform(0.3, 3.3)
+            erase_h = int(round((target_area / aspect) ** 0.5))
+            erase_w = int(round((target_area * aspect) ** 0.5))
+            if not (0 < erase_h < h and 0 < erase_w < w):
+                continue
+            y1 = random.randint(0, h - erase_h)
+            x1 = random.randint(0, w - erase_w)
+            erase_box = (x1, y1, x1 + erase_w, y1 + erase_h)
+            if any(self._boxes_overlap(erase_box, box) for box in protected):
+                continue
+            img = img.copy()
+            img[y1 : y1 + erase_h, x1 : x1 + erase_w] = np.array([114, 114, 114], dtype=np.uint8)
+            break
+        return img
+
+    @staticmethod
     def _apply_gaussian_noise(img: np.ndarray, sigma: float) -> np.ndarray:
         """Apply small RGB Gaussian noise while preserving uint8 image format."""
         noise = np.random.normal(0.0, float(sigma), img.shape).astype(np.float32)
@@ -698,7 +812,12 @@ class GCSLaneDataset(Dataset):
         out[mask > 0] *= factor
         return np.clip(out, 0, 255).astype(np.uint8)
 
-    def _apply_gt5_extra_photometric(self, img: np.ndarray) -> np.ndarray:
+    def _apply_gt5_extra_photometric(
+        self,
+        img: np.ndarray,
+        lanes: np.ndarray,
+        lane_valid: np.ndarray,
+    ) -> np.ndarray:
         """Apply extra image-only augmentation to rare >=5-lane training samples."""
         if self.gt5_blur > 0.0 and random.random() < self.gt5_blur:
             kernel = random.choice((3, 5))
@@ -708,7 +827,10 @@ class GCSLaneDataset(Dataset):
         if self.gt5_shadow > 0.0 and random.random() < self.gt5_shadow:
             img = self._apply_random_shadow(img)
         if self.gt5_erasing > 0.0:
-            img = self._apply_random_erasing(img, probability=self.gt5_erasing)
+            if self.gt5_lane_aware_erasing:
+                img = self._apply_lane_aware_random_erasing(img, lanes, lane_valid, probability=self.gt5_erasing)
+            else:
+                img = self._apply_random_erasing(img, probability=self.gt5_erasing)
         return img
 
     def _apply_geometric_augment(
@@ -755,21 +877,24 @@ class GCSLaneDataset(Dataset):
         """Apply photometric and geometric GCS training augmentations."""
         img = self._augment_hsv(img)
         if gt5_extra:
-            img = self._apply_gt5_extra_photometric(img)
+            img = self._apply_gt5_extra_photometric(img, lanes, lane_valid)
         img, lanes, lane_valid = self._apply_geometric_augment(
             img,
             lanes,
             lane_valid,
         )
-        img = self._apply_random_erasing(img)
+        if self.erasing > 0.0 and gt5_extra and self.gt5_lane_aware_erasing:
+            img = self._apply_lane_aware_random_erasing(img, lanes, lane_valid, probability=self.erasing)
+        else:
+            img = self._apply_random_erasing(img)
         return img, lanes, lane_valid
 
     def __getitem__(self, index: int) -> dict:
         """Load one image and its structured lane targets."""
         if self.mosaic and random.random() < self.mosaic_prob:
-            img, lanes, lane_valid, img_file, label_file, ori_shape = self._load_mosaic(index)
+            img, lanes, lane_valid, img_file, label_file, raw_file, ori_shape = self._load_mosaic(index)
         else:
-            img, lanes, lane_valid, img_file, label_file, ori_shape = self._load_resized_sample(index)
+            img, lanes, lane_valid, img_file, label_file, raw_file, ori_shape = self._load_resized_sample(index)
 
         if self.augment:
             gt5_extra = self.gt5_extra_aug and lanes.shape[0] >= self.gt5_aug_min_lanes
@@ -788,6 +913,7 @@ class GCSLaneDataset(Dataset):
             "img": torch.from_numpy(img),
             "im_file": str(img_file),
             "path": str(img_file),
+            "raw_file": raw_file,
             "label_file": str(label_file),
             "ori_shape": ori_shape,
             "resized_shape": self.imgsz,
@@ -810,6 +936,7 @@ class GCSLaneDataset(Dataset):
             "img": torch.stack([b["img"] for b in batch], dim=0),
             "im_file": [b["im_file"] for b in batch],
             "path": [b["path"] for b in batch],
+            "raw_file": [b.get("raw_file", "") for b in batch],
             "label_file": [b["label_file"] for b in batch],
             "ori_shape": [b["ori_shape"] for b in batch],
             "resized_shape": [b["resized_shape"] for b in batch],

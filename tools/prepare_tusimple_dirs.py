@@ -16,7 +16,7 @@ from gcs_tools.tusimple_utils import ensure_dataset_dirs, find_archive_root, loa
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Create GCS-YOLO-Lane TuSimple project directories.")
     parser.add_argument("--archive-root", default="archive/TUSimple", help="TuSimple root or archive directory.")
-    parser.add_argument("--output-root", default="datasets/tusimple_fixed_y_960x544", help="Converted dataset root.")
+    parser.add_argument("--output-root", default="datasets/tusimple_fixed_y_k56_960x544", help="Converted dataset root.")
     parser.add_argument("--no-test", action="store_true", help="Do not create test output directories.")
     return parser.parse_args()
 

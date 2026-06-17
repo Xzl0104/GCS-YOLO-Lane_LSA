@@ -19,7 +19,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 os.chdir(ROOT)
 
-from gcs_tools.label_utils import TUSIMPLE_OFFICIAL_BOTTOM_Y_NORM, sort_lane_bottom_to_top
+from gcs_tools.label_utils import TUSIMPLE_OFFICIAL_BOTTOM_Y_NORM, TUSIMPLE_OFFICIAL_TOP_Y_NORM, sort_lane_bottom_to_top
 from gcs_tools.tusimple_utils import (
     ensure_dataset_dirs,
     find_archive_root,
@@ -48,16 +48,21 @@ def parse_args() -> argparse.Namespace:
         )
     )
     parser.add_argument("--archive-root", default="archive/TUSimple", help="TuSimple root or archive directory.")
-    parser.add_argument("--dataset-root", default="datasets/tusimple_fixed_y_960x544", help="Converted dataset root.")
+    parser.add_argument("--dataset-root", default="datasets/tusimple_fixed_y_k56_960x544", help="Converted dataset root.")
     parser.add_argument("--imgsz", nargs="+", type=int, default=[544, 960], help="Output image shape as H W.")
-    parser.add_argument("--num-points", type=int, default=32, help="Fixed-y point count per lane.")
+    parser.add_argument("--num-points", type=int, default=56, help="Fixed-y point count per lane.")
     parser.add_argument(
         "--fixed-y-start",
         type=float,
         default=TUSIMPLE_OFFICIAL_BOTTOM_Y_NORM,
         help="Bottom normalized y anchor. Defaults to TuSimple official h=710 / H=720.",
     )
-    parser.add_argument("--fixed-y-end", type=float, default=0.25, help="Top normalized y anchor.")
+    parser.add_argument(
+        "--fixed-y-end",
+        type=float,
+        default=TUSIMPLE_OFFICIAL_TOP_Y_NORM,
+        help="Top normalized y anchor. Defaults to TuSimple official h=160 / H=720.",
+    )
     parser.add_argument("--val-size", type=int, default=363, help="Number of validation images.")
     parser.add_argument("--seed", type=int, default=20260530, help="Deterministic stratified split seed.")
     parser.add_argument(

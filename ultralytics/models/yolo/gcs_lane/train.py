@@ -222,7 +222,10 @@ class GCSLaneTrainer(BaseTrainer):
         "line_iou_loss",
         "count_cls_loss",
         "count_sum_loss",
+        "visible_count_sum_loss",
         "quality_loss",
+        "survival_loss",
+        "decoder_aux_loss",
     )
     progress_loss_names = (
         "exist_loss",
@@ -231,7 +234,10 @@ class GCSLaneTrainer(BaseTrainer):
         "line_iou_loss",
         "count_cls_loss",
         "count_sum_loss",
+        "visible_count_sum_loss",
         "quality_loss",
+        "survival_loss",
+        "decoder_aux_loss",
     )
     # YOLO11 backbone -> GCS-YOLO-Lane backbone. LSEM is inserted after old
     # layers 4 and 6, so all later backbone layers must be shifted explicitly.
@@ -253,8 +259,8 @@ class GCSLaneTrainer(BaseTrainer):
         """Initialize the GCS lane trainer."""
         overrides = dict(overrides or {})
         overrides["task"] = "gcs_lane"
-        overrides.setdefault("model", str(ROOT / "cfg/models/gcs/gcs-yolo-lane-s-q12.yaml"))
-        overrides.setdefault("data", str(ROOT.parent / "data/tusimple_gcs_fixed_y_960x544.yaml"))
+        overrides.setdefault("model", str(ROOT / "cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml"))
+        overrides.setdefault("data", str(ROOT.parent / "data/tusimple_gcs_fixed_y_k56_960x544.yaml"))
         # The current main GCS config uses 12 lane queries. Four-image mosaic can still raise TuSimple GT lanes
         # above the query budget, so keep mosaic off unless requested.
         overrides.setdefault("mosaic", 0.0)
@@ -266,7 +272,12 @@ class GCSLaneTrainer(BaseTrainer):
         overrides.setdefault("gcs_group_sampler_ratios", GCS_MAINLINE_GROUP_SAMPLER_RATIOS)
         overrides.setdefault("gcs_gt5_oversample_weight", GCS_MAINLINE_GT5_OVERSAMPLE_WEIGHT)
         overrides.setdefault("gcs_count_sum", GCS_MAINLINE_COUNT_SUM_GAIN)
+        overrides.setdefault("gcs_visible_count_sum", 0.0)
+        overrides.setdefault("gcs_visible_count_sum_quality_weight", 0.0)
+        overrides.setdefault("gcs_visible_count_sum_survival_weight", 0.0)
         overrides.setdefault("gcs_quality", GCS_MAINLINE_QUALITY_GAIN)
+        overrides.setdefault("gcs_survival", 0.0)
+        overrides.setdefault("gcs_decoder_aux", 0.0)
         overrides.setdefault("gcs_quality_neg_weight", GCS_MAINLINE_QUALITY_NEG_WEIGHT)
         overrides.setdefault("gcs_quality_gt5_edge_floor", GCS_MAINLINE_QUALITY_GT5_EDGE_FLOOR)
         overrides.setdefault("gcs_quality_point_weight", GCS_MAINLINE_QUALITY_POINT_WEIGHT)
@@ -297,6 +308,7 @@ class GCSLaneTrainer(BaseTrainer):
         overrides.setdefault("gcs_hard_lane_counts", "")
         overrides.setdefault("gcs_hard_sampling_boost_by_count", "")
         overrides.setdefault("gcs_gt5_extra_aug", True)
+        overrides.setdefault("gcs_gt5_lane_aware_erasing", False)
         for native_loss_gain in ("box", "cls", "dfl", "pose", "kobj", "rle", "angle"):
             overrides[native_loss_gain] = 0.0
         super().__init__(cfg, overrides, _callbacks)
@@ -401,6 +413,8 @@ class GCSLaneTrainer(BaseTrainer):
             gt5_extra_aug=bool(getattr(self.args, "gcs_gt5_extra_aug", False)) if augment else False,
             gt5_aug_min_lanes=int(getattr(self.args, "gcs_gt5_aug_min_lanes", 5)),
             gt5_erasing=float(getattr(self.args, "gcs_gt5_erasing", 0.0)) if augment else 0.0,
+            gt5_lane_aware_erasing=bool(getattr(self.args, "gcs_gt5_lane_aware_erasing", False)) if augment else False,
+            gt5_erasing_lane_margin_px=float(getattr(self.args, "gcs_gt5_erasing_lane_margin_px", 8.0)),
             gt5_blur=float(getattr(self.args, "gcs_gt5_blur", 0.0)) if augment else 0.0,
             gt5_noise=float(getattr(self.args, "gcs_gt5_noise", 0.0)) if augment else 0.0,
             gt5_shadow=float(getattr(self.args, "gcs_gt5_shadow", 0.0)) if augment else 0.0,
@@ -974,7 +988,7 @@ class GCSLaneTrainer(BaseTrainer):
         if not loadable:
             LOGGER.warning(
                 "No pretrained tensors were transferred. Check that the weight file is a YOLO11/YOLO11-seg "
-                "checkpoint with the same scale as the GCS YAML, e.g. yolo11s-seg.pt for gcs-yolo-lane-s-q12.yaml."
+                "checkpoint with the same scale as the GCS YAML, e.g. yolo11s-seg.pt for gcs-yolo-lane-s-q12-k56.yaml."
             )
 
     def get_validator(self):

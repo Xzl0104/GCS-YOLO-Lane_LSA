@@ -8,6 +8,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 TUSIMPLE_OFFICIAL_BOTTOM_Y_NORM = 710.0 / 720.0
+TUSIMPLE_OFFICIAL_TOP_Y_NORM = 160.0 / 720.0
 
 __all__ = (
     "CoordReweight",
@@ -22,6 +23,20 @@ __all__ = (
     "build_2d_sincos_position_embedding",
     "GCSLaneHead",
 )
+
+
+def _parse_bool(value, default: bool = False) -> bool:
+    """Parse bool-like YAML/module args without treating non-empty strings as truthy."""
+    if value is None:
+        return bool(default)
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"true", "1", "yes", "y", "on"}:
+        return True
+    if text in {"false", "0", "no", "n", "off", "none", ""}:
+        return False
+    raise ValueError(f"Expected a boolean value, got {value!r}.")
 
 
 class CoordReweight(nn.Module):
@@ -768,13 +783,15 @@ class GCSLaneHead(nn.Module):
         self,
         c1=128,
         num_queries=12,
-        num_points=32,
+        num_points=56,
         num_decoder_layers=3,
         nhead=8,
         point_mode="free",
         fixed_y_start=TUSIMPLE_OFFICIAL_BOTTOM_Y_NORM,
-        fixed_y_end=0.25,
+        fixed_y_end=TUSIMPLE_OFFICIAL_TOP_Y_NORM,
         count_quality_calib_dim=0,
+        survival_head=False,
+        decoder_aux_loss=False,
     ):
         """Initialize the GCS lane query decoder."""
         super().__init__()
@@ -804,6 +821,8 @@ class GCSLaneHead(nn.Module):
         self.fixed_y_start = float(fixed_y_start)
         self.fixed_y_end = float(fixed_y_end)
         self.count_quality_calib_dim = int(count_quality_calib_dim or 0)
+        self.survival_head_enabled = _parse_bool(survival_head, default=False)
+        self.decoder_aux_outputs = _parse_bool(decoder_aux_loss, default=False)
         if not (0.0 <= self.fixed_y_end < self.fixed_y_start <= 1.0):
             raise ValueError(
                 f"Expected 0 <= fixed_y_end < fixed_y_start <= 1, got "
@@ -874,6 +893,12 @@ class GCSLaneHead(nn.Module):
             nn.ReLU(inplace=True),
             nn.Linear(c1, 1),
         )
+        if self.survival_head_enabled:
+            self.survival_mlp = nn.Sequential(
+                nn.Linear(c1, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, 1),
+            )
         if self.count_quality_calib_dim > 0:
             self.count_quality_calib = nn.Sequential(
                 nn.Linear(c1 * 3, self.count_quality_calib_dim),
@@ -890,6 +915,7 @@ class GCSLaneHead(nn.Module):
         self._init_point_refine_head()
         self._init_point_valid_refine_head()
         self._init_quality_head()
+        self._init_survival_head()
 
     def _build_fixed_y_anchors(self):
         """Build shared bottom-to-top y anchors for fixed-y x-only prediction."""
@@ -941,6 +967,14 @@ class GCSLaneHead(nn.Module):
     def _init_quality_head(self):
         """Initialize lane-quality logits near the BCE decision boundary."""
         final = self.quality_mlp[-1]
+        nn.init.normal_(final.weight, mean=0.0, std=1e-3)
+        nn.init.zeros_(final.bias)
+
+    def _init_survival_head(self):
+        """Initialize optional lane-survival logits near the BCE decision boundary."""
+        if not hasattr(self, "survival_mlp"):
+            return
+        final = self.survival_mlp[-1]
         nn.init.normal_(final.weight, mean=0.0, std=1e-3)
         nn.init.zeros_(final.bias)
 
@@ -1011,6 +1045,72 @@ class GCSLaneHead(nn.Module):
         refine_tokens = self._point_refine_tokens(xs, hs, pred_points.detach())
         valid_delta = self.point_valid_refine_mlp(refine_tokens).squeeze(-1)
         return coarse_valid + valid_delta
+
+    def _run_decoder(self, query, memory):
+        """Run the Transformer decoder and optionally retain intermediate layer states."""
+        output = query
+        intermediate = []
+        for layer in self.decoder.layers:
+            output = layer(output, memory)
+            if self.decoder_aux_outputs:
+                intermediate.append(output)
+        if self.decoder.norm is not None:
+            output = self.decoder.norm(output)
+            if intermediate:
+                intermediate[-1] = output
+        aux = intermediate[:-1] if self.decoder_aux_outputs and len(intermediate) > 1 else []
+        return output, aux
+
+    def _lane_outputs_from_hs(self, xs, hs):
+        """Project one decoder state into lane query outputs without Count Head logits."""
+        b = hs.shape[0]
+        point_dims = int(getattr(self, "point_dims", 2))
+        point_delta = self.point_mlp(hs).view(b, self.num_queries, self.num_points, point_dims)
+        point_ref = getattr(self, "point_reference_logits", None)
+        point_mode = getattr(self, "point_mode", "free")
+        if point_mode == "fixed_y":
+            if point_ref is None:
+                x_logits = point_delta.squeeze(-1)
+            else:
+                point_ref = point_ref.to(device=point_delta.device, dtype=point_delta.dtype).unsqueeze(0)
+                x_logits = point_delta.squeeze(-1) + point_ref
+            fixed_y = getattr(self, "fixed_y_anchors", None)
+            if fixed_y is None:
+                fixed_y = self._build_fixed_y_anchors()
+            x_logits = self._refine_fixed_y_logits(xs, hs, x_logits, fixed_y)
+            pred_x = torch.sigmoid(x_logits)
+            y = fixed_y.to(device=pred_x.device, dtype=pred_x.dtype).view(1, 1, self.num_points)
+            pred_y = y.expand(b, self.num_queries, -1)
+            pred_points = torch.stack((pred_x, pred_y), dim=-1)
+        elif point_ref is None:
+            pred_points = torch.sigmoid(point_delta)
+        else:
+            point_ref = point_ref.to(device=point_delta.device, dtype=point_delta.dtype).unsqueeze(0)
+            pred_points = torch.sigmoid(point_delta + point_ref)
+
+        pred_logits = self.exist_mlp(hs).squeeze(-1)
+        if hasattr(self, "point_valid_mlp"):
+            if point_mode == "fixed_y" and hasattr(self, "point_valid_refine_mlp"):
+                pred_valid_logits = self._refine_fixed_y_valid_logits(xs, hs, pred_points)
+            else:
+                pred_valid_logits = self.point_valid_mlp(hs).view(b, self.num_queries, self.num_points)
+        else:
+            pred_valid_logits = pred_logits.new_full((b, self.num_queries, self.num_points), 20.0)
+
+        count_quality_hs = self._count_quality_tokens(hs)
+        if hasattr(self, "quality_mlp"):
+            pred_quality_logits = self.quality_mlp(count_quality_hs).squeeze(-1)
+        else:
+            pred_quality_logits = pred_logits.new_zeros((b, self.num_queries))
+        out = {
+            "pred_points": pred_points,
+            "pred_logits": pred_logits,
+            "pred_valid_logits": pred_valid_logits,
+            "pred_quality_logits": pred_quality_logits,
+        }
+        if hasattr(self, "survival_mlp"):
+            out["pred_survival_logits"] = self.survival_mlp(hs).squeeze(-1)
+        return out, count_quality_hs
 
     def profile_flops(self, xs):
         """Estimate inference GFLOPs for the query decoder and prediction MLPs."""
@@ -1102,65 +1202,23 @@ class GCSLaneHead(nn.Module):
 
         memory = self.flatten_features(xs)
         query = self.query_embed.weight.unsqueeze(0).expand(b, -1, -1)
-        hs = self.decoder(tgt=query, memory=memory)
-
-        point_dims = int(getattr(self, "point_dims", 2))
-        point_delta = self.point_mlp(hs).view(b, self.num_queries, self.num_points, point_dims)
-        point_ref = getattr(self, "point_reference_logits", None)
-        point_mode = getattr(self, "point_mode", "free")
-        if point_mode == "fixed_y":
-            if point_ref is None:
-                x_logits = point_delta.squeeze(-1)
-            else:
-                point_ref = point_ref.to(device=point_delta.device, dtype=point_delta.dtype).unsqueeze(0)
-                x_logits = point_delta.squeeze(-1) + point_ref
-            fixed_y = getattr(self, "fixed_y_anchors", None)
-            if fixed_y is None:
-                fixed_y = self._build_fixed_y_anchors()
-            x_logits = self._refine_fixed_y_logits(xs, hs, x_logits, fixed_y)
-            pred_x = torch.sigmoid(x_logits)
-            y = fixed_y.to(device=pred_x.device, dtype=pred_x.dtype).view(1, 1, self.num_points)
-            pred_y = y.expand(b, self.num_queries, -1)
-            pred_points = torch.stack((pred_x, pred_y), dim=-1)
-        elif point_ref is None:
-            # Backward compatibility for checkpoints created before query-specific references existed.
-            pred_points = torch.sigmoid(point_delta)
-        else:
-            point_ref = point_ref.to(device=point_delta.device, dtype=point_delta.dtype).unsqueeze(0)
-            pred_points = torch.sigmoid(point_delta + point_ref)
-        pred_logits = self.exist_mlp(hs).squeeze(-1)
-        if hasattr(self, "point_valid_mlp"):
-            if point_mode == "fixed_y" and hasattr(self, "point_valid_refine_mlp"):
-                pred_valid_logits = self._refine_fixed_y_valid_logits(xs, hs, pred_points)
-            else:
-                pred_valid_logits = self.point_valid_mlp(hs).view(b, self.num_queries, self.num_points)
-        else:
-            pred_valid_logits = pred_logits.new_full((b, self.num_queries, self.num_points), 20.0)
-
-        count_quality_hs = self._count_quality_tokens(hs)
-        if hasattr(self, "quality_mlp"):
-            pred_quality_logits = self.quality_mlp(count_quality_hs).squeeze(-1)
-        else:
-            # Backward compatibility for checkpoints saved before the Quality Head existed.
-            pred_quality_logits = pred_logits.new_zeros((b, self.num_queries))
-        out = {
-            "pred_points": pred_points,
-            "pred_logits": pred_logits,
-            "pred_valid_logits": pred_valid_logits,
-            "pred_quality_logits": pred_quality_logits,
-        }
+        hs, aux_hs = self._run_decoder(query, memory)
+        out, count_quality_hs = self._lane_outputs_from_hs(xs, hs)
         if hasattr(self, "count_head"):
             # Count CE trains only the Count Head; shared lane features and candidate branches keep their own losses.
+            count_quality_logits = None if self.survival_head_enabled else out["pred_quality_logits"].detach()
             pred_count_logits, pred_count_boundary_logits = self.count_head.forward_with_boundary(
                 [x.detach() for x in xs],
                 count_quality_hs.detach(),
-                pred_logits=pred_logits.detach(),
-                pred_valid_logits=pred_valid_logits.detach(),
-                pred_points=pred_points.detach(),
-                pred_quality_logits=pred_quality_logits.detach(),
+                pred_logits=out["pred_logits"].detach(),
+                pred_valid_logits=out["pred_valid_logits"].detach(),
+                pred_points=out["pred_points"].detach(),
+                pred_quality_logits=count_quality_logits,
             )
             out["pred_count_logits"] = pred_count_logits
             out["pred_count_boundary_logits"] = pred_count_boundary_logits
+        if aux_hs:
+            out["aux_outputs"] = [self._lane_outputs_from_hs(xs, aux)[0] for aux in aux_hs]
 
         return out
 

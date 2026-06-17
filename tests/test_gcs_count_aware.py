@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import math
 import sys
+from types import SimpleNamespace
 
+import numpy as np
 import pytest
 import torch
 
 from tools import train_gcs
+from ultralytics.data.dataset_gcs import GCSLaneDataset
 from ultralytics.cfg import CFG_BOOL_KEYS, CFG_FLOAT_KEYS, CFG_FRACTION_KEYS, CFG_INT_KEYS
 from ultralytics.models.yolo.gcs_lane.train import (
     GCS_MAINLINE_CANDIDATE_GT5_EDGE_WEIGHT,
@@ -32,8 +35,15 @@ from ultralytics.models.yolo.gcs_lane.train import (
     GCSLaneTrainer,
     apply_gt5_oversample_weight_to_ratios,
 )
+from ultralytics.models.yolo.gcs_lane.val import GCSLaneValidator, LOSS_NAMES as VAL_LOSS_NAMES
 from ultralytics.engine.trainer import BaseTrainer
-from ultralytics.nn.modules.gcs_lane import CandidateAwareCountHead, GCSLaneHead, LaneStripPyramidAttention
+from ultralytics.nn.modules.gcs_lane import (
+    CandidateAwareCountHead,
+    GCSLaneHead,
+    LaneStripPyramidAttention,
+    TUSIMPLE_OFFICIAL_BOTTOM_Y_NORM,
+    TUSIMPLE_OFFICIAL_TOP_Y_NORM,
+)
 from ultralytics.utils import DEFAULT_CFG_DICT
 from ultralytics.utils.gcs_candidate_matching import GCSLaneCandidate
 from ultralytics.utils.gcs_count_diagnostics import build_candidates_from_predictions, diagnose_count_errors
@@ -52,17 +62,22 @@ def _gt(xs: list[float], points: int = 6) -> tuple[torch.Tensor, torch.Tensor]:
     return lanes, valid
 
 
-def _gt_fixed_y32(
+def _gt_fixed_y56(
     xs: list[float],
     *,
-    visible_start: int = 20,
-    visible_end: int = 26,
+    visible_start: int = 34,
+    visible_end: int = 42,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    y = torch.linspace(710.0 / 720.0, 0.25, 32)
+    y = torch.linspace(TUSIMPLE_OFFICIAL_BOTTOM_Y_NORM, TUSIMPLE_OFFICIAL_TOP_Y_NORM, 56)
     lanes = torch.stack([torch.stack((torch.full_like(y, x), y), dim=-1) for x in xs], dim=0)
-    valid = torch.zeros((len(xs), 32), dtype=torch.float32)
+    valid = torch.zeros((len(xs), 56), dtype=torch.float32)
     valid[:, visible_start:visible_end] = 1.0
     return lanes, valid
+
+
+def _logit_prob(prob: float) -> float:
+    prob = min(max(float(prob), 1e-6), 1.0 - 1e-6)
+    return math.log(prob / (1.0 - prob))
 
 
 def _cand(
@@ -188,10 +203,10 @@ def test_count_head_visible_segment_evidence_keeps_short_edge_lane_count_visible
     high = math.log(0.95 / 0.05)
     low = math.log(0.05 / 0.95)
     pred_logits = torch.full((1, 6), high)
-    pred_valid_logits = torch.full((1, 6, 32), low)
+    pred_valid_logits = torch.full((1, 6, 56), low)
     pred_valid_logits[0, 0:4, :] = high
-    pred_valid_logits[0, 4, 20:26] = high
-    pred_valid_logits[0, 5, [1, 6, 11, 16, 21, 26]] = high
+    pred_valid_logits[0, 4, 34:40] = high
+    pred_valid_logits[0, 5, [3, 12, 21, 30, 39, 48]] = high
 
     valid_prob = pred_valid_logits.sigmoid()
     visible_mean, visible_support, visible_points, all_anchor_mean = head._visible_segment_stats(valid_prob)
@@ -357,6 +372,73 @@ def test_gcs_lane_head_count_quality_calib_preserves_count_head_isolation():
     )
 
 
+def test_gcs_lane_head_survival_and_decoder_aux_outputs_keep_shapes():
+    torch.manual_seed(7)
+    head = GCSLaneHead(
+        c1=16,
+        num_queries=6,
+        num_points=56,
+        num_decoder_layers=3,
+        nhead=4,
+        point_mode="fixed_y",
+        survival_head=True,
+        decoder_aux_loss=True,
+    )
+    head.min_spatial_tokens = 0
+    feats = [
+        torch.randn(2, 16, 8, 16),
+        torch.randn(2, 16, 4, 8),
+        torch.randn(2, 16, 3, 4),
+        torch.randn(2, 16, 2, 3),
+    ]
+
+    out = head(feats)
+
+    assert out["pred_survival_logits"].shape == (2, 6)
+    assert len(out["aux_outputs"]) == 2
+    assert all(aux["pred_points"].shape == (2, 6, 56, 2) for aux in out["aux_outputs"])
+    assert all(aux["pred_valid_logits"].shape == (2, 6, 56) for aux in out["aux_outputs"])
+    out["pred_survival_logits"].sum().backward()
+    assert any(
+        param.grad is not None and torch.count_nonzero(param.grad).item() > 0
+        for name, param in head.named_parameters()
+        if name.startswith("survival_mlp.") and param.requires_grad
+    )
+
+
+def test_survival_head_keeps_quality_logits_out_of_count_head(monkeypatch):
+    def run_head(survival_head: bool):
+        head = GCSLaneHead(
+            c1=16,
+            num_queries=6,
+            num_points=56,
+            num_decoder_layers=3,
+            nhead=4,
+            point_mode="fixed_y",
+            survival_head=survival_head,
+        )
+        head.min_spatial_tokens = 0
+        captured = {}
+
+        def fake_forward_with_boundary(_feats, _query_embed, **kwargs):
+            captured["pred_quality_logits"] = kwargs.get("pred_quality_logits")
+            pred_logits = kwargs["pred_logits"]
+            return pred_logits.new_zeros((pred_logits.shape[0], 4)), pred_logits.new_zeros((pred_logits.shape[0], 2))
+
+        monkeypatch.setattr(head.count_head, "forward_with_boundary", fake_forward_with_boundary)
+        feats = [
+            torch.randn(1, 16, 8, 16),
+            torch.randn(1, 16, 4, 8),
+            torch.randn(1, 16, 3, 4),
+            torch.randn(1, 16, 2, 3),
+        ]
+        head(feats)
+        return captured["pred_quality_logits"]
+
+    assert run_head(survival_head=False) is not None
+    assert run_head(survival_head=True) is None
+
+
 def test_lane_strip_pyramid_attention_is_zero_init_residual_for_selected_levels():
     torch.manual_seed(6)
     module = LaneStripPyramidAttention(16, levels="p2,p3", k=9)
@@ -385,6 +467,197 @@ def test_count_sum_loss_backward():
     assert float(loss.detach()) > 0
     loss.backward()
     assert pred_logits.grad is not None
+
+
+def test_query_count_losses_share_count_min_gt_points():
+    gt_valid = [
+        torch.tensor(
+            [
+                [1.0, 0.0, 0.0],
+                [1.0, 1.0, 0.0],
+                [0.0, 0.0, 0.0],
+            ],
+            dtype=torch.float32,
+        )
+    ]
+    pred_logits = torch.zeros(1, 4)
+    default = GCSLoss(model={"gcs_point_mode": "fixed_y", "gcs_imgsz": [544, 960], "gcs_count_min_gt_points": 1})
+    strict = GCSLoss(model={"gcs_point_mode": "fixed_y", "gcs_imgsz": [544, 960], "gcs_count_min_gt_points": 2})
+
+    assert default.target_lane_count(pred_logits, {}, gt_valid).item() == 2
+    assert default.count_head_targets(torch.zeros(1, 4), gt_valid)[2].item() == 2
+    assert strict.target_lane_count(pred_logits, {}, gt_valid).item() == 1
+    assert strict.count_head_targets(torch.zeros(1, 4), gt_valid)[2].item() == 1
+
+
+def test_visible_count_sum_loss_backprops_to_exist_valid_quality_and_survival():
+    criterion = GCSLoss(
+        model={
+            "gcs_point_mode": "fixed_y",
+            "gcs_imgsz": [544, 960],
+            "gcs_visible_count_sum": 1.0,
+            "gcs_visible_count_sum_quality_weight": 0.5,
+            "gcs_visible_count_sum_survival_weight": 0.5,
+        }
+    )
+    _, valid = _gt_fixed_y56([0.1, 0.25, 0.45, 0.65])
+    pred_logits = torch.zeros(1, 5, requires_grad=True)
+    pred_valid_logits = torch.full((1, 5, 56), -4.0)
+    pred_valid_logits[:, :, 30:44] = 4.0
+    pred_valid_logits.requires_grad_()
+    pred_quality_logits = torch.zeros(1, 5, requires_grad=True)
+    pred_survival_logits = torch.zeros(1, 5, requires_grad=True)
+
+    loss = criterion.visible_count_sum_loss(
+        pred_logits,
+        pred_valid_logits,
+        pred_quality_logits,
+        pred_survival_logits,
+        {},
+        [valid],
+    )
+
+    assert float(loss.detach()) > 0.0
+    loss.backward()
+    for tensor in (pred_logits, pred_valid_logits, pred_quality_logits, pred_survival_logits):
+        assert tensor.grad is not None
+        assert torch.count_nonzero(tensor.grad).item() > 0
+
+
+def test_visible_count_sum_loss_soft_fallback_backprops_when_no_segment_is_visible():
+    criterion = GCSLoss(
+        model={
+            "gcs_point_mode": "fixed_y",
+            "gcs_imgsz": [544, 960],
+            "gcs_visible_count_sum": 1.0,
+        }
+    )
+    _, valid = _gt_fixed_y56([0.1, 0.25, 0.45, 0.65])
+    pred_logits = torch.zeros(1, 5, requires_grad=True)
+    pred_valid_logits = torch.full((1, 5, 56), -8.0, requires_grad=True)
+    loss = criterion.visible_count_sum_loss(
+        pred_logits,
+        pred_valid_logits,
+        None,
+        None,
+        {},
+        [valid],
+    )
+
+    assert float(loss.detach()) > 0.0
+    loss.backward()
+    assert pred_valid_logits.grad is not None
+    assert torch.count_nonzero(pred_valid_logits.grad).item() > 0
+
+
+def test_visible_count_sum_loss_uses_count4_count5_ordinal_targets():
+    criterion = GCSLoss(
+        model={
+            "gcs_point_mode": "fixed_y",
+            "gcs_imgsz": [544, 960],
+            "gcs_visible_count_sum": 1.0,
+            "gcs_visible_count_sum_normalize": False,
+            "gcs_visible_count_boundary": 1.0,
+            "gcs_visible_count_boundary_temperature": 0.5,
+        }
+    )
+    targets = torch.tensor([3.0, 4.0, 5.0])
+    pred_logits = torch.logit((targets / 6.0).view(-1, 1).expand(-1, 6)).clone()
+    gt_valid = [_gt_fixed_y56([0.1 + 0.1 * i for i in range(count)])[1] for count in (3, 4, 5)]
+
+    loss = criterion.visible_count_sum_loss(pred_logits, None, None, None, {}, gt_valid)
+
+    boundary_logits = (targets.view(-1, 1) - torch.tensor([3.5, 4.5]).view(1, 2)) / 0.5
+    boundary_targets = torch.stack((targets.ge(4).float(), targets.ge(5).float()), dim=1)
+    expected = torch.nn.functional.binary_cross_entropy_with_logits(
+        boundary_logits,
+        boundary_targets,
+        reduction="none",
+    ).mean(dim=1).mean()
+    assert torch.allclose(loss, expected, atol=1e-6)
+
+
+def test_survival_loss_targets_matched_lanes_and_unmatched_negatives():
+    criterion = GCSLoss(
+        model={
+            "gcs_point_mode": "fixed_y",
+            "gcs_imgsz": [544, 960],
+            "gcs_survival": 1.0,
+            "gcs_survival_neg_weight": 1.0,
+        }
+    )
+    pred_survival_logits = torch.zeros(1, 4, requires_grad=True)
+    pred_points = torch.zeros(1, 4, 56, 2)
+    indices = [(torch.tensor([0, 2]), torch.tensor([0, 1]))]
+
+    loss = criterion.survival_loss(pred_survival_logits, pred_points, indices)
+
+    assert float(loss.detach()) > 0.0
+    loss.backward()
+    assert pred_survival_logits.grad is not None
+    assert pred_survival_logits.grad[0, 0] < 0.0
+    assert pred_survival_logits.grad[0, 2] < 0.0
+    assert pred_survival_logits.grad[0, 1] > 0.0
+    assert pred_survival_logits.grad[0, 3] > 0.0
+
+
+def test_survival_loss_negative_weight_changes_unmatched_gradient():
+    pred_points = torch.zeros(1, 4, 56, 2)
+    indices = [(torch.tensor([0, 2]), torch.tensor([0, 1]))]
+
+    def grad_for_weight(weight: float) -> torch.Tensor:
+        criterion = GCSLoss(
+            model={
+                "gcs_point_mode": "fixed_y",
+                "gcs_imgsz": [544, 960],
+                "gcs_survival": 1.0,
+                "gcs_survival_neg_weight": weight,
+            }
+        )
+        logits = torch.zeros(1, 4, requires_grad=True)
+        loss = criterion.survival_loss(logits, pred_points, indices)
+        loss.backward()
+        return logits.grad.detach().clone()
+
+    low = grad_for_weight(0.5)
+    high = grad_for_weight(2.0)
+
+    assert high[0, 1] > low[0, 1]
+    assert high[0, 3] > low[0, 3]
+    assert torch.allclose(high[0, [0, 2]], low[0, [0, 2]])
+
+
+def test_decoder_aux_loss_backprops_from_intermediate_decoder_outputs():
+    torch.manual_seed(8)
+    head = GCSLaneHead(
+        c1=16,
+        num_queries=6,
+        num_points=56,
+        num_decoder_layers=3,
+        nhead=4,
+        point_mode="fixed_y",
+        decoder_aux_loss=True,
+    )
+    head.min_spatial_tokens = 0
+    feats = [
+        torch.randn(1, 16, 8, 16),
+        torch.randn(1, 16, 4, 8),
+        torch.randn(1, 16, 3, 4),
+        torch.randn(1, 16, 2, 3),
+    ]
+    out = head(feats)
+    lanes, valid = _gt_fixed_y56([0.1, 0.3, 0.5])
+    criterion = GCSLoss(model={"gcs_point_mode": "fixed_y", "gcs_imgsz": [544, 960], "gcs_decoder_aux": 0.2})
+
+    loss = criterion.decoder_aux_loss(out["aux_outputs"], [lanes], [valid])
+
+    assert float(loss.detach()) > 0.0
+    loss.backward()
+    assert any(
+        param.grad is not None and torch.count_nonzero(param.grad).item() > 0
+        for name, param in head.named_parameters()
+        if not name.startswith("count_head.") and param.requires_grad
+    )
 
 
 def test_gt5_oversample_ratio_boost():
@@ -428,6 +701,12 @@ def test_mainline_sampler_defaults_and_ratio_boost_boundaries(monkeypatch):
         DEFAULT_CFG_DICT["gcs_point_valid_gt5_edge_segment_min_points"]
         == GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT_MIN_POINTS
     )
+    assert DEFAULT_CFG_DICT["gcs_visible_count_sum"] == 0.0
+    assert DEFAULT_CFG_DICT["gcs_visible_count_sum_quality_weight"] == 0.0
+    assert DEFAULT_CFG_DICT["gcs_visible_count_sum_survival_weight"] == 0.0
+    assert DEFAULT_CFG_DICT["gcs_survival"] == 0.0
+    assert DEFAULT_CFG_DICT["gcs_decoder_aux"] == 0.0
+    assert DEFAULT_CFG_DICT["gcs_gt5_lane_aware_erasing"] is False
     assert DEFAULT_CFG_DICT["gcs_official_best_top_k"] == 1
 
     monkeypatch.setattr(sys, "argv", ["train_gcs.py"])
@@ -458,6 +737,12 @@ def test_mainline_sampler_defaults_and_ratio_boost_boundaries(monkeypatch):
     assert args.gcs_point_valid_gt5_edge_segment == GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT
     assert args.gcs_point_valid_gt5_edge_segment_thr == GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT_THR
     assert args.gcs_point_valid_gt5_edge_segment_min_points == GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT_MIN_POINTS
+    assert args.gcs_visible_count_sum == 0.0
+    assert args.gcs_visible_count_sum_quality_weight == 0.0
+    assert args.gcs_visible_count_sum_survival_weight == 0.0
+    assert args.gcs_survival == 0.0
+    assert args.gcs_decoder_aux == 0.0
+    assert args.gcs_gt5_lane_aware_erasing is False
     assert args.gcs_official_best_top_k == 1
 
     trainer_overrides = {}
@@ -498,6 +783,12 @@ def test_mainline_sampler_defaults_and_ratio_boost_boundaries(monkeypatch):
         trainer_overrides["gcs_point_valid_gt5_edge_segment_min_points"]
         == GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT_MIN_POINTS
     )
+    assert trainer_overrides["gcs_visible_count_sum"] == 0.0
+    assert trainer_overrides["gcs_visible_count_sum_quality_weight"] == 0.0
+    assert trainer_overrides["gcs_visible_count_sum_survival_weight"] == 0.0
+    assert trainer_overrides["gcs_survival"] == 0.0
+    assert trainer_overrides["gcs_decoder_aux"] == 0.0
+    assert trainer_overrides["gcs_gt5_lane_aware_erasing"] is False
 
     criterion = GCSLoss(model={"gcs_point_mode": "fixed_y", "gcs_imgsz": [544, 960]})
     assert math.isclose(criterion.count_sum_gain, GCS_MAINLINE_COUNT_SUM_GAIN)
@@ -528,6 +819,11 @@ def test_mainline_sampler_defaults_and_ratio_boost_boundaries(monkeypatch):
         criterion.point_valid_gt5_edge_segment_thr, GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT_THR
     )
     assert criterion.point_valid_gt5_edge_segment_min_points == GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT_MIN_POINTS
+    assert criterion.visible_count_sum_gain == 0.0
+    assert criterion.visible_count_sum_quality_weight == 0.0
+    assert criterion.visible_count_sum_survival_weight == 0.0
+    assert criterion.survival_gain == 0.0
+    assert criterion.decoder_aux_gain == 0.0
 
     ratios = {2: 0.01, 3: 0.29, 4: 0.42, 5: 0.28}
     assert apply_gt5_oversample_weight_to_ratios(ratios, 1.0) == ratios
@@ -544,11 +840,24 @@ def test_gcs_loss_item_names_stay_stable():
         "line_iou_loss",
         "count_cls_loss",
         "count_sum_loss",
+        "visible_count_sum_loss",
         "quality_loss",
+        "survival_loss",
+        "decoder_aux_loss",
     )
     assert GCSLoss.loss_names == expected
     assert GCSLaneTrainer.loss_names == expected
     assert GCSLaneTrainer.progress_loss_names == expected
+    assert VAL_LOSS_NAMES == expected
+
+    validator = GCSLaneValidator(args=SimpleNamespace())
+    gains = validator._loss_gains(torch.device("cpu"))
+    assert gains.shape == (len(expected),)
+    assert torch.isclose(gains[expected.index("count_sum_loss")], torch.tensor(0.03))
+    assert torch.isclose(gains[expected.index("visible_count_sum_loss")], torch.tensor(0.0))
+    assert torch.isclose(gains[expected.index("quality_loss")], torch.tensor(0.4))
+    assert torch.isclose(gains[expected.index("survival_loss")], torch.tensor(0.0))
+    assert torch.isclose(gains[expected.index("decoder_aux_loss")], torch.tensor(0.0))
 
 
 def test_gt5_candidate_cfg_keys_have_expected_types():
@@ -563,15 +872,31 @@ def test_gt5_candidate_cfg_keys_have_expected_types():
         "gcs_hard_negative_visible_support_points",
         "gcs_point_valid_gt5_edge_continuity",
         "gcs_point_valid_gt5_edge_segment",
+        "gcs_visible_count_sum",
+        "gcs_visible_count_sum_support_points",
+        "gcs_visible_count_sum_hard_weight",
+        "gcs_visible_count_boundary",
+        "gcs_visible_count_boundary_temperature",
+        "gcs_survival",
+        "gcs_survival_pos_weight",
+        "gcs_survival_neg_weight",
+        "gcs_decoder_aux",
+        "gcs_gt5_erasing_lane_margin_px",
     } <= CFG_FLOAT_KEYS
     assert "gcs_hard_negative_visible_thr" in CFG_FRACTION_KEYS
     assert "gcs_quality_point_weight" in CFG_FRACTION_KEYS
     assert "gcs_quality_gt5_edge_floor" in CFG_FRACTION_KEYS
+    assert "gcs_visible_count_sum_visible_thr" in CFG_FRACTION_KEYS
+    assert "gcs_visible_count_sum_quality_weight" in CFG_FRACTION_KEYS
+    assert "gcs_visible_count_sum_survival_weight" in CFG_FRACTION_KEYS
+    assert "gcs_visible_count_boundary_label_smoothing" in CFG_FRACTION_KEYS
     assert "gcs_point_valid_gt5_edge_continuity_thr" in CFG_FRACTION_KEYS
     assert "gcs_point_valid_gt5_edge_segment_thr" in CFG_FRACTION_KEYS
     assert "gcs_point_valid_gt5_edge_segment_min_points" in CFG_INT_KEYS
     assert "gcs_quality_hard_negative_from_head" in CFG_BOOL_KEYS
     assert "gcs_hard_negative_visible_segment" in CFG_BOOL_KEYS
+    assert "gcs_visible_count_sum_normalize" in CFG_BOOL_KEYS
+    assert "gcs_gt5_lane_aware_erasing" in CFG_BOOL_KEYS
     assert "gcs_official_best_top_k" in CFG_INT_KEYS
 
 
@@ -782,8 +1107,8 @@ def test_quality_hard_negative_from_head_increases_quality_loss():
 
 
 def test_quality_head_hard_negative_from_head_ignores_matched_zero_quality_lane():
-    lanes, valid = _gt_fixed_y32([0.8])
-    pred_points = torch.zeros(1, 3, 32, 2)
+    lanes, valid = _gt_fixed_y56([0.8])
+    pred_points = torch.zeros(1, 3, 56, 2)
     pred_points[0, :, :, 1] = lanes[0, :, 1]
     pred_quality_logits = torch.tensor([[4.0, -4.0, -4.0]], requires_grad=True)
     indices = [(torch.tensor([0]), torch.tensor([0]))]
@@ -829,7 +1154,7 @@ def test_quality_head_hard_negative_from_head_ignores_matched_zero_quality_lane(
 
 
 def test_quality_gt5_edge_floor_only_boosts_matched_edge_targets():
-    lanes, valid = _gt_fixed_y32([0.1, 0.3, 0.5, 0.7, 0.9])
+    lanes, valid = _gt_fixed_y56([0.1, 0.3, 0.5, 0.7, 0.9])
     extra_lane = lanes[:1].clone()
     pred_points = torch.cat([lanes, extra_lane], dim=0).unsqueeze(0)
     pred_points[..., 0] = 0.0
@@ -850,7 +1175,7 @@ def test_quality_gt5_edge_floor_only_boosts_matched_edge_targets():
     assert torch.allclose(floor_target[0, 1:4], base_target[0, 1:4])
     assert floor_target[0, 5].item() == 0.0
 
-    lanes4, valid4 = _gt_fixed_y32([0.1, 0.3, 0.5, 0.7])
+    lanes4, valid4 = _gt_fixed_y56([0.1, 0.3, 0.5, 0.7])
     pred_points4 = lanes4.unsqueeze(0).clone()
     pred_points4[..., 0] = 0.0
     pred_quality_logits4 = torch.zeros(1, 4)
@@ -890,14 +1215,14 @@ def test_quality_point_weight_blends_point_inlier_and_line_iou_targets():
 
 
 def test_visible_segment_hard_negative_mining_is_default_off():
-    lanes, valid = _gt_fixed_y32([0.2])
+    lanes, valid = _gt_fixed_y56([0.2])
     high = math.log(0.95 / 0.05)
     low = math.log(0.05 / 0.95)
     pred_logits = torch.full((1, 3), high)
-    pred_valid_logits = torch.full((1, 3, 32), low)
+    pred_valid_logits = torch.full((1, 3, 56), low)
     pred_valid_logits[0, 0, :] = high
     pred_valid_logits[0, 1, 20:26] = high
-    pred_points = torch.zeros(1, 3, 32, 2)
+    pred_points = torch.zeros(1, 3, 56, 2)
     pred_points[0, :, :, 1] = lanes[0, :, 1]
     pred_points[0, 0, :, 0] = 0.2
     pred_points[0, 1, :, 0] = 0.85
@@ -927,14 +1252,14 @@ def test_visible_segment_hard_negative_mining_is_default_off():
 
 
 def test_visible_segment_hard_negative_mining_selects_short_unmatched_candidate():
-    lanes, valid = _gt_fixed_y32([0.2])
+    lanes, valid = _gt_fixed_y56([0.2])
     high = math.log(0.95 / 0.05)
     low = math.log(0.05 / 0.95)
     pred_logits = torch.full((1, 3), high)
-    pred_valid_logits = torch.full((1, 3, 32), low)
+    pred_valid_logits = torch.full((1, 3, 56), low)
     pred_valid_logits[0, 0, :] = high
     pred_valid_logits[0, 1, 20:26] = high
-    pred_points = torch.zeros(1, 3, 32, 2)
+    pred_points = torch.zeros(1, 3, 56, 2)
     pred_points[0, :, :, 1] = lanes[0, :, 1]
     pred_points[0, 0, :, 0] = 0.2
     pred_points[0, 1, :, 0] = 0.85
@@ -974,14 +1299,14 @@ def test_visible_segment_hard_negative_mining_selects_short_unmatched_candidate(
 
 
 def test_visible_segment_hard_negative_recipe_keeps_matched_queries_protected():
-    lanes, valid = _gt_fixed_y32([0.2])
+    lanes, valid = _gt_fixed_y56([0.2])
     high = math.log(0.95 / 0.05)
     low = math.log(0.05 / 0.95)
     pred_logits = torch.full((1, 2), high)
-    pred_valid_logits = torch.full((1, 2, 32), low)
+    pred_valid_logits = torch.full((1, 2, 56), low)
     pred_valid_logits[0, 0, 20:26] = high
     pred_valid_logits[0, 1, 20:26] = high
-    pred_points = torch.zeros(1, 2, 32, 2)
+    pred_points = torch.zeros(1, 2, 56, 2)
     pred_points[0, :, :, 1] = lanes[0, :, 1]
     pred_points[0, 0, :, 0] = 0.2
     pred_points[0, 1, :, 0] = 0.85
@@ -1078,9 +1403,9 @@ def test_point_valid_gt5_edge_segment_adds_loss():
     assert pred_valid_logits.grad is not None
 
 
-def test_point_valid_gt5_edge_segment_uses_fixed_y32_edge_queries_only():
-    visible_start, visible_end = 20, 26
-    lanes5, valid5 = _gt_fixed_y32(
+def test_point_valid_gt5_edge_segment_uses_fixed_y56_edge_queries_only():
+    visible_start, visible_end = 34, 42
+    lanes5, valid5 = _gt_fixed_y56(
         [0.1, 0.25, 0.4, 0.55, 0.7],
         visible_start=visible_start,
         visible_end=visible_end,
@@ -1106,7 +1431,7 @@ def test_point_valid_gt5_edge_segment_uses_fixed_y32_edge_queries_only():
         }
     )
 
-    edge_logits = torch.full((1, 5, 32), 4.0)
+    edge_logits = torch.full((1, 5, 56), 4.0)
     edge_logits[0, 0, visible_start:visible_end] = -3.0
     edge_logits[0, 4, visible_start:visible_end] = -3.0
     edge_logits = edge_logits.requires_grad_()
@@ -1116,20 +1441,20 @@ def test_point_valid_gt5_edge_segment_uses_fixed_y32_edge_queries_only():
     edge_segment_loss.backward()
     assert edge_logits.grad is not None
 
-    middle_logits = torch.full((1, 5, 32), 4.0)
+    middle_logits = torch.full((1, 5, 56), 4.0)
     middle_logits[0, 2, visible_start:visible_end] = -3.0
     middle_base_loss = base.point_valid_loss(middle_logits, pred_points5, [valid5], indices5, gt_points=[lanes5])
     middle_segment_loss = segment.point_valid_loss(middle_logits, pred_points5, [valid5], indices5, gt_points=[lanes5])
     assert torch.isclose(middle_segment_loss, middle_base_loss)
 
-    lanes4, valid4 = _gt_fixed_y32(
+    lanes4, valid4 = _gt_fixed_y56(
         [0.1, 0.25, 0.55, 0.7],
         visible_start=visible_start,
         visible_end=visible_end,
     )
     pred_points4 = lanes4.unsqueeze(0).clone()
     indices4 = [(torch.arange(4), torch.arange(4))]
-    gt4_logits = torch.full((1, 4, 32), 4.0)
+    gt4_logits = torch.full((1, 4, 56), 4.0)
     gt4_logits[0, 0, visible_start:visible_end] = -3.0
     gt4_logits[0, 3, visible_start:visible_end] = -3.0
     gt4_base_loss = base.point_valid_loss(gt4_logits, pred_points4, [valid4], indices4, gt_points=[lanes4])
@@ -1267,6 +1592,325 @@ def test_hard_edge_loss_weights_match_manifest_and_count(tmp_path):
     assert torch.isclose(quality_weighted[4], torch.tensor(1.6))
 
 
+def test_hard_loss_lane_count_filter_uses_shared_count_min_gt_points(tmp_path):
+    manifest = tmp_path / "hard.txt"
+    manifest.write_text("short5.jpg\n", encoding="utf-8")
+    valid = torch.tensor(
+        [
+            [
+                [1.0, 0.0, 0.0],
+                [1.0, 1.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+            ]
+        ],
+        dtype=torch.float32,
+    )
+    batch = {
+        "raw_file": ["short5.jpg"],
+        "im_file": ["D:/data/images/train/short5.jpg"],
+        "label_file": ["D:/data/labels_gcs/train/short5.npz"],
+    }
+
+    count_min1 = GCSLoss(
+        model={
+            "gcs_point_mode": "fixed_y",
+            "gcs_imgsz": [544, 960],
+            "gcs_hard_loss_file": str(manifest),
+            "gcs_hard_loss_lane_counts": "5",
+            "gcs_count_min_gt_points": 1,
+        }
+    )
+    count_min2 = GCSLoss(
+        model={
+            "gcs_point_mode": "fixed_y",
+            "gcs_imgsz": [544, 960],
+            "gcs_hard_loss_file": str(manifest),
+            "gcs_hard_loss_lane_counts": "5",
+            "gcs_count_min_gt_points": 2,
+        }
+    )
+
+    assert count_min1.hard_loss_mask(batch, 1, torch.device("cpu"), gt_valid=valid).tolist() == [True]
+    assert count_min2.hard_loss_mask(batch, 1, torch.device("cpu"), gt_valid=valid).tolist() == [False]
+
+
+def test_survival_head_replaces_quality_for_fifth_lane_rescue_gate():
+    y = torch.linspace(0.98, 0.25, 6)
+    pred_points = torch.stack(
+        [torch.stack((torch.full_like(y, x), y), dim=-1) for x in (0.1, 0.25, 0.4, 0.55, 0.7)],
+        dim=0,
+    )
+    common = {
+        "pred_points": pred_points,
+        "pred_logits": torch.tensor([5.0, 4.8, 4.6, 4.4, 4.2]),
+        "pred_valid_logits": torch.full((5, 6), 5.0),
+        "pred_count_logits": torch.tensor([-5.0, -5.0, -5.0, 5.0]),
+        "image_shape": (544, 960),
+        "score_thr": 0.0,
+        "point_valid_thr": 0.5,
+        "min_points": 5,
+        "max_det": 5,
+        "nms_dist_px": 0.0,
+        "quality_rescue_count5_thr": 0.7,
+        "quality_rescue_quality_thr": 0.55,
+        "quality_rescue_dist_px": 0.0,
+        "return_meta": True,
+    }
+
+    blocked, blocked_meta = decode_gcs_predictions(
+        pred_quality_logits=torch.full((5,), _logit_prob(0.95)),
+        pred_survival_logits=torch.tensor(
+            [_logit_prob(0.95), _logit_prob(0.95), _logit_prob(0.95), _logit_prob(0.95), _logit_prob(0.05)]
+        ),
+        **common,
+    )
+    rescued, rescued_meta = decode_gcs_predictions(
+        pred_quality_logits=torch.tensor(
+            [_logit_prob(0.95), _logit_prob(0.95), _logit_prob(0.95), _logit_prob(0.95), _logit_prob(0.05)]
+        ),
+        pred_survival_logits=torch.full((5,), _logit_prob(0.95)),
+        **common,
+    )
+
+    assert len(blocked) == 4
+    assert blocked_meta["rescue_reason"] == "survival_too_low"
+    assert blocked_meta["rescue_candidate_gate_source"] == "survival"
+    assert blocked_meta["rescue_candidate_gate_score"] < 0.55
+    assert blocked_meta["rescue_candidate_quality"] > 0.9
+    assert len(rescued) == 5
+    assert rescued_meta["rescue_reason"] == "rescued"
+    assert rescued_meta["rescue_candidate_gate_source"] == "survival"
+    assert rescued_meta["rescue_candidate_gate_score"] > 0.9
+    assert rescued_meta["rescue_candidate_quality"] < 0.1
+    assert rescued[-1]["survival_score"] > 0.9
+    assert rescued[-1]["quality_score"] < 0.1
+
+
+def test_edge_count4_to5_upgrade_uses_survival_gated_edge_candidate():
+    y = torch.linspace(0.98, 0.25, 6)
+    pred_points = torch.stack(
+        [torch.stack((torch.full_like(y, x), y), dim=-1) for x in (0.1, 0.25, 0.4, 0.55, 0.70, 0.88)],
+        dim=0,
+    )
+
+    lanes, meta = decode_gcs_predictions(
+        pred_points=pred_points,
+        pred_logits=torch.tensor([5.0, 4.9, 4.8, 4.7, 4.6, 4.0]),
+        pred_valid_logits=torch.full((6, 6), 5.0),
+        pred_count_logits=torch.tensor([-6.0, -6.0, 5.0, 4.95]),
+        pred_quality_logits=torch.full((6,), _logit_prob(0.95)),
+        pred_survival_logits=torch.tensor(
+            [
+                _logit_prob(0.95),
+                _logit_prob(0.95),
+                _logit_prob(0.95),
+                _logit_prob(0.95),
+                _logit_prob(0.05),
+                _logit_prob(0.95),
+            ]
+        ),
+        image_shape=(544, 960),
+        score_thr=0.0,
+        point_valid_thr=0.5,
+        min_points=5,
+        max_det=5,
+        nms_dist_px=0.0,
+        edge_rescue_dist_px=0.0,
+        return_meta=True,
+    )
+
+    queries = {int(lane["query"]) for lane in lanes}
+    assert len(lanes) == 5
+    assert 5 in queries
+    assert 4 not in queries
+    assert meta["edge_count4_to5_upgrade"] is True
+    assert meta["edge_count4_to5_upgrade_success"] is True
+    assert meta["edge_last_lane_rescue_reason"] == "rescued"
+    assert meta["edge_last_lane_rescue_candidate_gate_source"] == "survival"
+    assert meta["edge_last_lane_rescue_candidate_gate_score"] > 0.9
+
+
+def test_quality_head_keeps_quality_too_low_rescue_reason_without_survival_head():
+    y = torch.linspace(0.98, 0.25, 6)
+    pred_points = torch.stack(
+        [torch.stack((torch.full_like(y, x), y), dim=-1) for x in (0.1, 0.25, 0.4, 0.55, 0.7)],
+        dim=0,
+    )
+
+    lanes, meta = decode_gcs_predictions(
+        pred_points=pred_points,
+        pred_logits=torch.tensor([5.0, 4.8, 4.6, 4.4, 4.2]),
+        pred_valid_logits=torch.full((5, 6), 5.0),
+        pred_count_logits=torch.tensor([-5.0, -5.0, -5.0, 5.0]),
+        pred_quality_logits=torch.tensor(
+            [_logit_prob(0.95), _logit_prob(0.95), _logit_prob(0.95), _logit_prob(0.95), _logit_prob(0.05)]
+        ),
+        image_shape=(544, 960),
+        score_thr=0.0,
+        point_valid_thr=0.5,
+        min_points=5,
+        max_det=5,
+        nms_dist_px=0.0,
+        quality_rescue_count5_thr=0.7,
+        quality_rescue_quality_thr=0.55,
+        quality_rescue_dist_px=0.0,
+        return_meta=True,
+    )
+
+    assert len(lanes) == 4
+    assert meta["rescue_reason"] == "quality_too_low"
+    assert meta["rescue_candidate_gate_source"] == "quality"
+
+
+def test_lane_aware_gt5_erasing_avoids_visible_lane_anchors(monkeypatch):
+    dataset = object.__new__(GCSLaneDataset)
+    dataset.gt5_erasing_lane_margin_px = 8.0
+    img = np.zeros((100, 100, 3), dtype=np.uint8)
+    lanes = np.array([[[0.5, 0.5]]], dtype=np.float32)
+    lane_valid = np.array([[1.0]], dtype=np.float32)
+    uniform_values = iter([0.04, 1.0, 0.04, 1.0])
+    randint_values = iter([40, 40, 0, 0])
+    calls = []
+
+    monkeypatch.setattr("ultralytics.data.dataset_gcs.random.random", lambda: 0.0)
+    monkeypatch.setattr("ultralytics.data.dataset_gcs.random.uniform", lambda *_: next(uniform_values))
+    monkeypatch.setattr("ultralytics.data.dataset_gcs.random.randint", lambda *_: next(randint_values))
+
+    out = dataset._apply_lane_aware_random_erasing(img, lanes, lane_valid, probability=1.0)
+
+    assert np.array_equal(out[50, 50], np.array([0, 0, 0], dtype=np.uint8))
+    assert np.array_equal(out[5, 5], np.array([114, 114, 114], dtype=np.uint8))
+
+
+def test_lane_aware_gt5_erasing_avoids_visible_lane_segments(monkeypatch):
+    dataset = object.__new__(GCSLaneDataset)
+    dataset.gt5_erasing_lane_margin_px = 4.0
+    img = np.zeros((100, 100, 3), dtype=np.uint8)
+    lanes = np.array([[[0.2, 0.5], [0.8, 0.5]]], dtype=np.float32)
+    lane_valid = np.array([[1.0, 1.0]], dtype=np.float32)
+    uniform_values = iter([0.04, 1.0, 0.04, 1.0])
+    randint_values = iter([40, 40, 0, 0])
+
+    monkeypatch.setattr("ultralytics.data.dataset_gcs.random.random", lambda: 0.0)
+    monkeypatch.setattr("ultralytics.data.dataset_gcs.random.uniform", lambda *_: next(uniform_values))
+    monkeypatch.setattr("ultralytics.data.dataset_gcs.random.randint", lambda *_: next(randint_values))
+
+    out = dataset._apply_lane_aware_random_erasing(img, lanes, lane_valid, probability=1.0)
+
+    assert np.array_equal(out[50, 50], np.array([0, 0, 0], dtype=np.uint8))
+    assert np.array_equal(out[5, 5], np.array([114, 114, 114], dtype=np.uint8))
+
+
+def test_lane_aware_gt5_erasing_does_not_bridge_invalid_anchor_gaps():
+    lanes = np.array([[[0.2, 0.5], [0.5, 0.5], [0.8, 0.5]]], dtype=np.float32)
+    lane_valid = np.array([[1.0, 0.0, 1.0]], dtype=np.float32)
+
+    boxes = GCSLaneDataset._visible_lane_anchor_boxes(lanes, lane_valid, (100, 100), margin_px=4.0)
+
+    bridge_box = (48, 48, 53, 53)
+    left_anchor_box = (18, 48, 23, 53)
+    assert not any(GCSLaneDataset._boxes_overlap(bridge_box, box) for box in boxes)
+    assert any(GCSLaneDataset._boxes_overlap(left_anchor_box, box) for box in boxes)
+
+
+def test_gt5_lane_aware_erasing_also_guards_base_erasing(monkeypatch):
+    dataset = object.__new__(GCSLaneDataset)
+    dataset.erasing = 1.0
+    dataset.gt5_lane_aware_erasing = True
+    dataset.gt5_erasing_lane_margin_px = 8.0
+    dataset.gt5_blur = 0.0
+    dataset.gt5_noise = 0.0
+    dataset.gt5_shadow = 0.0
+    dataset.gt5_erasing = 0.0
+    dataset.scale = 0.0
+    dataset.translate = 0.0
+    dataset.fliplr = 0.0
+    dataset.flipud = 0.0
+    dataset.hsv_h = 0.0
+    dataset.hsv_s = 0.0
+    dataset.hsv_v = 0.0
+    dataset.img_h = 100
+    dataset.img_w = 100
+    dataset.imgsz = (100, 100)
+
+    img = np.zeros((100, 100, 3), dtype=np.uint8)
+    lanes = np.array([[[0.5, 0.6], [0.5, 0.4]]], dtype=np.float32)
+    lane_valid = np.array([[1.0, 1.0]], dtype=np.float32)
+    uniform_values = iter([0.04, 1.0, 0.04, 1.0])
+    randint_values = iter([40, 40, 0, 0])
+    calls = []
+
+    monkeypatch.setattr("ultralytics.data.dataset_gcs.random.random", lambda: 0.0)
+    monkeypatch.setattr("ultralytics.data.dataset_gcs.random.uniform", lambda *_: next(uniform_values))
+    monkeypatch.setattr("ultralytics.data.dataset_gcs.random.randint", lambda *_: next(randint_values))
+    original_lane_aware = GCSLaneDataset._apply_lane_aware_random_erasing
+    original_plain = GCSLaneDataset._apply_random_erasing
+
+    def tracked_lane_aware(self, *args, **kwargs):
+        calls.append("lane_aware")
+        return original_lane_aware(self, *args, **kwargs)
+
+    def tracked_plain(self, *args, **kwargs):
+        calls.append("plain")
+        return original_plain(self, *args, **kwargs)
+
+    monkeypatch.setattr(GCSLaneDataset, "_apply_lane_aware_random_erasing", tracked_lane_aware)
+    monkeypatch.setattr(GCSLaneDataset, "_apply_random_erasing", tracked_plain)
+
+    out, out_lanes, out_valid = dataset._apply_augmentations(img, lanes, lane_valid, gt5_extra=True)
+
+    assert np.any(out == 114)
+    assert np.array_equal(out_lanes, lanes)
+    assert np.array_equal(out_valid, lane_valid)
+    assert calls == ["lane_aware"]
+
+
+def test_decoder_aux_loss_forward_path_returns_full_loss_vector():
+    torch.manual_seed(9)
+    head = GCSLaneHead(
+        c1=16,
+        num_queries=6,
+        num_points=56,
+        num_decoder_layers=3,
+        nhead=4,
+        point_mode="fixed_y",
+        decoder_aux_loss=True,
+    )
+    head.min_spatial_tokens = 0
+    feats = [
+        torch.randn(1, 16, 8, 16),
+        torch.randn(1, 16, 4, 8),
+        torch.randn(1, 16, 3, 4),
+        torch.randn(1, 16, 2, 3),
+    ]
+    preds = head(feats)
+    lanes, valid = _gt_fixed_y56([0.1, 0.3, 0.5])
+    criterion = GCSLoss(
+        model={
+            "gcs_point_mode": "fixed_y",
+            "gcs_imgsz": [544, 960],
+            "gcs_decoder_aux": 0.2,
+        }
+    )
+
+    total, items = criterion(
+        preds,
+        {
+            "img": torch.zeros(1, 3, 544, 960),
+            "lanes": [lanes],
+            "lane_valid": [valid],
+            "num_lanes": torch.tensor([3]),
+        },
+    )
+
+    assert torch.isfinite(total)
+    assert items.shape == (len(GCSLoss.loss_names),)
+    aux_idx = GCSLoss.loss_names.index("decoder_aux_loss")
+    assert items[aux_idx] > 0.0
+
+
 def test_count_aware_refill_does_not_fabricate_lanes():
     selected = [{"query": i, "points_norm": _cand(0.1 + i * 0.1, q=i, rank=i + 1).points.numpy(), "valid_count": 6, "rank_score": 1.0} for i in range(4)]
     rescue = selected + [{"query": 4, "points_norm": _cand(0.8, q=4, rank=5).points.numpy(), "valid_count": 6, "rank_score": 0.9}]
@@ -1308,3 +1952,23 @@ def test_soft_count_decision_can_upgrade_or_stay():
     lanes[-1]["quality_score"] = -5.0
     meta2 = soft_count_decision([0.01, 0.10, 0.46, 0.43], lanes, prob_margin=0.08, min_points=5)
     assert meta2["pred_count_cls_soft"] == 4
+
+
+def test_soft_count_decision_prefers_survival_score_when_present():
+    lanes = [
+        {
+            "rank_score": 1.0,
+            "quality_score": 1.0,
+            "survival_score": 1.0,
+            "valid_count": 6,
+            "points_norm": _cand(0.1 + i * 0.1, q=i, rank=i + 1).points.numpy(),
+        }
+        for i in range(5)
+    ]
+    lanes[-1]["quality_score"] = 1.0
+    lanes[-1]["survival_score"] = -5.0
+
+    meta = soft_count_decision([0.01, 0.10, 0.46, 0.43], lanes, prob_margin=0.08, min_points=5)
+
+    assert meta["pred_count_cls_raw"] == 4
+    assert meta["pred_count_cls_soft"] == 4

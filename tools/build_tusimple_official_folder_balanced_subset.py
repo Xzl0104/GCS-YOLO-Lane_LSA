@@ -22,7 +22,7 @@ from gcs_tools.tusimple_official_eval import (  # noqa: E402
 
 
 DEFAULT_OUTPUT = ROOT / "runs" / "gcs_lane" / "tusimple_official_val_363_folder_aware_seed20260602.json"
-DEFAULT_DATASET_ROOT = ROOT / "datasets" / "tusimple_fixed_y_960x544"
+DEFAULT_DATASET_ROOT = ROOT / "datasets" / "tusimple_fixed_y_k56_960x544"
 
 
 def parse_args() -> argparse.Namespace:
@@ -60,7 +60,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--reference-json",
         default=None,
-        help="Json-lines used for target lane-count ratio when --target-hist is not set. Defaults to test labels.",
+        help=(
+            "Json-lines used for target lane-count ratio when --target-hist is not set. "
+            "Defaults to the train/val pool; test labels are rejected by default."
+        ),
+    )
+    parser.add_argument(
+        "--allow-test-reference",
+        action="store_true",
+        help="Allow --reference-json to point at official test labels. Use only for frozen historical split reproduction.",
     )
     parser.add_argument("--num-images", type=int, default=363, help="Number of records to sample.")
     parser.add_argument(
@@ -236,6 +244,21 @@ def display_path(path: Path) -> str:
         return path.as_posix()
 
 
+def same_resolved_path(left: Path, right: Path) -> bool:
+    """Return whether two paths resolve to the same location without requiring them to exist."""
+    return Path(left).resolve(strict=False) == Path(right).resolve(strict=False)
+
+
+def reject_test_reference(reference_json: Path, test_json: Path, *, allow: bool) -> None:
+    """Reject official test labels as subset-construction reference unless explicitly allowed."""
+    if same_resolved_path(reference_json, test_json) and not allow:
+        raise ValueError(
+            "Refusing to use official test labels as a subset reference. "
+            "Use a train/val reference, pass --target-hist, or add --allow-test-reference only "
+            "for frozen historical split reproduction."
+        )
+
+
 def nested_counter_to_dict(counter: Counter[tuple[int, str]]) -> dict[str, dict[str, int]]:
     out: dict[str, dict[str, int]] = defaultdict(dict)
     for (count, folder), value in sorted(counter.items()):
@@ -247,7 +270,9 @@ def main() -> None:
     args = parse_args()
     archive_root = find_tusimple_archive_root(args.archive_root)
     pool_json = Path(args.pool_json) if args.pool_json else default_tusimple_gt_json(archive_root, split="train")
-    reference_json = Path(args.reference_json) if args.reference_json else default_tusimple_gt_json(archive_root, split="test")
+    reference_json = Path(args.reference_json) if args.reference_json else pool_json
+    test_json = default_tusimple_gt_json(archive_root, split="test")
+    reject_test_reference(reference_json, test_json, allow=bool(args.allow_test_reference))
     dataset_root = Path(args.dataset_root)
     output = Path(args.output)
     summary_path = Path(args.summary) if args.summary else output.with_suffix(".summary.json")
@@ -324,6 +349,7 @@ def main() -> None:
         "dataset_root": display_path(dataset_root),
         "pool_json": display_path(pool_json),
         "reference_json": display_path(reference_json),
+        "reference_uses_test_labels": bool(same_resolved_path(reference_json, test_json)),
         "source_splits": list(args.source_splits),
         "seed": int(args.seed),
         "num_images": len(selected),

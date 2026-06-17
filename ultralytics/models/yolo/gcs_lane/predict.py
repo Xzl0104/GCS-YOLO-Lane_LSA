@@ -155,6 +155,9 @@ class GCSLanePredictor(BasePredictor):
         quality_logits = preds.get("pred_quality_logits")
         if quality_logits is not None:
             quality_logits = quality_logits.detach()
+        survival_logits = preds.get("pred_survival_logits")
+        if survival_logits is not None:
+            survival_logits = survival_logits.detach()
         conf = 0.25 if self.args.conf is None else float(self.args.conf)
         generic_max_det = getattr(self.args, "max_det", None)
         if generic_max_det is not None and int(generic_max_det) != 300:
@@ -201,6 +204,10 @@ class GCSLanePredictor(BasePredictor):
             quality_iter = [None] * int(points.shape[0])
         else:
             quality_iter = list(quality_logits)
+        if survival_logits is None:
+            survival_iter = [None] * int(points.shape[0])
+        else:
+            survival_iter = list(survival_logits)
 
         for (
             lane_points,
@@ -209,10 +216,19 @@ class GCSLanePredictor(BasePredictor):
             lane_count_logits,
             lane_count_boundary_logits,
             lane_quality_logits,
+            lane_survival_logits,
             orig_img,
             img_path,
         ) in zip(
-            points, logits, valid_iter, count_iter, count_boundary_iter, quality_iter, orig_imgs, self.batch[0]
+            points,
+            logits,
+            valid_iter,
+            count_iter,
+            count_boundary_iter,
+            quality_iter,
+            survival_iter,
+            orig_imgs,
+            self.batch[0],
         ):
             lanes = decode_gcs_predictions(
                 lane_points,
@@ -221,6 +237,7 @@ class GCSLanePredictor(BasePredictor):
                 pred_count_logits=lane_count_logits,
                 pred_count_boundary_logits=lane_count_boundary_logits,
                 pred_quality_logits=lane_quality_logits,
+                pred_survival_logits=lane_survival_logits,
                 image_shape=orig_img.shape[:2],
                 score_thr=conf,
                 point_valid_thr=point_valid_thr,

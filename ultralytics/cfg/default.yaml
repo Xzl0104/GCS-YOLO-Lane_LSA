@@ -121,6 +121,16 @@ gcs_line_iou_width_px: 15.0 # (float) half-width in pixels used to expand lane p
 gcs_count_cls: 0.3 # (float) explicit image-level Count Head count=2/3/4/5 CE loss gain
 gcs_count_sum: 0.03 # (float) exist-count consistency loss gain for sum(sigmoid(pred_logits)) ~= GT lane count
 gcs_count_sum_normalize: True # (bool) normalize count_sum_loss by GT lane count
+gcs_visible_count_sum: 0.0 # (float) default-off visible-segment count loss gain from query exist/valid/quality evidence
+gcs_visible_count_sum_normalize: True # (bool) normalize visible_count_sum_loss by GT lane count
+gcs_visible_count_sum_visible_thr: 0.5 # (float) point-valid threshold for visible_count_sum longest segment
+gcs_visible_count_sum_support_points: 12.0 # (float) visible count support saturation in anchors
+gcs_visible_count_sum_quality_weight: 0.0 # (float) blend query Quality Head probability into visible_count_sum evidence; 0 disables
+gcs_visible_count_sum_survival_weight: 0.0 # (float) blend Survival Head probability into visible_count_sum evidence; 0 disables
+gcs_visible_count_boundary: 0.25 # (float) count>=4/count>=5 BCE gain inside visible_count_sum_loss
+gcs_visible_count_boundary_temperature: 0.5 # (float) temperature for visible count boundary logits
+gcs_visible_count_boundary_label_smoothing: 0.0 # (float) label smoothing for visible count boundary targets
+gcs_visible_count_sum_hard_weight: 1.0 # (float) sample weight for hard_loss_file hits inside visible_count_sum_loss
 gcs_quality: 0.4 # (float) lane-level Quality Head BCE loss gain
 gcs_quality_dist_thr_px: 20.0 # (float) pixel threshold for quality target point-inlier score
 gcs_quality_neg_weight: 0.5 # (float) relative weight for unmatched-query quality negatives
@@ -129,6 +139,12 @@ gcs_quality_gt5_edge_floor: 0.0 # (float) minimum matched Quality Head target fo
 gcs_quality_hard_negative_weight: 1.0 # (float) absolute Quality Head BCE weight for mined unmatched hard negatives
 gcs_quality_duplicate_negative_weight: 1.5 # (float) absolute Quality Head BCE weight for unmatched duplicate negatives
 gcs_quality_hard_negative_from_head: False # (bool) mine Quality Head hard negatives from high unmatched pred_quality_logits
+gcs_survival: 0.0 # (float) default-off lane Survival Head BCE loss gain; requires survival-head model YAML
+gcs_survival_pos_weight: 1.0 # (float) matched-query Survival Head positive weight
+gcs_survival_neg_weight: 0.5 # (float) unmatched-query Survival Head negative weight
+gcs_survival_hard_negative_weight: 1.0 # (float) Survival Head weight for mined hard negatives
+gcs_survival_duplicate_negative_weight: 1.5 # (float) Survival Head weight for duplicate negatives
+gcs_decoder_aux: 0.0 # (float) default-off auxiliary decoder supervision gain; requires decoder-aux model YAML
 gcs_hard_negative_visible_segment: False # (bool) mine unmatched hard negatives with visible-segment evidence instead of all-anchor point-valid mean
 gcs_hard_negative_visible_thr: 0.5 # (float) point-valid probability threshold for visible-segment hard-negative mining
 gcs_hard_negative_visible_support_points: 12.0 # (float) visible-segment length saturation for hard-negative mining support
@@ -259,6 +275,8 @@ gcs_gt5_oversample_weight: 1.0 # (float) additional GT=5 sampler ratio/weight mu
 gcs_gt5_extra_aug: True # (bool) apply image-only multi-view augmentation to rare >=5-lane training samples
 gcs_gt5_aug_min_lanes: 5 # (int) minimum GT lane count for gcs_gt5_extra_aug
 gcs_gt5_erasing: 0.15 # (float) extra erasing probability for gcs_gt5_extra_aug samples
+gcs_gt5_lane_aware_erasing: False # (bool) avoid visible lane anchors/segments when applying GT5 extra erasing
+gcs_gt5_erasing_lane_margin_px: 8.0 # (float) protected pixel margin around visible lane anchors/segments for lane-aware GT5 erasing
 gcs_gt5_blur: 0.15 # (float) blur probability for gcs_gt5_extra_aug samples
 gcs_gt5_noise: 0.15 # (float) Gaussian noise probability for gcs_gt5_extra_aug samples
 gcs_gt5_shadow: 0.20 # (float) synthetic shadow probability for gcs_gt5_extra_aug samples

@@ -43,13 +43,13 @@ from ultralytics.utils.torch_utils import select_device
 
 
 DEFAULT_WEIGHTS = ROOT / "runs" / "gcs_lane" / "overfit20" / "weights" / "best.pt"
-DEFAULT_SOURCE = ROOT / "datasets" / "tusimple_fixed_y_960x544" / "images" / "val"
-DEFAULT_LABELS = ROOT / "datasets" / "tusimple_fixed_y_960x544" / "labels_gcs" / "val"
+DEFAULT_SOURCE = ROOT / "datasets" / "tusimple_fixed_y_k56_960x544" / "images" / "val"
+DEFAULT_LABELS = ROOT / "datasets" / "tusimple_fixed_y_k56_960x544" / "labels_gcs" / "val"
 
 
 def dataset_defaults(dataset: str, split: str = "val") -> dict[str, Path]:
     """Return conventional validation paths for a converted GCS dataset."""
-    root = ROOT / "datasets" / ("tusimple_fixed_y_960x544" if dataset.lower() == "tusimple" else dataset.lower())
+    root = ROOT / "datasets" / ("tusimple_fixed_y_k56_960x544" if dataset.lower() == "tusimple" else dataset.lower())
     return {
         "source": root / "images" / split,
         "labels": root / "labels_gcs" / split,
@@ -859,6 +859,7 @@ def evaluate(
         pred_count = preds.get("pred_count_logits")
         pred_count_boundary = preds.get("pred_count_boundary_logits")
         pred_quality = preds.get("pred_quality_logits")
+        pred_survival = preds.get("pred_survival_logits")
         count_meta = count_head_decode_meta(
             pred_count[0] if pred_count is not None else None,
             pred_count_boundary[0] if pred_count_boundary is not None else None,
@@ -874,6 +875,7 @@ def evaluate(
             pred_count_logits=pred_count[0] if pred_count is not None else None,
             pred_count_boundary_logits=pred_count_boundary[0] if pred_count_boundary is not None else None,
             pred_quality_logits=pred_quality[0] if pred_quality is not None else None,
+            pred_survival_logits=pred_survival[0] if pred_survival is not None else None,
             image_shape=img.shape[:2],
             score_thr=conf,
             point_valid_thr=point_valid_thr,

@@ -26,7 +26,10 @@ class GCSLoss(nn.Module):
         "line_iou_loss",
         "count_cls_loss",
         "count_sum_loss",
+        "visible_count_sum_loss",
         "quality_loss",
+        "survival_loss",
+        "decoder_aux_loss",
     )
 
     def __init__(
@@ -38,7 +41,10 @@ class GCSLoss(nn.Module):
         lambda_line_iou: float | None = None,
         lambda_count_cls: float | None = None,
         lambda_count_sum: float | None = None,
+        lambda_visible_count_sum: float | None = None,
         lambda_quality: float | None = None,
+        lambda_survival: float | None = None,
+        lambda_decoder_aux: float | None = None,
         line_iou_width_px: float | None = None,
         count_head_warmup_epochs: float | None = None,
         count_min_gt_points: int | None = None,
@@ -117,8 +123,46 @@ class GCSLoss(nn.Module):
             lambda_count_sum if lambda_count_sum is not None else self._arg(args, "gcs_count_sum", 0.03)
         )
         self.count_sum_normalize = bool(self._arg(args, "gcs_count_sum_normalize", True))
+        self.visible_count_sum_gain = float(
+            lambda_visible_count_sum
+            if lambda_visible_count_sum is not None
+            else self._arg(args, "gcs_visible_count_sum", 0.0)
+        )
+        self.visible_count_sum_normalize = bool(self._arg(args, "gcs_visible_count_sum_normalize", True))
+        self.visible_count_sum_visible_thr = float(self._arg(args, "gcs_visible_count_sum_visible_thr", 0.5))
+        self.visible_count_sum_support_points = float(
+            self._arg(args, "gcs_visible_count_sum_support_points", 12.0)
+        )
+        self.visible_count_sum_quality_weight = float(
+            self._arg(args, "gcs_visible_count_sum_quality_weight", 0.0)
+        )
+        self.visible_count_sum_survival_weight = float(
+            self._arg(args, "gcs_visible_count_sum_survival_weight", 0.0)
+        )
+        self.visible_count_boundary_gain = float(self._arg(args, "gcs_visible_count_boundary", 0.25))
+        self.visible_count_boundary_temperature = float(
+            self._arg(args, "gcs_visible_count_boundary_temperature", 0.5)
+        )
+        self.visible_count_boundary_label_smoothing = float(
+            self._arg(args, "gcs_visible_count_boundary_label_smoothing", 0.0)
+        )
+        self.visible_count_sum_hard_weight = float(self._arg(args, "gcs_visible_count_sum_hard_weight", 1.0))
         self.quality_gain = float(
             lambda_quality if lambda_quality is not None else self._arg(args, "gcs_quality", 0.4)
+        )
+        self.survival_gain = float(
+            lambda_survival if lambda_survival is not None else self._arg(args, "gcs_survival", 0.0)
+        )
+        self.survival_pos_weight = float(self._arg(args, "gcs_survival_pos_weight", 1.0))
+        self.survival_neg_weight = float(self._arg(args, "gcs_survival_neg_weight", 0.5))
+        self.survival_hard_negative_weight = float(
+            self._arg(args, "gcs_survival_hard_negative_weight", 1.0)
+        )
+        self.survival_duplicate_negative_weight = float(
+            self._arg(args, "gcs_survival_duplicate_negative_weight", 1.5)
+        )
+        self.decoder_aux_gain = float(
+            lambda_decoder_aux if lambda_decoder_aux is not None else self._arg(args, "gcs_decoder_aux", 0.0)
         )
         self.quality_dist_thr_px = float(
             quality_dist_thr_px
@@ -354,12 +398,21 @@ class GCSLoss(nn.Module):
             "gcs_count_adjacent_margin": self.count_adjacent_margin,
             "gcs_count_adjacent_margin_gain": self.count_adjacent_margin_gain,
             "gcs_count_sum": self.count_sum_gain,
+            "gcs_visible_count_sum": self.visible_count_sum_gain,
+            "gcs_visible_count_boundary": self.visible_count_boundary_gain,
+            "gcs_visible_count_sum_hard_weight": self.visible_count_sum_hard_weight,
             "gcs_quality": self.quality_gain,
             "gcs_quality_dist_thr_px": self.quality_dist_thr_px,
             "gcs_quality_hard_negative_weight": self.quality_hard_negative_weight,
             "gcs_quality_duplicate_negative_weight": self.quality_duplicate_negative_weight,
             "gcs_quality_gt5_edge_floor": self.quality_gt5_edge_floor,
             "gcs_quality_point_weight": self.quality_point_weight,
+            "gcs_survival": self.survival_gain,
+            "gcs_survival_pos_weight": self.survival_pos_weight,
+            "gcs_survival_neg_weight": self.survival_neg_weight,
+            "gcs_survival_hard_negative_weight": self.survival_hard_negative_weight,
+            "gcs_survival_duplicate_negative_weight": self.survival_duplicate_negative_weight,
+            "gcs_decoder_aux": self.decoder_aux_gain,
             "gcs_hard_negative_exist_weight": self.hard_negative_exist_weight,
             "gcs_hard_negative_visible_thr": self.hard_negative_visible_thr,
             "gcs_hard_negative_visible_support_points": self.hard_negative_visible_support_points,
@@ -385,6 +438,10 @@ class GCSLoss(nn.Module):
             "gcs_hard_negative_quality_thr": self.hard_negative_quality_thr,
             "gcs_hard_negative_visible_thr": self.hard_negative_visible_thr,
             "gcs_count_boundary_label_smoothing": self.count_boundary_label_smoothing,
+            "gcs_visible_count_sum_visible_thr": self.visible_count_sum_visible_thr,
+            "gcs_visible_count_sum_quality_weight": self.visible_count_sum_quality_weight,
+            "gcs_visible_count_sum_survival_weight": self.visible_count_sum_survival_weight,
+            "gcs_visible_count_boundary_label_smoothing": self.visible_count_boundary_label_smoothing,
             "gcs_point_valid_gt5_edge_continuity_thr": self.point_valid_gt5_edge_continuity_thr,
             "gcs_point_valid_gt5_edge_segment_thr": self.point_valid_gt5_edge_segment_thr,
             "gcs_duplicate_iou_thr": self.duplicate_iou_thr,
@@ -425,6 +482,16 @@ class GCSLoss(nn.Module):
             raise ValueError(
                 "gcs_hard_negative_visible_support_points must be > 0, "
                 f"got {self.hard_negative_visible_support_points}."
+            )
+        if self.visible_count_sum_support_points <= 0.0:
+            raise ValueError(
+                "gcs_visible_count_sum_support_points must be > 0, "
+                f"got {self.visible_count_sum_support_points}."
+            )
+        if self.visible_count_boundary_temperature <= 0.0:
+            raise ValueError(
+                "gcs_visible_count_boundary_temperature must be > 0, "
+                f"got {self.visible_count_boundary_temperature}."
             )
         if self.point_valid_gt5_edge_segment_min_points <= 0:
             raise ValueError(
@@ -722,7 +789,8 @@ class GCSLoss(nn.Module):
                 raise ValueError(
                     f"Tensor gt_valid must have shape B x N x K with B={batch_size}, got {tuple(gt_valid.shape)}."
                 )
-            lane_counts = (gt_valid.detach().to(device=device).float().sum(dim=-1) >= 2).sum(dim=-1)
+            min_points = int(self.count_min_gt_points)
+            lane_counts = (gt_valid.detach().to(device=device).float().sum(dim=-1) >= min_points).sum(dim=-1)
         elif isinstance(gt_valid, (list, tuple)):
             if len(gt_valid) != batch_size:
                 raise ValueError(f"gt_valid must contain one tensor per image, got {len(gt_valid)} vs B={batch_size}.")
@@ -731,7 +799,7 @@ class GCSLoss(nn.Module):
                 valid = torch.as_tensor(valid, device=device)
                 if valid.ndim != 2:
                     raise ValueError(f"Each GT lane_valid must have shape N x K, got {tuple(valid.shape)}.")
-                counts.append((valid.float().sum(dim=-1) >= 2).sum())
+                counts.append((valid.float().sum(dim=-1) >= int(self.count_min_gt_points)).sum())
             lane_counts = torch.stack(counts) if counts else torch.empty(0, device=device, dtype=torch.long)
         else:
             raise TypeError(f"gt_valid must be a tensor, list, or tuple, got {type(gt_valid).__name__}.")
@@ -766,15 +834,17 @@ class GCSLoss(nn.Module):
         mask = torch.zeros(batch_size, device=device, dtype=torch.bool)
         if not self.hard_loss_ids:
             return mask
-        if not any(key in batch for key in ("im_file", "path", "label_file")):
+        if not any(key in batch for key in ("raw_file", "im_file", "path", "label_file")):
             raise KeyError(
-                "gcs_hard_loss_file is set, but the batch has no im_file/path/label_file fields for manifest matching."
+                "gcs_hard_loss_file is set, but the batch has no raw_file/im_file/path/label_file fields "
+                "for manifest matching."
             )
+        raw_files = self._batch_string_values(batch.get("raw_file"), batch_size, "raw_file")
         im_files = self._batch_string_values(batch.get("im_file", batch.get("path")), batch_size, "im_file")
         label_files = self._batch_string_values(batch.get("label_file"), batch_size, "label_file")
-        for i, (im_file, label_file) in enumerate(zip(im_files, label_files)):
+        for i, (raw_file, im_file, label_file) in enumerate(zip(raw_files, im_files, label_files)):
             candidates: set[str] = set()
-            for value in (im_file, label_file):
+            for value in (raw_file, im_file, label_file):
                 candidates.update(self._sample_id_variants(value))
             if candidates & self.hard_loss_ids:
                 mask[i] = True
@@ -1104,6 +1174,7 @@ class GCSLoss(nn.Module):
         *,
         visible_thr: float,
         support_points: float,
+        soft_fallback: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Return longest-visible-segment mean valid and length support for B x Q x K probabilities."""
         if valid_prob.ndim != 3:
@@ -1116,6 +1187,10 @@ class GCSLoss(nn.Module):
                 start, end = GCSLoss._longest_true_segment_bounds(valid_prob[b, q] >= float(visible_thr))
                 length = int(end - start)
                 if length <= 0:
+                    if soft_fallback:
+                        fallback = valid_prob[b, q].mean()
+                        mean[b, q] = fallback
+                        support[b, q] = (fallback / max(float(visible_thr), 1e-6)).clamp(max=1.0)
                     continue
                 segment = valid_prob[b, q, start:end]
                 mean[b, q] = segment.mean()
@@ -1299,6 +1374,27 @@ class GCSLoss(nn.Module):
                 f"got {tuple(pred_quality_logits.shape)} vs {tuple(pred_points.shape[:2])}."
             )
         return pred_quality_logits
+
+    def _pred_survival_logits(self, preds: dict[str, torch.Tensor], pred_points: torch.Tensor) -> torch.Tensor | None:
+        """Read optional lane-survival logits from the GCS head output."""
+        pred_survival_logits = preds.get("pred_survival_logits")
+        if pred_survival_logits is None:
+            if self.survival_gain > 0.0 or (
+                self.visible_count_sum_gain > 0.0 and self.visible_count_sum_survival_weight > 0.0
+            ):
+                raise ValueError(
+                    "GCS lane Survival Head loss/gate is enabled but pred_survival_logits is missing. "
+                    "Use a survival-head candidate YAML or disable gcs_survival and survival-gated visible count."
+                )
+            return None
+        if pred_survival_logits.ndim == 3 and pred_survival_logits.shape[-1] == 1:
+            pred_survival_logits = pred_survival_logits.squeeze(-1)
+        if pred_survival_logits.shape != pred_points.shape[:2]:
+            raise ValueError(
+                "pred_survival_logits must have shape B x Q matching pred_points, "
+                f"got {tuple(pred_survival_logits.shape)} vs {tuple(pred_points.shape[:2])}."
+            )
+        return pred_survival_logits
 
     def exist_loss(
         self,
@@ -1667,7 +1763,12 @@ class GCSLoss(nn.Module):
         edge_weight = torch.ones_like(pred_valid_logits)
         for b, (src_idx, tgt_idx) in enumerate(indices):
             lane_count = int(
-                (gt_valid[b].detach().to(device=target.device).float().sum(dim=1) >= 2).sum().item()
+                (
+                    gt_valid[b].detach().to(device=target.device).float().sum(dim=1)
+                    >= int(self.count_min_gt_points)
+                )
+                .sum()
+                .item()
             )
             if lane_count >= 5:
                 gt5_image_mask[b] = True
@@ -1781,7 +1882,7 @@ class GCSLoss(nn.Module):
             valid = valid.detach().to(device=pred_logits.device)
             if valid.ndim != 2:
                 raise ValueError(f"GT lane_valid must have shape N x K, got {tuple(valid.shape)}.")
-            counts.append(int((valid.float().sum(dim=1) >= 2).sum().item()))
+            counts.append(int((valid.float().sum(dim=1) >= int(self.count_min_gt_points)).sum().item()))
         if len(counts) != pred_logits.shape[0]:
             raise ValueError(f"gt_valid must contain one tensor per image, got {len(counts)} vs B={pred_logits.shape[0]}.")
         target = pred_logits.new_tensor(counts, dtype=pred_logits.dtype)
@@ -1943,6 +2044,199 @@ class GCSLoss(nn.Module):
             loss = loss / target.clamp_min(1.0)
         return loss.mean()
 
+    def visible_count_sum_loss(
+        self,
+        pred_logits: torch.Tensor,
+        pred_valid_logits: torch.Tensor | None,
+        pred_quality_logits: torch.Tensor | None,
+        pred_survival_logits: torch.Tensor | None,
+        batch: dict,
+        gt_valid: list[torch.Tensor],
+        hard_loss_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Regress GT lane count from query existence and longest-visible-segment support."""
+        target = self.target_lane_count(pred_logits, batch, gt_valid).to(dtype=pred_logits.dtype)
+        if pred_valid_logits is None:
+            visible_mean = torch.ones_like(pred_logits)
+            visible_support = torch.ones_like(pred_logits)
+        else:
+            valid_prob = pred_valid_logits.sigmoid()
+            visible_mean, visible_support = self._visible_segment_mean_and_support(
+                valid_prob,
+                visible_thr=float(self.visible_count_sum_visible_thr),
+                support_points=float(self.visible_count_sum_support_points),
+                soft_fallback=True,
+            )
+
+        query_gate = pred_logits.sigmoid() * visible_mean * visible_support
+        quality_weight = min(max(float(self.visible_count_sum_quality_weight), 0.0), 1.0)
+        if quality_weight > 0.0:
+            if pred_quality_logits is None:
+                raise ValueError("gcs_visible_count_sum_quality_weight > 0 requires pred_quality_logits.")
+            quality_gate = pred_quality_logits.sigmoid().to(dtype=query_gate.dtype)
+            query_gate = query_gate * ((1.0 - quality_weight) + quality_weight * quality_gate)
+        survival_weight = min(max(float(self.visible_count_sum_survival_weight), 0.0), 1.0)
+        if survival_weight > 0.0:
+            if pred_survival_logits is None:
+                raise ValueError("gcs_visible_count_sum_survival_weight > 0 requires pred_survival_logits.")
+            survival_gate = pred_survival_logits.sigmoid().to(dtype=query_gate.dtype)
+            query_gate = query_gate * ((1.0 - survival_weight) + survival_weight * survival_gate)
+
+        visible_sum = query_gate.sum(dim=1)
+        count_loss = F.smooth_l1_loss(visible_sum, target, reduction="none")
+        if self.visible_count_sum_normalize:
+            count_loss = count_loss / target.clamp_min(1.0)
+
+        thresholds = visible_sum.new_tensor([3.5, 4.5])
+        temperature = max(float(self.visible_count_boundary_temperature), 1e-6)
+        boundary_logits = (visible_sum.unsqueeze(1) - thresholds.view(1, 2)) / temperature
+        boundary_targets = torch.stack((target.ge(4).float(), target.ge(5).float()), dim=1)
+        smoothing = min(max(float(self.visible_count_boundary_label_smoothing), 0.0), 1.0)
+        if smoothing > 0.0:
+            boundary_targets = boundary_targets * (1.0 - smoothing) + 0.5 * smoothing
+        boundary_loss = F.binary_cross_entropy_with_logits(
+            boundary_logits,
+            boundary_targets.to(dtype=boundary_logits.dtype),
+            reduction="none",
+        ).mean(dim=1)
+
+        sample_weight = torch.ones_like(count_loss)
+        if hard_loss_mask is not None and float(self.visible_count_sum_hard_weight) != 1.0:
+            hard = hard_loss_mask.to(device=sample_weight.device, dtype=torch.bool)
+            sample_weight = torch.where(
+                hard,
+                sample_weight.new_tensor(float(self.visible_count_sum_hard_weight)),
+                sample_weight,
+            )
+        loss = count_loss + float(self.visible_count_boundary_gain) * boundary_loss
+        return (loss * sample_weight).sum() / sample_weight.sum().clamp_min(1.0)
+
+    def survival_loss(
+        self,
+        pred_survival_logits: torch.Tensor | None,
+        pred_points: torch.Tensor,
+        indices: list[tuple[torch.Tensor, torch.Tensor]],
+        hard_negative_mask: torch.Tensor | None = None,
+        duplicate_negative_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """BCE loss separating real matched lane survival from unmatched/duplicate queries."""
+        if pred_survival_logits is None:
+            return self._zero_like(pred_points)
+        target = torch.zeros_like(pred_survival_logits)
+        for b, (src_idx, _) in enumerate(indices):
+            if src_idx.numel():
+                target[b, src_idx.to(device=target.device, dtype=torch.long)] = 1.0
+        raw_loss = F.binary_cross_entropy_with_logits(pred_survival_logits, target.detach(), reduction="none")
+        matched_mask = self._matched_query_mask(pred_survival_logits, indices)
+        unmatched_mask = ~matched_mask
+        if bool(matched_mask.any()):
+            pos_loss = raw_loss[matched_mask].mean() * float(self.survival_pos_weight)
+        else:
+            pos_loss = self._zero_like(pred_points)
+
+        if bool(unmatched_mask.any()):
+            neg_weight = torch.full_like(raw_loss, float(self.survival_neg_weight))
+            if hard_negative_mask is not None:
+                neg_weight = torch.where(
+                    hard_negative_mask & unmatched_mask,
+                    neg_weight.new_tensor(float(self.survival_hard_negative_weight)),
+                    neg_weight,
+                )
+            if duplicate_negative_mask is not None:
+                neg_weight = torch.where(
+                    duplicate_negative_mask & unmatched_mask,
+                    neg_weight.new_tensor(float(self.survival_duplicate_negative_weight)),
+                    neg_weight,
+                )
+            neg_loss = (raw_loss[unmatched_mask] * neg_weight[unmatched_mask]).sum()
+            neg_loss = neg_loss / unmatched_mask.sum().clamp_min(1).to(dtype=neg_loss.dtype)
+        else:
+            neg_loss = self._zero_like(pred_points)
+        return pos_loss + neg_loss
+
+    def decoder_aux_loss(
+        self,
+        aux_outputs: list[dict[str, torch.Tensor]] | tuple[dict[str, torch.Tensor], ...] | None,
+        gt_points: list[torch.Tensor],
+        gt_valid: list[torch.Tensor],
+        hard_loss_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Light auxiliary supervision on intermediate decoder outputs with per-layer Hungarian matches."""
+        if not aux_outputs:
+            return self._zero_like(gt_points[0]) if gt_points else torch.tensor(0.0)
+        final_match_stats = dict(getattr(self.matcher, "last_stats", {}) or {})
+        losses: list[torch.Tensor] = []
+        for aux in aux_outputs:
+            aux_points, aux_logits = self._normalize_pred_shapes(aux)
+            aux_valid_logits = self._pred_valid_logits(aux, aux_points)
+            aux_quality_logits = self._pred_quality_logits(aux, aux_points)
+            aux_indices = self.matcher(aux_points, aux_logits, gt_points, gt_valid)
+            aux_hard_negative_mask, aux_duplicate_negative_mask = self.negative_query_masks(
+                aux_logits,
+                aux_points,
+                aux_valid_logits,
+                gt_points,
+                gt_valid,
+                aux_indices,
+            )
+            exist = self.exist_loss(
+                aux_logits,
+                aux_points,
+                aux_valid_logits,
+                gt_points,
+                gt_valid,
+                aux_indices,
+                hard_loss_mask=hard_loss_mask,
+                hard_negative_mask=aux_hard_negative_mask,
+                duplicate_negative_mask=aux_duplicate_negative_mask,
+            )
+            point = self.point_loss(
+                aux_points,
+                gt_points,
+                gt_valid,
+                aux_indices,
+                aux_valid_logits,
+                hard_loss_mask=hard_loss_mask,
+            )
+            point_valid = self.point_valid_loss(
+                aux_valid_logits,
+                aux_points,
+                gt_valid,
+                aux_indices,
+                gt_points=gt_points,
+                hard_loss_mask=hard_loss_mask,
+                hard_negative_mask=aux_hard_negative_mask,
+                duplicate_negative_mask=aux_duplicate_negative_mask,
+            )
+            line_iou = (
+                self.line_iou_loss(aux_points, gt_points, gt_valid, aux_indices, hard_loss_mask=hard_loss_mask)
+                if self.line_iou_gain > 0.0
+                else self._zero_like(aux_points)
+            )
+            quality = (
+                self.quality_loss(
+                    aux_quality_logits,
+                    aux_points,
+                    gt_points,
+                    gt_valid,
+                    aux_indices,
+                    hard_loss_mask=hard_loss_mask,
+                    hard_negative_mask=aux_hard_negative_mask,
+                    duplicate_negative_mask=aux_duplicate_negative_mask,
+                )
+                if self.quality_gain > 0.0
+                else self._zero_like(aux_points)
+            )
+            losses.append(
+                self.exist_gain * exist
+                + self.point_gain * point
+                + self.point_valid_gain * point_valid
+                + self.line_iou_gain * line_iou
+                + self.quality_gain * quality
+            )
+        self.matcher.last_stats = final_match_stats
+        return torch.stack(losses).mean()
+
     @torch.no_grad()
     def count_head_metrics(
         self, preds: dict[str, torch.Tensor], pred_points: torch.Tensor, gt_valid: list[torch.Tensor]
@@ -2009,6 +2303,7 @@ class GCSLoss(nn.Module):
         pred_points, pred_logits = self._normalize_pred_shapes(preds)
         pred_valid_logits = self._pred_valid_logits(preds, pred_points)
         pred_quality_logits = self._pred_quality_logits(preds, pred_points)
+        pred_survival_logits = self._pred_survival_logits(preds, pred_points)
         if "img" in batch:
             assert_gcs_image_tensor(batch["img"], self.image_size, name="batch['img']", context="GCSLoss.forward")
         gt_points, gt_valid = self._targets_from_batch(batch)
@@ -2049,6 +2344,19 @@ class GCSLoss(nn.Module):
         )
         count_cls_loss = self.count_head_loss(preds, pred_points, gt_valid)
         count_sum_loss = self.count_sum_loss(pred_logits, batch, gt_valid)
+        visible_count_sum_loss = (
+            self.visible_count_sum_loss(
+                pred_logits,
+                pred_valid_logits,
+                pred_quality_logits,
+                pred_survival_logits,
+                batch,
+                gt_valid,
+                hard_loss_mask=hard_loss_mask,
+            )
+            if self.visible_count_sum_gain > 0.0
+            else self._zero_like(pred_points)
+        )
         quality_loss = (
             self.quality_loss(
                 pred_quality_logits,
@@ -2063,6 +2371,30 @@ class GCSLoss(nn.Module):
             if self.quality_gain > 0.0
             else self._zero_like(pred_points)
         )
+        survival_loss = (
+            self.survival_loss(
+                pred_survival_logits,
+                pred_points,
+                indices,
+                hard_negative_mask=hard_negative_mask,
+                duplicate_negative_mask=duplicate_negative_mask,
+            )
+            if self.survival_gain > 0.0
+            else self._zero_like(pred_points)
+        )
+        aux_outputs = preds.get("aux_outputs")
+        if self.decoder_aux_gain > 0.0 and not aux_outputs:
+            raise ValueError("gcs_decoder_aux > 0 requires GCSLaneHead aux_outputs from a decoder-aux candidate YAML.")
+        decoder_aux_loss = (
+            self.decoder_aux_loss(
+                aux_outputs,
+                gt_points,
+                gt_valid,
+                hard_loss_mask=hard_loss_mask,
+            )
+            if self.decoder_aux_gain > 0.0
+            else self._zero_like(pred_points)
+        )
 
         total = (
             self.exist_gain * exist_loss
@@ -2071,7 +2403,10 @@ class GCSLoss(nn.Module):
             + self.line_iou_gain * line_iou_loss
             + self.count_head_warmup_factor(batch) * self.count_cls_gain * count_cls_loss
             + self.count_sum_gain * count_sum_loss
+            + self.visible_count_sum_gain * visible_count_sum_loss
             + self.quality_gain * quality_loss
+            + self.survival_gain * survival_loss
+            + self.decoder_aux_gain * decoder_aux_loss
         )
         loss_items = torch.stack(
             (
@@ -2081,7 +2416,10 @@ class GCSLoss(nn.Module):
                 line_iou_loss.detach(),
                 count_cls_loss.detach(),
                 count_sum_loss.detach(),
+                visible_count_sum_loss.detach(),
                 quality_loss.detach(),
+                survival_loss.detach(),
+                decoder_aux_loss.detach(),
             )
         )
         return total, loss_items

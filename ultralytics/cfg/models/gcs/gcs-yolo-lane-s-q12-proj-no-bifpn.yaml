@@ -1,4 +1,4 @@
-# GCS-YOLO-Lane Q12 ablation: projection-only, no Lane-BiFPN fusion.
+# GCS-YOLO-Lane Q12-K56 ablation: projection-only, no Lane-BiFPN fusion.
 # LSEM stays enabled; P2-P5 are only projected to equal channels before GCSLaneHead.
 
 nc: 1
@@ -26,4 +26,4 @@ backbone:
 
 head:
   - [[2, 5, 8, 12], 1, LaneFeatureProjection, [128]] # 13-P2/P3/P4/P5 projection only
-  - [-1, 1, GCSLaneHead, [12, 32, 3, 8, fixed_y, 0.9861111111111112, 0.25]] # 14
+  - [-1, 1, GCSLaneHead, [12, 56, 3, 8, fixed_y, 0.9861111111111112, 0.2222222222222222]] # 14
