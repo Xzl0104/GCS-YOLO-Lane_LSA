@@ -406,6 +406,35 @@ def test_gcs_lane_head_survival_and_decoder_aux_outputs_keep_shapes():
     )
 
 
+def test_gcs_lane_head_missing_optional_flags_matches_old_checkpoint_defaults():
+    torch.manual_seed(8)
+    head = GCSLaneHead(
+        c1=16,
+        num_queries=6,
+        num_points=56,
+        num_decoder_layers=3,
+        nhead=4,
+        point_mode="fixed_y",
+    )
+    head.min_spatial_tokens = 0
+    delattr(head, "decoder_aux_outputs")
+    delattr(head, "survival_head_enabled")
+    feats = [
+        torch.randn(1, 16, 8, 16),
+        torch.randn(1, 16, 4, 8),
+        torch.randn(1, 16, 3, 4),
+        torch.randn(1, 16, 2, 3),
+    ]
+
+    out = head(feats)
+
+    assert "aux_outputs" not in out
+    assert "pred_survival_logits" not in out
+    assert out["pred_points"].shape == (1, 6, 56, 2)
+    assert out["pred_count_logits"].shape == (1, 4)
+    assert out["pred_count_boundary_logits"].shape == (1, 2)
+
+
 def test_survival_head_keeps_quality_logits_out_of_count_head(monkeypatch):
     def run_head(survival_head: bool):
         head = GCSLaneHead(

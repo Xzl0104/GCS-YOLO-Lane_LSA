@@ -1050,15 +1050,16 @@ class GCSLaneHead(nn.Module):
         """Run the Transformer decoder and optionally retain intermediate layer states."""
         output = query
         intermediate = []
+        decoder_aux_outputs = bool(getattr(self, "decoder_aux_outputs", False))
         for layer in self.decoder.layers:
             output = layer(output, memory)
-            if self.decoder_aux_outputs:
+            if decoder_aux_outputs:
                 intermediate.append(output)
         if self.decoder.norm is not None:
             output = self.decoder.norm(output)
             if intermediate:
                 intermediate[-1] = output
-        aux = intermediate[:-1] if self.decoder_aux_outputs and len(intermediate) > 1 else []
+        aux = intermediate[:-1] if decoder_aux_outputs and len(intermediate) > 1 else []
         return output, aux
 
     def _lane_outputs_from_hs(self, xs, hs):
@@ -1206,7 +1207,8 @@ class GCSLaneHead(nn.Module):
         out, count_quality_hs = self._lane_outputs_from_hs(xs, hs)
         if hasattr(self, "count_head"):
             # Count CE trains only the Count Head; shared lane features and candidate branches keep their own losses.
-            count_quality_logits = None if self.survival_head_enabled else out["pred_quality_logits"].detach()
+            survival_head_enabled = bool(getattr(self, "survival_head_enabled", False))
+            count_quality_logits = None if survival_head_enabled else out["pred_quality_logits"].detach()
             pred_count_logits, pred_count_boundary_logits = self.count_head.forward_with_boundary(
                 [x.detach() for x in xs],
                 count_quality_hs.detach(),
