@@ -233,6 +233,12 @@ def record_raw_file(record: dict, *, require_raw_file: bool = False) -> str:
     raw_file = normalize_sample_id(record.get("raw_file", ""))
     if raw_file:
         return raw_file
+    for key in ("label", "label_file"):
+        label = normalize_sample_id(record.get(key, ""))
+        if label:
+            raw_file = label_raw_file(Path(label))
+            if raw_file:
+                return raw_file
     if require_raw_file:
         return ""
     for key in ("raw_file", "image", "im_file", "file"):

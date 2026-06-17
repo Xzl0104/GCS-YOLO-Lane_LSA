@@ -21,6 +21,7 @@ from tools import build_tusimple_official_subset as subset_builder
 from tools import check_model
 from tools import check_tusimple_fixed_y_label_oracle as oracle
 from tools import diagnose_gcs_gt5 as gt5_diag
+from tools import eval_gcs
 from tools import rebuild_tusimple_fixed_y_k56_from_reference_split as builder
 from tools import sweep_gcs_conf
 from tools import sweep_tusimple_official
@@ -408,6 +409,67 @@ def test_k56_hardsample_raw_file_manifest_hits_dataset_batch(monkeypatch, tmp_pa
 
     assert batch["raw_file"] == [raw_file]
     assert mask.tolist() == [True]
+
+
+def test_eval_gcs_reads_raw_file_from_npz_label(tmp_path):
+    label_path = tmp_path / "sample.npz"
+    np.savez(label_path, raw_file=np.array(b"clips/train/present/20.jpg"))
+
+    assert eval_gcs.label_raw_file(label_path) == "clips/train/present/20.jpg"
+
+
+def test_k56_hardsample_builder_recovers_raw_file_from_eval_label_path(monkeypatch, tmp_path):
+    summary_path = tmp_path / "train_summary.json"
+    output = tmp_path / "out" / "hard.txt"
+    dataset_root = tmp_path / "dataset"
+    label_dir = dataset_root / "labels_gcs" / "train"
+    image_dir = dataset_root / "images" / "train"
+    label_dir.mkdir(parents=True)
+    image_dir.mkdir(parents=True)
+
+    raw_file = "clips/train/present/20.jpg"
+    label_path = label_dir / "present.npz"
+    np.savez(label_path, raw_file=np.array(raw_file))
+    summary_path.write_text(
+        json.dumps(
+            {
+                "config": {"split": "train"},
+                "records": [
+                    {
+                        "image": str(image_dir / "present.jpg"),
+                        "label": str(label_path),
+                        "gt_lanes": 4,
+                        "pred_lanes": 5,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "build_gcs_hard_samples_from_eval.py",
+            "--eval-summary",
+            str(summary_path),
+            "--preset",
+            "k56_viscountsum_hardsamples",
+            "--dataset-root",
+            str(dataset_root),
+            "--target-splits",
+            "train",
+            "--require-target-match",
+            "--output",
+            str(output),
+        ],
+    )
+
+    hard_samples.main()
+
+    assert output.read_text(encoding="utf-8").strip() == raw_file
+    sidecar = json.loads(output.with_suffix(output.suffix + ".summary.json").read_text(encoding="utf-8"))
+    assert sidecar["target_match_audit"]["raw_file_only"] is True
+    assert sidecar["target_match_audit"]["unmatched_unique_samples"] == 0
 
 
 def test_k56_hardsample_builder_refuses_overwrite(monkeypatch, tmp_path):

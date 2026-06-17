@@ -213,6 +213,26 @@ def label_path_for_image(image_path: Path, label_dir: str | Path | None) -> Path
     return image_path.parent.parent / "labels_gcs" / image_path.parent.name / f"{image_path.stem}.npz"
 
 
+def label_scalar_to_str(value) -> str:
+    """Convert scalar npz metadata such as raw_file into a normalized string."""
+    if isinstance(value, np.ndarray):
+        if value.shape == ():
+            value = value.item()
+        elif value.size == 1:
+            value = value.reshape(-1)[0].item()
+    if isinstance(value, bytes):
+        value = value.decode("utf-8")
+    return str(value).strip().strip("\"'").replace("\\", "/")
+
+
+def label_raw_file(label_path: Path) -> str:
+    """Read TuSimple raw_file metadata from one GCS npz label when available."""
+    with np.load(label_path, allow_pickle=False) as data:
+        if "raw_file" not in data:
+            return ""
+        return label_scalar_to_str(data["raw_file"])
+
+
 def model_fixed_y_anchors(model: torch.nn.Module) -> np.ndarray | None:
     """Return fixed-y anchors from the model head, or None for free-point heads."""
     model = getattr(model, "module", model)
@@ -864,6 +884,7 @@ def evaluate(
         )
         label_path = label_path_for_image(image_path, label_dir)
         assert_label_fixed_y_compatible(label_path, expected_fixed_y, image_shape=img.shape[:2])
+        raw_file = label_raw_file(label_path)
         gt_lanes, gt_valid = load_gcs_label(label_path)
 
         tensor = preprocess_image(img, imgsz=imgsz, device=device_obj, half=half)
@@ -973,6 +994,7 @@ def evaluate(
 
         records.append(
             {
+                "raw_file": raw_file,
                 "image": str(image_path.resolve()),
                 "label": str(label_path.resolve()),
                 "height": int(img.shape[0]),
