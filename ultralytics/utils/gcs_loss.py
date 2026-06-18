@@ -984,6 +984,16 @@ class GCSLoss(nn.Module):
                 matched[b, src_idx] = True
         return matched
 
+    def _gt_lane_counts_from_valid(self, gt_valid: list[torch.Tensor], device: torch.device) -> torch.Tensor:
+        """Return one GT lane count per image using the shared Count Head min-point contract."""
+        counts = []
+        for valid in gt_valid:
+            valid = valid.detach().to(device=device)
+            if valid.ndim != 2:
+                raise ValueError(f"GT lane_valid must have shape N x K, got {tuple(valid.shape)}.")
+            counts.append(int((valid.float().sum(dim=1) >= int(self.count_min_gt_points)).sum().item()))
+        return torch.tensor(counts, device=device, dtype=torch.long)
+
     @staticmethod
     def _matched_target_lookup(
         pred_logits: torch.Tensor, indices: list[tuple[torch.Tensor, torch.Tensor]]
@@ -1304,9 +1314,10 @@ class GCSLoss(nn.Module):
         self,
         pred_logits: torch.Tensor,
         pred_valid_logits: torch.Tensor | None,
+        gt_valid: list[torch.Tensor],
         indices: list[tuple[torch.Tensor, torch.Tensor]],
     ) -> torch.Tensor:
-        """Return unmatched rank-5 candidate mask used by count-conditioned fifth-gate negatives."""
+        """Return GT3/GT4 unmatched fifth-candidate negatives for count-conditioned fifth gates."""
         unmatched = ~self._matched_query_mask(pred_logits, indices)
         if pred_valid_logits is None:
             rank_score = pred_logits.detach().sigmoid()
@@ -1321,9 +1332,21 @@ class GCSLoss(nn.Module):
         mask = torch.zeros_like(unmatched)
         if pred_logits.shape[1] < 5:
             return mask
-        top5 = rank_score.topk(k=5, dim=1, largest=True).indices[:, 4]
-        batch_idx = torch.arange(pred_logits.shape[0], device=pred_logits.device)
-        mask[batch_idx, top5] = unmatched[batch_idx, top5]
+        lane_counts = self._gt_lane_counts_from_valid(gt_valid, pred_logits.device)
+        if lane_counts.numel() != pred_logits.shape[0]:
+            raise ValueError(
+                f"gt_valid must contain one tensor per image, got {lane_counts.numel()} vs B={pred_logits.shape[0]}."
+            )
+        gt34 = lane_counts.ge(3) & lane_counts.le(4)
+        ranks = rank_score.argsort(dim=1, descending=True)
+        for b in range(pred_logits.shape[0]):
+            if not bool(gt34[b]):
+                continue
+            for q in ranks[b, 4:]:
+                q_int = int(q.item())
+                if bool(unmatched[b, q_int]):
+                    mask[b, q_int] = True
+                    break
         return mask.detach()
 
     def _line_iou(self, pred_points: torch.Tensor, target_points: torch.Tensor, valid: torch.Tensor) -> torch.Tensor:
@@ -2240,13 +2263,19 @@ class GCSLoss(nn.Module):
 
         negative_mask = unmatched_mask
         if self.survival_target_mode == "count_conditioned_fifth":
+            lane_counts = self._gt_lane_counts_from_valid(gt_valid, unmatched_mask.device)
+            if lane_counts.numel() != unmatched_mask.shape[0]:
+                raise ValueError(
+                    f"gt_valid must contain one tensor per image, got {lane_counts.numel()} vs B={unmatched_mask.shape[0]}."
+                )
+            gt34 = (lane_counts.ge(3) & lane_counts.le(4)).view(-1, 1)
             candidate_mask = torch.zeros_like(unmatched_mask)
             if fifth_candidate_negative_mask is not None:
-                candidate_mask |= fifth_candidate_negative_mask.to(device=unmatched_mask.device, dtype=torch.bool)
+                candidate_mask |= fifth_candidate_negative_mask.to(device=unmatched_mask.device, dtype=torch.bool) & gt34
             if hard_negative_mask is not None:
-                candidate_mask |= hard_negative_mask.to(device=unmatched_mask.device, dtype=torch.bool)
+                candidate_mask |= hard_negative_mask.to(device=unmatched_mask.device, dtype=torch.bool) & gt34
             if duplicate_negative_mask is not None:
-                candidate_mask |= duplicate_negative_mask.to(device=unmatched_mask.device, dtype=torch.bool)
+                candidate_mask |= duplicate_negative_mask.to(device=unmatched_mask.device, dtype=torch.bool) & gt34
             negative_mask = unmatched_mask & candidate_mask
 
         if bool(negative_mask.any()):
@@ -2446,7 +2475,7 @@ class GCSLoss(nn.Module):
             pred_logits, pred_points, pred_valid_logits, gt_points, gt_valid, indices
         )
         fifth_candidate_negative_mask = (
-            self.fifth_candidate_negative_mask(pred_logits, pred_valid_logits, indices)
+            self.fifth_candidate_negative_mask(pred_logits, pred_valid_logits, gt_valid, indices)
             if self.survival_target_mode == "count_conditioned_fifth"
             else None
         )
