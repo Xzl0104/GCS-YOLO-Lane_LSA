@@ -307,6 +307,16 @@ def test_k56_fifth_gate_hardsample_preset_collects_only_requested_failures():
         transitions=transitions,
     ) == (False, "")
     assert hard_samples.record_matches_preset(
+        {"gt_lanes": 5, "pred_lanes": 5, "effective_policy_count": 4},
+        preset=preset,
+        transitions=transitions,
+    ) == (False, "")
+    assert hard_samples.record_matches_preset(
+        {"gt_lanes": 5, "pred_lanes": 5, "count_head_meta": {"effective_policy_count": 4}},
+        preset=preset,
+        transitions=transitions,
+    ) == (False, "")
+    assert hard_samples.record_matches_preset(
         {"gt_lanes": 3, "pred_lanes": 5}, preset=preset, transitions=transitions
     ) == (False, "")
 

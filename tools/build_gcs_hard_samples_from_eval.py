@@ -57,12 +57,12 @@ def safe_int(value: Any, default: int | None = None) -> int | None:
 
 def count_head_policy_count(record: dict) -> int | None:
     """Return Count Head policy K from custom or GT5 diagnostic record fields."""
-    for key in ("decode_count_head_k", "count_head_policy_count", "effective_policy_count"):
+    for key in ("decode_count_head_k", "count_head_policy_count"):
         value = safe_int(record.get(key), None)
         if value is not None:
             return value
     meta = record.get("count_head_meta") if isinstance(record.get("count_head_meta"), dict) else {}
-    for key in ("count_head_policy_count", "effective_policy_count"):
+    for key in ("count_head_policy_count",):
         value = safe_int(meta.get(key), None)
         if value is not None:
             return value

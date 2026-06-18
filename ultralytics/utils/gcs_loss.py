@@ -1299,6 +1299,33 @@ class GCSLoss(nn.Module):
         hard_negative |= duplicate_negative
         return hard_negative.detach(), duplicate_negative.detach()
 
+    @torch.no_grad()
+    def fifth_candidate_negative_mask(
+        self,
+        pred_logits: torch.Tensor,
+        pred_valid_logits: torch.Tensor | None,
+        indices: list[tuple[torch.Tensor, torch.Tensor]],
+    ) -> torch.Tensor:
+        """Return unmatched rank-5 candidate mask used by count-conditioned fifth-gate negatives."""
+        unmatched = ~self._matched_query_mask(pred_logits, indices)
+        if pred_valid_logits is None:
+            rank_score = pred_logits.detach().sigmoid()
+        else:
+            valid_prob = pred_valid_logits.detach().sigmoid()
+            visible_mean, visible_support = self._visible_segment_mean_and_support(
+                valid_prob,
+                visible_thr=0.5,
+                support_points=12.0,
+            )
+            rank_score = pred_logits.detach().sigmoid() * visible_mean * visible_support
+        mask = torch.zeros_like(unmatched)
+        if pred_logits.shape[1] < 5:
+            return mask
+        top5 = rank_score.topk(k=5, dim=1, largest=True).indices[:, 4]
+        batch_idx = torch.arange(pred_logits.shape[0], device=pred_logits.device)
+        mask[batch_idx, top5] = unmatched[batch_idx, top5]
+        return mask.detach()
+
     def _line_iou(self, pred_points: torch.Tensor, target_points: torch.Tensor, valid: torch.Tensor) -> torch.Tensor:
         """Approximate lane IoU by expanding each fixed row point to a horizontal strip in pixel space."""
         if not self._is_fixed_y():
@@ -2184,6 +2211,7 @@ class GCSLoss(nn.Module):
         indices: list[tuple[torch.Tensor, torch.Tensor]],
         hard_negative_mask: torch.Tensor | None = None,
         duplicate_negative_mask: torch.Tensor | None = None,
+        fifth_candidate_negative_mask: torch.Tensor | None = None,
         gt_points: list[torch.Tensor] | None = None,
         gt_valid: list[torch.Tensor] | None = None,
         hard_loss_mask: torch.Tensor | None = None,
@@ -2210,12 +2238,23 @@ class GCSLoss(nn.Module):
         else:
             pos_loss = self._zero_like(pred_points)
 
-        if bool(unmatched_mask.any()):
+        negative_mask = unmatched_mask
+        if self.survival_target_mode == "count_conditioned_fifth":
+            candidate_mask = torch.zeros_like(unmatched_mask)
+            if fifth_candidate_negative_mask is not None:
+                candidate_mask |= fifth_candidate_negative_mask.to(device=unmatched_mask.device, dtype=torch.bool)
+            if hard_negative_mask is not None:
+                candidate_mask |= hard_negative_mask.to(device=unmatched_mask.device, dtype=torch.bool)
+            if duplicate_negative_mask is not None:
+                candidate_mask |= duplicate_negative_mask.to(device=unmatched_mask.device, dtype=torch.bool)
+            negative_mask = unmatched_mask & candidate_mask
+
+        if bool(negative_mask.any()):
             neg_weight = torch.full_like(raw_loss, float(self.survival_neg_weight))
             if self.survival_target_mode == "count_conditioned_fifth" and hard_loss_mask is not None:
                 hard = hard_loss_mask.to(device=unmatched_mask.device, dtype=torch.bool).view(-1, 1)
                 neg_weight = torch.where(
-                    hard & unmatched_mask,
+                    hard & negative_mask,
                     torch.maximum(
                         neg_weight,
                         neg_weight.new_tensor(float(self.fifth_gate_hard_negative_weight)),
@@ -2226,7 +2265,7 @@ class GCSLoss(nn.Module):
                 hard_weight = neg_weight.new_tensor(float(self.survival_hard_negative_weight))
                 if self.survival_target_mode == "count_conditioned_fifth":
                     neg_weight = torch.where(
-                        hard_negative_mask & unmatched_mask,
+                        hard_negative_mask & negative_mask,
                         torch.maximum(neg_weight, hard_weight),
                         neg_weight,
                     )
@@ -2236,14 +2275,14 @@ class GCSLoss(nn.Module):
                 duplicate_weight = neg_weight.new_tensor(float(self.survival_duplicate_negative_weight))
                 if self.survival_target_mode == "count_conditioned_fifth":
                     neg_weight = torch.where(
-                        duplicate_negative_mask & unmatched_mask,
+                        duplicate_negative_mask & negative_mask,
                         torch.maximum(neg_weight, duplicate_weight),
                         neg_weight,
                     )
                 else:
                     neg_weight = torch.where(duplicate_negative_mask & unmatched_mask, duplicate_weight, neg_weight)
-            neg_loss = (raw_loss[unmatched_mask] * neg_weight[unmatched_mask]).sum()
-            neg_loss = neg_loss / unmatched_mask.sum().clamp_min(1).to(dtype=neg_loss.dtype)
+            neg_loss = (raw_loss[negative_mask] * neg_weight[negative_mask]).sum()
+            neg_loss = neg_loss / negative_mask.sum().clamp_min(1).to(dtype=neg_loss.dtype)
         else:
             neg_loss = self._zero_like(pred_points)
         return pos_loss + neg_loss
@@ -2406,6 +2445,11 @@ class GCSLoss(nn.Module):
         hard_negative_mask, duplicate_negative_mask = self.negative_query_masks(
             pred_logits, pred_points, pred_valid_logits, gt_points, gt_valid, indices
         )
+        fifth_candidate_negative_mask = (
+            self.fifth_candidate_negative_mask(pred_logits, pred_valid_logits, indices)
+            if self.survival_target_mode == "count_conditioned_fifth"
+            else None
+        )
         hard_loss_mask = self.hard_loss_mask(batch, pred_logits.shape[0], pred_logits.device, gt_valid=gt_valid)
         exist_loss = self.exist_loss(
             pred_logits,
@@ -2472,6 +2516,7 @@ class GCSLoss(nn.Module):
                 indices,
                 hard_negative_mask=hard_negative_mask,
                 duplicate_negative_mask=duplicate_negative_mask,
+                fifth_candidate_negative_mask=fifth_candidate_negative_mask,
                 gt_points=gt_points,
                 gt_valid=gt_valid,
                 hard_loss_mask=hard_loss_mask,
