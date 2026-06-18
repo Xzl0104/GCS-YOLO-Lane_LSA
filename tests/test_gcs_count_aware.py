@@ -656,6 +656,40 @@ def test_survival_loss_negative_weight_changes_unmatched_gradient():
     assert torch.allclose(high[0, [0, 2]], low[0, [0, 2]])
 
 
+def test_count_conditioned_fifth_survival_targets_only_gt5_edge_matches():
+    lanes, valid = _gt_fixed_y56([0.1, 0.25, 0.4, 0.55, 0.7])
+    criterion = GCSLoss(
+        model={
+            "gcs_point_mode": "fixed_y",
+            "gcs_imgsz": [544, 960],
+            "gcs_survival": 1.0,
+            "gcs_survival_target_mode": "count_conditioned_fifth",
+            "gcs_survival_neg_weight": 1.0,
+            "gcs_fifth_gate_hard_negative_weight": 3.0,
+        }
+    )
+    pred_survival_logits = torch.zeros(1, 6, requires_grad=True)
+    pred_points = torch.zeros(1, 6, 56, 2)
+    indices = [(torch.tensor([0, 1, 2, 3, 4]), torch.tensor([0, 1, 2, 3, 4]))]
+
+    loss = criterion.survival_loss(
+        pred_survival_logits,
+        pred_points,
+        indices,
+        gt_points=[lanes],
+        gt_valid=[valid],
+        hard_loss_mask=torch.tensor([True]),
+    )
+
+    loss.backward()
+    grad = pred_survival_logits.grad
+    assert grad is not None
+    assert grad[0, 0] < 0.0
+    assert grad[0, 4] < 0.0
+    assert torch.allclose(grad[0, 1:4], torch.zeros(3))
+    assert grad[0, 5] > 0.0
+
+
 def test_decoder_aux_loss_backprops_from_intermediate_decoder_outputs():
     torch.manual_seed(8)
     head = GCSLaneHead(
@@ -734,7 +768,11 @@ def test_mainline_sampler_defaults_and_ratio_boost_boundaries(monkeypatch):
     assert DEFAULT_CFG_DICT["gcs_visible_count_sum_quality_weight"] == 0.0
     assert DEFAULT_CFG_DICT["gcs_visible_count_sum_survival_weight"] == 0.0
     assert DEFAULT_CFG_DICT["gcs_survival"] == 0.0
+    assert DEFAULT_CFG_DICT["gcs_survival_target_mode"] == "matched"
+    assert DEFAULT_CFG_DICT["gcs_fifth_gate_hard_negative_weight"] == 2.0
     assert DEFAULT_CFG_DICT["gcs_decoder_aux"] == 0.0
+    assert DEFAULT_CFG_DICT["gcs_count_boundary_hard_margin"] == 0.2
+    assert DEFAULT_CFG_DICT["gcs_count_boundary_hard_margin_gain"] == 0.0
     assert DEFAULT_CFG_DICT["gcs_gt5_lane_aware_erasing"] is False
     assert DEFAULT_CFG_DICT["gcs_official_best_top_k"] == 1
 
@@ -770,7 +808,11 @@ def test_mainline_sampler_defaults_and_ratio_boost_boundaries(monkeypatch):
     assert args.gcs_visible_count_sum_quality_weight == 0.0
     assert args.gcs_visible_count_sum_survival_weight == 0.0
     assert args.gcs_survival == 0.0
+    assert args.gcs_survival_target_mode == "matched"
+    assert args.gcs_fifth_gate_hard_negative_weight == 2.0
     assert args.gcs_decoder_aux == 0.0
+    assert args.gcs_count_boundary_hard_margin == 0.2
+    assert args.gcs_count_boundary_hard_margin_gain == 0.0
     assert args.gcs_gt5_lane_aware_erasing is False
     assert args.gcs_official_best_top_k == 1
 
@@ -816,7 +858,11 @@ def test_mainline_sampler_defaults_and_ratio_boost_boundaries(monkeypatch):
     assert trainer_overrides["gcs_visible_count_sum_quality_weight"] == 0.0
     assert trainer_overrides["gcs_visible_count_sum_survival_weight"] == 0.0
     assert trainer_overrides["gcs_survival"] == 0.0
+    assert trainer_overrides["gcs_survival_target_mode"] == "matched"
+    assert trainer_overrides["gcs_fifth_gate_hard_negative_weight"] == 2.0
     assert trainer_overrides["gcs_decoder_aux"] == 0.0
+    assert trainer_overrides["gcs_count_boundary_hard_margin"] == 0.2
+    assert trainer_overrides["gcs_count_boundary_hard_margin_gain"] == 0.0
     assert trainer_overrides["gcs_gt5_lane_aware_erasing"] is False
 
     criterion = GCSLoss(model={"gcs_point_mode": "fixed_y", "gcs_imgsz": [544, 960]})
@@ -852,7 +898,11 @@ def test_mainline_sampler_defaults_and_ratio_boost_boundaries(monkeypatch):
     assert criterion.visible_count_sum_quality_weight == 0.0
     assert criterion.visible_count_sum_survival_weight == 0.0
     assert criterion.survival_gain == 0.0
+    assert criterion.survival_target_mode == "matched"
+    assert math.isclose(criterion.fifth_gate_hard_negative_weight, 2.0)
     assert criterion.decoder_aux_gain == 0.0
+    assert math.isclose(criterion.count_boundary_hard_margin, 0.2)
+    assert math.isclose(criterion.count_boundary_hard_margin_gain, 0.0)
 
     ratios = {2: 0.01, 3: 0.29, 4: 0.42, 5: 0.28}
     assert apply_gt5_oversample_weight_to_ratios(ratios, 1.0) == ratios
@@ -892,6 +942,8 @@ def test_gcs_loss_item_names_stay_stable():
 def test_gt5_candidate_cfg_keys_have_expected_types():
     assert {
         "gcs_count_boundary_gt5_pos_weight",
+        "gcs_count_boundary_hard_margin",
+        "gcs_count_boundary_hard_margin_gain",
         "gcs_count_adjacent_margin",
         "gcs_count_adjacent_margin_gain",
         "gcs_count_adjacent_margin_gt45_weight",
@@ -909,6 +961,7 @@ def test_gt5_candidate_cfg_keys_have_expected_types():
         "gcs_survival",
         "gcs_survival_pos_weight",
         "gcs_survival_neg_weight",
+        "gcs_fifth_gate_hard_negative_weight",
         "gcs_decoder_aux",
         "gcs_gt5_erasing_lane_margin_px",
     } <= CFG_FLOAT_KEYS
@@ -949,6 +1002,34 @@ def test_count_boundary_gt5_pos_weight_increases_count_loss():
     boosted_loss = boosted.count_head_loss(preds, pred_points, [valid])
 
     assert boosted_loss > base_loss
+
+
+def test_count_boundary_hard_margin_pushes_only_hard_gt4_gt5_samples():
+    _, valid_gt4 = _gt([0.1, 0.25, 0.4, 0.55])
+    _, valid_gt5 = _gt([0.1, 0.25, 0.4, 0.55, 0.7])
+    _, valid_gt3 = _gt([0.2, 0.4, 0.6])
+    criterion = GCSLoss(
+        model={
+            "gcs_point_mode": "fixed_y",
+            "gcs_imgsz": [544, 960],
+            "gcs_count_boundary_hard_margin": 0.2,
+            "gcs_count_boundary_hard_margin_gain": 1.0,
+        }
+    )
+    boundary_logits = torch.tensor([[0.0, 0.5], [0.0, -0.5], [0.0, 0.5]], requires_grad=True)
+
+    loss = criterion.count_boundary_hard_margin_loss(
+        boundary_logits,
+        [valid_gt4, valid_gt5, valid_gt3],
+        torch.tensor([True, True, False]),
+    )
+
+    assert loss > 0.0
+    loss.backward()
+    assert boundary_logits.grad is not None
+    assert boundary_logits.grad[0, 1] > 0.0
+    assert boundary_logits.grad[1, 1] < 0.0
+    assert torch.allclose(boundary_logits.grad[2], torch.zeros(2))
 
 
 def test_count_adjacent_margin_is_default_off_for_count_loss():

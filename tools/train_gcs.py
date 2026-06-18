@@ -41,6 +41,7 @@ from ultralytics.utils.gcs_postprocess import GCS_DEFAULT_MAX_DET
 
 
 DEFAULT_MODEL = ROOT / "ultralytics" / "cfg" / "models" / "gcs" / "gcs-yolo-lane-s-q12-k56.yaml"
+TRAIN_HARD_MANIFEST_PRESETS = {"k56_viscountsum_hardsamples", "k56_fifth_gate_hardsamples"}
 
 
 def str2bool(value: str | bool) -> bool:
@@ -150,19 +151,20 @@ def validate_hard_manifest_sidecar(
     if require_builder_preset and payload.get("preset") != require_builder_preset:
         raise SystemExit(
             f"ERROR: {flag} sidecar preset must be {require_builder_preset} for hard-weighted "
-            f"visible_count_sum training: {sidecar}"
+            f"training: {sidecar}"
         )
-    if payload.get("preset") != "k56_viscountsum_hardsamples":
+    preset = str(payload.get("preset", "") or "")
+    if preset not in TRAIN_HARD_MANIFEST_PRESETS:
         return
     audit = payload.get("target_match_audit") if isinstance(payload.get("target_match_audit"), dict) else {}
     if str(payload.get("source_split", "")).lower() != "train":
-        raise SystemExit(f"ERROR: {flag} k56_viscountsum_hardsamples sidecar must have source_split=train: {sidecar}")
+        raise SystemExit(f"ERROR: {flag} {preset} sidecar must have source_split=train: {sidecar}")
     if list(payload.get("target_splits") or []) != ["train"]:
-        raise SystemExit(f"ERROR: {flag} k56_viscountsum_hardsamples sidecar must target only train: {sidecar}")
+        raise SystemExit(f"ERROR: {flag} {preset} sidecar must target only train: {sidecar}")
     if not bool(payload.get("require_target_match", False)):
-        raise SystemExit(f"ERROR: {flag} k56_viscountsum_hardsamples sidecar must require target matching: {sidecar}")
+        raise SystemExit(f"ERROR: {flag} {preset} sidecar must require target matching: {sidecar}")
     if not bool(audit.get("raw_file_only", False)):
-        raise SystemExit(f"ERROR: {flag} k56_viscountsum_hardsamples sidecar must use raw_file-only audit: {sidecar}")
+        raise SystemExit(f"ERROR: {flag} {preset} sidecar must use raw_file-only audit: {sidecar}")
     if int(audit.get("unmatched_unique_samples", 0) or 0) > 0:
         raise SystemExit(f"ERROR: {flag} sidecar has unmatched train hard samples: {sidecar}")
     if require_builder_preset and int(audit.get("matched_unique_samples", 0) or 0) <= 0:
@@ -175,15 +177,38 @@ def validate_training_hard_manifest_args(args: argparse.Namespace) -> None:
     hard_weight = _float_arg(args, "gcs_visible_count_sum_hard_weight", 1.0)
     hard_loss_file = str(getattr(args, "gcs_hard_loss_file", "") or "").strip()
     requires_weighted_visible_manifest = visible_gain > 0.0 and abs(hard_weight - 1.0) > 1e-12
+    survival_gain = _float_arg(args, "gcs_survival", 0.0)
+    survival_target_mode = str(getattr(args, "gcs_survival_target_mode", "matched") or "matched").strip()
+    count_boundary_hard_margin_gain = _float_arg(args, "gcs_count_boundary_hard_margin_gain", 0.0)
+    requires_fifth_gate_manifest = (
+        (survival_gain > 0.0 and survival_target_mode == "count_conditioned_fifth")
+        or count_boundary_hard_margin_gain > 0.0
+    )
+    if requires_weighted_visible_manifest and requires_fifth_gate_manifest:
+        raise SystemExit(
+            "ERROR: hard-weighted visible_count_sum and count-conditioned fifth-gate training require different "
+            "hard manifest presets. Run them as separate candidates or add an explicit combined preset."
+        )
     if requires_weighted_visible_manifest and not hard_loss_file:
         raise SystemExit(
             "ERROR: --gcs-visible-count-sum-hard-weight != 1.0 requires --gcs-hard-loss-file. "
             "Otherwise k56_viscountsum_hardsamples silently becomes an all-sample visible_count_sum run."
         )
+    if requires_fifth_gate_manifest and not hard_loss_file:
+        raise SystemExit(
+            "ERROR: count-conditioned fifth-gate training requires --gcs-hard-loss-file built with "
+            "preset k56_fifth_gate_hardsamples."
+        )
     validate_hard_manifest_sidecar(
         hard_loss_file,
         flag="--gcs-hard-loss-file",
-        require_builder_preset="k56_viscountsum_hardsamples" if requires_weighted_visible_manifest else None,
+        require_builder_preset=(
+            "k56_viscountsum_hardsamples"
+            if requires_weighted_visible_manifest
+            else "k56_fifth_gate_hardsamples"
+            if requires_fifth_gate_manifest
+            else None
+        ),
     )
     validate_hard_manifest_sidecar(getattr(args, "gcs_hard_sample_file", ""), flag="--gcs-hard-sample-file")
 
@@ -437,6 +462,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gcs-survival-hard-negative-weight", type=float, default=1.0)
     parser.add_argument("--gcs-survival-duplicate-negative-weight", type=float, default=1.5)
     parser.add_argument(
+        "--gcs-survival-target-mode",
+        choices=("matched", "count_conditioned_fifth"),
+        default="matched",
+        help=(
+            "Survival loss target mode. matched preserves the existing matched/unmatched BCE; "
+            "count_conditioned_fifth trains only true GT5 edge fifth-lane matches as positives and unmatched fifth "
+            "candidates as negatives."
+        ),
+    )
+    parser.add_argument(
+        "--gcs-fifth-gate-hard-negative-weight",
+        type=float,
+        default=2.0,
+        help="Sample-level negative weight for hard-manifest images in count_conditioned_fifth survival mode.",
+    )
+    parser.add_argument(
         "--gcs-decoder-aux",
         type=float,
         default=0.0,
@@ -488,6 +529,18 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=GCS_MAINLINE_COUNT_BOUNDARY_GT5_POS_WEIGHT,
         help="Extra Count Boundary BCE weight for count>=5 positive targets. 1 disables.",
+    )
+    parser.add_argument(
+        "--gcs-count-boundary-hard-margin",
+        type=float,
+        default=0.2,
+        help="Hard-case count>=5 boundary logit margin for GT4 false-fifth and GT5 miss-fifth samples.",
+    )
+    parser.add_argument(
+        "--gcs-count-boundary-hard-margin-gain",
+        type=float,
+        default=0.0,
+        help="Default-off hard-only Count Boundary margin gain. Requires k56_fifth_gate_hardsamples manifest.",
     )
     parser.add_argument(
         "--gcs-count-adjacent-margin",
@@ -1165,6 +1218,8 @@ def main() -> None:
         "gcs_survival_neg_weight": args.gcs_survival_neg_weight,
         "gcs_survival_hard_negative_weight": args.gcs_survival_hard_negative_weight,
         "gcs_survival_duplicate_negative_weight": args.gcs_survival_duplicate_negative_weight,
+        "gcs_survival_target_mode": args.gcs_survival_target_mode,
+        "gcs_fifth_gate_hard_negative_weight": args.gcs_fifth_gate_hard_negative_weight,
         "gcs_decoder_aux": args.gcs_decoder_aux,
         "gcs_hard_negative_visible_segment": args.gcs_hard_negative_visible_segment,
         "gcs_hard_negative_visible_thr": args.gcs_hard_negative_visible_thr,
@@ -1178,6 +1233,8 @@ def main() -> None:
         "gcs_count_boundary": args.gcs_count_boundary,
         "gcs_count_boundary_label_smoothing": args.gcs_count_boundary_label_smoothing,
         "gcs_count_boundary_gt5_pos_weight": args.gcs_count_boundary_gt5_pos_weight,
+        "gcs_count_boundary_hard_margin": args.gcs_count_boundary_hard_margin,
+        "gcs_count_boundary_hard_margin_gain": args.gcs_count_boundary_hard_margin_gain,
         "gcs_count_adjacent_margin": args.gcs_count_adjacent_margin,
         "gcs_count_adjacent_margin_gain": args.gcs_count_adjacent_margin_gain,
         "gcs_count_adjacent_margin_gt45_weight": args.gcs_count_adjacent_margin_gt45_weight,

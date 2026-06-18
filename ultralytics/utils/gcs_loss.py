@@ -161,6 +161,11 @@ class GCSLoss(nn.Module):
         self.survival_duplicate_negative_weight = float(
             self._arg(args, "gcs_survival_duplicate_negative_weight", 1.5)
         )
+        self.survival_target_mode = str(self._arg(args, "gcs_survival_target_mode", "matched") or "matched")
+        self.survival_target_mode = self.survival_target_mode.strip().lower().replace("-", "_")
+        self.fifth_gate_hard_negative_weight = float(
+            self._arg(args, "gcs_fifth_gate_hard_negative_weight", 2.0)
+        )
         self.decoder_aux_gain = float(
             lambda_decoder_aux if lambda_decoder_aux is not None else self._arg(args, "gcs_decoder_aux", 0.0)
         )
@@ -222,6 +227,10 @@ class GCSLoss(nn.Module):
             count_boundary_gt5_pos_weight
             if count_boundary_gt5_pos_weight is not None
             else self._arg(args, "gcs_count_boundary_gt5_pos_weight", 1.15)
+        )
+        self.count_boundary_hard_margin = float(self._arg(args, "gcs_count_boundary_hard_margin", 0.2))
+        self.count_boundary_hard_margin_gain = float(
+            self._arg(args, "gcs_count_boundary_hard_margin_gain", 0.0)
         )
         self.count_adjacent_margin = float(self._arg(args, "gcs_count_adjacent_margin", 0.2))
         self.count_adjacent_margin_gain = float(self._arg(args, "gcs_count_adjacent_margin_gain", 0.0))
@@ -395,6 +404,8 @@ class GCSLoss(nn.Module):
             "gcs_point_invalid_x": self.point_invalid_x_gain,
             "gcs_count_cls": self.count_cls_gain,
             "gcs_count_boundary": self.count_boundary_gain,
+            "gcs_count_boundary_hard_margin": self.count_boundary_hard_margin,
+            "gcs_count_boundary_hard_margin_gain": self.count_boundary_hard_margin_gain,
             "gcs_count_adjacent_margin": self.count_adjacent_margin,
             "gcs_count_adjacent_margin_gain": self.count_adjacent_margin_gain,
             "gcs_count_sum": self.count_sum_gain,
@@ -412,6 +423,7 @@ class GCSLoss(nn.Module):
             "gcs_survival_neg_weight": self.survival_neg_weight,
             "gcs_survival_hard_negative_weight": self.survival_hard_negative_weight,
             "gcs_survival_duplicate_negative_weight": self.survival_duplicate_negative_weight,
+            "gcs_fifth_gate_hard_negative_weight": self.fifth_gate_hard_negative_weight,
             "gcs_decoder_aux": self.decoder_aux_gain,
             "gcs_hard_negative_exist_weight": self.hard_negative_exist_weight,
             "gcs_hard_negative_visible_thr": self.hard_negative_visible_thr,
@@ -464,6 +476,11 @@ class GCSLoss(nn.Module):
             raise ValueError(
                 "gcs_count_adjacent_margin_gt45_weight must be >= 1.0, "
                 f"got {self.count_adjacent_margin_gt45_weight}."
+            )
+        if self.survival_target_mode not in {"matched", "count_conditioned_fifth"}:
+            raise ValueError(
+                "Unsupported gcs_survival_target_mode="
+                f"{self.survival_target_mode!r}; use 'matched' or 'count_conditioned_fifth'."
             )
         if self.candidate_gt5_edge_weight < 1.0:
             raise ValueError(
@@ -1922,7 +1939,11 @@ class GCSLoss(nn.Module):
         return gt_count, gt_count_cls, gt_count_raw
 
     def count_head_loss(
-        self, preds: dict[str, torch.Tensor], pred_points: torch.Tensor, gt_valid: list[torch.Tensor]
+        self,
+        preds: dict[str, torch.Tensor],
+        pred_points: torch.Tensor,
+        gt_valid: list[torch.Tensor],
+        hard_loss_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Return CE plus optional count>=4/count>=5 boundary BCE for the image-level Count Head."""
         pred_count_logits = preds.get("pred_count_logits")
@@ -1945,7 +1966,7 @@ class GCSLoss(nn.Module):
             count_loss = count_loss + self.count_adjacent_margin_gain * self.count_adjacent_margin_loss(
                 pred_count_logits, gt_count_cls, gt_count
             )
-        if self.count_boundary_gain <= 0.0:
+        if self.count_boundary_gain <= 0.0 and self.count_boundary_hard_margin_gain <= 0.0:
             return count_loss
         pred_count_boundary_logits = preds.get("pred_count_boundary_logits")
         if pred_count_boundary_logits is None:
@@ -1958,22 +1979,28 @@ class GCSLoss(nn.Module):
                 "pred_count_boundary_logits must have shape B x 2, "
                 f"got {tuple(pred_count_boundary_logits.shape)} vs B={pred_count_logits.shape[0]}."
             )
-        boundary_targets = self.count_boundary_targets(pred_count_boundary_logits, gt_valid)
-        boundary_loss_elem = F.binary_cross_entropy_with_logits(
-            pred_count_boundary_logits.float(), boundary_targets.float(), reduction="none"
-        )
-        if self.count_boundary_gt5_pos_weight > 1.0:
-            boundary_weight = torch.ones_like(boundary_loss_elem)
-            gt5_positive = boundary_targets[:, 1] > 0.5
-            boundary_weight[:, 1] = torch.where(
-                gt5_positive,
-                boundary_weight[:, 1] * float(self.count_boundary_gt5_pos_weight),
-                boundary_weight[:, 1],
+        if self.count_boundary_gain > 0.0:
+            boundary_targets = self.count_boundary_targets(pred_count_boundary_logits, gt_valid)
+            boundary_loss_elem = F.binary_cross_entropy_with_logits(
+                pred_count_boundary_logits.float(), boundary_targets.float(), reduction="none"
             )
-            boundary_loss = (boundary_loss_elem * boundary_weight).mean()
-        else:
-            boundary_loss = boundary_loss_elem.mean()
-        return count_loss + self.count_boundary_gain * boundary_loss
+            if self.count_boundary_gt5_pos_weight > 1.0:
+                boundary_weight = torch.ones_like(boundary_loss_elem)
+                gt5_positive = boundary_targets[:, 1] > 0.5
+                boundary_weight[:, 1] = torch.where(
+                    gt5_positive,
+                    boundary_weight[:, 1] * float(self.count_boundary_gt5_pos_weight),
+                    boundary_weight[:, 1],
+                )
+                boundary_loss = (boundary_loss_elem * boundary_weight).mean()
+            else:
+                boundary_loss = boundary_loss_elem.mean()
+            count_loss = count_loss + self.count_boundary_gain * boundary_loss
+        if self.count_boundary_hard_margin_gain > 0.0:
+            count_loss = count_loss + self.count_boundary_hard_margin_gain * self.count_boundary_hard_margin_loss(
+                pred_count_boundary_logits, gt_valid, hard_loss_mask
+            )
+        return count_loss
 
     def count_adjacent_margin_loss(
         self, pred_count_logits: torch.Tensor, gt_count_cls: torch.Tensor, gt_count: torch.Tensor
@@ -2009,6 +2036,45 @@ class GCSLoss(nn.Module):
                 sample_weight,
             )
         return (loss * sample_weight).sum() / sample_weight.sum().clamp_min(1.0)
+
+    def count_boundary_hard_margin_loss(
+        self,
+        pred_count_boundary_logits: torch.Tensor,
+        gt_valid: list[torch.Tensor],
+        hard_loss_mask: torch.Tensor | None,
+    ) -> torch.Tensor:
+        """Push count>=5 boundary down/up only on train-mined hard GT4/GT5 images."""
+        if hard_loss_mask is None:
+            return self._zero_like(pred_count_boundary_logits)
+        logits = pred_count_boundary_logits.float()
+        hard = hard_loss_mask.to(device=logits.device, dtype=torch.bool).reshape(-1)
+        if hard.numel() != logits.shape[0] or not bool(hard.any()):
+            return self._zero_like(pred_count_boundary_logits)
+        counts = []
+        for valid in gt_valid:
+            valid = valid.detach().to(device=logits.device)
+            if valid.ndim != 2:
+                raise ValueError(f"GT lane_valid must have shape N x K, got {tuple(valid.shape)}.")
+            counts.append(int((valid.float().sum(dim=1) >= int(self.count_min_gt_points)).sum().item()))
+        if len(counts) != logits.shape[0]:
+            raise ValueError(
+                "gt_valid must contain one tensor per image, "
+                f"got {len(counts)} vs B={logits.shape[0]}."
+            )
+        gt_count = torch.tensor(counts, device=logits.device, dtype=torch.long)
+        logit5 = logits[:, 1]
+        margin = logit5.new_tensor(float(self.count_boundary_hard_margin))
+        loss = torch.zeros_like(logit5)
+        gt4 = hard & gt_count.eq(4)
+        gt5 = hard & gt_count.ge(5)
+        if bool(gt4.any()):
+            loss[gt4] = torch.relu(logit5[gt4] + margin).pow(2)
+        if bool(gt5.any()):
+            loss[gt5] = torch.relu(margin - logit5[gt5]).pow(2)
+        active = gt4 | gt5
+        if not bool(active.any()):
+            return self._zero_like(pred_count_boundary_logits)
+        return loss[active].mean()
 
     def count_boundary_targets(self, pred_count_boundary_logits: torch.Tensor, gt_valid: list[torch.Tensor]) -> torch.Tensor:
         """Build smoothed binary targets for count>=4 and count>=5 boundary logits."""
@@ -2118,36 +2184,64 @@ class GCSLoss(nn.Module):
         indices: list[tuple[torch.Tensor, torch.Tensor]],
         hard_negative_mask: torch.Tensor | None = None,
         duplicate_negative_mask: torch.Tensor | None = None,
+        gt_points: list[torch.Tensor] | None = None,
+        gt_valid: list[torch.Tensor] | None = None,
+        hard_loss_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """BCE loss separating real matched lane survival from unmatched/duplicate queries."""
         if pred_survival_logits is None:
             return self._zero_like(pred_points)
         target = torch.zeros_like(pred_survival_logits)
-        for b, (src_idx, _) in enumerate(indices):
-            if src_idx.numel():
-                target[b, src_idx.to(device=target.device, dtype=torch.long)] = 1.0
-        raw_loss = F.binary_cross_entropy_with_logits(pred_survival_logits, target.detach(), reduction="none")
         matched_mask = self._matched_query_mask(pred_survival_logits, indices)
+        if self.survival_target_mode == "matched":
+            positive_mask = matched_mask
+            for b, (src_idx, _) in enumerate(indices):
+                if src_idx.numel():
+                    target[b, src_idx.to(device=target.device, dtype=torch.long)] = 1.0
+        else:
+            if gt_points is None or gt_valid is None:
+                raise ValueError("count_conditioned_fifth survival mode requires gt_points and gt_valid.")
+            positive_mask = self._gt5_edge_query_mask(pred_survival_logits, gt_points, gt_valid, indices)
+            target = torch.where(positive_mask, torch.ones_like(target), target)
+        raw_loss = F.binary_cross_entropy_with_logits(pred_survival_logits, target.detach(), reduction="none")
         unmatched_mask = ~matched_mask
-        if bool(matched_mask.any()):
-            pos_loss = raw_loss[matched_mask].mean() * float(self.survival_pos_weight)
+        if bool(positive_mask.any()):
+            pos_loss = raw_loss[positive_mask].mean() * float(self.survival_pos_weight)
         else:
             pos_loss = self._zero_like(pred_points)
 
         if bool(unmatched_mask.any()):
             neg_weight = torch.full_like(raw_loss, float(self.survival_neg_weight))
+            if self.survival_target_mode == "count_conditioned_fifth" and hard_loss_mask is not None:
+                hard = hard_loss_mask.to(device=unmatched_mask.device, dtype=torch.bool).view(-1, 1)
+                neg_weight = torch.where(
+                    hard & unmatched_mask,
+                    torch.maximum(
+                        neg_weight,
+                        neg_weight.new_tensor(float(self.fifth_gate_hard_negative_weight)),
+                    ),
+                    neg_weight,
+                )
             if hard_negative_mask is not None:
-                neg_weight = torch.where(
-                    hard_negative_mask & unmatched_mask,
-                    neg_weight.new_tensor(float(self.survival_hard_negative_weight)),
-                    neg_weight,
-                )
+                hard_weight = neg_weight.new_tensor(float(self.survival_hard_negative_weight))
+                if self.survival_target_mode == "count_conditioned_fifth":
+                    neg_weight = torch.where(
+                        hard_negative_mask & unmatched_mask,
+                        torch.maximum(neg_weight, hard_weight),
+                        neg_weight,
+                    )
+                else:
+                    neg_weight = torch.where(hard_negative_mask & unmatched_mask, hard_weight, neg_weight)
             if duplicate_negative_mask is not None:
-                neg_weight = torch.where(
-                    duplicate_negative_mask & unmatched_mask,
-                    neg_weight.new_tensor(float(self.survival_duplicate_negative_weight)),
-                    neg_weight,
-                )
+                duplicate_weight = neg_weight.new_tensor(float(self.survival_duplicate_negative_weight))
+                if self.survival_target_mode == "count_conditioned_fifth":
+                    neg_weight = torch.where(
+                        duplicate_negative_mask & unmatched_mask,
+                        torch.maximum(neg_weight, duplicate_weight),
+                        neg_weight,
+                    )
+                else:
+                    neg_weight = torch.where(duplicate_negative_mask & unmatched_mask, duplicate_weight, neg_weight)
             neg_loss = (raw_loss[unmatched_mask] * neg_weight[unmatched_mask]).sum()
             neg_loss = neg_loss / unmatched_mask.sum().clamp_min(1).to(dtype=neg_loss.dtype)
         else:
@@ -2342,7 +2436,7 @@ class GCSLoss(nn.Module):
             if self.line_iou_gain > 0.0
             else self._zero_like(pred_points)
         )
-        count_cls_loss = self.count_head_loss(preds, pred_points, gt_valid)
+        count_cls_loss = self.count_head_loss(preds, pred_points, gt_valid, hard_loss_mask=hard_loss_mask)
         count_sum_loss = self.count_sum_loss(pred_logits, batch, gt_valid)
         visible_count_sum_loss = (
             self.visible_count_sum_loss(
@@ -2378,6 +2472,9 @@ class GCSLoss(nn.Module):
                 indices,
                 hard_negative_mask=hard_negative_mask,
                 duplicate_negative_mask=duplicate_negative_mask,
+                gt_points=gt_points,
+                gt_valid=gt_valid,
+                hard_loss_mask=hard_loss_mask,
             )
             if self.survival_gain > 0.0
             else self._zero_like(pred_points)

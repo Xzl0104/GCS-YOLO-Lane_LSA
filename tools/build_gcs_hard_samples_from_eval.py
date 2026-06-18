@@ -19,7 +19,9 @@ os.chdir(ROOT)
 DEFAULT_DATASET_ROOT = ROOT / "datasets" / "tusimple_fixed_y_k56_960x544"
 PRESET_TRANSITIONS = {
     "k56_viscountsum_hardsamples": "4->5,5->2,5->3,5->4",
+    "k56_fifth_gate_hardsamples": "4->5,5->4",
 }
+TRAIN_ONLY_PRESETS = frozenset(PRESET_TRANSITIONS)
 
 
 def parse_list(value: str) -> list[str]:
@@ -43,6 +45,50 @@ def parse_transitions(value: str) -> set[tuple[int, int]]:
     return transitions
 
 
+def safe_int(value: Any, default: int | None = None) -> int | None:
+    """Best-effort integer conversion for optional eval-summary fields."""
+    if value in (None, ""):
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def count_head_policy_count(record: dict) -> int | None:
+    """Return Count Head policy K from custom or GT5 diagnostic record fields."""
+    for key in ("decode_count_head_k", "count_head_policy_count", "effective_policy_count"):
+        value = safe_int(record.get(key), None)
+        if value is not None:
+            return value
+    meta = record.get("count_head_meta") if isinstance(record.get("count_head_meta"), dict) else {}
+    for key in ("count_head_policy_count", "effective_policy_count"):
+        value = safe_int(meta.get(key), None)
+        if value is not None:
+            return value
+    return None
+
+
+def record_matches_preset(
+    record: dict,
+    *,
+    preset: str,
+    transitions: set[tuple[int, int]],
+) -> tuple[bool, str]:
+    """Return whether one eval record belongs in the requested hard manifest and why."""
+    gt = safe_int(record.get("gt_lanes"), -1)
+    pred = safe_int(record.get("pred_lanes", record.get("final_pred_lanes")), -1)
+    if gt is None or pred is None:
+        return False, ""
+    if (gt, pred) in transitions:
+        return True, f"{gt}->{pred}"
+    if preset == "k56_fifth_gate_hardsamples" and gt == 5:
+        policy_count = count_head_policy_count(record)
+        if policy_count is not None and policy_count < 5:
+            return True, "5->count_head_klt5"
+    return False, ""
+
+
 def is_test_summary(payload: dict, summary_path: Path) -> bool:
     """Detect likely TuSimple test summaries so hard files are not built from test failures by accident."""
     config = payload.get("config") or {}
@@ -60,29 +106,30 @@ def summary_split(payload: dict) -> str:
 
 def validate_preset_scope(args: argparse.Namespace, payload: dict, summary_path: Path) -> None:
     """Enforce train-only scope for training hard-sample presets."""
-    if args.preset != "k56_viscountsum_hardsamples" or bool(getattr(args, "allow_non_train_preset", False)):
+    preset = str(getattr(args, "preset", "") or "")
+    if preset not in TRAIN_ONLY_PRESETS or bool(getattr(args, "allow_non_train_preset", False)):
         return
     split = summary_split(payload)
     if split != "train":
         raise SystemExit(
-            "Preset k56_viscountsum_hardsamples is training-side hard-sample mining and requires "
+            f"Preset {preset} is training-side hard-sample mining and requires "
             f"an eval summary with config.split='train'; got split={split or '<missing>'} from {summary_path}. "
             "Use --allow-non-train-preset only for analysis manifests that will not be used as gcs_hard_loss_file."
         )
     target_splits = parse_list(getattr(args, "target_splits", "train"))
     if target_splits != ["train"]:
         raise SystemExit(
-            "Preset k56_viscountsum_hardsamples requires --target-splits train so exported failures stay "
+            f"Preset {preset} requires --target-splits train so exported failures stay "
             f"bound to the training split; got {target_splits!r}. Use --allow-non-train-preset only for analysis manifests."
         )
     if not bool(getattr(args, "require_target_match", False)):
         raise SystemExit(
-            "Preset k56_viscountsum_hardsamples requires --require-target-match so the exported train failures "
+            f"Preset {preset} requires --require-target-match so the exported train failures "
             "are auditable against the target training split."
         )
     if not str(getattr(args, "dataset_root", "") or "").strip():
         raise SystemExit(
-            "Preset k56_viscountsum_hardsamples requires --dataset-root for target split matching. "
+            f"Preset {preset} requires --dataset-root for target split matching. "
             "Use --allow-non-train-preset only for analysis manifests."
         )
 
@@ -91,13 +138,14 @@ def validate_preset_target_audit(
     args: argparse.Namespace, unique_rows: list[dict], target_match_audit: dict | None
 ) -> None:
     """Require all train hard-sample preset rows to match the target training split."""
-    if args.preset != "k56_viscountsum_hardsamples" or bool(getattr(args, "allow_non_train_preset", False)):
+    preset = str(getattr(args, "preset", "") or "")
+    if preset not in TRAIN_ONLY_PRESETS or bool(getattr(args, "allow_non_train_preset", False)):
         return
     if not unique_rows or target_match_audit is None:
         return
     if int(target_match_audit["unmatched_unique_samples"]) > 0:
         raise SystemExit(
-            "Preset k56_viscountsum_hardsamples requires every exported failure to match the target train split. "
+            f"Preset {preset} requires every exported failure to match the target train split. "
             f"Audit: {json.dumps(target_match_audit, ensure_ascii=False)}"
         )
 
@@ -267,7 +315,7 @@ def manifest_provenance(
     analysis_only = bool(
         getattr(args, "allow_non_train_preset", False)
         or getattr(args, "allow_test", False)
-        or (getattr(args, "preset", "") == "k56_viscountsum_hardsamples" and split != "train")
+        or (getattr(args, "preset", "") in TRAIN_ONLY_PRESETS and split != "train")
     )
     return {
         "builder": "build_gcs_hard_samples_from_eval.py",
@@ -295,7 +343,10 @@ def parse_args() -> argparse.Namespace:
         "--preset",
         choices=tuple(sorted(PRESET_TRANSITIONS)),
         default="",
-        help="Optional named transition preset. k56_viscountsum_hardsamples exports only train GT4 false fifth and GT5 underpredict failures.",
+        help=(
+            "Optional named transition preset. k56_viscountsum_hardsamples exports train count failures; "
+            "k56_fifth_gate_hardsamples exports train GT4 false-fifth and GT5 miss-fifth/count-under cases."
+        ),
     )
     parser.add_argument("--output", default=None, help="Output txt/json manifest. Defaults next to --eval-summary.")
     parser.add_argument("--format", choices=("txt", "json"), default="txt")
@@ -351,32 +402,35 @@ def main() -> None:
     records = extract_records(payload, summary_path)
     rows = []
     transition_counts: Counter[str] = Counter()
-    require_raw_file = args.preset == "k56_viscountsum_hardsamples"
+    require_raw_file = args.preset in TRAIN_ONLY_PRESETS
     for record in records:
-        gt = int(record.get("gt_lanes", -1))
-        pred = int(record.get("pred_lanes", -1))
-        if (gt, pred) not in transitions:
+        matched, reason = record_matches_preset(record, preset=args.preset, transitions=transitions)
+        if not matched:
             continue
         raw_file = record_raw_file(record, require_raw_file=require_raw_file)
         if require_raw_file and (not raw_file or not is_path_like_raw_file(raw_file)):
             raise SystemExit(
-                "Preset k56_viscountsum_hardsamples requires each exported record to contain a path-like raw_file. "
+                f"Preset {args.preset} requires each exported record to contain a path-like raw_file. "
                 f"Bad record: {json.dumps(record, ensure_ascii=False)[:500]}"
             )
         if not raw_file:
             continue
+        gt = int(safe_int(record.get("gt_lanes"), -1) or -1)
+        pred = int(safe_int(record.get("pred_lanes", record.get("final_pred_lanes")), -1) or -1)
         metrics = record.get("metrics") if isinstance(record.get("metrics"), dict) else {}
         rows.append(
             {
                 "raw_file": raw_file,
                 "gt_lanes": gt,
                 "pred_lanes": pred,
+                "hard_reason": reason,
+                "count_head_policy_count": count_head_policy_count(record),
                 "Accuracy": record.get("Accuracy"),
                 "FP": record.get("FP", metrics.get("fp")),
                 "FN": record.get("FN", metrics.get("fn")),
             }
         )
-        transition_counts[f"{gt}->{pred}"] += 1
+        transition_counts[reason] += 1
 
     seen = set()
     unique_rows = []

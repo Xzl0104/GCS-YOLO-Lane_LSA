@@ -281,6 +281,96 @@ def test_k56_viscountsum_hardsample_preset_is_train_failure_scope():
         )
 
 
+def test_k56_fifth_gate_hardsample_preset_collects_only_requested_failures():
+    transitions = hard_samples.parse_transitions(hard_samples.PRESET_TRANSITIONS["k56_fifth_gate_hardsamples"])
+    preset = "k56_fifth_gate_hardsamples"
+
+    assert hard_samples.record_matches_preset(
+        {"gt_lanes": 4, "pred_lanes": 5}, preset=preset, transitions=transitions
+    ) == (True, "4->5")
+    assert hard_samples.record_matches_preset(
+        {"gt_lanes": 5, "pred_lanes": 4}, preset=preset, transitions=transitions
+    ) == (True, "5->4")
+    assert hard_samples.record_matches_preset(
+        {"gt_lanes": 5, "pred_lanes": 5, "decode_count_head_k": 4},
+        preset=preset,
+        transitions=transitions,
+    ) == (True, "5->count_head_klt5")
+    assert hard_samples.record_matches_preset(
+        {"gt_lanes": 5, "final_pred_lanes": 5, "count_head_policy_count": 4},
+        preset=preset,
+        transitions=transitions,
+    ) == (True, "5->count_head_klt5")
+    assert hard_samples.record_matches_preset(
+        {"gt_lanes": 5, "pred_lanes": 5, "decode_count_head_k": 5},
+        preset=preset,
+        transitions=transitions,
+    ) == (False, "")
+    assert hard_samples.record_matches_preset(
+        {"gt_lanes": 3, "pred_lanes": 5}, preset=preset, transitions=transitions
+    ) == (False, "")
+
+
+def test_k56_fifth_gate_hardsample_builder_writes_train_sidecar(monkeypatch, tmp_path):
+    summary_path = tmp_path / "train_summary.json"
+    output = tmp_path / "out" / "fifth_gate.txt"
+    dataset_root = tmp_path / "dataset"
+    label_dir = dataset_root / "labels_gcs" / "train"
+    label_dir.mkdir(parents=True)
+    exported = [
+        "clips/train/gt4_false/20.jpg",
+        "clips/train/gt5_miss/20.jpg",
+        "clips/train/gt5_count_under/20.jpg",
+    ]
+    for idx, raw_file in enumerate(exported):
+        np.savez(label_dir / f"sample{idx}.npz", raw_file=np.array(raw_file))
+    summary_path.write_text(
+        json.dumps(
+            {
+                "config": {"split": "train"},
+                "records": [
+                    {"raw_file": exported[0], "gt_lanes": 4, "pred_lanes": 5},
+                    {"raw_file": exported[1], "gt_lanes": 5, "pred_lanes": 4},
+                    {"raw_file": exported[2], "gt_lanes": 5, "pred_lanes": 5, "decode_count_head_k": 4},
+                    {"raw_file": "clips/train/clean_gt5/20.jpg", "gt_lanes": 5, "pred_lanes": 5, "decode_count_head_k": 5},
+                    {"raw_file": "clips/train/gt3_false/20.jpg", "gt_lanes": 3, "pred_lanes": 5},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "build_gcs_hard_samples_from_eval.py",
+            "--eval-summary",
+            str(summary_path),
+            "--preset",
+            "k56_fifth_gate_hardsamples",
+            "--dataset-root",
+            str(dataset_root),
+            "--target-splits",
+            "train",
+            "--require-target-match",
+            "--output",
+            str(output),
+        ],
+    )
+
+    hard_samples.main()
+
+    assert output.read_text(encoding="utf-8").splitlines() == exported
+    sidecar = json.loads(output.with_suffix(output.suffix + ".summary.json").read_text(encoding="utf-8"))
+    assert sidecar["preset"] == "k56_fifth_gate_hardsamples"
+    assert sidecar["source_split"] == "train"
+    assert sidecar["target_splits"] == ["train"]
+    assert sidecar["require_target_match"] is True
+    assert sidecar["analysis_only"] is False
+    assert sidecar["target_match_audit"]["raw_file_only"] is True
+    assert sidecar["target_match_audit"]["unmatched_unique_samples"] == 0
+    assert sidecar["transition_counts"] == {"4->5": 1, "5->4": 1, "5->count_head_klt5": 1}
+
+
 def test_k56_hardsample_preset_does_not_write_failed_target_audit(monkeypatch, tmp_path):
     summary_path = tmp_path / "train_summary.json"
     output = tmp_path / "out" / "hard.txt"
@@ -674,6 +764,83 @@ def test_train_treats_zero_hard_weight_as_weighted_visible_count_sum(tmp_path):
     )
 
     with pytest.raises(SystemExit, match="requires a build_gcs_hard_samples_from_eval.py sidecar"):
+        train_gcs.validate_training_hard_manifest_args(args)
+
+
+def test_train_requires_fifth_gate_manifest_for_count_conditioned_survival(tmp_path):
+    manifest = tmp_path / "hard.txt"
+    manifest.write_text("clips/train/present/20.jpg\n", encoding="utf-8")
+    args = SimpleNamespace(
+        gcs_visible_count_sum=0.0,
+        gcs_visible_count_sum_hard_weight=1.0,
+        gcs_survival=0.2,
+        gcs_survival_target_mode="count_conditioned_fifth",
+        gcs_count_boundary_hard_margin_gain=0.0,
+        gcs_hard_loss_file="",
+        gcs_hard_sample_file="",
+    )
+    with pytest.raises(SystemExit, match="k56_fifth_gate_hardsamples"):
+        train_gcs.validate_training_hard_manifest_args(args)
+
+    args.gcs_hard_loss_file = str(manifest)
+    with pytest.raises(SystemExit, match="requires a build_gcs_hard_samples_from_eval.py sidecar"):
+        train_gcs.validate_training_hard_manifest_args(args)
+
+    manifest.with_suffix(manifest.suffix + ".summary.json").write_text(
+        json.dumps(
+            {
+                "builder": "build_gcs_hard_samples_from_eval.py",
+                "preset": "k56_viscountsum_hardsamples",
+                "source_split": "train",
+                "target_splits": ["train"],
+                "require_target_match": True,
+                "analysis_only": False,
+                "test_summary_allowed": False,
+                "target_match_audit": {
+                    "raw_file_only": True,
+                    "matched_unique_samples": 1,
+                    "unmatched_unique_samples": 0,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(SystemExit, match="sidecar preset must be k56_fifth_gate_hardsamples"):
+        train_gcs.validate_training_hard_manifest_args(args)
+
+    manifest.with_suffix(manifest.suffix + ".summary.json").write_text(
+        json.dumps(
+            {
+                "builder": "build_gcs_hard_samples_from_eval.py",
+                "preset": "k56_fifth_gate_hardsamples",
+                "source_split": "train",
+                "target_splits": ["train"],
+                "require_target_match": True,
+                "analysis_only": False,
+                "test_summary_allowed": False,
+                "target_match_audit": {
+                    "raw_file_only": True,
+                    "matched_unique_samples": 1,
+                    "unmatched_unique_samples": 0,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    train_gcs.validate_training_hard_manifest_args(args)
+
+
+def test_train_requires_fifth_gate_manifest_for_count_boundary_hard_margin():
+    args = SimpleNamespace(
+        gcs_visible_count_sum=0.0,
+        gcs_visible_count_sum_hard_weight=1.0,
+        gcs_survival=0.0,
+        gcs_survival_target_mode="matched",
+        gcs_count_boundary_hard_margin_gain=0.2,
+        gcs_hard_loss_file="",
+        gcs_hard_sample_file="",
+    )
+    with pytest.raises(SystemExit, match="k56_fifth_gate_hardsamples"):
         train_gcs.validate_training_hard_manifest_args(args)
 
 
