@@ -292,7 +292,27 @@ def test_k56_fifth_gate_hardsample_preset_collects_only_requested_failures():
         {"gt_lanes": 5, "pred_lanes": 4}, preset=preset, transitions=transitions
     ) == (True, "5->4")
     assert hard_samples.record_matches_preset(
+        {"gt_lanes": 5, "pred_lanes": None, "final_pred_lanes": 4},
+        preset=preset,
+        transitions=transitions,
+    ) == (True, "5->4")
+    assert hard_samples.record_matches_preset(
+        {"gt_lanes": 5, "pred_lanes": 5, "final_pred_lanes": 4},
+        preset=preset,
+        transitions=transitions,
+    ) == (True, "5->4")
+    assert hard_samples.record_matches_preset(
+        {"gt_lanes": 4, "pred_lanes": 5, "final_pred_lanes": 4},
+        preset=preset,
+        transitions=transitions,
+    ) == (False, "")
+    assert hard_samples.record_matches_preset(
         {"gt_lanes": 5, "pred_lanes": 5, "decode_count_head_k": 4},
+        preset=preset,
+        transitions=transitions,
+    ) == (True, "5->count_head_klt5")
+    assert hard_samples.record_matches_preset(
+        {"gt_lanes": 5, "decode_count_head_k": 4},
         preset=preset,
         transitions=transitions,
     ) == (True, "5->count_head_klt5")
@@ -331,6 +351,7 @@ def test_k56_fifth_gate_hardsample_builder_writes_train_sidecar(monkeypatch, tmp
         "clips/train/gt4_false/20.jpg",
         "clips/train/gt5_miss/20.jpg",
         "clips/train/gt5_count_under/20.jpg",
+        "clips/train/gt5_count_under_no_pred/20.jpg",
     ]
     for idx, raw_file in enumerate(exported):
         np.savez(label_dir / f"sample{idx}.npz", raw_file=np.array(raw_file))
@@ -342,6 +363,7 @@ def test_k56_fifth_gate_hardsample_builder_writes_train_sidecar(monkeypatch, tmp
                     {"raw_file": exported[0], "gt_lanes": 4, "pred_lanes": 5},
                     {"raw_file": exported[1], "gt_lanes": 5, "pred_lanes": 4},
                     {"raw_file": exported[2], "gt_lanes": 5, "pred_lanes": 5, "decode_count_head_k": 4},
+                    {"raw_file": exported[3], "gt_lanes": 5, "decode_count_head_k": 4},
                     {"raw_file": "clips/train/clean_gt5/20.jpg", "gt_lanes": 5, "pred_lanes": 5, "decode_count_head_k": 5},
                     {"raw_file": "clips/train/gt3_false/20.jpg", "gt_lanes": 3, "pred_lanes": 5},
                 ],
@@ -378,7 +400,7 @@ def test_k56_fifth_gate_hardsample_builder_writes_train_sidecar(monkeypatch, tmp
     assert sidecar["analysis_only"] is False
     assert sidecar["target_match_audit"]["raw_file_only"] is True
     assert sidecar["target_match_audit"]["unmatched_unique_samples"] == 0
-    assert sidecar["transition_counts"] == {"4->5": 1, "5->4": 1, "5->count_head_klt5": 1}
+    assert sidecar["transition_counts"] == {"4->5": 1, "5->4": 1, "5->count_head_klt5": 2}
 
 
 def test_k56_hardsample_preset_does_not_write_failed_target_audit(monkeypatch, tmp_path):
@@ -837,6 +859,10 @@ def test_train_requires_fifth_gate_manifest_for_count_conditioned_survival(tmp_p
         ),
         encoding="utf-8",
     )
+    with pytest.raises(SystemExit, match="Disable unrelated hard-edge weighting"):
+        train_gcs.validate_training_hard_manifest_args(args)
+
+    args.gcs_hard_edge_loss_weight_by_count = "none"
     train_gcs.validate_training_hard_manifest_args(args)
 
 
@@ -852,6 +878,47 @@ def test_train_requires_fifth_gate_manifest_for_count_boundary_hard_margin():
     )
     with pytest.raises(SystemExit, match="k56_fifth_gate_hardsamples"):
         train_gcs.validate_training_hard_manifest_args(args)
+
+
+def test_train_rejects_default_hard_edge_weighting_for_fifth_gate_manifest(tmp_path):
+    manifest = tmp_path / "hard.txt"
+    manifest.write_text("clips/train/present/20.jpg\n", encoding="utf-8")
+    manifest.with_suffix(manifest.suffix + ".summary.json").write_text(
+        json.dumps(
+            {
+                "builder": "build_gcs_hard_samples_from_eval.py",
+                "preset": "k56_fifth_gate_hardsamples",
+                "source_split": "train",
+                "target_splits": ["train"],
+                "require_target_match": True,
+                "analysis_only": False,
+                "test_summary_allowed": False,
+                "target_match_audit": {
+                    "raw_file_only": True,
+                    "matched_unique_samples": 1,
+                    "unmatched_unique_samples": 0,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    args = SimpleNamespace(
+        gcs_visible_count_sum=0.0,
+        gcs_visible_count_sum_hard_weight=1.0,
+        gcs_survival=0.2,
+        gcs_survival_target_mode="count_conditioned_fifth",
+        gcs_count_boundary_hard_margin_gain=0.0,
+        gcs_hard_loss_file=str(manifest),
+        gcs_hard_sample_file="",
+        gcs_hard_edge_loss_weight_by_count="4:1.15,5:1.6",
+        gcs_hard_edge_loss_terms="exist,point,point_valid,line_iou",
+    )
+
+    with pytest.raises(SystemExit, match="Disable unrelated hard-edge weighting"):
+        train_gcs.validate_training_hard_manifest_args(args)
+
+    args.gcs_hard_edge_loss_terms = "none"
+    train_gcs.validate_training_hard_manifest_args(args)
 
 
 def test_official_search_tools_reject_explicit_test_gt_json(monkeypatch):

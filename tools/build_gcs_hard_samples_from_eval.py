@@ -69,6 +69,15 @@ def count_head_policy_count(record: dict) -> int | None:
     return None
 
 
+def predicted_lane_count(record: dict) -> int | None:
+    """Return final decoded lane count from either summary field name."""
+    for key in ("final_pred_lanes", "pred_lanes"):
+        value = safe_int(record.get(key), None)
+        if value is not None:
+            return value
+    return None
+
+
 def record_matches_preset(
     record: dict,
     *,
@@ -76,11 +85,11 @@ def record_matches_preset(
     transitions: set[tuple[int, int]],
 ) -> tuple[bool, str]:
     """Return whether one eval record belongs in the requested hard manifest and why."""
-    gt = safe_int(record.get("gt_lanes"), -1)
-    pred = safe_int(record.get("pred_lanes", record.get("final_pred_lanes")), -1)
-    if gt is None or pred is None:
+    gt = safe_int(record.get("gt_lanes"), None)
+    pred = predicted_lane_count(record)
+    if gt is None:
         return False, ""
-    if (gt, pred) in transitions:
+    if pred is not None and (gt, pred) in transitions:
         return True, f"{gt}->{pred}"
     if preset == "k56_fifth_gate_hardsamples" and gt == 5:
         policy_count = count_head_policy_count(record)
@@ -416,7 +425,7 @@ def main() -> None:
         if not raw_file:
             continue
         gt = int(safe_int(record.get("gt_lanes"), -1) or -1)
-        pred = int(safe_int(record.get("pred_lanes", record.get("final_pred_lanes")), -1) or -1)
+        pred = int(predicted_lane_count(record) or -1)
         metrics = record.get("metrics") if isinstance(record.get("metrics"), dict) else {}
         rows.append(
             {

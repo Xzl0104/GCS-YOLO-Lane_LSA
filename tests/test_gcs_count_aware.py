@@ -699,6 +699,64 @@ def test_count_conditioned_fifth_survival_targets_edges_and_fifth_candidates_onl
     assert torch.allclose(grad[0, 5:], torch.zeros(4))
 
 
+def test_count_conditioned_fifth_survival_edge_uses_count_min_gt_points():
+    lanes, valid = _gt_fixed_y56([0.1, 0.25, 0.4, 0.55, 0.7])
+    valid[0] = 0.0
+    valid[0, 40] = 1.0
+    criterion = GCSLoss(
+        model={
+            "gcs_point_mode": "fixed_y",
+            "gcs_imgsz": [544, 960],
+            "gcs_count_min_gt_points": 1,
+            "gcs_survival": 1.0,
+            "gcs_survival_target_mode": "count_conditioned_fifth",
+            "gcs_survival_neg_weight": 1.0,
+        }
+    )
+    pred_survival_logits = torch.zeros(1, 6, requires_grad=True)
+    pred_points = torch.zeros(1, 6, 56, 2)
+    indices = [(torch.tensor([0, 1, 2, 3, 4]), torch.tensor([0, 1, 2, 3, 4]))]
+
+    loss = criterion.survival_loss(
+        pred_survival_logits,
+        pred_points,
+        indices,
+        hard_negative_mask=torch.zeros(1, 6, dtype=torch.bool),
+        duplicate_negative_mask=torch.zeros(1, 6, dtype=torch.bool),
+        fifth_candidate_negative_mask=torch.zeros(1, 6, dtype=torch.bool),
+        gt_points=[lanes],
+        gt_valid=[valid],
+    )
+
+    loss.backward()
+    grad = pred_survival_logits.grad
+    assert grad is not None
+    assert grad[0, 0] < 0.0
+    assert grad[0, 4] < 0.0
+    assert torch.allclose(grad[0, 1:4], torch.zeros(3))
+    assert torch.allclose(grad[0, 5:], torch.zeros(1))
+
+
+def test_survival_loss_requires_survival_logits_when_enabled():
+    criterion = GCSLoss(
+        model={
+            "gcs_point_mode": "fixed_y",
+            "gcs_imgsz": [544, 960],
+            "gcs_survival": 1.0,
+            "gcs_survival_target_mode": "count_conditioned_fifth",
+        }
+    )
+
+    with pytest.raises(ValueError, match="pred_survival_logits is missing"):
+        criterion.survival_loss(
+            None,
+            torch.zeros(1, 2, 56, 2),
+            [(torch.tensor([], dtype=torch.long), torch.tensor([], dtype=torch.long))],
+            gt_points=[torch.zeros(0, 56, 2)],
+            gt_valid=[torch.zeros(0, 56)],
+        )
+
+
 def test_fifth_candidate_negative_mask_selects_unmatched_rank5_candidate():
     criterion = GCSLoss(model={"gcs_point_mode": "fixed_y", "gcs_imgsz": [544, 960]})
     _, valid4 = _gt_fixed_y56([0.1, 0.25, 0.45, 0.65])
@@ -714,7 +772,263 @@ def test_fifth_candidate_negative_mask_selects_unmatched_rank5_candidate():
     assert gt5_mask.tolist() == [[False, False, False, False, False, False]]
 
 
-def test_count_conditioned_fifth_survival_negatives_are_gt34_fifth_candidates_only():
+def test_fifth_candidate_negative_mask_skips_unmatched_candidates_before_rank5():
+    criterion = GCSLoss(model={"gcs_point_mode": "fixed_y", "gcs_imgsz": [544, 960]})
+    _, valid4 = _gt_fixed_y56([0.1, 0.25, 0.45, 0.65])
+    pred_logits = torch.tensor([[5.0, 4.9, 4.8, 4.7, 4.6, 4.5, 1.0]])
+    pred_valid_logits = torch.full((1, 7, 56), 5.0)
+    indices = [(torch.tensor([0, 1, 2]), torch.tensor([0, 1, 2]))]
+
+    mask = criterion.fifth_candidate_negative_mask(pred_logits, pred_valid_logits, [valid4], indices)
+
+    assert mask.tolist() == [[False, False, False, False, True, False, False]]
+
+
+def test_fifth_candidate_negative_mask_uses_decode_candidate_visibility_thresholds():
+    criterion = GCSLoss(
+        model={
+            "gcs_point_mode": "fixed_y",
+            "gcs_imgsz": [544, 960],
+            "gcs_decode_candidate_point_valid_thr": 0.20,
+            "gcs_decode_candidate_min_points": 5,
+        }
+    )
+    _, valid4 = _gt_fixed_y56([0.1, 0.25, 0.45, 0.65])
+    pred_logits = torch.tensor([[5.0, 4.9, 4.8, 4.7, 4.6, 4.5]])
+    pred_valid_logits = torch.full((1, 6, 56), _logit_prob(0.05))
+    pred_valid_logits[0, :, 10:16] = _logit_prob(0.95)
+    pred_valid_logits[0, 3, :] = _logit_prob(0.05)
+    pred_valid_logits[0, 3, 10:14] = _logit_prob(0.95)
+    indices = [(torch.tensor([0, 1, 2]), torch.tensor([0, 1, 2]))]
+
+    mask = criterion.fifth_candidate_negative_mask(pred_logits, pred_valid_logits, [valid4], indices)
+
+    assert mask.tolist() == [[False, False, False, False, False, True]]
+
+
+def test_fifth_candidate_negative_mask_uses_rescue_pool_when_normal_pool_shortfalls():
+    criterion = GCSLoss(
+        model={
+            "gcs_point_mode": "fixed_y",
+            "gcs_imgsz": [544, 960],
+            "gcs_decode_candidate_point_valid_thr": 0.20,
+            "gcs_decode_candidate_min_points": 5,
+            "gcs_enable_rescue_candidate_pool": True,
+            "gcs_decode_rescue_candidate_point_valid_thr": 0.08,
+            "gcs_decode_rescue_candidate_min_points": 4,
+        }
+    )
+    _, valid4 = _gt_fixed_y56([0.1, 0.25, 0.45, 0.65])
+    pred_logits = torch.tensor([[5.0, 4.9, 4.8, 4.7, 4.6, 4.5]])
+    pred_valid_logits = torch.full((1, 6, 56), _logit_prob(0.05))
+    pred_valid_logits[0, 0:4, 10:16] = _logit_prob(0.95)
+    pred_valid_logits[0, 4:6, 10:14] = _logit_prob(0.10)
+    indices = [(torch.tensor([0, 1, 2, 3]), torch.tensor([0, 1, 2, 3]))]
+
+    mask = criterion.fifth_candidate_negative_mask(pred_logits, pred_valid_logits, [valid4], indices)
+
+    assert mask.tolist() == [[False, False, False, False, True, False]]
+
+
+def test_fifth_candidate_negative_mask_does_not_use_rescue_when_normal_pool_has_five():
+    criterion = GCSLoss(
+        model={
+            "gcs_point_mode": "fixed_y",
+            "gcs_imgsz": [544, 960],
+            "gcs_decode_candidate_point_valid_thr": 0.20,
+            "gcs_decode_candidate_min_points": 5,
+            "gcs_enable_rescue_candidate_pool": True,
+            "gcs_decode_rescue_candidate_point_valid_thr": 0.08,
+            "gcs_decode_rescue_candidate_min_points": 4,
+        }
+    )
+    _, valid4 = _gt_fixed_y56([0.1, 0.25, 0.45, 0.65])
+    pred_logits = torch.tensor([[5.0, 4.9, 4.8, 4.7, 4.6, 20.0]])
+    pred_valid_logits = torch.full((1, 6, 56), _logit_prob(0.05))
+    pred_valid_logits[0, 0:5, 10:16] = _logit_prob(0.95)
+    pred_valid_logits[0, 5, 10:14] = _logit_prob(0.10)
+    indices = [(torch.tensor([0, 1, 2, 3]), torch.tensor([0, 1, 2, 3]))]
+
+    mask = criterion.fifth_candidate_negative_mask(pred_logits, pred_valid_logits, [valid4], indices)
+
+    assert mask.tolist() == [[False, False, False, False, True, False]]
+
+
+def test_fifth_candidate_negative_mask_sorts_after_rescue_shortfall_like_decode():
+    criterion = GCSLoss(
+        model={
+            "gcs_point_mode": "fixed_y",
+            "gcs_imgsz": [544, 960],
+            "gcs_decode_candidate_point_valid_thr": 0.20,
+            "gcs_decode_candidate_min_points": 5,
+            "gcs_enable_rescue_candidate_pool": True,
+            "gcs_decode_rescue_candidate_point_valid_thr": 0.08,
+            "gcs_decode_rescue_candidate_min_points": 4,
+        }
+    )
+    _, valid4 = _gt_fixed_y56([0.1, 0.25, 0.45, 0.65])
+    pred_logits = torch.tensor([[5.0, 4.9, 4.8, 20.0, 4.7, 4.6]])
+    pred_valid_logits = torch.full((1, 6, 56), _logit_prob(0.05))
+    pred_valid_logits[0, 0:3, 10:16] = _logit_prob(0.95)
+    pred_valid_logits[0, 3, 10:14] = _logit_prob(0.10)
+    pred_valid_logits[0, 4, 10:14] = _logit_prob(0.09)
+    pred_valid_logits[0, 5, 10:14] = _logit_prob(0.08)
+    indices = [(torch.tensor([0, 1, 2]), torch.tensor([0, 1, 2]))]
+
+    mask = criterion.fifth_candidate_negative_mask(pred_logits, pred_valid_logits, [valid4], indices)
+
+    assert mask.tolist() == [[False, False, False, False, True, False]]
+
+
+def test_fifth_candidate_negative_mask_filters_close_rescue_like_decode():
+    criterion = GCSLoss(
+        model={
+            "gcs_point_mode": "fixed_y",
+            "gcs_imgsz": [544, 960],
+            "gcs_decode_candidate_point_valid_thr": 0.20,
+            "gcs_decode_candidate_min_points": 5,
+            "gcs_enable_rescue_candidate_pool": True,
+            "gcs_decode_rescue_candidate_point_valid_thr": 0.08,
+            "gcs_decode_rescue_candidate_min_points": 4,
+            "gcs_line_nms_rescue_dist_px": 30.0,
+            "gcs_line_nms_min_overlap": 4,
+        }
+    )
+    _, valid4 = _gt_fixed_y56([0.1, 0.25, 0.45, 0.65])
+    pred_logits = torch.tensor([[5.0, 4.9, 4.8, 4.7, 20.0, 4.6]])
+    pred_valid_logits = torch.full((1, 6, 56), _logit_prob(0.05))
+    pred_valid_logits[0, 0:4, 10:16] = _logit_prob(0.95)
+    pred_valid_logits[0, 4, 10:14] = _logit_prob(0.10)
+    pred_valid_logits[0, 5, 10:14] = _logit_prob(0.09)
+    pred_points = torch.zeros(1, 6, 56, 2)
+    pred_points[..., 1] = torch.linspace(0.9861111111111112, 0.2222222222222222, 56).view(1, 1, 56)
+    for q, x in enumerate((0.10, 0.25, 0.45, 0.65, 0.105, 0.85)):
+        pred_points[0, q, :, 0] = x
+    indices = [(torch.tensor([0, 1, 2, 3]), torch.tensor([0, 1, 2, 3]))]
+
+    mask = criterion.fifth_candidate_negative_mask(
+        pred_logits,
+        pred_valid_logits,
+        [valid4],
+        indices,
+        pred_points=pred_points,
+    )
+
+    assert mask.tolist() == [[False, False, False, False, False, True]]
+
+
+def test_fifth_candidate_negative_mask_filters_close_rescue_against_accepted_rescue():
+    criterion = GCSLoss(
+        model={
+            "gcs_point_mode": "fixed_y",
+            "gcs_imgsz": [544, 960],
+            "gcs_decode_candidate_point_valid_thr": 0.20,
+            "gcs_decode_candidate_min_points": 5,
+            "gcs_enable_rescue_candidate_pool": True,
+            "gcs_decode_rescue_candidate_point_valid_thr": 0.08,
+            "gcs_decode_rescue_candidate_min_points": 4,
+            "gcs_line_nms_rescue_dist_px": 30.0,
+            "gcs_line_nms_min_overlap": 4,
+        }
+    )
+    _, valid4 = _gt_fixed_y56([0.1, 0.25, 0.45, 0.65])
+    pred_logits = torch.tensor([[5.0, 4.9, 4.8, 20.0, 19.0, 4.6]])
+    pred_valid_logits = torch.full((1, 6, 56), _logit_prob(0.05))
+    pred_valid_logits[0, 0:3, 10:16] = _logit_prob(0.95)
+    pred_valid_logits[0, 3, 10:14] = _logit_prob(0.10)
+    pred_valid_logits[0, 4, 10:14] = _logit_prob(0.10)
+    pred_valid_logits[0, 5, 10:14] = _logit_prob(0.09)
+    pred_points = torch.zeros(1, 6, 56, 2)
+    pred_points[..., 1] = torch.linspace(0.9861111111111112, 0.2222222222222222, 56).view(1, 1, 56)
+    for q, x in enumerate((0.10, 0.25, 0.45, 0.70, 0.705, 0.85)):
+        pred_points[0, q, :, 0] = x
+    indices = [(torch.tensor([0, 1, 2]), torch.tensor([0, 1, 2]))]
+
+    mask = criterion.fifth_candidate_negative_mask(
+        pred_logits,
+        pred_valid_logits,
+        [valid4],
+        indices,
+        pred_points=pred_points,
+    )
+
+    assert mask.tolist() == [[False, False, False, False, False, True]]
+
+
+def test_fifth_candidate_negative_mask_includes_duplicate_fifth_candidate_only_for_gt34():
+    criterion = GCSLoss(model={"gcs_point_mode": "fixed_y", "gcs_imgsz": [544, 960]})
+    _, valid4 = _gt_fixed_y56([0.1, 0.25, 0.45, 0.65])
+    _, valid5 = _gt_fixed_y56([0.1, 0.25, 0.4, 0.55, 0.7])
+    pred_logits = torch.tensor([[5.0, 4.8, 4.6, 4.4, 1.0, 4.2, 0.9]])
+    pred_valid_logits = torch.full((1, 7, 56), 5.0)
+    indices = [(torch.tensor([0, 1, 2, 3]), torch.tensor([0, 1, 2, 3]))]
+    duplicate_negative_mask = torch.zeros(1, 7, dtype=torch.bool)
+    duplicate_negative_mask[0, 4] = True
+    duplicate_negative_mask[0, 5] = True
+    duplicate_negative_mask[0, 6] = True
+
+    mask = criterion.fifth_candidate_negative_mask(
+        pred_logits,
+        pred_valid_logits,
+        [valid4],
+        indices,
+        duplicate_negative_mask=duplicate_negative_mask,
+    )
+    gt5_mask = criterion.fifth_candidate_negative_mask(
+        pred_logits,
+        pred_valid_logits,
+        [valid5],
+        indices,
+        duplicate_negative_mask=duplicate_negative_mask,
+    )
+
+    assert mask.tolist() == [[False, False, False, False, True, True, True]]
+    assert gt5_mask.tolist() == [[False, False, False, False, False, False, False]]
+
+
+def test_fifth_candidate_negative_mask_requires_duplicate_to_be_decode_candidate():
+    criterion = GCSLoss(
+        model={
+            "gcs_point_mode": "fixed_y",
+            "gcs_imgsz": [544, 960],
+            "gcs_decode_candidate_point_valid_thr": 0.20,
+            "gcs_decode_candidate_min_points": 5,
+            "gcs_enable_rescue_candidate_pool": False,
+        }
+    )
+    _, valid4 = _gt_fixed_y56([0.1, 0.25, 0.45, 0.65])
+    pred_logits = torch.tensor([[5.0, 4.8, 4.6, 4.4, 1.0, 4.2, 0.9]])
+    pred_valid_logits = torch.full((1, 7, 56), _logit_prob(0.05))
+    pred_valid_logits[0, 0:6, 10:16] = _logit_prob(0.95)
+    indices = [(torch.tensor([0, 1, 2, 3]), torch.tensor([0, 1, 2, 3]))]
+    duplicate_negative_mask = torch.zeros(1, 7, dtype=torch.bool)
+    duplicate_negative_mask[0, 5] = True
+    duplicate_negative_mask[0, 6] = True
+
+    mask = criterion.fifth_candidate_negative_mask(
+        pred_logits,
+        pred_valid_logits,
+        [valid4],
+        indices,
+        duplicate_negative_mask=duplicate_negative_mask,
+    )
+
+    assert mask.tolist() == [[False, False, False, False, False, True, False]]
+
+
+def test_fifth_candidate_negative_mask_marks_unmatched_top5_even_when_rank5_is_matched():
+    criterion = GCSLoss(model={"gcs_point_mode": "fixed_y", "gcs_imgsz": [544, 960]})
+    _, valid4 = _gt_fixed_y56([0.1, 0.25, 0.45, 0.65])
+    pred_logits = torch.tensor([[5.0, 4.8, 4.6, 4.5, 4.4, 4.3]])
+    pred_valid_logits = torch.full((1, 6, 56), 5.0)
+    indices = [(torch.tensor([0, 1, 2, 4]), torch.tensor([0, 1, 2, 3]))]
+
+    mask = criterion.fifth_candidate_negative_mask(pred_logits, pred_valid_logits, [valid4], indices)
+
+    assert mask.tolist() == [[False, False, False, False, False, False]]
+
+
+def test_count_conditioned_fifth_survival_negatives_are_gt34_rank5_candidates_only():
     lanes, valid = _gt_fixed_y56([0.1, 0.25, 0.45, 0.65])
     criterion = GCSLoss(
         model={
@@ -739,8 +1053,10 @@ def test_count_conditioned_fifth_survival_negatives_are_gt34_fifth_candidates_on
     assert torch.equal(fifth_candidate_negative_mask.cpu(), expected_fifth)
 
     hard_negative_mask = torch.zeros(1, 8, dtype=torch.bool)
+    hard_negative_mask[0, 5] = True
     hard_negative_mask[0, 6] = True
     duplicate_negative_mask = torch.zeros(1, 8, dtype=torch.bool)
+    duplicate_negative_mask[0, 5] = True
     duplicate_negative_mask[0, 7] = True
 
     loss = criterion.survival_loss(
@@ -760,8 +1076,153 @@ def test_count_conditioned_fifth_survival_negatives_are_gt34_fifth_candidates_on
     assert grad is not None
     assert torch.allclose(grad[0, [0, 1, 2, 3, 4]], torch.zeros(5))
     assert grad[0, 5] > 0.0
+    assert torch.allclose(grad[0, 6:], torch.zeros(2))
+
+
+def test_count_conditioned_fifth_survival_trains_duplicate_fifth_candidate_negative():
+    lanes, valid = _gt_fixed_y56([0.1, 0.25, 0.45, 0.65])
+    criterion = GCSLoss(
+        model={
+            "gcs_point_mode": "fixed_y",
+            "gcs_imgsz": [544, 960],
+            "gcs_survival": 1.0,
+            "gcs_survival_target_mode": "count_conditioned_fifth",
+            "gcs_survival_neg_weight": 1.0,
+        }
+    )
+    pred_survival_logits = torch.zeros(1, 7, requires_grad=True)
+    pred_points = torch.zeros(1, 7, 56, 2)
+    indices = [(torch.tensor([0, 1, 2, 3]), torch.tensor([0, 1, 2, 3]))]
+    duplicate_negative_mask = torch.zeros(1, 7, dtype=torch.bool)
+    duplicate_negative_mask[0, 5] = True
+    fifth_candidate_negative_mask = torch.zeros(1, 7, dtype=torch.bool)
+    fifth_candidate_negative_mask[0, 5] = True
+
+    loss = criterion.survival_loss(
+        pred_survival_logits,
+        pred_points,
+        indices,
+        hard_negative_mask=torch.zeros(1, 7, dtype=torch.bool),
+        duplicate_negative_mask=duplicate_negative_mask,
+        fifth_candidate_negative_mask=fifth_candidate_negative_mask,
+        gt_points=[lanes],
+        gt_valid=[valid],
+        hard_loss_mask=torch.tensor([False]),
+    )
+
+    loss.backward()
+    grad = pred_survival_logits.grad
+    assert grad is not None
+    assert torch.allclose(grad[0, :5], torch.zeros(5))
+    assert grad[0, 5] > 0.0
+    assert torch.allclose(grad[0, 6:], torch.zeros(1))
+
+
+def test_count_conditioned_fifth_survival_ignores_general_survival_hard_weights():
+    lanes, valid = _gt_fixed_y56([0.1, 0.25, 0.45, 0.65])
+    pred_points = torch.zeros(1, 7, 56, 2)
+    indices = [(torch.tensor([0, 1, 2, 3]), torch.tensor([0, 1, 2, 3]))]
+    fifth_candidate_negative_mask = torch.zeros(1, 7, dtype=torch.bool)
+    fifth_candidate_negative_mask[0, 5] = True
+    hard_negative_mask = torch.zeros(1, 7, dtype=torch.bool)
+    duplicate_negative_mask = torch.zeros(1, 7, dtype=torch.bool)
+    hard_negative_mask[0, 5] = True
+    duplicate_negative_mask[0, 5] = True
+
+    def grad_for_weights(hard_weight: float, duplicate_weight: float) -> torch.Tensor:
+        criterion = GCSLoss(
+            model={
+                "gcs_point_mode": "fixed_y",
+                "gcs_imgsz": [544, 960],
+                "gcs_survival": 1.0,
+                "gcs_survival_target_mode": "count_conditioned_fifth",
+                "gcs_survival_neg_weight": 1.0,
+                "gcs_survival_hard_negative_weight": hard_weight,
+                "gcs_survival_duplicate_negative_weight": duplicate_weight,
+                "gcs_fifth_gate_hard_negative_weight": 3.0,
+            }
+        )
+        logits = torch.zeros(1, 7, requires_grad=True)
+        loss = criterion.survival_loss(
+            logits,
+            pred_points,
+            indices,
+            hard_negative_mask=hard_negative_mask,
+            duplicate_negative_mask=duplicate_negative_mask,
+            fifth_candidate_negative_mask=fifth_candidate_negative_mask,
+            gt_points=[lanes],
+            gt_valid=[valid],
+            hard_loss_mask=torch.tensor([True]),
+        )
+        loss.backward()
+        return logits.grad.detach().clone()
+
+    low = grad_for_weights(1.0, 1.0)
+    high = grad_for_weights(20.0, 30.0)
+
+    assert torch.allclose(high, low)
+    assert high[0, 5] > 0.0
+
+
+def test_count_conditioned_fifth_survival_ignores_global_hard_negatives_without_manifest_hit():
+    lanes, valid = _gt_fixed_y56([0.1, 0.25, 0.45, 0.65])
+    criterion = GCSLoss(
+        model={
+            "gcs_point_mode": "fixed_y",
+            "gcs_imgsz": [544, 960],
+            "gcs_survival": 1.0,
+            "gcs_survival_target_mode": "count_conditioned_fifth",
+            "gcs_survival_neg_weight": 1.0,
+        }
+    )
+    pred_survival_logits = torch.zeros(1, 7, requires_grad=True)
+    pred_points = torch.zeros(1, 7, 56, 2)
+    indices = [(torch.tensor([0, 1, 2, 3]), torch.tensor([0, 1, 2, 3]))]
+    hard_negative_mask = torch.zeros(1, 7, dtype=torch.bool)
+    hard_negative_mask[0, 5] = True
+    duplicate_negative_mask = torch.zeros(1, 7, dtype=torch.bool)
+    fifth_candidate_negative_mask = torch.zeros(1, 7, dtype=torch.bool)
+    fifth_candidate_negative_mask[0, 6] = True
+
+    loss = criterion.survival_loss(
+        pred_survival_logits,
+        pred_points,
+        indices,
+        hard_negative_mask=hard_negative_mask,
+        duplicate_negative_mask=duplicate_negative_mask,
+        fifth_candidate_negative_mask=fifth_candidate_negative_mask,
+        gt_points=[lanes],
+        gt_valid=[valid],
+        hard_loss_mask=torch.tensor([False]),
+    )
+
+    loss.backward()
+    grad = pred_survival_logits.grad
+    assert grad is not None
+    assert torch.allclose(grad[0, :6], torch.zeros(6))
     assert grad[0, 6] > 0.0
-    assert grad[0, 7] > 0.0
+
+
+def test_count_conditioned_fifth_survival_rejects_bad_candidate_mask_shape():
+    lanes, valid = _gt_fixed_y56([0.1, 0.25, 0.45, 0.65])
+    criterion = GCSLoss(
+        model={
+            "gcs_point_mode": "fixed_y",
+            "gcs_imgsz": [544, 960],
+            "gcs_survival": 1.0,
+            "gcs_survival_target_mode": "count_conditioned_fifth",
+        }
+    )
+
+    with pytest.raises(ValueError, match="fifth_candidate_negative_mask must match"):
+        criterion.survival_loss(
+            torch.zeros(1, 7),
+            torch.zeros(1, 7, 56, 2),
+            [(torch.tensor([0, 1, 2, 3]), torch.tensor([0, 1, 2, 3]))],
+            fifth_candidate_negative_mask=torch.zeros(1, 6, dtype=torch.bool),
+            gt_points=[lanes],
+            gt_valid=[valid],
+        )
 
 
 def test_decoder_aux_loss_backprops_from_intermediate_decoder_outputs():
@@ -1104,6 +1565,26 @@ def test_count_boundary_hard_margin_pushes_only_hard_gt4_gt5_samples():
     assert boundary_logits.grad[0, 1] > 0.0
     assert boundary_logits.grad[1, 1] < 0.0
     assert torch.allclose(boundary_logits.grad[2], torch.zeros(2))
+
+
+def test_count_boundary_hard_margin_rejects_bad_hard_mask_shape():
+    _, valid_gt4 = _gt([0.1, 0.25, 0.4, 0.55])
+    _, valid_gt5 = _gt([0.1, 0.25, 0.4, 0.55, 0.7])
+    criterion = GCSLoss(
+        model={
+            "gcs_point_mode": "fixed_y",
+            "gcs_imgsz": [544, 960],
+            "gcs_count_boundary_hard_margin_gain": 1.0,
+        }
+    )
+    boundary_logits = torch.zeros(2, 2, requires_grad=True)
+
+    with pytest.raises(ValueError, match="hard_loss_mask must contain one value per image"):
+        criterion.count_boundary_hard_margin_loss(
+            boundary_logits,
+            [valid_gt4, valid_gt5],
+            torch.tensor([True]),
+        )
 
 
 def test_count_adjacent_margin_is_default_off_for_count_loss():

@@ -166,6 +166,22 @@ class GCSLoss(nn.Module):
         self.fifth_gate_hard_negative_weight = float(
             self._arg(args, "gcs_fifth_gate_hard_negative_weight", 2.0)
         )
+        self.fifth_gate_candidate_conf = float(self._arg(args, "gcs_decode_candidate_conf", 0.05))
+        self.fifth_gate_candidate_point_valid_thr = float(
+            self._arg(args, "gcs_decode_candidate_point_valid_thr", 0.20)
+        )
+        self.fifth_gate_candidate_min_points = int(self._arg(args, "gcs_decode_candidate_min_points", 5))
+        self.fifth_gate_enable_rescue_candidate_pool = self._parse_bool(
+            self._arg(args, "gcs_enable_rescue_candidate_pool", True),
+            default=True,
+        )
+        self.fifth_gate_rescue_candidate_conf = float(self._arg(args, "gcs_decode_rescue_candidate_conf", 0.005))
+        self.fifth_gate_rescue_candidate_point_valid_thr = float(
+            self._arg(args, "gcs_decode_rescue_candidate_point_valid_thr", 0.08)
+        )
+        self.fifth_gate_rescue_candidate_min_points = int(self._arg(args, "gcs_decode_rescue_candidate_min_points", 4))
+        self.fifth_gate_line_nms_min_overlap = int(self._arg(args, "gcs_line_nms_min_overlap", 6))
+        self.fifth_gate_line_nms_rescue_dist_px = float(self._arg(args, "gcs_line_nms_rescue_dist_px", 30.0))
         self.decoder_aux_gain = float(
             lambda_decoder_aux if lambda_decoder_aux is not None else self._arg(args, "gcs_decoder_aux", 0.0)
         )
@@ -424,6 +440,10 @@ class GCSLoss(nn.Module):
             "gcs_survival_hard_negative_weight": self.survival_hard_negative_weight,
             "gcs_survival_duplicate_negative_weight": self.survival_duplicate_negative_weight,
             "gcs_fifth_gate_hard_negative_weight": self.fifth_gate_hard_negative_weight,
+            "gcs_decode_candidate_conf": self.fifth_gate_candidate_conf,
+            "gcs_decode_candidate_point_valid_thr": self.fifth_gate_candidate_point_valid_thr,
+            "gcs_decode_rescue_candidate_conf": self.fifth_gate_rescue_candidate_conf,
+            "gcs_decode_rescue_candidate_point_valid_thr": self.fifth_gate_rescue_candidate_point_valid_thr,
             "gcs_decoder_aux": self.decoder_aux_gain,
             "gcs_hard_negative_exist_weight": self.hard_negative_exist_weight,
             "gcs_hard_negative_visible_thr": self.hard_negative_visible_thr,
@@ -450,6 +470,10 @@ class GCSLoss(nn.Module):
             "gcs_hard_negative_quality_thr": self.hard_negative_quality_thr,
             "gcs_hard_negative_visible_thr": self.hard_negative_visible_thr,
             "gcs_count_boundary_label_smoothing": self.count_boundary_label_smoothing,
+            "gcs_decode_candidate_conf": self.fifth_gate_candidate_conf,
+            "gcs_decode_candidate_point_valid_thr": self.fifth_gate_candidate_point_valid_thr,
+            "gcs_decode_rescue_candidate_conf": self.fifth_gate_rescue_candidate_conf,
+            "gcs_decode_rescue_candidate_point_valid_thr": self.fifth_gate_rescue_candidate_point_valid_thr,
             "gcs_visible_count_sum_visible_thr": self.visible_count_sum_visible_thr,
             "gcs_visible_count_sum_quality_weight": self.visible_count_sum_quality_weight,
             "gcs_visible_count_sum_survival_weight": self.visible_count_sum_survival_weight,
@@ -493,6 +517,16 @@ class GCSLoss(nn.Module):
             )
         if self.count_min_gt_points <= 0:
             raise ValueError(f"gcs_count_min_gt_points must be > 0, got {self.count_min_gt_points}.")
+        if self.fifth_gate_candidate_min_points <= 0:
+            raise ValueError(
+                "gcs_decode_candidate_min_points must be > 0 for count-conditioned fifth gate mining, "
+                f"got {self.fifth_gate_candidate_min_points}."
+            )
+        if self.fifth_gate_rescue_candidate_min_points <= 0:
+            raise ValueError(
+                "gcs_decode_rescue_candidate_min_points must be > 0 for count-conditioned fifth gate mining, "
+                f"got {self.fifth_gate_rescue_candidate_min_points}."
+            )
         if self.hard_negative_topk < 0:
             raise ValueError(f"gcs_hard_negative_topk must be >= 0, got {self.hard_negative_topk}.")
         if self.hard_negative_visible_support_points <= 0.0:
@@ -1016,6 +1050,7 @@ class GCSLoss(nn.Module):
         device: torch.device,
         dtype: torch.dtype,
         min_lane_count: int = 4,
+        min_visible_points: int = 2,
     ) -> tuple[torch.Tensor, int]:
         """Return matched left/right edge-lane mask and valid GT lane count for one image."""
         is_edge = torch.zeros(tgt_idx.shape[0], device=device, dtype=torch.bool)
@@ -1028,7 +1063,7 @@ class GCSLoss(nn.Module):
                 "GT points/valid shapes must be N x K x 2 and N x K for edge lane weighting, "
                 f"got {tuple(points.shape)} and {tuple(valid.shape)}."
             )
-        lane_mask = valid.sum(dim=1) >= 2
+        lane_mask = valid.sum(dim=1) >= max(int(min_visible_points), 1)
         lane_count = int(lane_mask.sum().item())
         if lane_count < int(min_lane_count):
             return is_edge, lane_count
@@ -1049,6 +1084,8 @@ class GCSLoss(nn.Module):
         gt_points: list[torch.Tensor],
         gt_valid: list[torch.Tensor],
         indices: list[tuple[torch.Tensor, torch.Tensor]],
+        *,
+        min_visible_points: int = 2,
     ) -> torch.Tensor:
         """Return B x Q mask for matched left/right edge lanes in images with at least 5 GT lanes."""
         mask = torch.zeros_like(pred_logits, dtype=torch.bool)
@@ -1063,6 +1100,7 @@ class GCSLoss(nn.Module):
                 device=device,
                 dtype=dtype,
                 min_lane_count=5,
+                min_visible_points=min_visible_points,
             )
             if lane_count >= 5:
                 mask[b, src_idx.to(device=device, dtype=torch.long)] = is_edge
@@ -1310,26 +1348,178 @@ class GCSLoss(nn.Module):
         return hard_negative.detach(), duplicate_negative.detach()
 
     @torch.no_grad()
+    def _fifth_gate_candidate_rank_score_for_thresholds(
+        self,
+        pred_logits: torch.Tensor,
+        pred_valid_logits: torch.Tensor | None,
+        *,
+        conf_thr: float,
+        point_valid_thr: float,
+        min_points: int,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return candidate rank scores and membership for one decode threshold set."""
+        exist_score = pred_logits.detach().sigmoid()
+        if pred_valid_logits is None:
+            candidate_mask = exist_score >= float(conf_thr)
+            return exist_score, candidate_mask
+
+        valid_prob = pred_valid_logits.detach().sigmoid()
+        if valid_prob.ndim != 3 or valid_prob.shape[:2] != pred_logits.shape:
+            raise ValueError(
+                "pred_valid_logits must have shape B x Q x K for fifth-candidate negatives, "
+                f"got {tuple(valid_prob.shape)} vs pred_logits {tuple(pred_logits.shape)}."
+            )
+        bsz, queries, _ = valid_prob.shape
+        rank_score = torch.zeros_like(exist_score)
+        candidate_mask = torch.zeros_like(exist_score, dtype=torch.bool)
+        for b in range(bsz):
+            for q in range(queries):
+                if float(exist_score[b, q].item()) < float(conf_thr):
+                    continue
+                start, end = self._longest_true_segment_bounds(valid_prob[b, q] >= float(point_valid_thr))
+                length = int(end - start)
+                if length < int(min_points):
+                    continue
+                segment = valid_prob[b, q, start:end]
+                mean_valid = segment.mean()
+                length_factor = min(1.0, float(length) / 12.0)
+                rank_score[b, q] = exist_score[b, q] * mean_valid * float(length_factor)
+                candidate_mask[b, q] = True
+        return rank_score, candidate_mask
+
+    @torch.no_grad()
+    def _fifth_gate_candidate_rank_score(
+        self,
+        pred_logits: torch.Tensor,
+        pred_valid_logits: torch.Tensor | None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Return normal/rescue decode-aligned rank scores and candidate-pool membership."""
+        normal_score, normal_mask = self._fifth_gate_candidate_rank_score_for_thresholds(
+            pred_logits,
+            pred_valid_logits,
+            conf_thr=float(self.fifth_gate_candidate_conf),
+            point_valid_thr=float(self.fifth_gate_candidate_point_valid_thr),
+            min_points=int(self.fifth_gate_candidate_min_points),
+        )
+        if not bool(self.fifth_gate_enable_rescue_candidate_pool):
+            return normal_score, normal_mask, normal_score, normal_mask
+        rescue_score, rescue_mask = self._fifth_gate_candidate_rank_score_for_thresholds(
+            pred_logits,
+            pred_valid_logits,
+            conf_thr=float(self.fifth_gate_rescue_candidate_conf),
+            point_valid_thr=float(self.fifth_gate_rescue_candidate_point_valid_thr),
+            min_points=int(self.fifth_gate_rescue_candidate_min_points),
+        )
+        return normal_score, normal_mask, rescue_score, rescue_mask
+
+    def _fifth_gate_candidate_visible_mask(
+        self,
+        pred_valid_logits_b: torch.Tensor | None,
+        query: int,
+        *,
+        rescue_pool: bool,
+        num_points: int,
+        device: torch.device,
+    ) -> torch.Tensor:
+        """Return the decode-style longest visible segment mask for one candidate query."""
+        if pred_valid_logits_b is None:
+            return torch.ones(num_points, device=device, dtype=torch.bool)
+        if pred_valid_logits_b.ndim != 2 or pred_valid_logits_b.shape[0] <= int(query):
+            raise ValueError(
+                "pred_valid_logits per image must have shape Q x K for fifth-candidate rescue filtering, "
+                f"got {tuple(pred_valid_logits_b.shape)}."
+            )
+        if pred_valid_logits_b.shape[1] != int(num_points):
+            raise ValueError(
+                "pred_valid_logits per image must align with pred_points K for fifth-candidate rescue filtering, "
+                f"got K={pred_valid_logits_b.shape[1]} vs {int(num_points)}."
+            )
+        point_valid_thr = (
+            float(self.fifth_gate_rescue_candidate_point_valid_thr)
+            if bool(rescue_pool)
+            else float(self.fifth_gate_candidate_point_valid_thr)
+        )
+        min_points = (
+            int(self.fifth_gate_rescue_candidate_min_points)
+            if bool(rescue_pool)
+            else int(self.fifth_gate_candidate_min_points)
+        )
+        valid = pred_valid_logits_b.detach().sigmoid()[int(query)] >= point_valid_thr
+        start, end = self._longest_true_segment_bounds(valid)
+        mask = torch.zeros(num_points, device=device, dtype=torch.bool)
+        if int(end - start) >= int(min_points):
+            mask[start:end] = True
+        return mask
+
+    def _fifth_gate_rescue_too_close_to_selected(
+        self,
+        pred_points_b: torch.Tensor,
+        pred_valid_logits_b: torch.Tensor | None,
+        query: int,
+        selected_queries: list[tuple[int, bool]],
+    ) -> bool:
+        """Mirror decode rescue-pool duplicate filtering for one candidate query."""
+        dist_thr = float(self.fifth_gate_line_nms_rescue_dist_px)
+        if dist_thr <= 0.0:
+            return False
+        points = pred_points_b.detach()
+        if points.ndim != 3 or points.shape[-1] != 2:
+            raise ValueError(f"pred_points per image must have shape Q x K x 2, got {tuple(points.shape)}.")
+        query = int(query)
+        if query < 0 or query >= points.shape[0]:
+            return False
+        selected = [(int(q), bool(rescue_pool)) for q, rescue_pool in selected_queries if 0 <= int(q) < points.shape[0]]
+        if not selected:
+            return False
+        min_overlap = max(int(self.fifth_gate_line_nms_min_overlap), 1)
+        width = float(self.image_size[1])
+        candidate_points = points[query]
+        candidate_valid = self._fifth_gate_candidate_visible_mask(
+            pred_valid_logits_b,
+            query,
+            rescue_pool=True,
+            num_points=points.shape[1],
+            device=points.device,
+        )
+        for kept, kept_rescue_pool in selected:
+            kept_points = points[kept]
+            kept_valid = self._fifth_gate_candidate_visible_mask(
+                pred_valid_logits_b,
+                kept,
+                rescue_pool=kept_rescue_pool,
+                num_points=points.shape[1],
+                device=points.device,
+            )
+            keep = candidate_valid & kept_valid
+            if int(keep.sum().item()) < min_overlap:
+                continue
+            dist = torch.mean(torch.abs(candidate_points[keep, 0] - kept_points[keep, 0]) * width)
+            if bool(torch.isfinite(dist)) and float(dist.item()) <= dist_thr:
+                return True
+        return False
+
+    @torch.no_grad()
     def fifth_candidate_negative_mask(
         self,
         pred_logits: torch.Tensor,
         pred_valid_logits: torch.Tensor | None,
         gt_valid: list[torch.Tensor],
         indices: list[tuple[torch.Tensor, torch.Tensor]],
+        duplicate_negative_mask: torch.Tensor | None = None,
+        pred_points: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Return GT3/GT4 unmatched fifth-candidate negatives for count-conditioned fifth gates."""
+        """Return GT3/GT4 rank-5 unmatched and tail duplicate fifth-candidate negatives."""
         unmatched = ~self._matched_query_mask(pred_logits, indices)
-        if pred_valid_logits is None:
-            rank_score = pred_logits.detach().sigmoid()
-        else:
-            valid_prob = pred_valid_logits.detach().sigmoid()
-            visible_mean, visible_support = self._visible_segment_mean_and_support(
-                valid_prob,
-                visible_thr=0.5,
-                support_points=12.0,
+        normal_score, normal_pool, rescue_score, rescue_pool = self._fifth_gate_candidate_rank_score(
+            pred_logits, pred_valid_logits
+        )
+        if pred_points is not None and pred_points.shape[:2] != pred_logits.shape:
+            raise ValueError(
+                "pred_points must have shape B x Q x K x 2 for fifth-candidate rescue filtering, "
+                f"got {tuple(pred_points.shape)} vs pred_logits {tuple(pred_logits.shape)}."
             )
-            rank_score = pred_logits.detach().sigmoid() * visible_mean * visible_support
         mask = torch.zeros_like(unmatched)
+        fifth_tail_mask = torch.zeros_like(unmatched)
         if pred_logits.shape[1] < 5:
             return mask
         lane_counts = self._gt_lane_counts_from_valid(gt_valid, pred_logits.device)
@@ -1338,15 +1528,59 @@ class GCSLoss(nn.Module):
                 f"gt_valid must contain one tensor per image, got {lane_counts.numel()} vs B={pred_logits.shape[0]}."
             )
         gt34 = lane_counts.ge(3) & lane_counts.le(4)
-        ranks = rank_score.argsort(dim=1, descending=True)
+        normal_ranks = normal_score.argsort(dim=1, descending=True)
+        rescue_ranks = rescue_score.argsort(dim=1, descending=True)
         for b in range(pred_logits.shape[0]):
             if not bool(gt34[b]):
                 continue
-            for q in ranks[b, 4:]:
-                q_int = int(q.item())
-                if bool(unmatched[b, q_int]):
-                    mask[b, q_int] = True
-                    break
+            candidate_idx = normal_ranks[b][normal_pool[b, normal_ranks[b]]]
+            candidate_score = normal_score[b, candidate_idx]
+            if candidate_idx.numel() < 5 and bool(self.fifth_gate_enable_rescue_candidate_pool):
+                selected = [int(q) for q in candidate_idx.tolist()]
+                selected_set = set(selected)
+                selected_for_distance = [(int(q), False) for q in selected]
+                rescue_extra: list[int] = []
+                for q in rescue_ranks[b][rescue_pool[b, rescue_ranks[b]]].tolist():
+                    q = int(q)
+                    if q in selected_set:
+                        continue
+                    if (
+                        pred_points is not None
+                        and selected
+                        and self._fifth_gate_rescue_too_close_to_selected(
+                            pred_points[b],
+                            pred_valid_logits[b] if pred_valid_logits is not None else None,
+                            q,
+                            selected_for_distance,
+                        )
+                    ):
+                        continue
+                    rescue_extra.append(q)
+                    selected.append(q)
+                    selected_set.add(q)
+                    selected_for_distance.append((q, True))
+                    if len(selected) >= 5:
+                        break
+                if rescue_extra:
+                    extra_idx = torch.tensor(rescue_extra, device=mask.device, dtype=torch.long)
+                    candidate_idx = torch.cat([candidate_idx.to(device=mask.device, dtype=torch.long), extra_idx])
+                    candidate_score = torch.cat([candidate_score.to(device=mask.device), rescue_score[b, extra_idx]])
+            if candidate_idx.numel() < 5:
+                continue
+            order = candidate_score.argsort(descending=True)
+            candidate_idx = candidate_idx[order]
+            tail_queries = candidate_idx[4:].to(device=mask.device, dtype=torch.long)
+            fifth_tail_mask[b, tail_queries] = True
+            fifth_query = tail_queries[0]
+            mask[b, fifth_query] = unmatched[b, fifth_query]
+        if duplicate_negative_mask is not None:
+            duplicate = duplicate_negative_mask.to(device=mask.device, dtype=torch.bool)
+            if duplicate.shape != mask.shape:
+                raise ValueError(
+                    "duplicate_negative_mask must match pred_logits shape for fifth-candidate negatives, "
+                    f"got {tuple(duplicate.shape)} vs {tuple(mask.shape)}."
+                )
+            mask |= unmatched & duplicate & fifth_tail_mask & gt34.view(-1, 1)
         return mask.detach()
 
     def _line_iou(self, pred_points: torch.Tensor, target_points: torch.Tensor, valid: torch.Tensor) -> torch.Tensor:
@@ -2098,7 +2332,12 @@ class GCSLoss(nn.Module):
             return self._zero_like(pred_count_boundary_logits)
         logits = pred_count_boundary_logits.float()
         hard = hard_loss_mask.to(device=logits.device, dtype=torch.bool).reshape(-1)
-        if hard.numel() != logits.shape[0] or not bool(hard.any()):
+        if hard.numel() != logits.shape[0]:
+            raise ValueError(
+                "hard_loss_mask must contain one value per image for Count Boundary hard margin, "
+                f"got {hard.numel()} vs B={logits.shape[0]}."
+            )
+        if not bool(hard.any()):
             return self._zero_like(pred_count_boundary_logits)
         counts = []
         for valid in gt_valid:
@@ -2239,8 +2478,13 @@ class GCSLoss(nn.Module):
         gt_valid: list[torch.Tensor] | None = None,
         hard_loss_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """BCE loss separating real matched lane survival from unmatched/duplicate queries."""
+        """BCE loss for either matched-query survival or count-conditioned fifth-lane gating."""
         if pred_survival_logits is None:
+            if self.survival_gain > 0.0:
+                raise ValueError(
+                    "GCS lane Survival Head loss is enabled but pred_survival_logits is missing. "
+                    "Use a survival-head candidate YAML or disable gcs_survival."
+                )
             return self._zero_like(pred_points)
         target = torch.zeros_like(pred_survival_logits)
         matched_mask = self._matched_query_mask(pred_survival_logits, indices)
@@ -2252,7 +2496,13 @@ class GCSLoss(nn.Module):
         else:
             if gt_points is None or gt_valid is None:
                 raise ValueError("count_conditioned_fifth survival mode requires gt_points and gt_valid.")
-            positive_mask = self._gt5_edge_query_mask(pred_survival_logits, gt_points, gt_valid, indices)
+            positive_mask = self._gt5_edge_query_mask(
+                pred_survival_logits,
+                gt_points,
+                gt_valid,
+                indices,
+                min_visible_points=int(self.count_min_gt_points),
+            )
             target = torch.where(positive_mask, torch.ones_like(target), target)
         raw_loss = F.binary_cross_entropy_with_logits(pred_survival_logits, target.detach(), reduction="none")
         unmatched_mask = ~matched_mask
@@ -2271,17 +2521,27 @@ class GCSLoss(nn.Module):
             gt34 = (lane_counts.ge(3) & lane_counts.le(4)).view(-1, 1)
             candidate_mask = torch.zeros_like(unmatched_mask)
             if fifth_candidate_negative_mask is not None:
-                candidate_mask |= fifth_candidate_negative_mask.to(device=unmatched_mask.device, dtype=torch.bool) & gt34
-            if hard_negative_mask is not None:
-                candidate_mask |= hard_negative_mask.to(device=unmatched_mask.device, dtype=torch.bool) & gt34
-            if duplicate_negative_mask is not None:
-                candidate_mask |= duplicate_negative_mask.to(device=unmatched_mask.device, dtype=torch.bool) & gt34
+                fifth_candidate_bool = fifth_candidate_negative_mask.to(device=unmatched_mask.device, dtype=torch.bool)
+                if fifth_candidate_bool.shape != unmatched_mask.shape:
+                    raise ValueError(
+                        "fifth_candidate_negative_mask must match pred_survival_logits shape for "
+                        "count-conditioned fifth gate survival, "
+                        f"got {tuple(fifth_candidate_bool.shape)} vs {tuple(unmatched_mask.shape)}."
+                    )
+                candidate_mask |= fifth_candidate_bool
+            candidate_mask &= gt34
             negative_mask = unmatched_mask & candidate_mask
 
         if bool(negative_mask.any()):
             neg_weight = torch.full_like(raw_loss, float(self.survival_neg_weight))
             if self.survival_target_mode == "count_conditioned_fifth" and hard_loss_mask is not None:
-                hard = hard_loss_mask.to(device=unmatched_mask.device, dtype=torch.bool).view(-1, 1)
+                hard = hard_loss_mask.to(device=unmatched_mask.device, dtype=torch.bool).reshape(-1)
+                if hard.numel() != unmatched_mask.shape[0]:
+                    raise ValueError(
+                        "hard_loss_mask must contain one value per image for count-conditioned fifth gate survival, "
+                        f"got {hard.numel()} vs B={unmatched_mask.shape[0]}."
+                    )
+                hard = hard.view(-1, 1)
                 neg_weight = torch.where(
                     hard & negative_mask,
                     torch.maximum(
@@ -2290,26 +2550,23 @@ class GCSLoss(nn.Module):
                     ),
                     neg_weight,
                 )
-            if hard_negative_mask is not None:
-                hard_weight = neg_weight.new_tensor(float(self.survival_hard_negative_weight))
-                if self.survival_target_mode == "count_conditioned_fifth":
-                    neg_weight = torch.where(
-                        hard_negative_mask & negative_mask,
-                        torch.maximum(neg_weight, hard_weight),
-                        neg_weight,
-                    )
-                else:
-                    neg_weight = torch.where(hard_negative_mask & unmatched_mask, hard_weight, neg_weight)
-            if duplicate_negative_mask is not None:
-                duplicate_weight = neg_weight.new_tensor(float(self.survival_duplicate_negative_weight))
-                if self.survival_target_mode == "count_conditioned_fifth":
-                    neg_weight = torch.where(
-                        duplicate_negative_mask & negative_mask,
-                        torch.maximum(neg_weight, duplicate_weight),
-                        neg_weight,
-                    )
-                else:
-                    neg_weight = torch.where(duplicate_negative_mask & unmatched_mask, duplicate_weight, neg_weight)
+            if self.survival_target_mode == "matched":
+                hard_negative_bool = (
+                    hard_negative_mask.to(device=unmatched_mask.device, dtype=torch.bool)
+                    if hard_negative_mask is not None
+                    else None
+                )
+                duplicate_negative_bool = (
+                    duplicate_negative_mask.to(device=unmatched_mask.device, dtype=torch.bool)
+                    if duplicate_negative_mask is not None
+                    else None
+                )
+                if hard_negative_bool is not None:
+                    hard_weight = neg_weight.new_tensor(float(self.survival_hard_negative_weight))
+                    neg_weight = torch.where(hard_negative_bool & unmatched_mask, hard_weight, neg_weight)
+                if duplicate_negative_bool is not None:
+                    duplicate_weight = neg_weight.new_tensor(float(self.survival_duplicate_negative_weight))
+                    neg_weight = torch.where(duplicate_negative_bool & unmatched_mask, duplicate_weight, neg_weight)
             neg_loss = (raw_loss[negative_mask] * neg_weight[negative_mask]).sum()
             neg_loss = neg_loss / negative_mask.sum().clamp_min(1).to(dtype=neg_loss.dtype)
         else:
@@ -2475,7 +2732,14 @@ class GCSLoss(nn.Module):
             pred_logits, pred_points, pred_valid_logits, gt_points, gt_valid, indices
         )
         fifth_candidate_negative_mask = (
-            self.fifth_candidate_negative_mask(pred_logits, pred_valid_logits, gt_valid, indices)
+            self.fifth_candidate_negative_mask(
+                pred_logits,
+                pred_valid_logits,
+                gt_valid,
+                indices,
+                duplicate_negative_mask=duplicate_negative_mask,
+                pred_points=pred_points,
+            )
             if self.survival_target_mode == "count_conditioned_fifth"
             else None
         )

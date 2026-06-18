@@ -111,6 +111,17 @@ def _float_arg(args: argparse.Namespace, name: str, default: float) -> float:
     return float(default if value is None else value)
 
 
+def _text_arg(args: argparse.Namespace, name: str, default: str) -> str:
+    """Read a string argparse field using the real CLI default when the field is absent."""
+    value = getattr(args, name, None)
+    return str(default if value is None else value).strip()
+
+
+def _is_disabled_text(value: str) -> bool:
+    """Return True for CLI strings that disable optional map/list knobs."""
+    return str(value or "").strip().lower() in {"", "none", "false", "off", "no", "0"}
+
+
 def validate_hard_manifest_sidecar(
     path: str | Path,
     *,
@@ -184,6 +195,8 @@ def validate_training_hard_manifest_args(args: argparse.Namespace) -> None:
         (survival_gain > 0.0 and survival_target_mode == "count_conditioned_fifth")
         or count_boundary_hard_margin_gain > 0.0
     )
+    hard_edge_weight_map = _text_arg(args, "gcs_hard_edge_loss_weight_by_count", "4:1.15,5:1.6")
+    hard_edge_terms = _text_arg(args, "gcs_hard_edge_loss_terms", "exist,point,point_valid,line_iou")
     if requires_weighted_visible_manifest and requires_fifth_gate_manifest:
         raise SystemExit(
             "ERROR: hard-weighted visible_count_sum and count-conditioned fifth-gate training require different "
@@ -210,6 +223,16 @@ def validate_training_hard_manifest_args(args: argparse.Namespace) -> None:
             else None
         ),
     )
+    if (
+        requires_fifth_gate_manifest
+        and not _is_disabled_text(hard_edge_weight_map)
+        and not _is_disabled_text(hard_edge_terms)
+    ):
+        raise SystemExit(
+            "ERROR: count-conditioned fifth-gate / hard Count Boundary training uses --gcs-hard-loss-file only "
+            "as a train-mined hard-case mask. Disable unrelated hard-edge weighting with "
+            "--gcs-hard-edge-loss-weight-by-count none or --gcs-hard-edge-loss-terms none."
+        )
     validate_hard_manifest_sidecar(getattr(args, "gcs_hard_sample_file", ""), flag="--gcs-hard-sample-file")
 
 
