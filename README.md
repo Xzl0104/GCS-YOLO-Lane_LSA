@@ -30,15 +30,38 @@ source /root/miniconda3/etc/profile.d/conda.sh
 conda activate ssh_lane
 
 python tools/train_gcs.py \
+  --dataset tusimple \
   --model ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml \
   --data data/tusimple_gcs_fixed_y_k56_960x544.yaml \
-  --imgsz 544 960 \
-  --name gcs_5_25_3_q12_k56_e220_seed1_b32w4 \
   --pretrained yolo11s-seg.pt \
-  --epochs 220 \
+  --imgsz 544 960 \
+  --epochs 160 \
   --batch 32 \
   --workers 4 \
-  --seed 1
+  --device 0 \
+  --optimizer AdamW \
+  --lr0 5e-4 \
+  --lrf 0.05 \
+  --cos-lr \
+  --weight-decay 1e-4 \
+  --warmup-epochs 3.0 \
+  --warmup-bias-lr 0.0 \
+  --patience 40 \
+  --erasing 0.1 \
+  --scale 0.3 \
+  --gcs-exist 2.0 \
+  --gcs-point 15.0 \
+  --gcs-point-valid 1.0 \
+  --gcs-smooth 0.05 \
+  --gcs-curve 0.1 \
+  --gcs-mask 0.2 \
+  --gcs-edge 0.2 \
+  --gcs-count 0.2 \
+  --gcs-count-under5 0.3 \
+  --gcs-count-under5-min-lanes 5 \
+  --gcs-lane-count-balanced \
+  --project runs/gcs_lane \
+  --name gcs_yolo_lane_s_tusimple_fixed_y_visible_iou_count02_under5_03
 ```
 
 If `batch=32` OOMs, reduce it only for OOM or instability and record the change in the run notes.
