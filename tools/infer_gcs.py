@@ -27,6 +27,47 @@ from ultralytics.utils.torch_utils import select_device
 DEFAULT_WEIGHTS = ROOT / "runs" / "gcs_lane" / "overfit20" / "weights" / "best.pt"
 
 
+def weight_run_dir(weights: str | Path) -> Path | None:
+    """Return the parent run directory for a standard runs/.../weights/best.pt path."""
+    path = Path(weights)
+    if path.name.lower().endswith((".pt", ".pth")) and path.parent.name == "weights":
+        return path.parent.parent
+    return None
+
+
+def read_run_gcs_eval_max_det(weights: str | Path) -> int | None:
+    """Read gcs_eval_max_det from the checkpoint run args.yaml when available."""
+    run_dir = weight_run_dir(weights)
+    if run_dir is None:
+        return None
+    args_path = run_dir / "args.yaml"
+    if not args_path.exists():
+        return None
+    for line in args_path.read_text(encoding="utf-8").splitlines():
+        text = line.split("#", 1)[0].strip()
+        if not text.startswith("gcs_eval_max_det:"):
+            continue
+        value = text.split(":", 1)[1].strip().strip("'\"")
+        if value.lower() in {"", "none", "null", "~"}:
+            return None
+        return int(float(value))
+    return None
+
+
+def warn_max_det_mismatch(weights: str | Path, max_det: int, context: str) -> None:
+    """Warn when evaluation keeps a different number of lanes than train-time validation."""
+    train_max_det = read_run_gcs_eval_max_det(weights)
+    if train_max_det is None or int(max_det) == int(train_max_det):
+        return
+    run_dir = weight_run_dir(weights)
+    args_path = run_dir / "args.yaml" if run_dir is not None else "args.yaml"
+    print(
+        f"WARNING: {context} max_det={int(max_det)} differs from train-time gcs_eval_max_det={train_max_det} "
+        f"in {args_path}. Keep train-time val, sweeps, and official test on one max_det policy for comparable FP/FN.",
+        file=sys.stderr,
+    )
+
+
 def dataset_defaults(dataset: str) -> dict[str, Path]:
     """Return conventional inference paths for a converted GCS dataset."""
     root = ROOT / "datasets" / ("tusimple_fixed_y_k56_960x544" if dataset.lower() == "tusimple" else dataset.lower())
