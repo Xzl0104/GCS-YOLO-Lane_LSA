@@ -70,6 +70,8 @@ The K56 anchors align exactly to TuSimple official h-samples from `710` down to 
 Expected fixed-y label fields:
 
 ```text
+semantic_mask
+edge_mask
 lanes
 lane_valid
 num_lanes

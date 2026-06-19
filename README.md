@@ -69,6 +69,14 @@ If `batch=32` OOMs, reduce it only for OOM or instability and record the change 
 
 ## Label Rebuild
 
+For this 5-25-3 branch, K56 `.npz` labels must include `semantic_mask` and `edge_mask` because the branch trains `mask_loss` and `edge_loss`. If the remote clone has `datasets` as a symlink to a shared K56 dataset that lacks those arrays, replace only this clone's symlink with a real local runtime directory before rebuilding:
+
+```bash
+cd /root/GCS-YOLO-Lane_LSA_5-25-3-k56
+rm -f datasets
+mkdir -p datasets
+```
+
 ```bash
 python tools/convert_tusimple_to_gcs.py \
   --archive-root archive/TUSimple \
@@ -78,6 +86,19 @@ python tools/convert_tusimple_to_gcs.py \
   --num-points 56 \
   --fixed-y-start 0.9861111111111112 \
   --fixed-y-end 0.2222222222222222
+```
+
+Quick label-field check:
+
+```bash
+python - <<'PY'
+from pathlib import Path
+import numpy as np
+p = next(Path("datasets/tusimple_fixed_y_k56_960x544/labels_gcs/train").glob("*.npz"))
+with np.load(p) as data:
+    print(p.name, sorted(data.files))
+    assert {"semantic_mask", "edge_mask", "lanes", "lane_valid"}.issubset(data.files)
+PY
 ```
 
 ## Local Checks
