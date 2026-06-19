@@ -20,6 +20,7 @@ from tools.eval_gcs import (  # noqa: E402
     dataset_defaults,
     default_data_yaml,
     label_path_for_image,
+    label_raw_file,
     labels_from_source,
     load_gcs_label,
     model_fixed_y_anchors,
@@ -54,6 +55,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--diagnostic-topk", type=int, default=8)
     parser.add_argument("--diagnostic-match-thr", type=float, default=0.5)
     parser.add_argument("--diagnostic-official-acc-thr", type=float, default=0.85)
+    parser.add_argument("--gcs-count-min-gt-points", type=int, default=1)
     parser.add_argument("--conf", type=float, default=0.2)
     parser.add_argument("--point-valid-thr", type=float, default=0.5)
     parser.add_argument("--nms-dist-px", type=float, default=18.0)
@@ -153,6 +155,7 @@ def main() -> None:
         label_path = label_path_for_image(image_path, labels)
         assert_label_fixed_y_compatible(label_path, expected_fixed_y, image_shape=img.shape[:2])
         gt_lanes, gt_valid = load_gcs_label(label_path)
+        raw_file = label_raw_file(label_path)
         tensor = preprocess_image(img, imgsz=imgsz, device=device, half=args.half)
         preds = model(tensor)
 
@@ -234,6 +237,14 @@ def main() -> None:
             diagnostic_match_thr=args.diagnostic_match_thr,
             image_shape=img.shape[:2],
             normal_min_points=args.normal_min_points,
+            count_min_gt_points=args.gcs_count_min_gt_points,
+        )
+        row.update(
+            {
+                "raw_file": raw_file,
+                "image_file": str(image_path),
+                "label_file": str(label_path),
+            }
         )
         row.update({f"decode_{k}": v for k, v in decode_meta.items() if isinstance(v, (int, float, bool, str))})
         rows.append(row)
@@ -245,6 +256,15 @@ def main() -> None:
         args.out,
         diagnostic_topk=args.diagnostic_topk,
         write_hard_samples=bool(args.write_hard_samples),
+        config={
+            "split": args.split,
+            "data": args.data,
+            "weights": args.weights,
+            "source": str(source),
+            "labels": str(labels),
+            "imgsz": list(imgsz),
+            "count_min_gt_points": int(args.gcs_count_min_gt_points),
+        },
     )
     print(json.dumps(summary, indent=2))
     print(f"saved to: {Path(args.out).resolve()}")

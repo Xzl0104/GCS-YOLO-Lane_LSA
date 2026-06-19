@@ -12,7 +12,7 @@ from typing import Any
 import numpy as np
 import torch
 
-from ultralytics.utils.gcs_candidate_matching import GCSLaneCandidate, match_candidates_to_gt
+from ultralytics.utils.gcs_candidate_matching import GCSLaneCandidate, lane_similarity
 from ultralytics.utils.gcs_postprocess import lane_nms, longest_contiguous_valid_mask
 
 
@@ -28,11 +28,23 @@ ERROR_TYPES = (
 )
 
 
-def _gt_count(gt_valid: Any) -> int:
+def _gt_count(gt_valid: Any, min_gt_points: int = 1) -> int:
     valid = torch.as_tensor(gt_valid, dtype=torch.float32)
     if valid.ndim != 2:
         raise ValueError(f"gt_valid must have shape N x K, got {tuple(valid.shape)}.")
-    return int((valid.sum(dim=1) >= 2).sum().item())
+    return int((valid.sum(dim=1) >= int(min_gt_points)).sum().item())
+
+
+def _counted_gt_subset(gt_lanes: Any, gt_valid: Any, min_gt_points: int = 1) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return the GT lanes that participate in count targets."""
+    points = torch.as_tensor(gt_lanes, dtype=torch.float32)
+    valid = torch.as_tensor(gt_valid, dtype=torch.float32)
+    if points.ndim != 3 or points.shape[-1] != 2:
+        raise ValueError(f"gt_lanes must have shape N x K x 2, got {tuple(points.shape)}.")
+    if valid.shape != points.shape[:2]:
+        raise ValueError(f"gt_valid must have shape N x K, got {tuple(valid.shape)} vs {tuple(points.shape[:2])}.")
+    lane_mask = valid.sum(dim=1) >= int(min_gt_points)
+    return points[lane_mask], valid[lane_mask]
 
 
 def _count_probs(pred_count_logits: Any | None, pred_count_cls: int | None, gt_count: int) -> tuple[int, list[float]]:
@@ -74,10 +86,59 @@ def _best_candidate_for_gt(candidates: list[GCSLaneCandidate], gt_id: int) -> GC
     return max(pool, key=lambda c: (float(c.line_iou), -int(c.pre_nms_rank or 10**9), float(c.pre_nms_score)))
 
 
-def _edge_gt_ids(gt_lanes: Any, gt_valid: Any) -> set[int]:
+def _match_candidates_to_counted_gt(
+    candidates: list[GCSLaneCandidate],
+    gt_lanes: Any,
+    gt_valid: Any,
+    *,
+    match_thr: float = 0.5,
+    image_shape: tuple[int, int] = (544, 960),
+    dist_thr_px: float = 20.0,
+) -> None:
+    """Match candidates to already-count-filtered GT, allowing 1-point matches only for 1-point GT lanes."""
+    gt_points = torch.as_tensor(gt_lanes, dtype=torch.float32)
+    gt_mask = torch.as_tensor(gt_valid, dtype=torch.float32)
+    scored: list[tuple[float, int, int]] = []
+    best_score_by_candidate: dict[int, float] = {}
+    gt_visible = gt_mask.sum(dim=1).to(dtype=torch.int64) if gt_mask.ndim == 2 else torch.zeros(0, dtype=torch.int64)
+    for ci, cand in enumerate(candidates):
+        best = 0.0
+        for gi in range(gt_points.shape[0]):
+            min_overlap = min(2, max(int(gt_visible[gi].item()), 1))
+            score = lane_similarity(
+                cand.points,
+                cand.valid_probs,
+                gt_points[gi],
+                gt_mask[gi],
+                image_shape=image_shape,
+                dist_thr_px=dist_thr_px,
+                min_overlap=min_overlap,
+            )
+            best = max(best, score)
+            if score >= float(match_thr):
+                scored.append((score, ci, gi))
+        best_score_by_candidate[ci] = best
+
+    matched_candidates: dict[int, int] = {}
+    matched_scores: dict[int, float] = {}
+    used_gt: set[int] = set()
+    for score, ci, gi in sorted(scored, key=lambda x: x[0], reverse=True):
+        if ci in matched_candidates or gi in used_gt:
+            continue
+        matched_candidates[ci] = gi
+        matched_scores[ci] = float(score)
+        used_gt.add(gi)
+
+    for ci, cand in enumerate(candidates):
+        cand.matched_gt_id = int(matched_candidates.get(ci, -1))
+        cand.line_iou = float(matched_scores.get(ci, best_score_by_candidate.get(ci, 0.0)))
+        cand.official_lane_acc = cand.line_iou
+
+
+def _edge_gt_ids(gt_lanes: Any, gt_valid: Any, min_gt_points: int = 1) -> set[int]:
     points = torch.as_tensor(gt_lanes, dtype=torch.float32)
     valid = torch.as_tensor(gt_valid, dtype=torch.float32)
-    lane_mask = valid.sum(dim=1) >= 2
+    lane_mask = valid.sum(dim=1) >= int(min_gt_points)
     if int(lane_mask.sum().item()) < 4:
         return set()
     mean_x = (points[..., 0] * valid).sum(dim=1) / valid.sum(dim=1).clamp_min(1.0)
@@ -109,13 +170,31 @@ def diagnose_count_errors(
     diagnostic_match_thr: float = 0.5,
     image_shape: tuple[int, int] = (544, 960),
     normal_min_points: int = 5,
+    count_min_gt_points: int = 1,
 ) -> dict:
     """Classify one image into A/B/C/D/E/F count-error buckets."""
-    gt_n = _gt_count(gt_valid)
+    gt_lanes_counted, gt_valid_counted = _counted_gt_subset(
+        gt_lanes,
+        gt_valid,
+        min_gt_points=count_min_gt_points,
+    )
+    gt_n = int(gt_lanes_counted.shape[0])
     pred_cls, probs = _count_probs(pred_count_logits, pred_count_cls, gt_n)
     candidates = _ranked(candidates)
-    match_candidates_to_gt(candidates, gt_lanes, gt_valid, match_thr=diagnostic_match_thr, image_shape=image_shape)
-    match_candidates_to_gt(final_candidates, gt_lanes, gt_valid, match_thr=diagnostic_match_thr, image_shape=image_shape)
+    _match_candidates_to_counted_gt(
+        candidates,
+        gt_lanes_counted,
+        gt_valid_counted,
+        match_thr=diagnostic_match_thr,
+        image_shape=image_shape,
+    )
+    _match_candidates_to_counted_gt(
+        final_candidates,
+        gt_lanes_counted,
+        gt_valid_counted,
+        match_thr=diagnostic_match_thr,
+        image_shape=image_shape,
+    )
 
     final_matched = {int(c.matched_gt_id) for c in final_candidates if int(c.matched_gt_id) >= 0}
     missing_gt_ids = [i for i in range(gt_n) if i not in final_matched]
@@ -123,7 +202,7 @@ def diagnose_count_errors(
     fp_count = sum(1 for c in final_candidates if int(c.matched_gt_id) < 0)
     fn_count = max(0, gt_n - len(final_matched))
     has_false_lane, has_duplicate_lane = _duplicate_or_false(final_candidates)
-    edge_missing = bool(_edge_gt_ids(gt_lanes, gt_valid) - final_matched)
+    edge_missing = bool(_edge_gt_ids(gt_lanes_counted, gt_valid_counted, min_gt_points=1) - final_matched)
 
     best_missing = [_best_candidate_for_gt(candidates, gi) for gi in missing_gt_ids]
     best_existing = [c for c in best_missing if c is not None]
@@ -181,6 +260,7 @@ def diagnose_count_errors(
 
     row = {
         "image_id": str(image_id),
+        "count_min_gt_points": int(count_min_gt_points),
         "gt_count": int(gt_n),
         "pred_count_cls": int(pred_cls),
         "pred_count_prob_2": float(probs[0]),
@@ -329,8 +409,10 @@ def summarize_count_diagnostics(rows: list[dict]) -> dict:
     fp_sum = sum(int(r.get("fp_count", 0)) for r in rows)
     fn_sum = sum(int(r.get("fn_count", 0)) for r in rows)
     gt_sum = sum(max(int(r.get("gt_count", 0)), 1) for r in rows)
+    count_min_values = sorted({int(r.get("count_min_gt_points", 1)) for r in rows}) if rows else []
     return {
         "num_images": int(n),
+        "count_min_gt_points": count_min_values[0] if len(count_min_values) == 1 else count_min_values,
         "official_acc": round(float(sum(max(0, int(r.get("gt_count", 0)) - int(r.get("fn_count", 0))) for r in rows) / max(gt_sum, 1)), 6),
         "official_fp": round(float(fp_sum / max(gt_sum, 1)), 6),
         "official_fn": round(float(fn_sum / max(gt_sum, 1)), 6),
@@ -351,6 +433,10 @@ def diagnostic_csv_fields(diagnostic_topk: int = 8) -> list[str]:
     """Return stable per-image CSV field order."""
     base = [
         "image_id",
+        "raw_file",
+        "image_file",
+        "label_file",
+        "count_min_gt_points",
         "gt_count",
         "pred_count_cls",
         "pred_count_prob_2",
@@ -404,6 +490,7 @@ def write_count_diagnostics(
     *,
     diagnostic_topk: int = 8,
     write_hard_samples: bool = True,
+    config: dict | None = None,
 ) -> dict:
     """Write per_image.csv, per_image.jsonl, summary.json, and optional hard-sample manifest."""
     out = Path(out_dir)
@@ -418,6 +505,8 @@ def write_count_diagnostics(
         for row in rows:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
     summary = summarize_count_diagnostics(rows)
+    if config is not None:
+        summary["config"] = dict(config)
     (out / "summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
     if write_hard_samples:
         with (out / "count_hard_samples.txt").open("w", encoding="utf-8") as f:

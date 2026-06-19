@@ -341,6 +341,61 @@ def test_k56_fifth_gate_hardsample_preset_collects_only_requested_failures():
     ) == (False, "")
 
 
+def test_k56_fifth_gate_nearmiss_preset_collects_boundary_cases():
+    preset = "k56_fifth_gate_nearmiss_hardsamples"
+    transitions = hard_samples.parse_transitions("4->5")
+    thresholds = hard_samples.nearmiss_thresholds_from_args()
+
+    assert hard_samples.record_matches_preset(
+        {"gt_count": 4, "final_count": 4, "fp_count": 1},
+        preset=preset,
+        transitions=transitions,
+        nearmiss_thresholds=thresholds,
+    ) == (True, "gt4_bad_composition")
+    assert hard_samples.record_matches_preset(
+        {"gt_count": 4, "final_count": 4, "pred_count_prob_5": 0.051},
+        preset=preset,
+        transitions=transitions,
+        nearmiss_thresholds=thresholds,
+    ) == (True, "gt4_count5_pressure")
+    assert hard_samples.record_matches_preset(
+        {
+            "gt_count": 4,
+            "final_count": 4,
+            "top1_matched_gt_id": -1,
+            "top1_score": 0.80,
+            "top1_valid_points": 5,
+        },
+        preset=preset,
+        transitions=transitions,
+        nearmiss_thresholds=thresholds,
+    ) == (True, "gt4_high_unmatched_candidate")
+    assert hard_samples.record_matches_preset(
+        {"gt_count": 5, "final_count": 4},
+        preset=preset,
+        transitions=transitions,
+        nearmiss_thresholds=thresholds,
+    ) == (True, "gt5_under_output")
+    assert hard_samples.record_matches_preset(
+        {"gt_count": 5, "final_count": 5, "pred_count_prob_4": 0.051},
+        preset=preset,
+        transitions=transitions,
+        nearmiss_thresholds=thresholds,
+    ) == (True, "gt5_count4_pressure")
+    assert hard_samples.record_matches_preset(
+        {"gt_count": 5, "final_count": 5, "candidate_recall_all": 0.8, "edge_lane_missing": 1},
+        preset=preset,
+        transitions=transitions,
+        nearmiss_thresholds=thresholds,
+    ) == (True, "gt5_edge_missing;gt5_candidate_recall_shortfall")
+    assert hard_samples.record_matches_preset(
+        {"gt_count": 4, "final_count": 4, "pred_count_prob_5": 0.05},
+        preset=preset,
+        transitions=transitions,
+        nearmiss_thresholds=thresholds,
+    ) == (False, "")
+
+
 def test_k56_fifth_gate_hardsample_builder_writes_train_sidecar(monkeypatch, tmp_path):
     summary_path = tmp_path / "train_summary.json"
     output = tmp_path / "out" / "fifth_gate.txt"
@@ -401,6 +456,143 @@ def test_k56_fifth_gate_hardsample_builder_writes_train_sidecar(monkeypatch, tmp
     assert sidecar["target_match_audit"]["raw_file_only"] is True
     assert sidecar["target_match_audit"]["unmatched_unique_samples"] == 0
     assert sidecar["transition_counts"] == {"4->5": 1, "5->4": 1, "5->count_head_klt5": 2}
+
+
+def test_k56_fifth_gate_nearmiss_builder_reads_count_diagnostic_jsonl(monkeypatch, tmp_path):
+    diag_dir = tmp_path / "diag"
+    diag_dir.mkdir()
+    output = tmp_path / "out" / "nearmiss.txt"
+    dataset_root = tmp_path / "dataset"
+    label_dir = dataset_root / "labels_gcs" / "train"
+    label_dir.mkdir(parents=True)
+    rows = []
+    for i in range(20):
+        raw_file = f"clips/train/gt4_nearmiss/{i:02d}.jpg"
+        np.savez(label_dir / f"gt4_{i:02d}.npz", raw_file=np.array(raw_file))
+        rows.append(
+            {
+                "raw_file": raw_file,
+                "gt_count": 4,
+                "final_count": 4,
+                "fp_count": 1 if i % 2 == 0 else 0,
+                "fn_count": 0,
+                "edge_lane_missing": 0,
+                "has_false_lane": 0,
+                "has_duplicate_lane": 0,
+                "pred_count_cls": 4,
+                "pred_count_prob_5": 0.06 if i % 2 else 0.0,
+                "candidate_recall_all": 1.0,
+                "count_min_gt_points": 1,
+            }
+        )
+    gt5_raw = "clips/train/gt5_nearmiss/20.jpg"
+    np.savez(label_dir / "gt5.npz", raw_file=np.array(gt5_raw))
+    rows.append(
+        {
+            "raw_file": gt5_raw,
+            "gt_count": 5,
+            "final_count": 4,
+            "pred_count_cls": 4,
+            "pred_count_prob_4": 0.06,
+            "candidate_recall_all": 1.0,
+            "edge_lane_missing": 0,
+            "count_min_gt_points": 1,
+        }
+    )
+    (diag_dir / "summary.json").write_text(
+        json.dumps({"config": {"split": "train", "count_min_gt_points": 1}}),
+        encoding="utf-8",
+    )
+    (diag_dir / "per_image.jsonl").write_text(
+        "".join(json.dumps(row) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "build_gcs_hard_samples_from_eval.py",
+            "--eval-summary",
+            str(diag_dir),
+            "--preset",
+            "k56_fifth_gate_nearmiss_hardsamples",
+            "--dataset-root",
+            str(dataset_root),
+            "--target-splits",
+            "train",
+            "--require-target-match",
+            "--output",
+            str(output),
+        ],
+    )
+
+    hard_samples.main()
+
+    assert output.read_text(encoding="utf-8").splitlines() == [row["raw_file"] for row in rows]
+    sidecar = json.loads(output.with_suffix(output.suffix + ".summary.json").read_text(encoding="utf-8"))
+    assert sidecar["preset"] == "k56_fifth_gate_nearmiss_hardsamples"
+    assert sidecar["source_split"] == "train"
+    assert sidecar["source_format"] == "count_diagnostics_jsonl"
+    assert sidecar["count_min_gt_points"] == 1
+    assert sidecar["target_match_audit"]["raw_file_only"] is True
+    assert sidecar["target_match_audit"]["unmatched_unique_samples"] == 0
+    assert sidecar["thresholds"]["gt4_count5_prob_thr"] == 0.05
+    assert sidecar["reason_counts"]["gt4_bad_composition"] == 10
+    assert sidecar["reason_counts"]["gt4_count5_pressure"] == 10
+    assert sidecar["reason_counts"]["gt5_under_output"] == 1
+    assert sidecar["gt_count_counts"] == {"4": 20, "5": 1}
+
+
+def test_k56_fifth_gate_nearmiss_builder_rejects_unaligned_count_min(monkeypatch, tmp_path):
+    diag_dir = tmp_path / "diag"
+    diag_dir.mkdir()
+    output = tmp_path / "nearmiss.txt"
+    dataset_root = tmp_path / "dataset"
+    (dataset_root / "labels_gcs" / "train").mkdir(parents=True)
+    (diag_dir / "summary.json").write_text(
+        json.dumps({"config": {"split": "train", "count_min_gt_points": 2}}),
+        encoding="utf-8",
+    )
+    (diag_dir / "per_image.jsonl").write_text(
+        json.dumps({"raw_file": "clips/train/a.jpg", "gt_count": 4, "final_count": 5}) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "build_gcs_hard_samples_from_eval.py",
+            "--eval-summary",
+            str(diag_dir),
+            "--preset",
+            "k56_fifth_gate_nearmiss_hardsamples",
+            "--dataset-root",
+            str(dataset_root),
+            "--target-splits",
+            "train",
+            "--require-target-match",
+            "--output",
+            str(output),
+        ],
+    )
+
+    with pytest.raises(SystemExit, match="count_min_gt_points=1"):
+        hard_samples.main()
+
+
+def test_k56_fifth_gate_nearmiss_v2_script_uses_train_diagnostics_and_nearmiss_manifest():
+    script = (ROOT / "scripts" / "run_k56_fifth_gate_nearmiss_v2.sh").read_text(encoding="utf-8")
+
+    assert "tools/diagnose_gcs_count_errors.py" in script
+    assert "--split train" in script
+    assert "--gcs-count-min-gt-points 1" in script
+    assert "--preset k56_fifth_gate_nearmiss_hardsamples" in script
+    assert "--target-splits train" in script
+    assert "--require-target-match" in script
+    assert "--gcs-survival-target-mode count_conditioned_fifth" in script
+    assert "--gcs-count-min-gt-points 1" in script
+    assert "--gcs-count-boundary-hard-margin-gain" in script
+    assert "--gcs-count-adjacent-margin-gain 0.0" in script
+    assert "--gcs-hard-edge-loss-weight-by-count none" in script
+    assert "--gcs-hard-edge-loss-terms none" in script
 
 
 def test_k56_hardsample_preset_does_not_write_failed_target_audit(monkeypatch, tmp_path):
@@ -837,7 +1029,7 @@ def test_train_requires_fifth_gate_manifest_for_count_conditioned_survival(tmp_p
         ),
         encoding="utf-8",
     )
-    with pytest.raises(SystemExit, match="sidecar preset must be k56_fifth_gate_hardsamples"):
+    with pytest.raises(SystemExit, match="sidecar preset must be one of"):
         train_gcs.validate_training_hard_manifest_args(args)
 
     manifest.with_suffix(manifest.suffix + ".summary.json").write_text(
@@ -877,6 +1069,105 @@ def test_train_requires_fifth_gate_manifest_for_count_boundary_hard_margin():
         gcs_hard_sample_file="",
     )
     with pytest.raises(SystemExit, match="k56_fifth_gate_hardsamples"):
+        train_gcs.validate_training_hard_manifest_args(args)
+
+
+def test_train_accepts_nearmiss_fifth_gate_manifest(tmp_path):
+    manifest = tmp_path / "nearmiss.txt"
+    manifest.write_text("\n".join(f"clips/train/hard/{i:02d}.jpg" for i in range(20)) + "\n", encoding="utf-8")
+    manifest.with_suffix(manifest.suffix + ".summary.json").write_text(
+        json.dumps(
+            {
+                "builder": "build_gcs_hard_samples_from_eval.py",
+                "preset": "k56_fifth_gate_nearmiss_hardsamples",
+                "source_split": "train",
+                "target_splits": ["train"],
+                "require_target_match": True,
+                "analysis_only": False,
+                "test_summary_allowed": False,
+                "count_min_gt_points": 1,
+                "reason_counts": {"gt4_bad_composition": 20, "gt5_under_output": 1},
+                "target_match_audit": {
+                    "raw_file_only": True,
+                    "matched_unique_samples": 20,
+                    "unmatched_unique_samples": 0,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    args = SimpleNamespace(
+        gcs_visible_count_sum=0.0,
+        gcs_visible_count_sum_hard_weight=1.0,
+        gcs_survival=0.2,
+        gcs_survival_target_mode="count_conditioned_fifth",
+        gcs_count_boundary_hard_margin_gain=0.0,
+        gcs_count_min_gt_points=1,
+        gcs_hard_loss_file=str(manifest),
+        gcs_hard_sample_file="",
+        gcs_hard_edge_loss_weight_by_count="none",
+        gcs_hard_edge_loss_terms="exist,point,point_valid,line_iou",
+    )
+
+    train_gcs.validate_training_hard_manifest_args(args)
+
+
+def test_train_rejects_degenerate_nearmiss_fifth_gate_manifest(tmp_path):
+    manifest = tmp_path / "nearmiss.txt"
+    manifest.write_text("clips/train/hard/00.jpg\n", encoding="utf-8")
+    base_sidecar = {
+        "builder": "build_gcs_hard_samples_from_eval.py",
+        "preset": "k56_fifth_gate_nearmiss_hardsamples",
+        "source_split": "train",
+        "target_splits": ["train"],
+        "require_target_match": True,
+        "analysis_only": False,
+        "test_summary_allowed": False,
+        "count_min_gt_points": 1,
+        "reason_counts": {"gt5_under_output": 20},
+        "target_match_audit": {
+            "raw_file_only": True,
+            "matched_unique_samples": 19,
+            "unmatched_unique_samples": 0,
+        },
+    }
+    sidecar_path = manifest.with_suffix(manifest.suffix + ".summary.json")
+    args = SimpleNamespace(
+        gcs_visible_count_sum=0.0,
+        gcs_visible_count_sum_hard_weight=1.0,
+        gcs_survival=0.2,
+        gcs_survival_target_mode="count_conditioned_fifth",
+        gcs_count_boundary_hard_margin_gain=0.0,
+        gcs_count_min_gt_points=1,
+        gcs_hard_loss_file=str(manifest),
+        gcs_hard_sample_file="",
+        gcs_hard_edge_loss_weight_by_count="none",
+        gcs_hard_edge_loss_terms="exist,point,point_valid,line_iou",
+    )
+
+    sidecar_path.write_text(json.dumps(base_sidecar), encoding="utf-8")
+    with pytest.raises(SystemExit, match="fewer than 20"):
+        train_gcs.validate_training_hard_manifest_args(args)
+
+    sidecar = {**base_sidecar, "target_match_audit": {**base_sidecar["target_match_audit"], "matched_unique_samples": 20}}
+    sidecar_path.write_text(json.dumps(sidecar), encoding="utf-8")
+    with pytest.raises(SystemExit, match="GT4 hard-negative"):
+        train_gcs.validate_training_hard_manifest_args(args)
+
+    sidecar = {**sidecar, "reason_counts": {"gt4_bad_composition": 20}}
+    sidecar_path.write_text(json.dumps(sidecar), encoding="utf-8")
+    with pytest.raises(SystemExit, match="GT5 hard-positive"):
+        train_gcs.validate_training_hard_manifest_args(args)
+
+    sidecar = {**sidecar, "count_min_gt_points": 2, "reason_counts": {"gt4_bad_composition": 20, "gt5_under_output": 1}}
+    sidecar_path.write_text(json.dumps(sidecar), encoding="utf-8")
+    with pytest.raises(SystemExit, match="count_min_gt_points=1"):
+        train_gcs.validate_training_hard_manifest_args(args)
+
+    sidecar = {**sidecar, "count_min_gt_points": 1}
+    sidecar_path.write_text(json.dumps(sidecar), encoding="utf-8")
+    args.gcs_count_min_gt_points = 2
+    with pytest.raises(SystemExit, match="training uses gcs_count_min_gt_points=2"):
         train_gcs.validate_training_hard_manifest_args(args)
 
 

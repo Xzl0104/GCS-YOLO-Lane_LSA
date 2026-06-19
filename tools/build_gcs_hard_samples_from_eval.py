@@ -21,7 +21,16 @@ PRESET_TRANSITIONS = {
     "k56_viscountsum_hardsamples": "4->5,5->2,5->3,5->4",
     "k56_fifth_gate_hardsamples": "4->5,5->4",
 }
-TRAIN_ONLY_PRESETS = frozenset(PRESET_TRANSITIONS)
+NEARMISS_PRESETS = {"k56_fifth_gate_nearmiss_hardsamples"}
+TRAIN_ONLY_PRESETS = frozenset(PRESET_TRANSITIONS) | frozenset(NEARMISS_PRESETS)
+ALL_PRESETS = frozenset(PRESET_TRANSITIONS) | frozenset(NEARMISS_PRESETS)
+DEFAULT_NEARMISS_THRESHOLDS = {
+    "gt4_count5_prob_thr": 0.05,
+    "gt4_unmatched_score_thr": 0.75,
+    "gt4_unmatched_min_points": 5,
+    "gt5_count4_prob_thr": 0.05,
+    "nearmiss_topk": 8,
+}
 
 
 def parse_list(value: str) -> list[str]:
@@ -55,6 +64,21 @@ def safe_int(value: Any, default: int | None = None) -> int | None:
         return default
 
 
+def safe_float(value: Any, default: float | None = None) -> float | None:
+    """Best-effort float conversion for optional eval-summary fields."""
+    if value in (None, ""):
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def truthy_int(record: dict, key: str) -> bool:
+    """Return a diagnostic boolean stored as 0/1, bool, or a numeric string."""
+    return bool(safe_int(record.get(key), 0) or 0)
+
+
 def count_head_policy_count(record: dict) -> int | None:
     """Return Count Head policy K from custom or GT5 diagnostic record fields."""
     for key in ("decode_count_head_k", "count_head_policy_count"):
@@ -71,11 +95,101 @@ def count_head_policy_count(record: dict) -> int | None:
 
 def predicted_lane_count(record: dict) -> int | None:
     """Return final decoded lane count from either summary field name."""
-    for key in ("final_pred_lanes", "pred_lanes"):
+    for key in ("final_pred_lanes", "pred_lanes", "final_count"):
         value = safe_int(record.get(key), None)
         if value is not None:
             return value
     return None
+
+
+def record_gt_count(record: dict) -> int | None:
+    """Return GT lane count from either eval-summary or count-diagnostic fields."""
+    for key in ("gt_lanes", "gt_count"):
+        value = safe_int(record.get(key), None)
+        if value is not None:
+            return value
+    return None
+
+
+def nearmiss_thresholds_from_args(args: argparse.Namespace | None = None) -> dict:
+    """Return the near-miss preset thresholds stored in sidecar provenance."""
+    values = dict(DEFAULT_NEARMISS_THRESHOLDS)
+    if args is None:
+        return values
+    for key in values:
+        values[key] = getattr(args, key, values[key])
+    values["gt4_unmatched_min_points"] = int(values["gt4_unmatched_min_points"])
+    values["nearmiss_topk"] = int(values["nearmiss_topk"])
+    return values
+
+
+def _has_high_unmatched_top_candidate(record: dict, thresholds: dict) -> bool:
+    """Detect decode-eligible high-score unmatched candidates from flattened top-k diagnostic fields."""
+    topk = int(thresholds["nearmiss_topk"])
+    score_thr = float(thresholds["gt4_unmatched_score_thr"])
+    min_points = int(thresholds["gt4_unmatched_min_points"])
+    for i in range(1, topk + 1):
+        matched_gt = safe_int(record.get(f"top{i}_matched_gt_id"), None)
+        if matched_gt is None or matched_gt >= 0:
+            continue
+        score = safe_float(record.get(f"top{i}_score"), 0.0) or 0.0
+        valid_points = safe_int(record.get(f"top{i}_valid_points"), 0) or 0
+        if score > score_thr and valid_points >= min_points:
+            return True
+    return False
+
+
+def record_matches_nearmiss_preset(record: dict, thresholds: dict | None = None) -> tuple[bool, str]:
+    """Return whether one count-diagnostic row belongs in the fifth-gate near-miss manifest."""
+    thresholds = thresholds or DEFAULT_NEARMISS_THRESHOLDS
+    gt = record_gt_count(record)
+    final = predicted_lane_count(record)
+    pred_cls = safe_int(record.get("pred_count_cls"), None)
+    if gt is None:
+        return False, ""
+
+    reasons: list[str] = []
+    if gt == 4:
+        bad_composition = (
+            final == 4
+            and (
+                (safe_int(record.get("fp_count"), 0) or 0) > 0
+                or (safe_int(record.get("fn_count"), 0) or 0) > 0
+                or truthy_int(record, "edge_lane_missing")
+                or truthy_int(record, "has_false_lane")
+                or truthy_int(record, "has_duplicate_lane")
+            )
+        )
+        count5_pressure = (
+            (final is not None and final > 4)
+            or (pred_cls is not None and pred_cls > 4)
+            or ((safe_float(record.get("pred_count_prob_5"), 0.0) or 0.0) > float(thresholds["gt4_count5_prob_thr"]))
+        )
+        high_unmatched = _has_high_unmatched_top_candidate(record, thresholds)
+        if bad_composition:
+            reasons.append("gt4_bad_composition")
+        if count5_pressure:
+            reasons.append("gt4_count5_pressure")
+        if high_unmatched:
+            reasons.append("gt4_high_unmatched_candidate")
+    elif gt == 5:
+        under_output = final is not None and final < 5
+        count4_pressure = (
+            (pred_cls is not None and pred_cls < 5)
+            or ((safe_float(record.get("pred_count_prob_4"), 0.0) or 0.0) > float(thresholds["gt5_count4_prob_thr"]))
+        )
+        edge_missing = truthy_int(record, "edge_lane_missing")
+        candidate_shortfall = (safe_float(record.get("candidate_recall_all"), 1.0) or 1.0) < 1.0
+        if under_output:
+            reasons.append("gt5_under_output")
+        if count4_pressure:
+            reasons.append("gt5_count4_pressure")
+        if edge_missing:
+            reasons.append("gt5_edge_missing")
+        if candidate_shortfall:
+            reasons.append("gt5_candidate_recall_shortfall")
+
+    return bool(reasons), ";".join(dict.fromkeys(reasons))
 
 
 def record_matches_preset(
@@ -83,9 +197,12 @@ def record_matches_preset(
     *,
     preset: str,
     transitions: set[tuple[int, int]],
+    nearmiss_thresholds: dict | None = None,
 ) -> tuple[bool, str]:
     """Return whether one eval record belongs in the requested hard manifest and why."""
-    gt = safe_int(record.get("gt_lanes"), None)
+    if preset in NEARMISS_PRESETS:
+        return record_matches_nearmiss_preset(record, thresholds=nearmiss_thresholds)
+    gt = record_gt_count(record)
     pred = predicted_lane_count(record)
     if gt is None:
         return False, ""
@@ -118,6 +235,7 @@ def validate_preset_scope(args: argparse.Namespace, payload: dict, summary_path:
     preset = str(getattr(args, "preset", "") or "")
     if preset not in TRAIN_ONLY_PRESETS or bool(getattr(args, "allow_non_train_preset", False)):
         return
+    config = payload.get("config") if isinstance(payload.get("config"), dict) else {}
     split = summary_split(payload)
     if split != "train":
         raise SystemExit(
@@ -141,6 +259,13 @@ def validate_preset_scope(args: argparse.Namespace, payload: dict, summary_path:
             f"Preset {preset} requires --dataset-root for target split matching. "
             "Use --allow-non-train-preset only for analysis manifests."
         )
+    if preset in NEARMISS_PRESETS:
+        count_min = safe_int(config.get("count_min_gt_points"), None)
+        if count_min != 1:
+            raise SystemExit(
+                f"Preset {preset} requires count diagnostics built with count_min_gt_points=1; "
+                f"got {count_min if count_min is not None else '<missing>'} from {summary_path}."
+            )
 
 
 def validate_preset_target_audit(
@@ -285,6 +410,44 @@ def extract_records(payload: dict, summary_path: Path) -> list[dict]:
     return records
 
 
+def load_eval_payload(summary_path: Path) -> tuple[dict, Path]:
+    """Load JSON or count-diagnostic JSONL records, accepting a diagnostic output directory."""
+    path = summary_path
+    if path.is_dir():
+        path = path / "per_image.jsonl"
+    if path.suffix.lower() == ".jsonl":
+        records = []
+        with path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    records.append(json.loads(line))
+        config: dict[str, Any] = {
+            "format": "count_diagnostics_jsonl",
+            "source": str(path),
+        }
+        sibling_summary = path.with_name("summary.json")
+        if sibling_summary.exists():
+            try:
+                summary_payload = json.loads(sibling_summary.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as exc:
+                raise SystemExit(f"Count diagnostic summary is not valid JSON: {sibling_summary}") from exc
+            summary_config = summary_payload.get("config") if isinstance(summary_payload.get("config"), dict) else {}
+            config.update(summary_config)
+            if "count_min_gt_points" not in config and "count_min_gt_points" in summary_payload:
+                config["count_min_gt_points"] = summary_payload["count_min_gt_points"]
+        if "count_min_gt_points" not in config:
+            count_min_values = sorted(
+                x for x in {safe_int(r.get("count_min_gt_points"), None) for r in records} if x is not None
+            )
+            if len(count_min_values) == 1:
+                config["count_min_gt_points"] = count_min_values[0]
+        payload = {"config": config, "records": records}
+        return payload, path
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return payload, path
+
+
 def record_raw_file(record: dict, *, require_raw_file: bool = False) -> str:
     """Return the best available image identifier from official or custom eval records."""
     raw_file = normalize_sample_id(record.get("raw_file", ""))
@@ -298,7 +461,7 @@ def record_raw_file(record: dict, *, require_raw_file: bool = False) -> str:
                 return raw_file
     if require_raw_file:
         return ""
-    for key in ("raw_file", "image", "im_file", "file"):
+    for key in ("raw_file", "image_file", "image", "im_file", "file"):
         value = normalize_sample_id(record.get(key, ""))
         if value:
             return value
@@ -321,6 +484,7 @@ def manifest_provenance(
     """Return sidecar fields used by training to reject leakage-prone hard manifests."""
     split = summary_split(payload)
     target_splits = parse_list(getattr(args, "target_splits", "train"))
+    config = payload.get("config") if isinstance(payload.get("config"), dict) else {}
     analysis_only = bool(
         getattr(args, "allow_non_train_preset", False)
         or getattr(args, "allow_test", False)
@@ -337,12 +501,18 @@ def manifest_provenance(
         "manifest_unique_samples": int(len(unique_rows)),
         "target_match_audit": target_match_audit,
         "eval_summary": str(summary_path),
+        "source_format": str(config.get("format", "json")),
+        "count_min_gt_points": config.get("count_min_gt_points"),
     }
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build a GCS hard-sample manifest from validation eval failures.")
-    parser.add_argument("--eval-summary", required=True, help="Path to tusimple_official_summary.json or similar eval JSON.")
+    parser.add_argument(
+        "--eval-summary",
+        required=True,
+        help="Path to eval JSON, count diagnostic per_image.jsonl, or a count diagnostic output directory.",
+    )
     parser.add_argument(
         "--transitions",
         default="4->3,4->5,3->5",
@@ -350,13 +520,27 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--preset",
-        choices=tuple(sorted(PRESET_TRANSITIONS)),
+        choices=tuple(sorted(ALL_PRESETS)),
         default="",
         help=(
             "Optional named transition preset. k56_viscountsum_hardsamples exports train count failures; "
-            "k56_fifth_gate_hardsamples exports train GT4 false-fifth and GT5 miss-fifth/count-under cases."
+            "k56_fifth_gate_hardsamples exports train GT4 false-fifth and GT5 miss-fifth/count-under cases; "
+            "k56_fifth_gate_nearmiss_hardsamples exports train count-diagnostic near-miss boundary cases."
         ),
     )
+    parser.add_argument("--gt4-count5-prob-thr", type=float, default=DEFAULT_NEARMISS_THRESHOLDS["gt4_count5_prob_thr"])
+    parser.add_argument(
+        "--gt4-unmatched-score-thr",
+        type=float,
+        default=DEFAULT_NEARMISS_THRESHOLDS["gt4_unmatched_score_thr"],
+    )
+    parser.add_argument(
+        "--gt4-unmatched-min-points",
+        type=int,
+        default=DEFAULT_NEARMISS_THRESHOLDS["gt4_unmatched_min_points"],
+    )
+    parser.add_argument("--gt5-count4-prob-thr", type=float, default=DEFAULT_NEARMISS_THRESHOLDS["gt5_count4_prob_thr"])
+    parser.add_argument("--nearmiss-topk", type=int, default=DEFAULT_NEARMISS_THRESHOLDS["nearmiss_topk"])
     parser.add_argument("--output", default=None, help="Output txt/json manifest. Defaults next to --eval-summary.")
     parser.add_argument("--format", choices=("txt", "json"), default="txt")
     parser.add_argument(
@@ -397,8 +581,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    summary_path = Path(args.eval_summary)
-    payload = json.loads(summary_path.read_text(encoding="utf-8"))
+    payload, summary_path = load_eval_payload(Path(args.eval_summary))
     if is_test_summary(payload, summary_path) and not args.allow_test:
         raise SystemExit(
             "Refusing to build hard samples from a likely test summary. "
@@ -406,14 +589,22 @@ def main() -> None:
         )
     validate_preset_scope(args, payload, summary_path)
 
-    transition_spec = PRESET_TRANSITIONS[args.preset] if args.preset else args.transitions
-    transitions = parse_transitions(transition_spec)
+    transition_spec = PRESET_TRANSITIONS[args.preset] if args.preset in PRESET_TRANSITIONS else args.transitions
+    transitions = set() if args.preset in NEARMISS_PRESETS else parse_transitions(transition_spec)
+    nearmiss_thresholds = nearmiss_thresholds_from_args(args)
     records = extract_records(payload, summary_path)
     rows = []
     transition_counts: Counter[str] = Counter()
+    reason_counts: Counter[str] = Counter()
+    gt_count_counts: Counter[str] = Counter()
     require_raw_file = args.preset in TRAIN_ONLY_PRESETS
     for record in records:
-        matched, reason = record_matches_preset(record, preset=args.preset, transitions=transitions)
+        matched, reason = record_matches_preset(
+            record,
+            preset=args.preset,
+            transitions=transitions,
+            nearmiss_thresholds=nearmiss_thresholds,
+        )
         if not matched:
             continue
         raw_file = record_raw_file(record, require_raw_file=require_raw_file)
@@ -424,7 +615,7 @@ def main() -> None:
             )
         if not raw_file:
             continue
-        gt = int(safe_int(record.get("gt_lanes"), -1) or -1)
+        gt = int(record_gt_count(record) or -1)
         pred = int(predicted_lane_count(record) or -1)
         metrics = record.get("metrics") if isinstance(record.get("metrics"), dict) else {}
         rows.append(
@@ -440,6 +631,9 @@ def main() -> None:
             }
         )
         transition_counts[reason] += 1
+        gt_count_counts[str(gt)] += 1
+        for item in parse_list(reason):
+            reason_counts[item] += 1
 
     seen = set()
     unique_rows = []
@@ -493,6 +687,9 @@ def main() -> None:
         "records": len(rows),
         "unique_samples": len(unique_rows),
         "transition_counts": dict(sorted(transition_counts.items())),
+        "reason_counts": dict(sorted(reason_counts.items())),
+        "gt_count_counts": dict(sorted(gt_count_counts.items())),
+        "thresholds": nearmiss_thresholds if args.preset in NEARMISS_PRESETS else {},
         **manifest_provenance(args, payload, summary_path, unique_rows, target_match_audit),
     }
     summary_path_out.write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

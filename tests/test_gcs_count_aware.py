@@ -48,6 +48,7 @@ from ultralytics.utils import DEFAULT_CFG_DICT
 from ultralytics.utils.gcs_candidate_matching import GCSLaneCandidate
 from ultralytics.utils.gcs_count_diagnostics import build_candidates_from_predictions, diagnose_count_errors
 from ultralytics.utils.gcs_loss import GCSLoss
+from ultralytics.utils import gcs_count_diagnostics
 from ultralytics.utils.gcs_postprocess import (
     count_aware_refill,
     decode_gcs_predictions,
@@ -2299,6 +2300,64 @@ def test_hard_loss_lane_count_filter_uses_shared_count_min_gt_points(tmp_path):
 
     assert count_min1.hard_loss_mask(batch, 1, torch.device("cpu"), gt_valid=valid).tolist() == [True]
     assert count_min2.hard_loss_mask(batch, 1, torch.device("cpu"), gt_valid=valid).tolist() == [False]
+
+
+def test_count_diagnostics_gt_count_uses_configured_min_gt_points():
+    y = torch.tensor([0.9, 0.7, 0.5])
+    gt_lanes = torch.stack(
+        [torch.stack((torch.full_like(y, x), y), dim=-1) for x in (0.1, 0.25, 0.4, 0.55, 0.7)],
+        dim=0,
+    )
+    gt_valid = torch.tensor(
+        [
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+        ],
+        dtype=torch.float32,
+    )
+
+    assert gcs_count_diagnostics._gt_count(gt_valid, min_gt_points=1) == 5
+    assert gcs_count_diagnostics._gt_count(gt_valid, min_gt_points=2) == 1
+    assert gcs_count_diagnostics._edge_gt_ids(gt_lanes, gt_valid, min_gt_points=1) == {0, 4}
+    assert gcs_count_diagnostics._edge_gt_ids(gt_lanes, gt_valid, min_gt_points=2) == set()
+
+
+def test_count_diagnostics_matches_only_counted_gt_subset():
+    y = torch.linspace(0.98, 0.25, 6)
+    xs = [0.1, 0.25, 0.4]
+    gt_lanes = torch.stack([torch.stack((torch.full_like(y, x), y), dim=-1) for x in xs], dim=0)
+    gt_valid = torch.tensor(
+        [
+            [1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+        ],
+        dtype=torch.float32,
+    )
+    candidates = [
+        _cand(0.25, q=1, rank=1, valid_points=3),
+        _cand(0.4, q=2, rank=2, valid_points=3),
+    ]
+    row = diagnose_count_errors(
+        image_id="synthetic",
+        gt_lanes=gt_lanes,
+        gt_valid=gt_valid,
+        candidates=candidates,
+        final_candidates=candidates,
+        pred_count_cls=2,
+        diagnostic_topk=8,
+        normal_min_points=2,
+        image_shape=(544, 960),
+        count_min_gt_points=2,
+    )
+
+    assert row["gt_count"] == 2
+    assert row["count_error_primary"] == "OK"
+    assert row["missing_gt_ids"] == ""
+    assert row["candidate_recall_all"] == 1.0
 
 
 def test_survival_head_replaces_quality_for_fifth_lane_rescue_gate():

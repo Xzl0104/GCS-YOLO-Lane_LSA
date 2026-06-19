@@ -41,7 +41,8 @@ from ultralytics.utils.gcs_postprocess import GCS_DEFAULT_MAX_DET
 
 
 DEFAULT_MODEL = ROOT / "ultralytics" / "cfg" / "models" / "gcs" / "gcs-yolo-lane-s-q12-k56.yaml"
-TRAIN_HARD_MANIFEST_PRESETS = {"k56_viscountsum_hardsamples", "k56_fifth_gate_hardsamples"}
+FIFTH_GATE_HARD_MANIFEST_PRESETS = {"k56_fifth_gate_hardsamples", "k56_fifth_gate_nearmiss_hardsamples"}
+TRAIN_HARD_MANIFEST_PRESETS = {"k56_viscountsum_hardsamples", *FIFTH_GATE_HARD_MANIFEST_PRESETS}
 
 
 def str2bool(value: str | bool) -> bool:
@@ -126,7 +127,8 @@ def validate_hard_manifest_sidecar(
     path: str | Path,
     *,
     flag: str,
-    require_builder_preset: str | None = None,
+    require_builder_preset: str | set[str] | None = None,
+    train_count_min_gt_points: int | None = None,
 ) -> None:
     """Reject hard manifests whose builder sidecar marks them as analysis/test artifacts."""
     text = str(path or "").strip()
@@ -159,9 +161,20 @@ def validate_hard_manifest_sidecar(
         raise SystemExit(
             f"ERROR: {flag} sidecar is marked analysis_only and must not be used for training: {sidecar}"
         )
-    if require_builder_preset and payload.get("preset") != require_builder_preset:
+    required_presets = (
+        {require_builder_preset}
+        if isinstance(require_builder_preset, str)
+        else set(require_builder_preset or [])
+    )
+    if required_presets and payload.get("preset") not in required_presets:
+        expected = ", ".join(sorted(required_presets))
+        if len(required_presets) == 1:
+            raise SystemExit(
+                f"ERROR: {flag} sidecar preset must be {expected} for hard-weighted "
+                f"training: {sidecar}"
+            )
         raise SystemExit(
-            f"ERROR: {flag} sidecar preset must be {require_builder_preset} for hard-weighted "
+            f"ERROR: {flag} sidecar preset must be one of {expected} for hard-weighted "
             f"training: {sidecar}"
         )
     preset = str(payload.get("preset", "") or "")
@@ -178,8 +191,33 @@ def validate_hard_manifest_sidecar(
         raise SystemExit(f"ERROR: {flag} {preset} sidecar must use raw_file-only audit: {sidecar}")
     if int(audit.get("unmatched_unique_samples", 0) or 0) > 0:
         raise SystemExit(f"ERROR: {flag} sidecar has unmatched train hard samples: {sidecar}")
-    if require_builder_preset and int(audit.get("matched_unique_samples", 0) or 0) <= 0:
+    if required_presets and int(audit.get("matched_unique_samples", 0) or 0) <= 0:
         raise SystemExit(f"ERROR: {flag} sidecar has no matched train hard samples: {sidecar}")
+    if preset == "k56_fifth_gate_nearmiss_hardsamples":
+        if int(payload.get("count_min_gt_points", 0) or 0) != 1:
+            raise SystemExit(
+                f"ERROR: {flag} near-miss sidecar must record count_min_gt_points=1: {sidecar}"
+            )
+        if train_count_min_gt_points is not None and int(train_count_min_gt_points) != 1:
+            raise SystemExit(
+                f"ERROR: {flag} near-miss sidecar was built with count_min_gt_points=1, but "
+                f"training uses gcs_count_min_gt_points={int(train_count_min_gt_points)}: {sidecar}"
+            )
+        if int(audit.get("matched_unique_samples", 0) or 0) < 20:
+            raise SystemExit(
+                f"ERROR: {flag} near-miss sidecar has fewer than 20 matched train hard samples: {sidecar}"
+            )
+        reason_counts = payload.get("reason_counts") if isinstance(payload.get("reason_counts"), dict) else {}
+        has_gt4_reason = any(str(k).startswith("gt4_") and int(v or 0) > 0 for k, v in reason_counts.items())
+        has_gt5_reason = any(str(k).startswith("gt5_") and int(v or 0) > 0 for k, v in reason_counts.items())
+        if not has_gt4_reason:
+            raise SystemExit(
+                f"ERROR: {flag} near-miss sidecar must include GT4 hard-negative reasons: {sidecar}"
+            )
+        if not has_gt5_reason:
+            raise SystemExit(
+                f"ERROR: {flag} near-miss sidecar must include GT5 hard-positive reasons: {sidecar}"
+            )
 
 
 def validate_training_hard_manifest_args(args: argparse.Namespace) -> None:
@@ -210,7 +248,7 @@ def validate_training_hard_manifest_args(args: argparse.Namespace) -> None:
     if requires_fifth_gate_manifest and not hard_loss_file:
         raise SystemExit(
             "ERROR: count-conditioned fifth-gate training requires --gcs-hard-loss-file built with "
-            "preset k56_fifth_gate_hardsamples."
+            "preset k56_fifth_gate_hardsamples or k56_fifth_gate_nearmiss_hardsamples."
         )
     validate_hard_manifest_sidecar(
         hard_loss_file,
@@ -218,10 +256,11 @@ def validate_training_hard_manifest_args(args: argparse.Namespace) -> None:
         require_builder_preset=(
             "k56_viscountsum_hardsamples"
             if requires_weighted_visible_manifest
-            else "k56_fifth_gate_hardsamples"
+            else FIFTH_GATE_HARD_MANIFEST_PRESETS
             if requires_fifth_gate_manifest
             else None
         ),
+        train_count_min_gt_points=int(getattr(args, "gcs_count_min_gt_points", 1) or 1),
     )
     if (
         requires_fifth_gate_manifest
@@ -563,7 +602,10 @@ def parse_args() -> argparse.Namespace:
         "--gcs-count-boundary-hard-margin-gain",
         type=float,
         default=0.0,
-        help="Default-off hard-only Count Boundary margin gain. Requires k56_fifth_gate_hardsamples manifest.",
+        help=(
+            "Default-off hard-only Count Boundary margin gain. Requires k56_fifth_gate_hardsamples or "
+            "k56_fifth_gate_nearmiss_hardsamples manifest."
+        ),
     )
     parser.add_argument(
         "--gcs-count-adjacent-margin",
