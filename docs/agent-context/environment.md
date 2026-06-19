@@ -101,7 +101,7 @@ single-batch inference or training smoke checks
 
 Do not use the local 8GB GPU for formal TuSimple algorithm training unless the user explicitly asks. Keep local smoke batches small and prefer CPU-safe contract checks when the goal is only shape or parser validation.
 
-The remote CUDA server GPU is an RTX 4090 with 24GB VRAM. Use it for formal training and official-val evaluation. For current Q12/K56 TuSimple experiments, the default remote formal-training starting point is:
+The remote CUDA server GPU is an RTX 4090 with 24GB VRAM. Use it for formal training and official-val evaluation. For current 5-25-3 K56 TuSimple mainline experiments, the default remote formal-training starting point is:
 
 ```text
 batch = 32

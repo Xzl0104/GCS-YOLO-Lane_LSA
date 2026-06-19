@@ -6,19 +6,24 @@ The model is expected to output lane instances as ordered 2D point sequences, no
 
 ## Main Files
 
-- Default model on this branch: `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml`
-- Legacy alias on this branch: `ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml`
-- Data config: `data/tusimple_gcs_fixed_y_k56_960x544.yaml`
+- Default model on this branch: `ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml`
+- Compatibility model for old q12-k56 records: `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml`
+- Data config: `data/tusimple_gcs_fixed_y_960x544.yaml`
+- Compatibility data config for old q12-k56 records: `data/tusimple_gcs_fixed_y_k56_960x544.yaml`
 - Training entry: `tools/train_gcs.py`
 - Inference entry: `tools/infer_gcs.py`
 - Custom GCS eval: `tools/eval_gcs.py`
+- TuSimple official eval: `tools/eval_tusimple_official.py`
+- TuSimple official sweep: `tools/sweep_tusimple_official.py`
 - Model shape check: `tools/check_model.py`
 
 ## Current Branch Direction
 
-This branch imports the historical `5-25-3.zip` algorithm as a separate K56-compatible branch.
+This branch imports the historical `5-25-3.zip` algorithm and is now the current K56 mainline.
 
 Only the explicit TuSimple contract was changed from the legacy `Q=8/K=32/fixed_y=[0.98,0.25]` setup to the current `Q=12/K=56/fixed_y=710/720 -> 160/720` setup. The 5-25-3 algorithm body is intentionally not upgraded to the later Count Head, Count Boundary, Quality Head, Survival Head, or near-miss machinery.
+
+Previous q12-k56 experiment documentation remains historical context. Do not delete it, and do not read it as the active algorithm unless it is explicitly marked as a legacy run record.
 
 ## Data Summary
 
@@ -38,9 +43,9 @@ test:  2782
 
 The official-val subset is aligned with the current validation split and must stay separate from test-driven tuning.
 
-The K56 labels keep the same split sizes and align fixed-y anchors exactly to TuSimple official h-samples `710..160` at step `10`.
+The K56 labels keep the same split sizes and align fixed-y anchors exactly to TuSimple official h-samples `710..160`, descending by `10` pixels.
 
-Official TuSimple Accuracy evaluation needs the original TuSimple archive layout, not only the fixed-y converted dataset. This 5-25-3 branch does not include the later mainline official evaluation helpers, so generate predictions with this branch and run official-val evaluation from a compatible evaluation checkout when needed.
+Official TuSimple Accuracy evaluation needs the original TuSimple archive layout, not only the fixed-y converted dataset. This branch includes `tools/eval_tusimple_official.py` and `tools/sweep_tusimple_official.py`; use official-val for threshold/postprocess selection and test only once for the selected candidate.
 
 Required test archive shape:
 

@@ -1,12 +1,12 @@
-# GCS-YOLO-Lane 5-25-3 K56 Branch
+# GCS-YOLO-Lane 5-25-3 K56 Mainline
 
-This branch imports the historical `5-25-3.zip` GCS-YOLO-Lane algorithm as a separate Git branch and adapts only the TuSimple fixed-y contract.
+This is the current GCS-YOLO-Lane mainline branch. It imports the historical `5-25-3.zip` algorithm and adapts only the TuSimple fixed-y contract.
 
 ## Contract
 
 ```text
-model: ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml
-data:  data/tusimple_gcs_fixed_y_k56_960x544.yaml
+model: ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml
+data:  data/tusimple_gcs_fixed_y_960x544.yaml
 root:  datasets/tusimple_fixed_y_k56_960x544
 Q:     12
 K:     56
@@ -18,6 +18,8 @@ imgsz: 544 960
 `--imgsz 544 960` is H,W order.
 
 The 56 fixed-y anchors are TuSimple official h-samples `710, 700, 690, ..., 160`. K56 labels must be regenerated from original TuSimple JSON and images, not resampled from old K32 labels.
+
+Compatibility paths `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml` and `data/tusimple_gcs_fixed_y_k56_960x544.yaml` keep the same K56 contract for old run records. New training commands should use the mainline paths above.
 
 The 5-25-3 algorithm body is intentionally not upgraded to later mainline Count Head, Count Boundary, Quality Head, Survival Head, near-miss, or official-best checkpoint machinery.
 
@@ -31,8 +33,8 @@ conda activate ssh_lane
 
 python tools/train_gcs.py \
   --dataset tusimple \
-  --model ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml \
-  --data data/tusimple_gcs_fixed_y_k56_960x544.yaml \
+  --model ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml \
+  --data data/tusimple_gcs_fixed_y_960x544.yaml \
   --pretrained yolo11s-seg.pt \
   --imgsz 544 960 \
   --epochs 160 \
@@ -66,6 +68,8 @@ python tools/train_gcs.py \
 ```
 
 If `batch=32` OOMs, reduce it only for OOM or instability and record the change in the run notes.
+
+`--no-amp` is included because the current remote run hit Ultralytics AMP self-check loading `yolo26n.pt`. Remove it only after that server-side checkpoint/cache problem is fixed and record the change.
 
 ## Label Rebuild
 
@@ -105,7 +109,7 @@ PY
 
 ```bash
 python tools/check_model.py \
-  --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml \
+  --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml \
   --imgsz 544 960 \
   --batch 1 \
   --device cpu

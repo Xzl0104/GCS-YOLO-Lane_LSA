@@ -28,8 +28,10 @@ This is H,W order. Do not reverse it.
 Default data YAML:
 
 ```text
-data/tusimple_gcs_fixed_y_k56_960x544.yaml
+data/tusimple_gcs_fixed_y_960x544.yaml
 ```
+
+`data/tusimple_gcs_fixed_y_k56_960x544.yaml` is a compatibility path for old q12-k56 records and has the same K56 contract.
 
 Default data root:
 
@@ -44,17 +46,19 @@ The K56 dataset must be rebuilt from original TuSimple JSON and images, not resa
 Default model:
 
 ```text
-ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml
 ```
 
-Branch aliases also use the same K56 fixed-y contract:
+Compatibility configs also use the same K56 fixed-y contract:
 
 ```text
-ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml
 ultralytics/cfg/models/gcs/gcs-yolo-lane-s-fixed-y.yaml
 ```
 
 All branch configs keep `Q=12`, `K=56`, fixed-y anchors `710/720 -> 160/720`, and `--imgsz 544 960`.
+
+Historical q12-k56 experiment docs are old records. Preserve them, but do not let them override the active 5-25-3 K56 mainline contract.
 
 ## Label Contract
 
@@ -65,7 +69,7 @@ fixed_y_end = 160 / 720 = 0.2222222222222222
 K = 56
 ```
 
-The K56 anchors align exactly to TuSimple official h-samples from `710` down to `160` at step `10`, normalized by original height `720`.
+The K56 anchors align exactly to TuSimple official h-samples from `710` down to `160`, descending by `10` pixels and normalized by original height `720`.
 
 Expected fixed-y label fields:
 
@@ -124,4 +128,4 @@ count_under5_loss
 
 Decode must use real query predictions only, must not use GT during inference, and must not fabricate lanes. Final output should be sorted from left to right by bottom visible x.
 
-This branch does not include later mainline official-val helper scripts such as `tools/sweep_tusimple_official.py`, `tools/diagnose_gcs_gt5.py`, or `tools/eval_tusimple_official.py`. If official TuSimple evaluation is needed, generate predictions with this branch and evaluate them from a compatible evaluation checkout, using official-val for selection and test only once for final evaluation.
+This branch includes `tools/sweep_tusimple_official.py` and `tools/eval_tusimple_official.py` for TuSimple official-val and final test evaluation. It still does not include later Count/Quality/Survival/near-miss/official-best machinery. Use official-val for selection and test only once for final evaluation.

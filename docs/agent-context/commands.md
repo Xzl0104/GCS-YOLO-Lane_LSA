@@ -13,8 +13,8 @@ This is H,W order.
 ## Branch Contract
 
 ```text
-model: ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml
-data:  data/tusimple_gcs_fixed_y_k56_960x544.yaml
+model: ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml
+data:  data/tusimple_gcs_fixed_y_960x544.yaml
 root:  datasets/tusimple_fixed_y_k56_960x544
 Q:     12
 K:     56
@@ -22,7 +22,9 @@ fixed_y_start: 710 / 720 = 0.9861111111111112
 fixed_y_end:   160 / 720 = 0.2222222222222222
 ```
 
-The 5-25-3 branch does not include later mainline `--gcs-official-best`, Count/Quality/Survival, near-miss, or official-val helper machinery.
+The q12-k56-named model/data files are compatibility paths for old experiment records and keep the same K56 fixed-y contract. New commands should use the mainline paths above.
+
+The 5-25-3 branch does not include later mainline `--gcs-official-best`, Count/Quality/Survival, or near-miss machinery. It does include branch-local TuSimple official evaluation tools.
 
 ## Full Remote Training
 
@@ -38,8 +40,8 @@ Run from the dedicated remote Git clone checked out to branch `codex/5-25-3-k56`
 ```bash
 python tools/train_gcs.py \
   --dataset tusimple \
-  --model ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml \
-  --data data/tusimple_gcs_fixed_y_k56_960x544.yaml \
+  --model ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml \
+  --data data/tusimple_gcs_fixed_y_960x544.yaml \
   --pretrained yolo11s-seg.pt \
   --imgsz 544 960 \
   --epochs 160 \
@@ -73,6 +75,8 @@ python tools/train_gcs.py \
 ```
 
 If `batch=32` OOMs on the target machine, reduce batch only for OOM/instability and record the change in the run notes.
+
+`--no-amp` is included because the current remote run hit an Ultralytics AMP self-check failure while loading `yolo26n.pt`. If that server cache/checkpoint issue is fixed, AMP may be re-enabled only with a run note.
 
 ## Label Rebuild
 
@@ -114,7 +118,7 @@ PY
 
 ```bash
 python tools/check_model.py \
-  --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml \
+  --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml \
   --imgsz 544 960 \
   --batch 1
 ```
@@ -146,6 +150,36 @@ python tools/eval_gcs.py \
   --imgsz 544 960
 ```
 
+## TuSimple Official-Val Sweep
+
+Use `val` for threshold and postprocess selection:
+
+```bash
+python tools/sweep_tusimple_official.py \
+  --archive-root archive/TUSimple \
+  --split val \
+  --weights <weights.pt> \
+  --imgsz 544 960 \
+  --device 0
+```
+
+## TuSimple Final Test
+
+Run test only once for a candidate already selected on official-val:
+
+```bash
+python tools/eval_tusimple_official.py \
+  --archive-root archive/TUSimple \
+  --split test \
+  --weights <weights.pt> \
+  --imgsz 544 960 \
+  --device 0 \
+  --conf <selected-conf> \
+  --point-valid-thr <selected-point-valid-thr> \
+  --nms-dist-px <selected-nms-dist-px> \
+  --max-det <selected-max-det>
+```
+
 ## Inference
 
 ```bash
@@ -165,4 +199,4 @@ python -m py_compile <changed-python-files>
 
 ## Known Validation Limitation
 
-This branch was imported from `5-25-3.zip`, which does not contain the current project `.codex/config.toml`, `scripts/`, `tests/`, or later mainline official-val helper scripts. Agent setup checks and mainline Count/Quality/Survival tests are intentionally not part of this branch unless a future task explicitly restores them.
+This branch was imported from `5-25-3.zip`, which does not contain the current project `.codex/config.toml`, `scripts/`, or `tests/`. Agent setup checks and mainline Count/Quality/Survival tests are intentionally not part of this branch unless a future task explicitly restores them.

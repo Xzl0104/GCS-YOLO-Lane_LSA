@@ -13,7 +13,7 @@ This branch does not include project `.codex/`, `.agents/`, or repository wrappe
 
 Subagents reviewing this branch should check:
 
-- Q12/K56 fixed-y contract
+- Q=12/K=56 fixed-y contract
 - `--imgsz 544 960` H,W order
 - K56 labels regenerated from original TuSimple JSON/images
 - no accidental import of later mainline Count/Quality/Survival/near-miss/official-best mechanisms

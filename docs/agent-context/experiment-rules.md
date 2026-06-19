@@ -20,4 +20,4 @@ Use official-val for threshold, checkpoint, postprocess, and run selection. Use 
 
 ## Branch-Specific Rule
 
-Do not add later mainline Count/Quality/Survival/near-miss/official-best machinery to this branch unless a future task explicitly changes the algorithm scope. The current task only adapts Q12/K56, fixed-y anchors, image size, and data/model defaults.
+Do not add later mainline Count/Quality/Survival/near-miss/official-best machinery to this branch unless a future task explicitly changes the algorithm scope. This branch only adapts Q=12/K=56, fixed-y anchors, image size, and data/model defaults.

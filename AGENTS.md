@@ -7,7 +7,7 @@
 
 ## Project Identity
 
-This branch is a separate GCS-YOLO-Lane algorithm branch imported from `5-25-3.zip`.
+This branch is the current GCS-YOLO-Lane mainline, imported from the historical `5-25-3.zip` algorithm.
 
 The branch keeps the historical 5-25-3 algorithm body and changes only the TuSimple fixed-y contract needed by the current request.
 
@@ -35,13 +35,13 @@ This is H,W order. Do not reverse it.
 Default model:
 
 ```text
-ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml
 ```
 
 Default data:
 
 ```text
-data/tusimple_gcs_fixed_y_k56_960x544.yaml
+data/tusimple_gcs_fixed_y_960x544.yaml
 ```
 
 Current fixed-y label contract:
@@ -61,6 +61,8 @@ The 56 fixed y anchors are exactly:
 ```
 
 The K56 labels must be regenerated from original TuSimple JSON and images, not resampled from historical K32 labels.
+
+Historical q12-k56 experiment notes and compatibility paths must stay as old records. They do not override the active 5-25-3 K56 mainline contract.
 
 ## Branch Scope
 
@@ -92,7 +94,7 @@ Recommended local checks after code/config changes:
 
 ```bash
 python -m py_compile <changed-python-files>
-python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml --imgsz 544 960 --batch 1 --device cpu
+python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml --imgsz 544 960 --batch 1 --device cpu
 python tools/check_gcs_label_order_split.py --dataset-root <path-to-tusimple_fixed_y_k56_960x544>
 ```
 

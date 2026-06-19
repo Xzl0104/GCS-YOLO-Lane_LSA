@@ -47,6 +47,33 @@ fixed-y anchor assertion for 56 y pixels: 710,700,...,160
 sample label split/order check against an external K56 dataset root
 ```
 
-Mainline or experiment:
+Mainline or experiment at the time:
 
-Separate historical algorithm branch, not a mainline promotion.
+Separate historical algorithm branch. This status was superseded by the 2026-06-20 mainline promotion below.
+
+## 2026-06-20: Promote 5-25-3 K56 as Current Mainline
+
+Decision:
+
+Treat branch `codex/5-25-3-k56` as the current mainline for new K56 TuSimple work. Use the mainline aliases:
+
+```text
+model = ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml
+data  = data/tusimple_gcs_fixed_y_960x544.yaml
+imgsz = 544 960
+```
+
+The q12-k56-named config/data paths remain compatibility references for old experiment records:
+
+```text
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml
+data/tusimple_gcs_fixed_y_k56_960x544.yaml
+```
+
+Why:
+
+The user clarified that `5-25-3-k56` and the previous q12-k56 line are different algorithms, and the new 5-25-3 branch should be the active line going forward.
+
+Preservation rule:
+
+Do not delete previous q12-k56 experiment documentation. Keep it as historical experiment context, and do not let it override `docs/agent-context/current-contracts.md`.
