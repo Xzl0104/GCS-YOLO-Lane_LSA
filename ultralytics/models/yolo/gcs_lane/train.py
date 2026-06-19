@@ -128,8 +128,8 @@ class GCSLaneTrainer(BaseTrainer):
         )
         self.gcs_imgsz = shape
         self.args.gcs_imgsz = [int(shape[0]), int(shape[1])]
-        # Keep run metadata explicit. BaseTrainer will convert this to max(H,W) later only for YOLO internals.
-        self.args.imgsz = [int(shape[0]), int(shape[1])]
+        # Keep Ultralytics train internals on their required scalar long side while GCS uses gcs_imgsz.
+        self.args.imgsz = max(int(shape[0]), int(shape[1]))
         self._save_shape_locked_args()
 
     def build_dataset(self, img_path: str, mode: str = "train", batch: int | None = None):
@@ -438,7 +438,7 @@ class GCSLaneTrainer(BaseTrainer):
         old_imgsz = self.args.imgsz
         shape = self._resolve_gcs_imgsz()
         self.args.gcs_imgsz = [int(shape[0]), int(shape[1])]
-        self.args.imgsz = [int(shape[0]), int(shape[1])]
+        self.args.imgsz = max(int(shape[0]), int(shape[1]))
         try:
             return super().save_model()
         finally:
