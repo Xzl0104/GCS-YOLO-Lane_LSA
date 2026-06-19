@@ -39,6 +39,7 @@ python tools/train_gcs.py \
   --batch 32 \
   --workers 4 \
   --device 0 \
+  --no-amp \
   --optimizer AdamW \
   --lr0 5e-4 \
   --lrf 0.05 \
