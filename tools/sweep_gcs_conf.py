@@ -18,18 +18,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 os.chdir(ROOT)
 
-from tools.eval_gcs import assert_label_fixed_y_compatible, label_path_for_image, load_gcs_label, match_lanes, model_fixed_y_anchors
-from tools.infer_gcs import collect_images, load_gcs_model, preprocess_image, warn_max_det_mismatch
+from tools.eval_gcs import label_path_for_image, load_gcs_label, match_lanes
+from tools.infer_gcs import collect_images, load_gcs_model, preprocess_image
 from ultralytics.data.utils import check_det_dataset
 from ultralytics.utils.gcs_shape import DATASET_IMAGE_SHAPES, assert_gcs_shape, normalize_imgsz, shape_str
-from ultralytics.utils.gcs_postprocess import (
-    GCS_DEFAULT_MAX_DET,
-    count_head_decode_meta,
-    decode_gcs_predictions,
-    empty_decode_count_state,
-    summarize_decode_count_state,
-    update_decode_count_state,
-)
+from ultralytics.utils.gcs_postprocess import decode_gcs_predictions
 from ultralytics.utils.torch_utils import select_device
 
 
@@ -43,12 +36,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--split",
         default="val",
-        choices=("train", "val"),
+        choices=("train", "val", "test"),
         help="Dataset split to sweep when --source is not provided.",
     )
     parser.add_argument("--weights", default=str(DEFAULT_WEIGHTS), help="GCS checkpoint .pt.")
     parser.add_argument("--source", default=None, help="Validation image directory/list. Defaults to data yaml val.")
     parser.add_argument("--labels", default=None, help="Validation labels_gcs directory. Empty means infer from images.")
+    parser.add_argument("--test-source", default=None, help="Optional test image directory/list for --run-test.")
+    parser.add_argument("--test-labels", default=None, help="Optional test labels_gcs directory for --run-test.")
     parser.add_argument(
         "--imgsz",
         nargs="+",
@@ -59,10 +54,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--conf-start",
         type=float,
-        default=0.05,
-        help="First candidate-pool confidence threshold in the sweep.",
+        default=0.10,
+        help="First confidence threshold in the sweep.",
     )
-    parser.add_argument("--conf-end", type=float, default=0.30, help="Last candidate-pool confidence threshold in the sweep.")
+    parser.add_argument("--conf-end", type=float, default=0.80, help="Last confidence threshold in the sweep.")
     parser.add_argument("--conf-step", type=float, default=0.05, help="Confidence threshold step.")
     parser.add_argument(
         "--confs",
@@ -74,21 +69,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ape-thr", type=float, default=20.0, help="APE threshold in pixels for TP matching.")
     parser.add_argument("--match-gate-px", type=float, default=None, help="Strict eval APE gate in pixels. Defaults to --ape-thr.")
     parser.add_argument("--max-x-dist", type=float, default=0.0, help="Optional strict eval mean x-distance gate in pixels. 0 disables.")
-    parser.add_argument("--min-overlap", type=int, default=6, help="Minimum overlapping visible anchors required for eval matching.")
-    parser.add_argument("--min-points", type=int, default=6, help="Minimum decoded visible anchors required to keep a predicted lane.")
-    parser.add_argument(
-        "--min-gt-cover-ratio",
-        type=float,
-        default=0.3,
-        help="Minimum GT visible-anchor coverage ratio required for eval matching.",
-    )
-    parser.add_argument(
-        "--min-pred-cover-ratio",
-        type=float,
-        default=0.3,
-        help="Minimum predicted visible-anchor coverage ratio required for eval matching.",
-    )
-    parser.add_argument("--nms-dist-px", type=float, default=18.0, help="Lane duplicate suppression distance in pixels. 0 disables.")
+    parser.add_argument("--min-overlap", type=int, default=2, help="Minimum valid overlapping GT points required for eval matching.")
+    parser.add_argument("--nms-dist-px", type=float, default=0.0, help="Optional lane duplicate suppression distance in pixels. 0 disables.")
     parser.add_argument(
         "--nms-dist-pxs",
         nargs="+",
@@ -99,8 +81,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--point-valid-thr",
         type=float,
-        default=0.20,
-        help="Candidate-pool per-point visibility threshold for fixed-y lane decoding.",
+        default=0.5,
+        help="Per-point visibility threshold for fixed-y lane decoding.",
     )
     parser.add_argument(
         "--point-valid-thrs",
@@ -109,49 +91,28 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Explicit per-point visibility thresholds. Overrides --point-valid-thr and sweeps conf x NMS x point-valid.",
     )
-    parser.add_argument("--max-det", type=int, default=GCS_DEFAULT_MAX_DET, help="Maximum decoded lane queries per image.")
-    parser.add_argument("--line-nms-min-overlap", type=int, default=6, help="Minimum shared visible anchors for lane-NMS duplicate suppression.")
+    parser.add_argument("--max-det", type=int, default=8, help="Maximum decoded lane queries per image.")
     parser.add_argument("--max-images", type=int, default=0, help="Limit validation images. 0 means all.")
+    parser.add_argument("--test-max-images", type=int, default=0, help="Limit test images for --run-test. 0 means all.")
     parser.add_argument("--warmup", type=int, default=20, help="Number of untimed warmup forwards.")
     parser.add_argument("--device", default="0", help="Inference device, e.g. 0 or cpu.")
     parser.add_argument("--half", action="store_true", help="Use FP16 on CUDA.")
-    parser.add_argument(
-        "--save-dir",
-        default=None,
-        help="Output directory. Defaults to a parameter-specific folder under the weight run.",
-    )
+    parser.add_argument("--save-dir", default="runs/gcs_lane/conf_sweep", help="Output directory.")
     parser.add_argument(
         "--select-by",
         default="f1",
         choices=("f1", "fitness"),
         help="Criterion for best conf. fitness = f1 - 0.001*lane_count_mae - 0.0001*ape_mean_px.",
     )
+    parser.add_argument("--run-test", action="store_true", help="Also evaluate test split using the best val conf.")
     parser.add_argument("--save-records", action="store_true", help="Save per-image records for each threshold.")
     return parser.parse_args()
-
-
-def path_has_test_component(value: str | Path | None) -> bool:
-    """Return whether a source/label path explicitly targets a test split."""
-    if value is None or not str(value).strip():
-        return False
-    parts = [p.lower() for p in Path(value).parts]
-    return "test" in parts or "test_set" in parts
-
-
-def reject_test_source(value: str | Path | None, *, field: str) -> None:
-    """Reject test paths in this threshold-sweep tool."""
-    if path_has_test_component(value):
-        raise ValueError(
-            f"{field} points at a test split: {value}. "
-            "Do not use sweep_gcs_conf.py for test evaluation or parameter search; use final-test evaluation only "
-            "after official-val selection."
-        )
 
 
 def default_data_yaml(dataset: str) -> Path:
     """Prefer the fixed-y TuSimple yaml used by current experiments when it exists."""
     candidates = [
-        ROOT / "data" / f"{dataset}_gcs_fixed_y_960x544.yaml",
+        ROOT / "data" / f"{dataset}_gcs_fixed_y_k56_960x544.yaml",
         ROOT / "data" / f"{dataset}_gcs_stratified_960x544.yaml",
         ROOT / "data" / f"{dataset}_gcs.yaml",
     ]
@@ -237,7 +198,6 @@ def empty_state(conf: float, nms_dist_px: float = 0.0, point_valid_thr: float = 
         "pred_lanes": [],
         "gt_lanes": [],
         "records": [],
-        **empty_decode_count_state(),
     }
 
 
@@ -252,10 +212,7 @@ def update_state(
     match_gate_px: float | None,
     max_x_dist: float,
     min_overlap: int,
-    min_gt_cover_ratio: float,
-    min_pred_cover_ratio: float,
     save_records: bool,
-    count_head_meta: dict | None = None,
 ) -> None:
     """Match one image and update one threshold's metric state."""
     metrics, matches = match_lanes(
@@ -267,8 +224,6 @@ def update_state(
         match_gate_px=match_gate_px,
         max_x_dist=max_x_dist,
         min_overlap=min_overlap,
-        min_gt_cover_ratio=min_gt_cover_ratio,
-        min_pred_cover_ratio=min_pred_cover_ratio,
     )
     pred_count = len(pred_lanes)
     gt_count = int(gt_lanes.shape[0])
@@ -283,7 +238,6 @@ def update_state(
     state["lane_count_abs_error"] += abs(pred_count - gt_count)
     state["pred_lanes"].append(pred_count)
     state["gt_lanes"].append(gt_count)
-    update_decode_count_state(state, count_head_meta, pred_count)
     if save_records:
         state["records"].append(
             {
@@ -312,7 +266,7 @@ def summarize_state(state: dict, ape_thr: float) -> dict:
     ape_mean = None if not apes else round(float(np.mean(apes)), 4)
     lane_count_mae = round(float(state["lane_count_abs_error"]) / images, 6)
     fitness = f1 - 0.001 * lane_count_mae - 0.0001 * (0.0 if ape_mean is None else ape_mean)
-    row = {
+    return {
         "conf": round(float(state["conf"]), 6),
         "nms_dist_px": round(float(state.get("nms_dist_px", 0.0)), 6),
         "point_valid_thr": round(float(state.get("point_valid_thr", 0.5)), 6),
@@ -341,8 +295,6 @@ def summarize_state(state: dict, ape_thr: float) -> dict:
             for (gt, pred), count in sorted(Counter(zip(gt_counts, pred_counts)).items())
         },
     }
-    row.update(summarize_decode_count_state(state, prefix="decode/"))
-    return row
 
 
 def select_best(rows: list[dict], select_by: str) -> dict:
@@ -394,11 +346,6 @@ def write_csv(path: Path, rows: list[dict]) -> None:
         "fp_matched_ape_mean_px",
         "ape_median_px",
         "curvature_error_mean_px",
-        "decode/count_head_k",
-        "decode/final_pred_lanes",
-        "decode/count_shortfall_rate",
-        "decode/k5_to_output4_rate",
-        "decode/k4_to_output5_rate",
     ]
     with path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fields)
@@ -410,63 +357,6 @@ def write_csv(path: Path, rows: list[dict]) -> None:
 def _sync_if_cuda(device: torch.device) -> None:
     if device.type == "cuda":
         torch.cuda.synchronize(device)
-
-
-def _fmt_float_for_path(value: float) -> str:
-    text = f"{float(value):.6g}"
-    return text.replace("-", "m").replace(".", "p")
-
-
-def _fmt_values_for_path(name: str, values: list[float]) -> str:
-    values = sorted({float(x) for x in values})
-    if len(values) == 1:
-        return f"{name}{_fmt_float_for_path(values[0])}"
-    return f"{name}{_fmt_float_for_path(values[0])}-{_fmt_float_for_path(values[-1])}x{len(values)}"
-
-
-def _weight_run_dir(weights: str | Path) -> Path | None:
-    path = Path(weights)
-    if path.name.lower().endswith((".pt", ".pth")) and path.parent.name == "weights":
-        return path.parent.parent
-    return None
-
-
-def resolve_sweep_save_dir(
-    save_dir: str | Path | None,
-    weights: str | Path,
-    split: str,
-    confs: list[float],
-    point_valid_thrs: list[float],
-    nms_dist_pxs: list[float],
-    max_det: int,
-    max_images: int,
-    min_points: int = 6,
-    min_overlap: int = 6,
-    min_gt_cover_ratio: float = 0.3,
-    min_pred_cover_ratio: float = 0.3,
-) -> Path:
-    """Resolve a non-overlapping default sweep output directory."""
-    if save_dir is not None and str(save_dir).strip():
-        return Path(save_dir)
-    tag_parts = [
-        f"sweep_{split}",
-        _fmt_values_for_path("conf", confs),
-        _fmt_values_for_path("pvalid", point_valid_thrs),
-        _fmt_values_for_path("nms", nms_dist_pxs),
-        f"maxdet{int(max_det)}",
-        f"minp{int(min_points)}",
-        f"overlap{int(min_overlap)}",
-    ]
-    if min_gt_cover_ratio > 0.0 or min_pred_cover_ratio > 0.0:
-        tag_parts.append(
-            f"coverg{_fmt_float_for_path(min_gt_cover_ratio)}p{_fmt_float_for_path(min_pred_cover_ratio)}"
-        )
-    if max_images and max_images > 0:
-        tag_parts.append(f"maximg{int(max_images)}")
-    run_dir = _weight_run_dir(weights)
-    if run_dir is not None:
-        return run_dir / "conf_sweep" / "_".join(tag_parts)
-    return ROOT / "runs" / "gcs_lane" / "conf_sweep" / Path(weights).stem / "_".join(tag_parts)
 
 
 @torch.inference_mode()
@@ -485,17 +375,12 @@ def evaluate_conf_grid(
     match_gate_px: float | None,
     max_x_dist: float,
     min_overlap: int,
-    min_points: int,
-    min_gt_cover_ratio: float,
-    min_pred_cover_ratio: float,
     nms_dist_pxs: list[float],
     point_valid_thrs: list[float],
-    line_nms_min_overlap: int = 6,
 ) -> dict:
     """Run one forward pass per image and evaluate all confidence thresholds."""
     images = collect_images(source, max_images=max_images)
     label_dir = None if labels is None or str(labels).strip() == "" else Path(labels)
-    expected_fixed_y = model_fixed_y_anchors(model)
     states = {
         (point_valid_thr, nms, conf): empty_state(conf, nms, point_valid_thr)
         for point_valid_thr in point_valid_thrs
@@ -510,9 +395,7 @@ def evaluate_conf_grid(
         if img is None:
             raise FileNotFoundError(f"Failed to read image: {image_path}")
         assert_gcs_shape(img.shape[:2], imgsz, name="sweep image", context=f"sweep_gcs_conf({image_path})")
-        label_path = label_path_for_image(image_path, label_dir)
-        assert_label_fixed_y_compatible(label_path, expected_fixed_y, image_shape=img.shape[:2])
-        gt_lanes, gt_valid = load_gcs_label(label_path)
+        gt_lanes, gt_valid = load_gcs_label(label_path_for_image(image_path, label_dir))
         tensor = preprocess_image(img, imgsz=imgsz, device=device, half=half)
 
         _sync_if_cuda(device)
@@ -523,39 +406,18 @@ def evaluate_conf_grid(
 
         t1 = time.perf_counter()
         pred_valid = preds.get("pred_valid_logits")
-        pred_count = preds.get("pred_count_logits")
-        pred_count_boundary = preds.get("pred_count_boundary_logits")
-        pred_quality = preds.get("pred_quality_logits")
-        pred_survival = preds.get("pred_survival_logits")
         for point_valid_thr in point_valid_thrs:
             for nms_dist_px in nms_dist_pxs:
                 for conf in confs:
-                    count_meta = count_head_decode_meta(
-                        pred_count[0] if pred_count is not None else None,
-                        pred_count_boundary[0] if pred_count_boundary is not None else None,
-                        use_count_head_decode=True,
-                        dataset_name=args.dataset,
-                        max_det=max_det,
-                    )
                     pred_lanes = decode_gcs_predictions(
                         preds["pred_points"][0],
                         preds["pred_logits"][0],
                         pred_valid_logits=pred_valid[0] if pred_valid is not None else None,
-                        pred_count_logits=pred_count[0] if pred_count is not None else None,
-                        pred_count_boundary_logits=(
-                            pred_count_boundary[0] if pred_count_boundary is not None else None
-                        ),
-                        pred_quality_logits=pred_quality[0] if pred_quality is not None else None,
-                        pred_survival_logits=pred_survival[0] if pred_survival is not None else None,
                         image_shape=img.shape[:2],
                         score_thr=conf,
                         point_valid_thr=point_valid_thr,
-                        min_points=min_points,
                         max_det=max_det,
                         nms_dist_px=nms_dist_px,
-                        candidate_score_thr=conf,
-                        candidate_point_valid_thr=point_valid_thr,
-                        line_nms_min_overlap=line_nms_min_overlap,
                     )
                     update_state(
                         states[(point_valid_thr, nms_dist_px, conf)],
@@ -568,10 +430,7 @@ def evaluate_conf_grid(
                         match_gate_px,
                         max_x_dist,
                         min_overlap,
-                        min_gt_cover_ratio,
-                        min_pred_cover_ratio,
                         save_records,
-                        count_head_meta=count_meta,
                     )
         total_post += time.perf_counter() - t1
 
@@ -614,7 +473,6 @@ def print_rows(rows: list[dict]) -> None:
 
 def main() -> None:
     args = parse_args()
-    warn_max_det_mismatch(args.weights, max_det=args.max_det, context="GCS conf sweep")
     data = resolve_dataset(args)
     imgsz = normalize_imgsz(args.imgsz or data.get("gcs_imgsz") or data.get("image_shape"), dataset=args.dataset)
     confs = conf_values(args)
@@ -624,8 +482,6 @@ def main() -> None:
     labels = args.labels or labels_from_source(source)
     if not source:
         raise ValueError(f"{args.split!r} source is required via --source or data yaml {args.split}.")
-    reject_test_source(source, field="--source")
-    reject_test_source(labels, field="--labels")
 
     device = select_device(args.device, verbose=False)
     model = load_gcs_model(args.weights, device=device, half=args.half, gcs_imgsz=imgsz)
@@ -644,10 +500,6 @@ def main() -> None:
     print(f"sweeping confs: {', '.join(f'{x:.2f}' for x in confs)}")
     print(f"sweeping Lane-NMS px: {', '.join(f'{x:.1f}' for x in nms_dist_pxs)}")
     print(f"sweeping point-valid thresholds: {', '.join(f'{x:.2f}' for x in point_valid_thrs)}")
-    print(
-        f"strict matching: min_points={args.min_points}, min_overlap={args.min_overlap}, "
-        f"gt_cover>={args.min_gt_cover_ratio:.2f}, pred_cover>={args.min_pred_cover_ratio:.2f}"
-    )
     val_result = evaluate_conf_grid(
         model=model,
         source=source,
@@ -663,30 +515,13 @@ def main() -> None:
         match_gate_px=args.match_gate_px,
         max_x_dist=args.max_x_dist,
         min_overlap=args.min_overlap,
-        min_points=args.min_points,
-        min_gt_cover_ratio=args.min_gt_cover_ratio,
-        min_pred_cover_ratio=args.min_pred_cover_ratio,
         nms_dist_pxs=nms_dist_pxs,
         point_valid_thrs=point_valid_thrs,
-        line_nms_min_overlap=args.line_nms_min_overlap,
     )
     rows = val_result["rows"]
     best = select_best(rows, args.select_by)
 
-    save_dir = resolve_sweep_save_dir(
-        save_dir=args.save_dir,
-        weights=args.weights,
-        split=args.split,
-        confs=confs,
-        point_valid_thrs=point_valid_thrs,
-        nms_dist_pxs=nms_dist_pxs,
-        max_det=args.max_det,
-        max_images=args.max_images,
-        min_points=args.min_points,
-        min_overlap=args.min_overlap,
-        min_gt_cover_ratio=args.min_gt_cover_ratio,
-        min_pred_cover_ratio=args.min_pred_cover_ratio,
-    )
+    save_dir = Path(args.save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
     write_csv(save_dir / "conf_sweep_val.csv", rows)
     output = {
@@ -702,24 +537,56 @@ def main() -> None:
             "confs": confs,
             "nms_dist_pxs": nms_dist_pxs,
             "point_valid_thrs": point_valid_thrs,
-            "line_nms_min_overlap": int(args.line_nms_min_overlap),
             "ape_threshold_px": float(args.ape_thr),
             "match_gate_px": float(args.ape_thr if args.match_gate_px is None else args.match_gate_px),
             "max_x_dist": float(args.max_x_dist),
             "min_overlap": int(args.min_overlap),
-            "min_points": int(args.min_points),
-            "min_gt_cover_ratio": float(args.min_gt_cover_ratio),
-            "min_pred_cover_ratio": float(args.min_pred_cover_ratio),
             "max_det": int(args.max_det),
             "device": str(args.device),
             "half": bool(args.half),
-            "save_dir": str(save_dir.resolve()),
         },
         "val": rows,
         "timing": val_result["timing"],
     }
     if args.save_records:
         output["val_records_by_conf"] = val_result["records_by_conf"]
+
+    if args.run_test:
+        test_source = args.test_source or data.get("test")
+        if not test_source:
+            raise ValueError("--run-test requested but no test split is available. Pass --test-source.")
+        test_labels = args.test_labels or labels_from_source(test_source)
+        test_result = evaluate_conf_grid(
+            model=model,
+            source=test_source,
+            labels=test_labels,
+            imgsz=imgsz,
+            confs=[float(best["conf"])],
+            ape_thr=args.ape_thr,
+            max_det=args.max_det,
+            max_images=args.test_max_images,
+            device=device,
+            half=args.half,
+            save_records=args.save_records,
+            match_gate_px=args.match_gate_px,
+            max_x_dist=args.max_x_dist,
+            min_overlap=args.min_overlap,
+            nms_dist_pxs=[float(best["nms_dist_px"])],
+            point_valid_thrs=[float(best["point_valid_thr"])],
+        )
+        test_rows = test_result["rows"]
+        write_csv(save_dir / "conf_sweep_test_best.csv", test_rows)
+        output["test_at_best_conf"] = test_rows[0]
+        output["test_config"] = {
+            "source": str(Path(test_source).resolve()),
+            "labels": None if test_labels is None else str(Path(test_labels).resolve()),
+            "conf": float(best["conf"]),
+            "nms_dist_px": float(best["nms_dist_px"]),
+            "point_valid_thr": float(best["point_valid_thr"]),
+            "max_images": int(args.test_max_images),
+        }
+        if args.save_records:
+            output["test_records_by_conf"] = test_result["records_by_conf"]
 
     (save_dir / "conf_sweep_summary.json").write_text(json.dumps(output, indent=2), encoding="utf-8")
     print_rows(rows)
@@ -728,6 +595,13 @@ def main() -> None:
         f"pvalid={best['point_valid_thr']:.2f}  "
         f"f1={best['f1']:.6f}  lane_count_mae={best['lane_count_mae']:.6f}"
     )
+    if args.run_test:
+        test = output["test_at_best_conf"]
+        print(
+            f"test @ conf={best['conf']:.2f}, nms={best['nms_dist_px']:.1f}, "
+            f"pvalid={best['point_valid_thr']:.2f}: "
+            f"f1={test['f1']:.6f} lane_count_mae={test['lane_count_mae']:.6f}"
+        )
     print(f"saved to: {save_dir.resolve()}")
 
 

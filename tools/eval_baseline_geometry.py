@@ -20,7 +20,7 @@ from gcs_tools.label_utils import resample_polyline
 from tools.eval_gcs import label_path_for_image, load_gcs_label, match_lanes, summarize
 from tools.infer_gcs import collect_images
 from ultralytics import YOLO
-from ultralytics.utils.gcs_postprocess import GCS_DEFAULT_MAX_DET, draw_gcs_lanes, save_gcs_lanes_txt
+from ultralytics.utils.gcs_postprocess import draw_gcs_lanes, save_gcs_lanes_txt
 
 
 DEFAULT_WEIGHTS = ROOT / "runs" / "baseline" / "yolo11s_seg_tusimple-2" / "weights" / "best.pt"
@@ -55,7 +55,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--conf", type=float, default=0.25, help="YOLO mask confidence threshold.")
     parser.add_argument("--iou", type=float, default=0.7, help="YOLO NMS IoU threshold.")
     parser.add_argument("--ape-thr", type=float, default=20.0, help="APE threshold in pixels for TP matching.")
-    parser.add_argument("--max-det", type=int, default=GCS_DEFAULT_MAX_DET, help="Maximum baseline mask instances per image.")
+    parser.add_argument("--max-det", type=int, default=8, help="Maximum baseline mask instances per image.")
     parser.add_argument("--max-images", type=int, default=0, help="Limit number of images. 0 means all.")
     parser.add_argument("--device", default="0", help="Inference device, e.g. 0 or cpu.")
     parser.add_argument("--half", action="store_true", help="Use FP16 on CUDA.")
@@ -299,7 +299,7 @@ def evaluate(
     conf: float = 0.25,
     iou: float = 0.7,
     ape_thr: float = 20.0,
-    max_det: int = GCS_DEFAULT_MAX_DET,
+    max_det: int = 8,
     max_images: int = 0,
     device: str = "0",
     half: bool = False,

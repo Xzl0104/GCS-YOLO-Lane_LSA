@@ -20,31 +20,30 @@ class GCSHungarianMatcher:
     """Match unordered predicted lane queries to unordered GT lanes.
 
     The GCS-YOLO-Lane matching cost is the weighted sum of normalized point
-    distance and existence confidence cost.
-    The point term is weighted by the real input image aspect ratio so
-    normalized x/y coordinates approximate pixel-space errors.
+    distance, second-order curvature distance, and existence confidence cost.
+    Point and curvature terms are weighted by the real input image aspect ratio
+    so normalized x/y coordinates approximate pixel-space errors.
     """
 
     def __init__(
         self,
         cost_point: float = 5.0,
+        cost_curve: float = 0.05,
         cost_exist: float = 0.1,
         image_size=None,
         min_overlap: int = 2,
         max_x_dist: float = 0.0,
         match_gate_px: float = 0.0,
-        point_mode: str = "free",
     ):
-        """Initialize the matching cost weights used by GCS-YOLO-Lane."""
+        """Initialize the three matching cost weights used by GCS-YOLO-Lane."""
         self.cost_point = float(cost_point)
+        self.cost_curve = float(cost_curve)
         self.cost_exist = float(cost_exist)
         self.point_scale = self._point_scale(image_size)
         self.pixel_scale = self._pixel_scale(image_size)
         self.min_overlap = max(int(min_overlap), 0)
         self.max_x_dist = float(max_x_dist)
         self.match_gate_px = float(match_gate_px)
-        point_mode = str(point_mode).lower()
-        self.point_mode = "fixed_y" if point_mode in {"fixed-y", "fixedy"} else point_mode
 
     @staticmethod
     def _point_scale(image_size) -> tuple[float, float]:
@@ -57,7 +56,7 @@ class GCSHungarianMatcher:
 
     @staticmethod
     def _pixel_scale(image_size) -> tuple[float, float]:
-        """Return x/y pixel scales for geometry gates on normalized points."""
+        """Return x/y pixel scales for curvature matching on normalized points."""
         if image_size is None or image_size == "":
             return 1.0, 1.0
         h, w = normalize_imgsz(image_size)
@@ -76,31 +75,33 @@ class GCSHungarianMatcher:
 
     def _point_cost(self, pred_points: torch.Tensor, gt_points: torch.Tensor, gt_valid: torch.Tensor) -> torch.Tensor:
         """Compute Q x N aspect-weighted normalized L1 point distance cost."""
-        if self.point_mode == "fixed_y":
-            scale_x = pred_points.new_tensor(float(self.point_scale[0]))
-            point_dist = (pred_points[:, None, :, 0] - gt_points[None, :, :, 0]).abs() * scale_x * gt_valid[None]
-            valid_count = gt_valid.sum(dim=1).clamp_min(1.0)
-            return point_dist.sum(dim=2) / valid_count[None, :]
-
         scale = self._scale_tensor(pred_points, dims=4)
         point_dist = (pred_points[:, None] - gt_points[None]).abs() * scale * gt_valid[None, :, :, None]
         valid_count = gt_valid.sum(dim=1).clamp_min(1.0)
         return point_dist.sum(dim=(2, 3)) / valid_count[None, :]
 
-    def _gate_mask(
-        self,
-        pred_points: torch.Tensor,
-        gt_points: torch.Tensor,
-        gt_valid: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Return Q x N finite-match mask and GT columns whose geometry gate was relaxed."""
-        valid_count = gt_valid.sum(dim=1)
-        base_gate = torch.ones((pred_points.shape[0], gt_points.shape[0]), dtype=torch.bool, device=pred_points.device)
-        if self.min_overlap > 0:
-            base_gate = base_gate & (valid_count[None, :] >= int(self.min_overlap))
-        gate = base_gate.clone()
+    def _curve_cost(self, pred_points: torch.Tensor, gt_points: torch.Tensor, gt_valid: torch.Tensor) -> torch.Tensor:
+        """Compute Q x N aspect-weighted L1 second-order curvature cost."""
+        if pred_points.shape[1] < 3:
+            return pred_points.new_zeros((pred_points.shape[0], gt_points.shape[0]))
 
-        pixel_scale = pred_points.new_tensor(self.pixel_scale).view(1, 1, 1, 2)
+        pred_curve = pred_points[:, 2:] - 2.0 * pred_points[:, 1:-1] + pred_points[:, :-2]
+        gt_curve = gt_points[:, 2:] - 2.0 * gt_points[:, 1:-1] + gt_points[:, :-2]
+        curve_valid = gt_valid[:, 2:] * gt_valid[:, 1:-1] * gt_valid[:, :-2]
+
+        scale = pred_points.new_tensor(getattr(self, "pixel_scale", (1.0, 1.0))).view(1, 1, 1, 2)
+        curve_dist = (pred_curve[:, None] - gt_curve[None]).abs() * scale * curve_valid[None, :, :, None]
+        curve_count = curve_valid.sum(dim=1).clamp_min(1.0)
+        return curve_dist.sum(dim=(2, 3)) / curve_count[None, :]
+
+    def _gate_mask(self, pred_points: torch.Tensor, gt_points: torch.Tensor, gt_valid: torch.Tensor) -> torch.Tensor:
+        """Return Q x N finite-match mask for optional training-time geometry gates."""
+        valid_count = gt_valid.sum(dim=1)
+        gate = torch.ones((pred_points.shape[0], gt_points.shape[0]), dtype=torch.bool, device=pred_points.device)
+        if self.min_overlap > 0:
+            gate = gate & (valid_count[None, :] >= int(self.min_overlap))
+
+        pixel_scale = pred_points.new_tensor(getattr(self, "pixel_scale", (1.0, 1.0))).view(1, 1, 1, 2)
         diff_px = (pred_points[:, None] - gt_points[None]) * pixel_scale
         valid = gt_valid[None, :, :, None]
 
@@ -110,37 +111,20 @@ class GCSHungarianMatcher:
             gate = gate & (mean_x <= float(self.max_x_dist))
 
         if self.match_gate_px > 0.0:
-            if self.point_mode == "fixed_y":
-                point_error = diff_px[..., 0].abs() * gt_valid[None]
-            else:
-                point_error = torch.norm(diff_px, dim=-1) * gt_valid[None]
+            point_error = torch.norm(diff_px, dim=-1) * gt_valid[None]
             ape = point_error.sum(dim=2) / valid_count[None, :].clamp_min(1.0)
             gate = gate & (ape <= float(self.match_gate_px))
 
-        eligible_gt = base_gate.any(dim=0)
-        relaxed_gt = eligible_gt & ~gate.any(dim=0)
-        if relaxed_gt.any():
-            # Keep the label-validity gate, but do not let prediction-dependent geometry gates remove
-            # every candidate for a GT lane. Otherwise the image becomes all-negative for structured losses.
-            gate[:, relaxed_gt] = base_gate[:, relaxed_gt]
+        return gate
 
-        return gate, relaxed_gt
-
-    def cost_matrix(
-        self,
-        pred_points: torch.Tensor,
-        pred_logits: torch.Tensor,
-        gt_points: torch.Tensor,
-        gt_valid: torch.Tensor,
-        return_relaxed_gt: bool = False,
-    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+    def cost_matrix(self, pred_points: torch.Tensor, pred_logits: torch.Tensor, gt_points: torch.Tensor, gt_valid: torch.Tensor) -> torch.Tensor:
         """Build the Q x N Hungarian cost matrix for one image."""
         cost_point = self._point_cost(pred_points, gt_points, gt_valid)
+        cost_curve = self._curve_cost(pred_points, gt_points, gt_valid)
         cost_exist = -pred_logits.sigmoid()[:, None].expand_as(cost_point)
-        cost = self.cost_point * cost_point + self.cost_exist * cost_exist
-        gate, relaxed_gt = self._gate_mask(pred_points, gt_points, gt_valid)
-        cost = cost.masked_fill(~gate, torch.inf)
-        return (cost, relaxed_gt) if return_relaxed_gt else cost
+        cost = self.cost_point * cost_point + self.cost_curve * cost_curve + self.cost_exist * cost_exist
+        gate = self._gate_mask(pred_points, gt_points, gt_valid)
+        return cost.masked_fill(~gate, torch.inf)
 
     @torch.no_grad()
     def __call__(
@@ -176,17 +160,8 @@ class GCSHungarianMatcher:
         device = pred_points.device
         dtype = pred_points.dtype
         indices: list[tuple[torch.Tensor, torch.Tensor]] = []
-        stats = {
-            "images": 0,
-            "images_with_gt": 0,
-            "gt_lanes": 0,
-            "matched_gt_lanes": 0,
-            "no_match_images": 0,
-            "relaxed_gt_lanes": 0,
-        }
 
         for b in range(pred_points.shape[0]):
-            stats["images"] += 1
             pp = pred_points[b]
             pl = pred_logits[b]
             gp = gt_points[b].to(device=device, dtype=dtype)
@@ -208,14 +183,10 @@ class GCSHungarianMatcher:
             original_cols = torch.arange(gp.shape[0], device=device)[valid_lane]
             gp = gp[valid_lane]
             gv = gv[valid_lane]
-            stats["images_with_gt"] += 1
-            stats["gt_lanes"] += int(gp.shape[0])
 
-            cost, relaxed_gt = self.cost_matrix(pp, pl, gp, gv, return_relaxed_gt=True)
-            stats["relaxed_gt_lanes"] += int(relaxed_gt.sum().item())
+            cost = self.cost_matrix(pp, pl, gp, gv)
             finite = torch.isfinite(cost)
             if not finite.any():
-                stats["no_match_images"] += 1
                 indices.append(self._empty_indices(device))
                 continue
             large_cost = torch.nan_to_num(cost, posinf=1e9, neginf=1e9).detach().cpu().numpy()
@@ -225,21 +196,6 @@ class GCSHungarianMatcher:
             keep = finite[rows_all, cols_all]
             rows = rows_all[keep]
             cols = original_cols[cols_all[keep]]
-            matched = int(cols.numel())
-            stats["matched_gt_lanes"] += matched
-            if matched == 0:
-                stats["no_match_images"] += 1
             indices.append((rows, cols))
 
-        if int(stats["gt_lanes"]) > 0:
-            gt_lanes = int(stats["gt_lanes"])
-            images_with_gt = max(int(stats["images_with_gt"]), 1)
-            stats["matched_gt_ratio"] = float(stats["matched_gt_lanes"]) / gt_lanes
-            stats["no_match_image_rate"] = float(stats["no_match_images"]) / images_with_gt
-            stats["relaxed_gt_ratio"] = float(stats["relaxed_gt_lanes"]) / gt_lanes
-        else:
-            stats["matched_gt_ratio"] = 1.0
-            stats["no_match_image_rate"] = 0.0
-            stats["relaxed_gt_ratio"] = 0.0
-        self.last_stats = stats
         return indices

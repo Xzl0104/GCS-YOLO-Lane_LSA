@@ -14,7 +14,7 @@ from ultralytics.engine.predictor import BasePredictor
 from ultralytics.engine.results import Results
 from ultralytics.utils import ops
 from ultralytics.utils.gcs_shape import assert_gcs_image_tensor, assert_gcs_shape, normalize_imgsz
-from ultralytics.utils.gcs_postprocess import GCS_DEFAULT_MAX_DET, decode_gcs_predictions, draw_gcs_lanes, save_gcs_lanes_txt
+from ultralytics.utils.gcs_postprocess import decode_gcs_predictions, draw_gcs_lanes, save_gcs_lanes_txt
 
 
 class GCSLaneResults(Results):
@@ -30,15 +30,11 @@ class GCSLaneResults(Results):
                 np.stack([x["points_norm"] for x in lanes], axis=0).astype("float32")
             )
             self.lane_scores = torch.tensor([x["score"] for x in lanes], dtype=torch.float32)
-            self.lane_exist_scores = torch.tensor([x.get("exist_score", x["score"]) for x in lanes], dtype=torch.float32)
-            self.lane_rank_scores = torch.tensor([x.get("rank_score", x["score"]) for x in lanes], dtype=torch.float32)
             self.lane_queries = torch.tensor([x["query"] for x in lanes], dtype=torch.long)
         else:
             self.lanes = torch.zeros((0, 0, 2), dtype=torch.float32)
             self.lanes_normalized = torch.zeros((0, 0, 2), dtype=torch.float32)
             self.lane_scores = torch.zeros((0,), dtype=torch.float32)
-            self.lane_exist_scores = torch.zeros((0,), dtype=torch.float32)
-            self.lane_rank_scores = torch.zeros((0,), dtype=torch.float32)
             self.lane_queries = torch.zeros((0,), dtype=torch.long)
         self._keys = (*self._keys, "lanes")
 
@@ -146,121 +142,32 @@ class GCSLanePredictor(BasePredictor):
         valid_logits = preds.get("pred_valid_logits")
         if valid_logits is not None:
             valid_logits = valid_logits.detach()
-        count_logits = preds.get("pred_count_logits")
-        if count_logits is not None:
-            count_logits = count_logits.detach()
-        count_boundary_logits = preds.get("pred_count_boundary_logits")
-        if count_boundary_logits is not None:
-            count_boundary_logits = count_boundary_logits.detach()
-        quality_logits = preds.get("pred_quality_logits")
-        if quality_logits is not None:
-            quality_logits = quality_logits.detach()
-        survival_logits = preds.get("pred_survival_logits")
-        if survival_logits is not None:
-            survival_logits = survival_logits.detach()
         conf = 0.25 if self.args.conf is None else float(self.args.conf)
-        generic_max_det = getattr(self.args, "max_det", None)
-        if generic_max_det is not None and int(generic_max_det) != 300:
-            max_det = int(generic_max_det)
-        else:
-            max_det = int(getattr(self.args, "gcs_eval_max_det", GCS_DEFAULT_MAX_DET) or GCS_DEFAULT_MAX_DET)
-        nms_dist_px = float(getattr(self.args, "gcs_eval_nms_dist_px", 18.0) or 0.0)
+        max_det = int(self.args.max_det) if getattr(self.args, "max_det", None) else None
+        nms_dist_px = float(getattr(self.args, "gcs_eval_nms_dist_px", 0.0) or 0.0)
         point_valid_thr = getattr(self.args, "gcs_eval_point_valid_thr", None)
         if point_valid_thr is None:
             point_valid_thr = getattr(self.args, "point_valid_thr", 0.5)
         point_valid_thr = float(point_valid_thr)
-        min_points = int(getattr(self.args, "gcs_eval_min_points", 6) or 0)
-        use_count_head_decode = bool(getattr(self.args, "gcs_use_count_head_decode", True))
-        count_head_temperature = float(getattr(self.args, "gcs_count_head_temp", 1.0) or 1.0)
-        candidate_score_thr = float(getattr(self.args, "gcs_decode_candidate_conf", 0.05) or 0.0)
-        candidate_point_valid_thr = float(getattr(self.args, "gcs_decode_candidate_point_valid_thr", 0.20) or 0.0)
-        candidate_min_points = int(getattr(self.args, "gcs_decode_candidate_min_points", 5) or 5)
-        final_min_points = int(getattr(self.args, "gcs_decode_final_min_points", 6) or 6)
-        fifth_min_points = int(getattr(self.args, "gcs_decode_fifth_min_points", 5) or 5)
-        line_nms_min_overlap = max(int(getattr(self.args, "gcs_line_nms_min_overlap", 6) or 6), 1)
-        line_nms_rescue_dist_px = float(getattr(self.args, "gcs_line_nms_rescue_dist_px", 30.0) or 0.0)
-        quality_rescue_5th = bool(getattr(self.args, "gcs_quality_rescue_5th", True))
-        quality_rescue_count5_thr = float(getattr(self.args, "gcs_quality_rescue_count5_thr", 0.70))
-        quality_rescue_conf_thr = float(getattr(self.args, "gcs_quality_rescue_conf_thr", 0.03))
-        quality_rescue_mean_valid_thr = float(getattr(self.args, "gcs_quality_rescue_mean_valid_thr", 0.45))
-        quality_rescue_quality_thr = float(getattr(self.args, "gcs_quality_rescue_quality_thr", 0.55))
-        quality_rescue_min_points = int(getattr(self.args, "gcs_quality_rescue_min_points", 5) or 5)
-        quality_rescue_dist_px = float(getattr(self.args, "gcs_quality_rescue_dist_px", 24.0) or 0.0)
 
         results = []
         if valid_logits is None:
             valid_iter = [None] * int(points.shape[0])
         else:
             valid_iter = list(valid_logits)
-        if count_logits is None:
-            count_iter = [None] * int(points.shape[0])
-        else:
-            count_iter = list(count_logits)
-        if count_boundary_logits is None:
-            count_boundary_iter = [None] * int(points.shape[0])
-        else:
-            count_boundary_iter = list(count_boundary_logits)
-        if quality_logits is None:
-            quality_iter = [None] * int(points.shape[0])
-        else:
-            quality_iter = list(quality_logits)
-        if survival_logits is None:
-            survival_iter = [None] * int(points.shape[0])
-        else:
-            survival_iter = list(survival_logits)
 
-        for (
-            lane_points,
-            lane_logits,
-            lane_valid_logits,
-            lane_count_logits,
-            lane_count_boundary_logits,
-            lane_quality_logits,
-            lane_survival_logits,
-            orig_img,
-            img_path,
-        ) in zip(
-            points,
-            logits,
-            valid_iter,
-            count_iter,
-            count_boundary_iter,
-            quality_iter,
-            survival_iter,
-            orig_imgs,
-            self.batch[0],
+        for lane_points, lane_logits, lane_valid_logits, orig_img, img_path in zip(
+            points, logits, valid_iter, orig_imgs, self.batch[0]
         ):
             lanes = decode_gcs_predictions(
                 lane_points,
                 lane_logits,
                 pred_valid_logits=lane_valid_logits,
-                pred_count_logits=lane_count_logits,
-                pred_count_boundary_logits=lane_count_boundary_logits,
-                pred_quality_logits=lane_quality_logits,
-                pred_survival_logits=lane_survival_logits,
                 image_shape=orig_img.shape[:2],
                 score_thr=conf,
                 point_valid_thr=point_valid_thr,
-                min_points=min_points,
                 max_det=max_det,
                 nms_dist_px=nms_dist_px,
-                use_count_head_decode=use_count_head_decode,
-                count_head_temperature=count_head_temperature,
-                dataset_name="tusimple",
-                candidate_score_thr=candidate_score_thr,
-                candidate_point_valid_thr=candidate_point_valid_thr,
-                candidate_min_points=candidate_min_points,
-                final_min_points=final_min_points,
-                fifth_min_points=fifth_min_points,
-                line_nms_min_overlap=line_nms_min_overlap,
-                line_nms_rescue_dist_px=line_nms_rescue_dist_px,
-                quality_rescue_5th=quality_rescue_5th,
-                quality_rescue_count5_thr=quality_rescue_count5_thr,
-                quality_rescue_conf_thr=quality_rescue_conf_thr,
-                quality_rescue_mean_valid_thr=quality_rescue_mean_valid_thr,
-                quality_rescue_quality_thr=quality_rescue_quality_thr,
-                quality_rescue_min_points=quality_rescue_min_points,
-                quality_rescue_dist_px=quality_rescue_dist_px,
             )
             result = GCSLaneResults(orig_img, path=img_path, names=self.model.names, lanes=lanes)
             if not lanes:

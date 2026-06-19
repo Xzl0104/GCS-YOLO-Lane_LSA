@@ -3,9 +3,6 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-TUSIMPLE_OFFICIAL_BOTTOM_Y_NORM = 710.0 / 720.0
-TUSIMPLE_OFFICIAL_TOP_Y_NORM = 160.0 / 720.0
-
 
 def _is_valid_number(value: float) -> bool:
     """Return True for finite numeric coordinates."""
@@ -38,7 +35,7 @@ def remove_duplicate_y(points: list[tuple[float, float]]) -> list[tuple[float, f
     return out
 
 
-def resample_polyline(points: list[tuple[float, float]], num_points: int = 56) -> tuple[np.ndarray, np.ndarray]:
+def resample_polyline(points: list[tuple[float, float]], num_points: int = 32) -> tuple[np.ndarray, np.ndarray]:
     """Resample a bottom-to-top polyline to a fixed number of points."""
     if num_points <= 0:
         raise ValueError(f"num_points must be positive, got {num_points}")
@@ -71,8 +68,8 @@ def resample_polyline(points: list[tuple[float, float]], num_points: int = 56) -
 
 def fixed_y_anchors(
     num_points: int = 56,
-    y_start: float = TUSIMPLE_OFFICIAL_BOTTOM_Y_NORM,
-    y_end: float = TUSIMPLE_OFFICIAL_TOP_Y_NORM,
+    y_start: float = 0.9861111111111112,
+    y_end: float = 0.2222222222222222,
 ) -> np.ndarray:
     """Return bottom-to-top normalized y anchors for fixed-y x-only lane labels."""
     if num_points <= 0:
@@ -87,8 +84,8 @@ def sample_polyline_fixed_y(
     img_h: int,
     img_w: int,
     num_points: int = 56,
-    y_start: float = TUSIMPLE_OFFICIAL_BOTTOM_Y_NORM,
-    y_end: float = TUSIMPLE_OFFICIAL_TOP_Y_NORM,
+    y_start: float = 0.9861111111111112,
+    y_end: float = 0.2222222222222222,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Sample one lane at fixed normalized y anchors and predict only x at those anchors.
 
@@ -173,6 +170,30 @@ def lane_to_points(lane_xs: list[float], h_samples: list[float]) -> list[tuple[f
         if _is_valid_number(x) and _is_valid_number(y) and float(x) >= 0.0 and float(y) >= 0.0:
             points.append((float(x), float(y)))
     return points
+
+
+def build_semantic_mask(
+    lanes: list[list[tuple[float, float]]],
+    h: int,
+    w: int,
+    line_width: int = 12,
+) -> np.ndarray:
+    """Build an HxW binary lane-region mask from pixel-space lane points."""
+    mask = np.zeros((h, w), dtype=np.uint8)
+    for lane in lanes:
+        lane = clip_lane_to_image(lane, h=h, w=w)
+        if len(lane) < 2:
+            continue
+        pts = np.asarray(lane, dtype=np.int32)
+        cv2.polylines(mask, [pts], isClosed=False, color=1, thickness=line_width)
+    return mask
+
+
+def build_edge_mask(semantic_mask: np.ndarray) -> np.ndarray:
+    """Build a binary edge mask from a semantic lane mask."""
+    binary = (semantic_mask > 0).astype(np.uint8) * 255
+    edges = cv2.Canny(binary, 50, 150)
+    return (edges > 0).astype(np.float32)
 
 
 def points_to_mask(

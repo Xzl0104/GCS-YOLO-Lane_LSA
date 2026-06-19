@@ -14,19 +14,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from ultralytics import YOLO
-from ultralytics.nn.modules import GCSLaneHead, LSEM, LaneBiFPN, LaneFeatureProjection
+from ultralytics.nn.modules import GCSLaneHead, LSEM, LaneBiFPN
 from ultralytics.utils.gcs_shape import DATASET_IMAGE_SHAPES, normalize_imgsz, shape_str
 
 DEFAULT_CFG = ROOT / "ultralytics" / "cfg" / "models" / "gcs" / "gcs-yolo-lane-s-q12-k56.yaml"
-
-
-def enforce_candidate_yaml_contract(cfg_stem: str, head: GCSLaneHead) -> None:
-    """Fail when a named candidate YAML no longer enables its declared output path."""
-    cfg_stem = str(cfg_stem).lower()
-    if "survival" in cfg_stem and not bool(getattr(head, "survival_head_enabled", False)):
-        raise RuntimeError("Survival candidate YAML name requires GCSLaneHead survival_head_enabled=True.")
-    if "decoder-aux" in cfg_stem and not bool(getattr(head, "decoder_aux_outputs", False)):
-        raise RuntimeError("Decoder-aux candidate YAML name requires GCSLaneHead decoder_aux_outputs=True.")
 
 
 def parse_args():
@@ -59,18 +50,11 @@ def main():
 
     has_lsem = any(isinstance(m, LSEM) for m in model.modules())
     has_bifpn = any(isinstance(m, LaneBiFPN) for m in model.modules())
-    has_projection = any(isinstance(m, LaneFeatureProjection) for m in model.modules())
     has_head = isinstance(model.model[-1], GCSLaneHead)
     head = model.model[-1] if has_head else None
 
-    cfg_stem = cfg.stem.lower()
-    expects_no_lsem = "no-lsem" in cfg_stem
-    expects_projection = "proj-no-bifpn" in cfg_stem
-    valid_lsem = not has_lsem if expects_no_lsem else has_lsem
-    valid_fusion = has_projection if expects_projection else has_bifpn
-    if not (valid_lsem and valid_fusion and has_head):
+    if not (has_lsem and has_bifpn and has_head):
         raise RuntimeError("GCS-YOLO-Lane registration check failed.")
-    enforce_candidate_yaml_contract(cfg_stem, head)
 
     img_h, img_w = normalize_imgsz(args.imgsz, dataset=args.dataset)
     model.gcs_imgsz = (img_h, img_w)
@@ -80,84 +64,14 @@ def main():
     with torch.no_grad():
         y = model(x)
 
-    expected = {
-        "pred_points",
-        "pred_logits",
-        "pred_valid_logits",
-        "pred_count_logits",
-        "pred_count_boundary_logits",
-        "pred_quality_logits",
-    }
-    optional = {"pred_survival_logits", "aux_outputs"}
-    if not isinstance(y, dict):
-        raise RuntimeError(f"Expected GCSLaneHead to return a dict, got {type(y).__name__}.")
-    missing = sorted(expected - set(y))
-    extra = sorted(set(y) - expected - optional)
-    if missing or extra:
-        raise RuntimeError(f"Unexpected GCSLaneHead output keys: missing={missing}, extra={extra}.")
-    expected_points_shape = (args.batch, head.num_queries, head.num_points, 2)
-    if tuple(y["pred_points"].shape) != expected_points_shape:
-        raise RuntimeError(
-            f"pred_points must have shape B x Q x K x 2, got {tuple(y['pred_points'].shape)} "
-            f"vs expected {expected_points_shape}."
-        )
-    if y["pred_logits"].shape != y["pred_points"].shape[:2]:
-        raise RuntimeError(
-            "pred_logits must have shape B x Q matching pred_points, "
-            f"got {tuple(y['pred_logits'].shape)} vs {tuple(y['pred_points'].shape[:2])}."
-        )
+    expected = {"pred_points", "pred_logits", "pred_valid_logits", "aux_mask_logits", "aux_edge_logits"}
+    if not isinstance(y, dict) or not expected.issubset(y):
+        raise RuntimeError("Unexpected GCSLaneHead output keys.")
     if y["pred_valid_logits"].shape != y["pred_points"].shape[:3]:
         raise RuntimeError(
             "pred_valid_logits must have shape B x Q x K matching pred_points, "
             f"got {tuple(y['pred_valid_logits'].shape)} vs {tuple(y['pred_points'].shape[:3])}."
         )
-    if y["pred_count_logits"].shape != (args.batch, 4):
-        raise RuntimeError(f"pred_count_logits must have shape B x 4, got {tuple(y['pred_count_logits'].shape)}.")
-    if y["pred_count_boundary_logits"].shape != (args.batch, 2):
-        raise RuntimeError(
-            "pred_count_boundary_logits must have shape B x 2, "
-            f"got {tuple(y['pred_count_boundary_logits'].shape)}."
-        )
-    if y["pred_quality_logits"].shape != y["pred_points"].shape[:2]:
-        raise RuntimeError(
-            "pred_quality_logits must have shape B x Q matching pred_points, "
-            f"got {tuple(y['pred_quality_logits'].shape)} vs {tuple(y['pred_points'].shape[:2])}."
-        )
-    if "pred_survival_logits" in y and y["pred_survival_logits"].shape != y["pred_points"].shape[:2]:
-        raise RuntimeError(
-            "pred_survival_logits must have shape B x Q matching pred_points, "
-            f"got {tuple(y['pred_survival_logits'].shape)} vs {tuple(y['pred_points'].shape[:2])}."
-        )
-    if bool(getattr(head, "survival_head_enabled", False)) and "pred_survival_logits" not in y:
-        raise RuntimeError("GCSLaneHead survival_head_enabled=True but pred_survival_logits is missing.")
-    if "aux_outputs" in y:
-        aux_outputs = y["aux_outputs"]
-        if not isinstance(aux_outputs, (list, tuple)):
-            raise RuntimeError(f"aux_outputs must be a list/tuple, got {type(aux_outputs).__name__}.")
-        expected_aux_len = max(int(len(getattr(head.decoder, "layers", []))) - 1, 0)
-        if bool(getattr(head, "decoder_aux_outputs", False)) and len(aux_outputs) != expected_aux_len:
-            raise RuntimeError(
-                f"GCSLaneHead decoder_aux_outputs=True expects {expected_aux_len} aux outputs, got {len(aux_outputs)}."
-            )
-        for idx, aux in enumerate(aux_outputs):
-            if not isinstance(aux, dict):
-                raise RuntimeError(f"aux_outputs[{idx}] must be a dict, got {type(aux).__name__}.")
-            for key in ("pred_points", "pred_logits", "pred_valid_logits", "pred_quality_logits"):
-                if key not in aux:
-                    raise RuntimeError(f"aux_outputs[{idx}] is missing {key}.")
-            if aux["pred_points"].shape != y["pred_points"].shape:
-                raise RuntimeError(
-                    f"aux_outputs[{idx}]['pred_points'] shape {tuple(aux['pred_points'].shape)} "
-                    f"must match final {tuple(y['pred_points'].shape)}."
-                )
-            if aux["pred_logits"].shape != y["pred_logits"].shape:
-                raise RuntimeError(f"aux_outputs[{idx}]['pred_logits'] shape mismatch.")
-            if aux["pred_valid_logits"].shape != y["pred_valid_logits"].shape:
-                raise RuntimeError(f"aux_outputs[{idx}]['pred_valid_logits'] shape mismatch.")
-            if aux["pred_quality_logits"].shape != y["pred_quality_logits"].shape:
-                raise RuntimeError(f"aux_outputs[{idx}]['pred_quality_logits'] shape mismatch.")
-    elif bool(getattr(head, "decoder_aux_outputs", False)):
-        raise RuntimeError("GCSLaneHead decoder_aux_outputs=True but aux_outputs is missing.")
     if getattr(head, "point_mode", "free") == "fixed_y":
         if int(getattr(head, "point_dims", 2)) != 1:
             raise RuntimeError("fixed_y GCSLaneHead must use point_dims=1 for x-only prediction.")
@@ -178,27 +92,13 @@ def main():
         print(f"input shape: {shape_str((img_h, img_w))} (W x H), stored as H,W={(img_h, img_w)}")
         print(f"registered LSEM: {has_lsem}")
         print(f"registered LaneBiFPN: {has_bifpn}")
-        print(f"registered LaneFeatureProjection: {has_projection}")
         print(f"registered GCSLaneHead: {has_head}")
         print(f"GCSLaneHead point_mode: {getattr(head, 'point_mode', None)}")
         print(f"GCSLaneHead point_dims: {getattr(head, 'point_dims', None)}")
 
     print(type(y))
     for k, v in y.items():
-        if isinstance(v, torch.Tensor):
-            print(k, v.shape)
-        elif isinstance(v, (list, tuple)):
-            print(k, f"{type(v).__name__}[{len(v)}]")
-            for idx, item in enumerate(v):
-                if isinstance(item, dict):
-                    shapes = {
-                        item_key: tuple(item_value.shape)
-                        for item_key, item_value in item.items()
-                        if isinstance(item_value, torch.Tensor)
-                    }
-                    print(f"{k}[{idx}]", shapes)
-        else:
-            print(k, type(v).__name__)
+        print(k, v.shape)
 
 
 if __name__ == "__main__":

@@ -1,48 +1,20 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 from pathlib import Path
-
-import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 os.chdir(ROOT)
 
-from ultralytics.models.yolo.gcs_lane.train import (
-    GCS_MAINLINE_CANDIDATE_GT5_EDGE_WEIGHT,
-    GCS_MAINLINE_COUNT_CLS_WEIGHTS,
-    GCS_MAINLINE_COUNT_BOUNDARY_GAIN,
-    GCS_MAINLINE_COUNT_BOUNDARY_GT5_POS_WEIGHT,
-    GCS_MAINLINE_COUNT_BOUNDARY_LABEL_SMOOTHING,
-    GCS_MAINLINE_COUNT_SUM_GAIN,
-    GCS_MAINLINE_GROUP_SAMPLER_RATIOS,
-    GCS_MAINLINE_GT5_EDGE_LOSS_WEIGHT,
-    GCS_MAINLINE_GT5_OVERSAMPLE_WEIGHT,
-    GCS_MAINLINE_POINT_VALID_GT5_EDGE_CONTINUITY,
-    GCS_MAINLINE_POINT_VALID_GT5_EDGE_CONTINUITY_THR,
-    GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT,
-    GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT_MIN_POINTS,
-    GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT_THR,
-    GCS_MAINLINE_POINT_VALID_GT5_POS_WEIGHT,
-    GCS_MAINLINE_QUALITY_HARD_NEGATIVE_FROM_HEAD,
-    GCS_MAINLINE_QUALITY_GAIN,
-    GCS_MAINLINE_QUALITY_GT5_EDGE_FLOOR,
-    GCS_MAINLINE_QUALITY_NEG_WEIGHT,
-    GCS_MAINLINE_QUALITY_POINT_WEIGHT,
-    GCSLaneTrainer,
-)
+from ultralytics.models.yolo.gcs_lane.train import GCSLaneTrainer
 from ultralytics.utils.gcs_shape import DATASET_IMAGE_SHAPES, normalize_imgsz, shape_str, trainer_imgsz
-from ultralytics.utils.gcs_postprocess import GCS_DEFAULT_MAX_DET
 
 
 DEFAULT_MODEL = ROOT / "ultralytics" / "cfg" / "models" / "gcs" / "gcs-yolo-lane-s-q12-k56.yaml"
-FIFTH_GATE_HARD_MANIFEST_PRESETS = {"k56_fifth_gate_hardsamples", "k56_fifth_gate_nearmiss_hardsamples"}
-TRAIN_HARD_MANIFEST_PRESETS = {"k56_viscountsum_hardsamples", *FIFTH_GATE_HARD_MANIFEST_PRESETS}
 
 
 def str2bool(value: str | bool) -> bool:
@@ -79,256 +51,6 @@ def dataset_defaults(dataset: str) -> dict[str, Path]:
         "val_images": root / "images" / "val",
         "val_labels": root / "labels_gcs" / "val",
     }
-
-
-def resolve_data_yaml_path(value: str | Path) -> Path:
-    path = Path(value)
-    return path if path.is_absolute() else ROOT / path
-
-
-def validate_named_candidate_training_args(model: str | Path, args: argparse.Namespace) -> None:
-    """Catch named candidate commands that would train the wrong objective."""
-    stem = Path(str(model)).stem.lower()
-    if "survival" in stem and float(getattr(args, "gcs_survival", 0.0) or 0.0) <= 0.0:
-        raise SystemExit(
-            "ERROR: survival-head candidate YAMLs emit pred_survival_logits and decode will prefer Survival Head "
-            "for fifth-lane gates. Train them with --gcs-survival > 0, or use the base K56 YAML."
-        )
-    if "decoder-aux" in stem and float(getattr(args, "gcs_decoder_aux", 0.0) or 0.0) <= 0.0:
-        raise SystemExit(
-            "ERROR: decoder-aux candidate YAMLs emit aux_outputs but need --gcs-decoder-aux > 0 to train the "
-            "auxiliary decoder objective. Use the base K56 YAML if auxiliary supervision is disabled."
-        )
-
-
-def _manifest_sidecar_path(path: str | Path) -> Path:
-    manifest = Path(path)
-    return manifest.with_suffix(manifest.suffix + ".summary.json")
-
-
-def _float_arg(args: argparse.Namespace, name: str, default: float) -> float:
-    """Read a numeric argparse field without treating 0.0 as missing."""
-    value = getattr(args, name, None)
-    return float(default if value is None else value)
-
-
-def _text_arg(args: argparse.Namespace, name: str, default: str) -> str:
-    """Read a string argparse field using the real CLI default when the field is absent."""
-    value = getattr(args, name, None)
-    return str(default if value is None else value).strip()
-
-
-def _is_disabled_text(value: str) -> bool:
-    """Return True for CLI strings that disable optional map/list knobs."""
-    return str(value or "").strip().lower() in {"", "none", "false", "off", "no", "0"}
-
-
-def validate_hard_manifest_sidecar(
-    path: str | Path,
-    *,
-    flag: str,
-    require_builder_preset: str | set[str] | None = None,
-    train_count_min_gt_points: int | None = None,
-) -> None:
-    """Reject hard manifests whose builder sidecar marks them as analysis/test artifacts."""
-    text = str(path or "").strip()
-    if not text:
-        return
-    sidecar = _manifest_sidecar_path(text)
-    if not sidecar.exists():
-        if require_builder_preset:
-            raise SystemExit(
-                f"ERROR: {flag} requires a build_gcs_hard_samples_from_eval.py sidecar for "
-                f"{require_builder_preset}: {sidecar}"
-            )
-        return
-    try:
-        payload = json.loads(sidecar.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise SystemExit(f"ERROR: {flag} sidecar is not valid JSON: {sidecar}") from exc
-    if payload.get("builder") != "build_gcs_hard_samples_from_eval.py":
-        if require_builder_preset:
-            raise SystemExit(
-                f"ERROR: {flag} sidecar must be produced by build_gcs_hard_samples_from_eval.py "
-                f"for {require_builder_preset}: {sidecar}"
-            )
-        return
-    if bool(payload.get("test_summary_allowed", False)):
-        raise SystemExit(
-            f"ERROR: {flag} sidecar allows test summaries and must not be used for training: {sidecar}"
-        )
-    if bool(payload.get("analysis_only", False)):
-        raise SystemExit(
-            f"ERROR: {flag} sidecar is marked analysis_only and must not be used for training: {sidecar}"
-        )
-    required_presets = (
-        {require_builder_preset}
-        if isinstance(require_builder_preset, str)
-        else set(require_builder_preset or [])
-    )
-    if required_presets and payload.get("preset") not in required_presets:
-        expected = ", ".join(sorted(required_presets))
-        if len(required_presets) == 1:
-            raise SystemExit(
-                f"ERROR: {flag} sidecar preset must be {expected} for hard-weighted "
-                f"training: {sidecar}"
-            )
-        raise SystemExit(
-            f"ERROR: {flag} sidecar preset must be one of {expected} for hard-weighted "
-            f"training: {sidecar}"
-        )
-    preset = str(payload.get("preset", "") or "")
-    if preset not in TRAIN_HARD_MANIFEST_PRESETS:
-        return
-    audit = payload.get("target_match_audit") if isinstance(payload.get("target_match_audit"), dict) else {}
-    if str(payload.get("source_split", "")).lower() != "train":
-        raise SystemExit(f"ERROR: {flag} {preset} sidecar must have source_split=train: {sidecar}")
-    if list(payload.get("target_splits") or []) != ["train"]:
-        raise SystemExit(f"ERROR: {flag} {preset} sidecar must target only train: {sidecar}")
-    if not bool(payload.get("require_target_match", False)):
-        raise SystemExit(f"ERROR: {flag} {preset} sidecar must require target matching: {sidecar}")
-    if not bool(audit.get("raw_file_only", False)):
-        raise SystemExit(f"ERROR: {flag} {preset} sidecar must use raw_file-only audit: {sidecar}")
-    if int(audit.get("unmatched_unique_samples", 0) or 0) > 0:
-        raise SystemExit(f"ERROR: {flag} sidecar has unmatched train hard samples: {sidecar}")
-    if required_presets and int(audit.get("matched_unique_samples", 0) or 0) <= 0:
-        raise SystemExit(f"ERROR: {flag} sidecar has no matched train hard samples: {sidecar}")
-    if preset == "k56_fifth_gate_nearmiss_hardsamples":
-        if int(payload.get("count_min_gt_points", 0) or 0) != 1:
-            raise SystemExit(
-                f"ERROR: {flag} near-miss sidecar must record count_min_gt_points=1: {sidecar}"
-            )
-        if train_count_min_gt_points is not None and int(train_count_min_gt_points) != 1:
-            raise SystemExit(
-                f"ERROR: {flag} near-miss sidecar was built with count_min_gt_points=1, but "
-                f"training uses gcs_count_min_gt_points={int(train_count_min_gt_points)}: {sidecar}"
-            )
-        if int(audit.get("matched_unique_samples", 0) or 0) < 20:
-            raise SystemExit(
-                f"ERROR: {flag} near-miss sidecar has fewer than 20 matched train hard samples: {sidecar}"
-            )
-        reason_counts = payload.get("reason_counts") if isinstance(payload.get("reason_counts"), dict) else {}
-        has_gt4_reason = any(str(k).startswith("gt4_") and int(v or 0) > 0 for k, v in reason_counts.items())
-        has_gt5_reason = any(str(k).startswith("gt5_") and int(v or 0) > 0 for k, v in reason_counts.items())
-        if not has_gt4_reason:
-            raise SystemExit(
-                f"ERROR: {flag} near-miss sidecar must include GT4 hard-negative reasons: {sidecar}"
-            )
-        if not has_gt5_reason:
-            raise SystemExit(
-                f"ERROR: {flag} near-miss sidecar must include GT5 hard-positive reasons: {sidecar}"
-            )
-
-
-def validate_training_hard_manifest_args(args: argparse.Namespace) -> None:
-    """Validate train-time hard sample manifests before building trainer overrides."""
-    visible_gain = _float_arg(args, "gcs_visible_count_sum", 0.0)
-    hard_weight = _float_arg(args, "gcs_visible_count_sum_hard_weight", 1.0)
-    hard_loss_file = str(getattr(args, "gcs_hard_loss_file", "") or "").strip()
-    requires_weighted_visible_manifest = visible_gain > 0.0 and abs(hard_weight - 1.0) > 1e-12
-    survival_gain = _float_arg(args, "gcs_survival", 0.0)
-    survival_target_mode = str(getattr(args, "gcs_survival_target_mode", "matched") or "matched").strip()
-    count_boundary_hard_margin_gain = _float_arg(args, "gcs_count_boundary_hard_margin_gain", 0.0)
-    requires_fifth_gate_manifest = (
-        (survival_gain > 0.0 and survival_target_mode == "count_conditioned_fifth")
-        or count_boundary_hard_margin_gain > 0.0
-    )
-    hard_edge_weight_map = _text_arg(args, "gcs_hard_edge_loss_weight_by_count", "4:1.15,5:1.6")
-    hard_edge_terms = _text_arg(args, "gcs_hard_edge_loss_terms", "exist,point,point_valid,line_iou")
-    if requires_weighted_visible_manifest and requires_fifth_gate_manifest:
-        raise SystemExit(
-            "ERROR: hard-weighted visible_count_sum and count-conditioned fifth-gate training require different "
-            "hard manifest presets. Run them as separate candidates or add an explicit combined preset."
-        )
-    if requires_weighted_visible_manifest and not hard_loss_file:
-        raise SystemExit(
-            "ERROR: --gcs-visible-count-sum-hard-weight != 1.0 requires --gcs-hard-loss-file. "
-            "Otherwise k56_viscountsum_hardsamples silently becomes an all-sample visible_count_sum run."
-        )
-    if requires_fifth_gate_manifest and not hard_loss_file:
-        raise SystemExit(
-            "ERROR: count-conditioned fifth-gate training requires --gcs-hard-loss-file built with "
-            "preset k56_fifth_gate_hardsamples or k56_fifth_gate_nearmiss_hardsamples."
-        )
-    validate_hard_manifest_sidecar(
-        hard_loss_file,
-        flag="--gcs-hard-loss-file",
-        require_builder_preset=(
-            "k56_viscountsum_hardsamples"
-            if requires_weighted_visible_manifest
-            else FIFTH_GATE_HARD_MANIFEST_PRESETS
-            if requires_fifth_gate_manifest
-            else None
-        ),
-        train_count_min_gt_points=int(getattr(args, "gcs_count_min_gt_points", 1) or 1),
-    )
-    if (
-        requires_fifth_gate_manifest
-        and not _is_disabled_text(hard_edge_weight_map)
-        and not _is_disabled_text(hard_edge_terms)
-    ):
-        raise SystemExit(
-            "ERROR: count-conditioned fifth-gate / hard Count Boundary training uses --gcs-hard-loss-file only "
-            "as a train-mined hard-case mask. Disable unrelated hard-edge weighting with "
-            "--gcs-hard-edge-loss-weight-by-count none or --gcs-hard-edge-loss-terms none."
-        )
-    validate_hard_manifest_sidecar(getattr(args, "gcs_hard_sample_file", ""), flag="--gcs-hard-sample-file")
-
-
-def infer_gcs_label_dir_from_image_path(image_path: str | Path) -> Path:
-    """Map an images/<split> path from a data YAML to its labels_gcs/<split> peer."""
-    path = Path(image_path)
-    parts = list(path.parts)
-    if "images" in parts:
-        idx = len(parts) - 1 - parts[::-1].index("images")
-        parts[idx] = "labels_gcs"
-        return Path(*parts)
-    return path.parent.parent / "labels_gcs" / path.name
-
-
-def is_file_like_dataset_entry(path: Path) -> bool:
-    return path.suffix.lower() in {".txt", ".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
-
-
-def infer_gcs_label_dirs_from_data(data_yaml: str | Path) -> dict[str, str]:
-    data_path = resolve_data_yaml_path(data_yaml)
-    if not data_path.exists():
-        return {}
-    data = yaml.safe_load(data_path.read_text(encoding="utf-8")) or {}
-    base = data_path.parent
-    yaml_base = data.get("path")
-    if yaml_base:
-        base_path = Path(yaml_base)
-        base = base_path if base_path.is_absolute() else data_path.parent / base_path
-
-    def resolve_entry(value: str | Path) -> Path:
-        path = Path(value)
-        return Path(os.path.abspath(path if path.is_absolute() else base / path))
-
-    def infer_entry(value: object) -> str | None:
-        if isinstance(value, (list, tuple)):
-            return None
-        if value:
-            path = resolve_entry(str(value))
-            if is_file_like_dataset_entry(path):
-                return None
-            return str(infer_gcs_label_dir_from_image_path(path))
-        return None
-
-    inferred: dict[str, str] = {}
-    for split in ("train", "val"):
-        label_dir = infer_entry(data.get(split))
-        if label_dir:
-            inferred[split] = label_dir
-    return inferred
-
-
-def choose_gcs_label_dir(explicit_label_dir: str | None, image_override: str | None, inferred_label_dir: str | None) -> str | None:
-    if explicit_label_dir:
-        return explicit_label_dir
-    if image_override:
-        return None
-    return inferred_label_dir
 
 
 def parse_args() -> argparse.Namespace:
@@ -391,12 +113,6 @@ def parse_args() -> argparse.Namespace:
         help="GCS-safe random center scaling gain. 0 disables; 0.3 samples scale from 0.7 to 1.3.",
     )
     parser.add_argument(
-        "--translate",
-        type=float,
-        default=0.0,
-        help="GCS-safe random translation gain as a fraction of image width/height.",
-    )
-    parser.add_argument(
         "--erasing",
         type=float,
         default=0.0,
@@ -412,250 +128,38 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--train-gcs-labels", default=None)
     parser.add_argument("--val-images", default=None)
     parser.add_argument("--val-gcs-labels", default=None)
+    parser.add_argument("--gcs-exist", type=float, default=2.0)
+    parser.add_argument("--gcs-point", type=float, default=15.0)
+    parser.add_argument("--gcs-point-valid", type=float, default=1.0)
+    parser.add_argument("--gcs-smooth", type=float, default=0.05)
+    parser.add_argument("--gcs-curve", type=float, default=0.1)
+    parser.add_argument("--gcs-mask", type=float, default=0.2)
+    parser.add_argument("--gcs-edge", type=float, default=0.2)
     parser.add_argument(
-        "--gcs-train-include-val",
-        action="store_true",
-        help="Append the configured val images/labels to the training loader for final train+val fitting. Use with --no-val.",
-    )
-    parser.add_argument("--gcs-exist", type=float, default=1.0, help="Quality-aware lane existence/confidence loss gain.")
-    parser.add_argument("--gcs-point", type=float, default=5.0)
-    parser.add_argument("--gcs-point-valid", type=float, default=0.5)
-    parser.add_argument(
-        "--gcs-point-invalid-x",
-        type=float,
-        default=0.05,
-        help="Relative pseudo-x penalty inside point loss for matched invisible anchors weighted by predicted point-valid probability.",
-    )
-    parser.add_argument(
-        "--gcs-line-iou",
-        type=float,
-        default=0.3,
-        help="Whole-lane LineIoU loss gain. 0 disables the LineIoU shape term.",
-    )
-    parser.add_argument(
-        "--gcs-line-iou-width-px",
-        type=float,
-        default=15.0,
-        help="Half-width in pixels used to expand lane points into horizontal strips for LineIoU.",
-    )
-    parser.add_argument("--gcs-count-cls", type=float, default=0.3, help="Explicit Count Head count=2/3/4/5 CE loss gain.")
-    parser.add_argument(
-        "--gcs-count-sum",
-        "--count-sum-loss-weight",
-        dest="gcs_count_sum",
-        type=float,
-        default=GCS_MAINLINE_COUNT_SUM_GAIN,
-        help="Exist-count consistency loss gain for sum(sigmoid(pred_logits)) ~= GT lane count.",
-    )
-    parser.add_argument(
-        "--gcs-count-sum-normalize",
-        "--count-sum-loss-normalize",
-        dest="gcs_count_sum_normalize",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Normalize count_sum_loss by GT lane count.",
-    )
-    parser.add_argument(
-        "--gcs-visible-count-sum",
+        "--gcs-count",
         type=float,
         default=0.0,
-        help="Default-off visible-segment query count loss gain from exist/valid/quality evidence.",
+        help="Cardinality loss gain for matching sum(sigmoid(pred_logits)) to GT lane count. 0 disables.",
     )
     parser.add_argument(
-        "--gcs-visible-count-sum-normalize",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Normalize visible_count_sum_loss by GT lane count.",
-    )
-    parser.add_argument("--gcs-visible-count-sum-visible-thr", type=float, default=0.5)
-    parser.add_argument("--gcs-visible-count-sum-support-points", type=float, default=12.0)
-    parser.add_argument(
-        "--gcs-visible-count-sum-quality-weight",
+        "--gcs-count-under5",
         type=float,
         default=0.0,
-        help="Blend pred_quality_logits into visible count evidence. Use >0 only for explicit candidates.",
+        help="Extra undercount loss gain for samples with GT lane count >= --gcs-count-under5-min-lanes. 0 disables.",
     )
     parser.add_argument(
-        "--gcs-visible-count-sum-survival-weight",
-        type=float,
-        default=0.0,
-        help="Blend pred_survival_logits into visible count evidence. Requires a survival-head candidate YAML.",
-    )
-    parser.add_argument("--gcs-visible-count-boundary", type=float, default=0.25)
-    parser.add_argument("--gcs-visible-count-boundary-temperature", type=float, default=0.5)
-    parser.add_argument("--gcs-visible-count-boundary-label-smoothing", type=float, default=0.0)
-    parser.add_argument(
-        "--gcs-visible-count-sum-hard-weight",
-        type=float,
-        default=1.0,
-        help="Sample weight for --gcs-hard-loss-file hits inside visible_count_sum_loss.",
-    )
-    parser.add_argument("--gcs-quality", type=float, default=GCS_MAINLINE_QUALITY_GAIN, help="Lane-level Quality Head BCE loss gain.")
-    parser.add_argument("--gcs-quality-dist-thr-px", type=float, default=20.0, help="Pixel threshold for quality target point-inlier score.")
-    parser.add_argument("--gcs-quality-neg-weight", type=float, default=GCS_MAINLINE_QUALITY_NEG_WEIGHT, help="Relative weight for unmatched-query quality negatives.")
-    parser.add_argument(
-        "--gcs-quality-point-weight",
-        type=float,
-        default=GCS_MAINLINE_QUALITY_POINT_WEIGHT,
-        help="Blend weight for point-inlier score in Quality targets; line-IoU receives 1-weight.",
-    )
-    parser.add_argument(
-        "--gcs-quality-gt5-edge-floor",
-        type=float,
-        default=GCS_MAINLINE_QUALITY_GT5_EDGE_FLOOR,
-        help="Minimum Quality Head target for matched left/right GT5 edge lanes. 0 disables.",
-    )
-    parser.add_argument("--gcs-quality-hard-negative-weight", type=float, default=1.0)
-    parser.add_argument("--gcs-quality-duplicate-negative-weight", type=float, default=1.5)
-    parser.add_argument(
-        "--gcs-quality-hard-negative-from-head",
-        action=argparse.BooleanOptionalAction,
-        default=GCS_MAINLINE_QUALITY_HARD_NEGATIVE_FROM_HEAD,
-        help="Also mine Quality Head hard negatives directly from high pred_quality_logits on unmatched queries.",
-    )
-    parser.add_argument(
-        "--gcs-survival",
-        type=float,
-        default=0.0,
-        help="Default-off lane Survival Head BCE gain. Requires a survival-head candidate YAML.",
-    )
-    parser.add_argument("--gcs-survival-pos-weight", type=float, default=1.0)
-    parser.add_argument("--gcs-survival-neg-weight", type=float, default=0.5)
-    parser.add_argument("--gcs-survival-hard-negative-weight", type=float, default=1.0)
-    parser.add_argument("--gcs-survival-duplicate-negative-weight", type=float, default=1.5)
-    parser.add_argument(
-        "--gcs-survival-target-mode",
-        choices=("matched", "count_conditioned_fifth"),
-        default="matched",
-        help=(
-            "Survival loss target mode. matched preserves the existing matched/unmatched BCE; "
-            "count_conditioned_fifth trains only true GT5 edge fifth-lane matches as positives and unmatched fifth "
-            "candidates as negatives."
-        ),
-    )
-    parser.add_argument(
-        "--gcs-fifth-gate-hard-negative-weight",
-        type=float,
-        default=2.0,
-        help="Sample-level negative weight for hard-manifest images in count_conditioned_fifth survival mode.",
-    )
-    parser.add_argument(
-        "--gcs-decoder-aux",
-        type=float,
-        default=0.0,
-        help="Default-off auxiliary decoder supervision gain. Requires a decoder-aux candidate YAML.",
-    )
-    parser.add_argument(
-        "--gcs-hard-negative-visible-segment",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Mine unmatched hard negatives with visible-segment evidence instead of all-anchor point-valid mean.",
-    )
-    parser.add_argument(
-        "--gcs-hard-negative-visible-thr",
-        type=float,
-        default=0.5,
-        help="Point-valid probability threshold for visible-segment hard-negative mining.",
-    )
-    parser.add_argument(
-        "--gcs-hard-negative-visible-support-points",
-        type=float,
-        default=12.0,
-        help="Visible-segment length saturation for hard-negative mining support.",
-    )
-    parser.add_argument("--gcs-count-head-warmup-epochs", type=float, default=5.0, help="Linearly ramp Count Head loss over this many epochs. 0 disables warmup.")
-    parser.add_argument("--gcs-count-min-gt-points", type=int, default=1, help="Minimum visible anchors for a GT lane to count in Count Head targets.")
-    parser.add_argument("--gcs-count-cls-w2", type=float, default=GCS_MAINLINE_COUNT_CLS_WEIGHTS[0])
-    parser.add_argument("--gcs-count-cls-w3", type=float, default=GCS_MAINLINE_COUNT_CLS_WEIGHTS[1])
-    parser.add_argument("--gcs-count-cls-w4", type=float, default=GCS_MAINLINE_COUNT_CLS_WEIGHTS[2])
-    parser.add_argument(
-        "--gcs-count-cls-w5",
-        type=float,
-        default=GCS_MAINLINE_COUNT_CLS_WEIGHTS[3],
-        help="Count Head CE class weight for 5-lane images. Current default balances GT5 recall and count generalization; sweep 1.6/1.8/2.0 if needed.",
-    )
-    parser.add_argument(
-        "--gcs-count-boundary",
-        type=float,
-        default=GCS_MAINLINE_COUNT_BOUNDARY_GAIN,
-        help="Count Boundary BCE gain for count>=4 and count>=5 calibration inside count_cls_loss.",
-    )
-    parser.add_argument(
-        "--gcs-count-boundary-label-smoothing",
-        type=float,
-        default=GCS_MAINLINE_COUNT_BOUNDARY_LABEL_SMOOTHING,
-        help="Label smoothing for Count Boundary count>=4/count>=5 targets.",
-    )
-    parser.add_argument(
-        "--gcs-count-boundary-gt5-pos-weight",
-        type=float,
-        default=GCS_MAINLINE_COUNT_BOUNDARY_GT5_POS_WEIGHT,
-        help="Extra Count Boundary BCE weight for count>=5 positive targets. 1 disables.",
-    )
-    parser.add_argument(
-        "--gcs-count-boundary-hard-margin",
-        type=float,
-        default=0.2,
-        help="Hard-case count>=5 boundary logit margin for GT4 false-fifth and GT5 miss-fifth samples.",
-    )
-    parser.add_argument(
-        "--gcs-count-boundary-hard-margin-gain",
-        type=float,
-        default=0.0,
-        help=(
-            "Default-off hard-only Count Boundary margin gain. Requires k56_fifth_gate_hardsamples or "
-            "k56_fifth_gate_nearmiss_hardsamples manifest."
-        ),
-    )
-    parser.add_argument(
-        "--gcs-count-adjacent-margin",
-        type=float,
-        default=0.2,
-        help="Target-vs-neighbor Count Head logit margin for adjacent count classes.",
-    )
-    parser.add_argument(
-        "--gcs-count-adjacent-margin-gain",
-        type=float,
-        default=0.0,
-        help="Adjacent count margin gain inside count_cls_loss. 0 disables the experimental margin term.",
-    )
-    parser.add_argument(
-        "--gcs-count-adjacent-margin-gt45-weight",
-        type=float,
-        default=1.0,
-        help="Extra adjacent-margin sample weight for GT4/GT5 images. 1 disables.",
+        "--gcs-count-under5-min-lanes",
+        type=int,
+        default=5,
+        help="Minimum GT lane count that enables the targeted undercount penalty.",
     )
     parser.add_argument("--gcs-exist-pos-weight", type=float, default=1.0)
-    parser.add_argument("--gcs-exist-focal-gamma", type=float, default=2.0, help="Quality focal gamma for existence BCE. 0 disables focal weighting.")
+    parser.add_argument("--gcs-exist-focal-gamma", type=float, default=0.0, help="Optional focal gamma for existence BCE. 0 disables focal weighting.")
     parser.add_argument(
         "--gcs-exist-focal-alpha",
         type=float,
         default=-1.0,
         help="Optional focal alpha for existence BCE. Use a value in [0, 1] to enable alpha weighting.",
-    )
-    parser.add_argument("--gcs-hard-negative-quality-thr", type=float, default=0.5)
-    parser.add_argument("--gcs-hard-negative-topk", type=int, default=2)
-    parser.add_argument("--gcs-hard-negative-exist-weight", type=float, default=4.0)
-    parser.add_argument("--gcs-duplicate-negative-exist-weight", type=float, default=4.0)
-    parser.add_argument("--gcs-duplicate-dist-thr-px", type=float, default=25.0)
-    parser.add_argument("--gcs-duplicate-iou-thr", type=float, default=0.30)
-    parser.add_argument(
-        "--gcs-exist-margin",
-        type=float,
-        default=0.5,
-        help="Relative exist probability margin loss gain for matched positives and unmatched negatives.",
-    )
-    parser.add_argument(
-        "--gcs-exist-pos-margin",
-        type=float,
-        default=0.55,
-        help="Matched positive queries with high quality are pushed above this exist probability.",
-    )
-    parser.add_argument(
-        "--gcs-exist-neg-margin",
-        type=float,
-        default=0.20,
-        help="Unmatched queries are pushed below this exist probability.",
     )
     parser.add_argument(
         "--gcs-exist-quality-alpha",
@@ -664,16 +168,10 @@ def parse_args() -> argparse.Namespace:
         help="Blend factor for quality-aware existence targets. 1 uses pure geometry quality, 0 restores hard matched labels.",
     )
     parser.add_argument(
-        "--gcs-exist-quality-lane-iou-alpha",
-        type=float,
-        default=1.0,
-        help="Legacy compatibility option; matched exist quality now always uses LineIoU, point error, and visibility.",
-    )
-    parser.add_argument(
         "--gcs-exist-quality-mode",
         choices=("linear", "exp"),
         default="linear",
-        help="Quality target shape. linear makes APE >= neg-px a zero target; exp uses exponential APE decay.",
+        help="Quality target shape. linear makes APE >= neg-px a zero target; exp keeps the old exp(-APE/tau) behavior.",
     )
     parser.add_argument(
         "--gcs-exist-quality-tau",
@@ -685,7 +183,7 @@ def parse_args() -> argparse.Namespace:
         "--gcs-exist-quality-floor",
         type=float,
         default=0.0,
-        help="Optional matched exist-target floor above the mandatory 0.5 lower bound.",
+        help="Minimum geometry quality used for exp quality mode.",
     )
     parser.add_argument(
         "--gcs-exist-quality-pos-px",
@@ -696,105 +194,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--gcs-exist-quality-neg-px",
         type=float,
-        default=25.0,
+        default=20.0,
         help="APE at or above this value receives quality 0.0 in linear quality mode.",
     )
+    parser.add_argument("--gcs-mask-pos-weight-max", type=float, default=20.0)
     parser.add_argument("--gcs-point-valid-pos-weight-max", type=float, default=10.0)
-    parser.add_argument("--gcs-point-valid-unmatched-weight", type=float, default=0.35)
-    parser.add_argument("--gcs-point-valid-hard-negative-weight", type=float, default=1.25)
-    parser.add_argument("--gcs-point-valid-duplicate-negative-weight", type=float, default=1.5)
-    parser.add_argument(
-        "--gcs-point-valid-gt5-pos-weight",
-        type=float,
-        default=GCS_MAINLINE_POINT_VALID_GT5_POS_WEIGHT,
-        help=(
-            "Extra multiplier for positive point-valid anchors on images with at least 5 GT lanes. 1 disables. "
-            "Current default avoids over-concentrating GT5 while preserving fifth-lane visibility pressure."
-        ),
-    )
-    parser.add_argument(
-        "--gcs-gt5-edge-loss-weight",
-        "--gt5-edge-loss-weight",
-        dest="gcs_gt5_edge_loss_weight",
-        type=float,
-        default=GCS_MAINLINE_GT5_EDGE_LOSS_WEIGHT,
-        help="Multiplier for matched left/right edge lanes on images with at least 4 GT lanes. 1 disables.",
-    )
-    parser.add_argument(
-        "--gcs-candidate-gt5-edge-weight",
-        type=float,
-        default=GCS_MAINLINE_CANDIDATE_GT5_EDGE_WEIGHT,
-        help="Matched left/right GT5 edge-query/lane loss multiplier. 1 disables.",
-    )
-    parser.add_argument(
-        "--gcs-point-valid-gt5-edge-continuity",
-        type=float,
-        default=GCS_MAINLINE_POINT_VALID_GT5_EDGE_CONTINUITY,
-        help="Point-valid continuity gain for matched left/right edge lanes on GT>=5 images. 0 disables.",
-    )
-    parser.add_argument(
-        "--gcs-point-valid-gt5-edge-continuity-thr",
-        type=float,
-        default=GCS_MAINLINE_POINT_VALID_GT5_EDGE_CONTINUITY_THR,
-        help="Minimum adjacent point-valid probability used by the GT>=5 edge continuity penalty.",
-    )
-    parser.add_argument(
-        "--gcs-point-valid-gt5-edge-segment",
-        type=float,
-        default=GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT,
-        help="GT5 edge-lane longest-visible-segment support loss gain. 0 disables.",
-    )
-    parser.add_argument(
-        "--gcs-point-valid-gt5-edge-segment-thr",
-        type=float,
-        default=GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT_THR,
-        help="Point-valid probability floor for the GT5 edge visible-segment support loss.",
-    )
-    parser.add_argument(
-        "--gcs-point-valid-gt5-edge-segment-min-points",
-        type=int,
-        default=GCS_MAINLINE_POINT_VALID_GT5_EDGE_SEGMENT_MIN_POINTS,
-        help="Minimum GT-visible anchors required for the GT5 edge segment support loss.",
-    )
-    parser.add_argument(
-        "--gcs-hard-loss-file",
-        default="",
-        help="Optional txt/json manifest of hard images for loss-only hard-edge weighting. Does not affect sampling.",
-    )
-    parser.add_argument(
-        "--gcs-hard-loss-lane-counts",
-        default="",
-        help="Optional GT lane-count filter for --gcs-hard-loss-file, e.g. '5' or '4,5'. Empty keeps all manifest hits.",
-    )
-    parser.add_argument(
-        "--gcs-hard-edge-loss-weight-by-count",
-        default="4:1.15,5:1.6",
-        help="Per-GT-count hard-edge loss multipliers for manifest hits, e.g. '4:1.15,5:1.6'.",
-    )
-    parser.add_argument(
-        "--gcs-hard-edge-loss-terms",
-        default="exist,point,point_valid,line_iou",
-        help="Comma/space separated terms that receive hard-edge weighting: exist, point, point_valid, line_iou, quality.",
-    )
-    parser.add_argument(
-        "--gcs-hard-edge-only",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Apply hard loss multipliers only to matched left/right edge lanes.",
-    )
-    parser.add_argument(
-        "--gcs-point-valid-neg",
-        type=float,
-        default=0.25,
-        help="Relative margin penalty for over-confident invisible anchors.",
-    )
-    parser.add_argument(
-        "--gcs-point-valid-neg-thr",
-        type=float,
-        default=0.20,
-        help="Invisible anchors are penalized when point-valid probability exceeds this threshold.",
-    )
+    parser.add_argument("--gcs-edge-pos-weight-max", type=float, default=50.0)
+    parser.add_argument("--gcs-aux-dice", type=float, default=0.5)
     parser.add_argument("--gcs-cost-point", type=float, default=5.0)
+    parser.add_argument("--gcs-cost-curve", type=float, default=0.05)
     parser.add_argument("--gcs-cost-exist", type=float, default=0.1)
     parser.add_argument("--gcs-match-min-overlap", type=int, default=2, help="Minimum valid GT points for training Hungarian matching.")
     parser.add_argument("--gcs-match-max-x-dist", type=float, default=0.0, help="Optional training matcher mean x-distance gate in pixels. 0 disables.")
@@ -803,100 +211,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gcs-eval-ape-thr", type=float, default=20.0)
     parser.add_argument("--gcs-eval-match-gate-px", type=float, default=None, help="Strict validation APE gate in pixels. Defaults to --gcs-eval-ape-thr.")
     parser.add_argument("--gcs-eval-max-x-dist", type=float, default=0.0, help="Optional strict validation mean x-distance gate in pixels. 0 disables.")
-    parser.add_argument("--gcs-eval-min-overlap", type=int, default=6, help="Minimum overlapping visible anchors for strict validation matching.")
-    parser.add_argument("--gcs-eval-min-points", type=int, default=6, help="Minimum decoded visible anchors required to keep a validation prediction.")
-    parser.add_argument(
-        "--gcs-eval-min-gt-cover-ratio",
-        type=float,
-        default=0.3,
-        help="Minimum GT visible-anchor coverage ratio required for strict validation matching.",
-    )
-    parser.add_argument(
-        "--gcs-eval-min-pred-cover-ratio",
-        type=float,
-        default=0.3,
-        help="Minimum predicted visible-anchor coverage ratio required for strict validation matching.",
-    )
-    parser.add_argument("--gcs-eval-nms-dist-px", type=float, default=18.0, help="Validation lane NMS distance in pixels. 0 disables.")
-    decode_group = parser.add_mutually_exclusive_group()
-    decode_group.add_argument("--gcs-use-count-head-decode", dest="gcs_use_count_head_decode", action="store_true", help="Use explicit Count Head K during validation/inference decode.")
-    decode_group.add_argument("--no-gcs-use-count-head-decode", dest="gcs_use_count_head_decode", action="store_false", help="Disable Count Head K and use max-det rank selection.")
-    parser.set_defaults(gcs_use_count_head_decode=True)
-    parser.add_argument("--gcs-count-head-temp", type=float, default=1.0)
-    parser.add_argument("--gcs-decode-candidate-conf", type=float, default=0.05)
-    parser.add_argument("--gcs-decode-candidate-point-valid-thr", type=float, default=0.20)
-    parser.add_argument("--gcs-decode-candidate-min-points", type=int, default=5)
-    rescue_candidate_group = parser.add_mutually_exclusive_group()
-    rescue_candidate_group.add_argument("--gcs-enable-rescue-candidate-pool", dest="gcs_enable_rescue_candidate_pool", action="store_true", help="Use weaker real-query candidates only when Count Head K exceeds the normal candidate pool.")
-    rescue_candidate_group.add_argument("--no-gcs-enable-rescue-candidate-pool", dest="gcs_enable_rescue_candidate_pool", action="store_false", help="Disable the weaker rescue candidate pool.")
-    parser.set_defaults(gcs_enable_rescue_candidate_pool=True)
-    parser.add_argument("--gcs-decode-rescue-candidate-conf", type=float, default=0.005)
-    parser.add_argument("--gcs-decode-rescue-candidate-point-valid-thr", type=float, default=0.08)
-    parser.add_argument("--gcs-decode-rescue-candidate-min-points", type=int, default=4)
-    parser.add_argument("--gcs-decode-final-min-points", type=int, default=6)
-    parser.add_argument("--gcs-decode-fifth-min-points", type=int, default=5)
-    parser.add_argument("--gcs-line-nms-min-overlap", type=int, default=6)
-    parser.add_argument("--gcs-line-nms-rescue-dist-px", type=float, default=30.0)
-    parser.add_argument("--gcs-quality-rescue-5th", action=argparse.BooleanOptionalAction, default=True, help="Enable quality-gated fifth-lane rescue when pred_quality_logits are present.")
-    parser.add_argument("--gcs-quality-rescue-count5-thr", type=float, default=0.70)
-    parser.add_argument("--gcs-quality-rescue-conf-thr", type=float, default=0.03)
-    parser.add_argument("--gcs-quality-rescue-mean-valid-thr", type=float, default=0.45)
-    parser.add_argument("--gcs-quality-rescue-quality-thr", type=float, default=0.55)
-    parser.add_argument("--gcs-quality-rescue-min-points", type=int, default=5)
-    parser.add_argument("--gcs-quality-rescue-dist-px", type=float, default=24.0)
-    parser.add_argument("--gcs-last-lane-rescue", action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument("--gcs-last-lane-rescue-min-policy-count", type=int, default=4)
-    parser.add_argument("--gcs-last-lane-rescue-conf-thr", type=float, default=None)
-    parser.add_argument("--gcs-last-lane-rescue-point-valid-thr", type=float, default=0.08)
-    parser.add_argument("--gcs-last-lane-rescue-min-points", type=int, default=4)
-    parser.add_argument("--gcs-last-lane-rescue-mean-valid-thr", type=float, default=0.40)
-    parser.add_argument("--gcs-last-lane-rescue-quality-thr", type=float, default=0.50)
-    parser.add_argument("--gcs-last-lane-rescue-dist-px", type=float, default=24.0)
-    parser.add_argument("--gcs-edge-last-lane-rescue", action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument("--gcs-edge-rescue-conf-thr", type=float, default=0.02)
-    parser.add_argument("--gcs-edge-rescue-point-valid-thr", type=float, default=0.06)
-    parser.add_argument("--gcs-edge-rescue-min-points", type=int, default=4)
-    parser.add_argument("--gcs-edge-rescue-mean-valid-thr", type=float, default=0.35)
-    parser.add_argument("--gcs-edge-rescue-quality-thr", type=float, default=0.45)
-    parser.add_argument("--gcs-edge-rescue-outside-gap-px", type=float, default=28.0)
-    parser.add_argument("--gcs-edge-rescue-dist-px", type=float, default=24.0)
-    parser.add_argument("--gcs-edge-rescue-min-policy-count", type=int, default=4)
-    parser.add_argument("--gcs-edge-count4-to5-upgrade", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--gcs-edge-count4-to5-prob-margin", type=float, default=0.20)
-    parser.add_argument(
-        "--gcs-soft-count-decision",
-        "--soft-count-decision",
-        dest="gcs_soft_count_decision",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help="When Count Head probabilities are close, choose K by candidate quality instead of hard argmax.",
-    )
-    parser.add_argument("--gcs-soft-count-prob-margin", "--soft-count-prob-margin", dest="gcs_soft_count_prob_margin", type=float, default=0.08)
-    parser.add_argument("--gcs-soft-count-quality-weight", "--soft-count-quality-weight", dest="gcs_soft_count_quality_weight", type=float, default=1.0)
-    parser.add_argument("--gcs-soft-count-prior-weight", "--soft-count-prior-weight", dest="gcs_soft_count_prior_weight", type=float, default=0.5)
-    parser.add_argument("--gcs-soft-count-duplicate-penalty", "--soft-count-duplicate-penalty", dest="gcs_soft_count_duplicate_penalty", type=float, default=1.0)
-    parser.add_argument("--gcs-soft-count-invalid-penalty", "--soft-count-invalid-penalty", dest="gcs_soft_count_invalid_penalty", type=float, default=1.0)
+    parser.add_argument("--gcs-eval-min-overlap", type=int, default=2, help="Minimum valid overlapping GT points for strict validation matching.")
+    parser.add_argument("--gcs-eval-nms-dist-px", type=float, default=50.0, help="Optional validation lane NMS distance in pixels. 0 disables.")
     parser.add_argument(
         "--gcs-eval-point-valid-thr",
         type=float,
         default=0.5,
         help="Per-point visibility threshold used when decoding fixed-y lanes for validation metrics.",
     )
-    parser.add_argument("--gcs-eval-max-det", type=int, default=GCS_DEFAULT_MAX_DET)
-    parser.add_argument(
-        "--gcs-sampler-mode",
-        default="group_cycle",
-        choices=("group_cycle", "weighted", "none"),
-        help="Training sampler mode. group_cycle uses lane-count target ratios and cycles each group without replacement.",
-    )
-    parser.add_argument(
-        "--gcs-group-sampler-ratios",
-        default=GCS_MAINLINE_GROUP_SAMPLER_RATIOS,
-        help=(
-            "Target lane-count ratios for --gcs-sampler-mode group_cycle. "
-            f"Mainline default: '{GCS_MAINLINE_GROUP_SAMPLER_RATIOS}'."
-        ),
-    )
+    parser.add_argument("--gcs-eval-max-det", type=int, default=8)
     balance_group = parser.add_mutually_exclusive_group()
     balance_group.add_argument(
         "--gcs-lane-count-balanced",
@@ -922,205 +245,6 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=50,
         help="Minimum group size used when balancing lane counts, preventing tiny groups from dominating an epoch.",
-    )
-    hard_group = parser.add_mutually_exclusive_group()
-    hard_group.add_argument(
-        "--gcs-hard-sampling",
-        dest="gcs_hard_sampling",
-        nargs="?",
-        const=True,
-        type=str2bool,
-        help="Boost hard lane-count groups in the GCS weighted sampler. Accepts '--gcs-hard-sampling' or '--gcs-hard-sampling True'.",
-    )
-    hard_group.add_argument(
-        "--no-gcs-hard-sampling",
-        dest="gcs_hard_sampling",
-        action="store_false",
-        help="Disable hard lane-count boosting while keeping optional lane-count balancing.",
-    )
-    parser.set_defaults(gcs_hard_sampling=False)
-    parser.add_argument(
-        "--gcs-hard-lane-counts",
-        default="",
-        help="Comma/space separated GT lane counts boosted by --gcs-hard-sampling in weighted legacy mode.",
-    )
-    parser.add_argument(
-        "--gcs-hard-sampling-boost",
-        type=float,
-        default=1.5,
-        help="Weight multiplier for samples whose GT lane count is in --gcs-hard-lane-counts.",
-    )
-    parser.add_argument(
-        "--gcs-hard-sampling-boost-by-count",
-        default="",
-        help="Optional per-count final multipliers for legacy weighted sampling, e.g. '4:1.5,5:2.0'.",
-    )
-    parser.add_argument(
-        "--gcs-hard-sample-file",
-        default="",
-        help="Optional txt/json manifest of hard image stems, paths, or raw_file ids to boost in the sampler.",
-    )
-    parser.add_argument(
-        "--gcs-hard-sample-boost",
-        type=float,
-        default=2.0,
-        help="Weight multiplier for samples matched by --gcs-hard-sample-file.",
-    )
-    parser.add_argument(
-        "--gcs-gt5-oversample-weight",
-        "--gt5-oversample-weight",
-        dest="gcs_gt5_oversample_weight",
-        type=float,
-        default=GCS_MAINLINE_GT5_OVERSAMPLE_WEIGHT,
-        help="Additional sampler multiplier/ratio boost for GT=5 training images. Mainline default 1 disables it.",
-    )
-    gt5_aug_group = parser.add_mutually_exclusive_group()
-    gt5_aug_group.add_argument(
-        "--gcs-gt5-extra-aug",
-        dest="gcs_gt5_extra_aug",
-        action="store_true",
-        help="Enable extra image-only multi-view augmentation for samples with at least 5 GT lanes.",
-    )
-    gt5_aug_group.add_argument(
-        "--no-gcs-gt5-extra-aug",
-        dest="gcs_gt5_extra_aug",
-        action="store_false",
-        help="Disable extra image-only augmentation for >=5-lane samples.",
-    )
-    parser.set_defaults(gcs_gt5_extra_aug=True)
-    parser.add_argument("--gcs-gt5-aug-min-lanes", type=int, default=5)
-    parser.add_argument("--gcs-gt5-erasing", type=float, default=0.15)
-    parser.add_argument(
-        "--gcs-gt5-lane-aware-erasing",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help=(
-            "For GT5 extra erasing, resample erase boxes that overlap visible lane anchors or adjacent "
-            "visible anchor-to-anchor segments; labels stay unchanged."
-        ),
-    )
-    parser.add_argument("--gcs-gt5-erasing-lane-margin-px", type=float, default=8.0)
-    parser.add_argument("--gcs-gt5-blur", type=float, default=0.15)
-    parser.add_argument("--gcs-gt5-noise", type=float, default=0.15)
-    parser.add_argument("--gcs-gt5-shadow", type=float, default=0.20)
-    parser.add_argument(
-        "--save-period",
-        type=int,
-        default=-1,
-        help="Save extra epoch checkpoint files every N epochs. Not required for --gcs-official-best.",
-    )
-    parser.add_argument(
-        "--gcs-official-best",
-        action="store_true",
-        help=(
-            "Maintain weights/official_best.pt using official Accuracy only in periodic TuSimple official val sweeps. "
-            "Configured thresholds are diagnostic only; weights/best.pt remains ordinary val F1 best."
-        ),
-    )
-    parser.add_argument(
-        "--gcs-official-best-period",
-        type=int,
-        default=0,
-        help="Epoch interval for official best sweeps. 0 uses --save-period once for legacy commands, otherwise defaults to 10.",
-    )
-    parser.add_argument(
-        "--gcs-official-best-top-k",
-        type=int,
-        default=1,
-        help="Preserve the top K official-val candidate checkpoints under weights/official_topk. 1 keeps legacy behavior.",
-    )
-    parser.add_argument("--gcs-official-best-gt-json", default="", help="Stratified official-val json-lines used for official_best.pt selection.")
-    parser.add_argument("--gcs-official-best-archive-root", default="archive", help="Path to archive/ or archive/TUSimple.")
-    parser.add_argument("--gcs-official-best-split", default="val", choices=("train", "val", "test"))
-    parser.add_argument("--gcs-official-best-confs", default="0.005 0.01 0.015 0.02 0.03 0.05 0.08 0.10")
-    parser.add_argument("--gcs-official-best-point-valid-thrs", default="0.20 0.25 0.30 0.35")
-    parser.add_argument("--gcs-official-best-nms-dist-pxs", default="18.0")
-    parser.add_argument("--gcs-official-best-max-dets", default="5")
-    parser.add_argument("--gcs-official-best-min-points", default="6")
-    parser.add_argument("--gcs-official-best-rank-min-points", default="none 5:5")
-    parser.add_argument("--gcs-official-best-last-lane-rescue-point-valid-thrs", default="0.08")
-    parser.add_argument("--gcs-official-best-last-lane-rescue-min-points", default="4")
-    parser.add_argument("--gcs-official-best-last-lane-rescue-mean-valid-thrs", default="0.40")
-    parser.add_argument("--gcs-official-best-last-lane-rescue-quality-thrs", default="0.50")
-    parser.add_argument("--gcs-official-best-last-lane-rescue-dist-pxs", default="24.0")
-    parser.add_argument("--gcs-official-best-max-images", type=int, default=0)
-    parser.add_argument("--gcs-official-best-warmup", type=int, default=0)
-    parser.add_argument("--gcs-official-best-half", action="store_true")
-    parser.add_argument("--gcs-official-best-score-fp-weight", type=float, default=0.02)
-    parser.add_argument("--gcs-official-best-score-fn-weight", type=float, default=0.02)
-    parser.add_argument("--gcs-official-best-count-acc3-weight", type=float, default=0.0)
-    parser.add_argument("--gcs-official-best-count-acc4-weight", type=float, default=0.006)
-    parser.add_argument("--gcs-official-best-count-acc5-weight", type=float, default=0.004)
-    parser.add_argument("--gcs-official-best-rate-4-to-5-weight", type=float, default=0.004)
-    parser.add_argument("--gcs-official-best-rate-3-to-5-weight", type=float, default=0.0025)
-    parser.add_argument("--gcs-official-best-rate-4-to-3-weight", type=float, default=0.0015)
-    parser.add_argument("--gcs-official-best-rate-3-to-4-weight", type=float, default=0.001)
-    parser.add_argument("--gcs-official-best-rate-5-to-4-weight", type=float, default=0.0)
-    parser.add_argument(
-        "--gcs-official-best-min-count-acc3",
-        type=float,
-        default=-1.0,
-        help="Soft diagnostic floor for GT=3 count accuracy. Use a negative value to disable.",
-    )
-    parser.add_argument(
-        "--gcs-official-best-min-count-acc4",
-        type=float,
-        default=-1.0,
-        help="Soft diagnostic floor for GT=4 count accuracy. Use a negative value to disable.",
-    )
-    parser.add_argument(
-        "--gcs-official-best-min-count-acc5",
-        type=float,
-        default=-1.0,
-        help="Legacy soft diagnostic floor for GT=5 count accuracy. Use a negative value to disable.",
-    )
-    parser.add_argument(
-        "--gcs-official-best-min-gt5-output5-rate",
-        type=float,
-        default=0.80,
-        help="Soft diagnostic floor for GT=5 images whose final decoded output has 5 lanes. Negative disables.",
-    )
-    parser.add_argument(
-        "--gcs-official-best-max-gt5-count-head-under-rate",
-        type=float,
-        default=0.15,
-        help="Soft diagnostic ceiling for GT=5 images where Count Head policy K is below 5. Negative disables.",
-    )
-    parser.add_argument(
-        "--gcs-official-best-max-gt5-valid-points-fail-rate",
-        type=float,
-        default=0.10,
-        help="Soft diagnostic ceiling for GT=5 images where Count Head K=5 but final output has fewer than 5 lanes. Use a negative value to disable.",
-    )
-    parser.add_argument(
-        "--gcs-official-best-max-rate-3-to-4",
-        type=float,
-        default=-1.0,
-        help="Soft diagnostic ceiling for GT=3 decoded as 4 lanes. Use a negative value to disable.",
-    )
-    parser.add_argument(
-        "--gcs-official-best-max-rate-4-to-3",
-        type=float,
-        default=-1.0,
-        help="Soft diagnostic ceiling for GT=4 decoded as 3 lanes. Use a negative value to disable.",
-    )
-    parser.add_argument(
-        "--gcs-official-best-max-rate-4-to-5",
-        type=float,
-        default=-1.0,
-        help="Optional soft diagnostic ceiling for GT=4 decoded as 5 lanes. Negative disables.",
-    )
-    parser.add_argument(
-        "--gcs-official-best-max-rate-3-to-5",
-        type=float,
-        default=-1.0,
-        help="Optional soft diagnostic ceiling for GT=3 decoded as 5 lanes. Negative disables.",
-    )
-    parser.add_argument(
-        "--gcs-official-best-max-rate-5-to-4",
-        type=float,
-        default=-1.0,
-        help="Soft diagnostic ceiling for GT=5 decoded as 4 lanes. Use a negative value to disable.",
     )
     parser.add_argument("--no-val", action="store_true")
     parser.add_argument(
@@ -1148,66 +272,15 @@ def resolve_project(value: str) -> str:
     return str(path if path.is_absolute() else (ROOT / path).resolve())
 
 
-def resolve_existing_path(value: str, *, flag: str) -> str:
-    """Resolve a CLI path relative to the project root and require that it exists."""
-    text = str(value).strip()
-    if not text or text.lower() in {"none", "false", "0"}:
-        raise SystemExit(f"ERROR: --gcs-official-best requires {flag}.")
-    path = Path(text)
-    resolved = path if path.is_absolute() else ROOT / path
-    if not resolved.exists():
-        raise SystemExit(f"ERROR: {flag} does not exist: {resolved}")
-    return text
-
-
 def main() -> None:
     args = parse_args()
-    validate_named_candidate_training_args(args.model, args)
-    validate_training_hard_manifest_args(args)
     defaults = dataset_defaults(args.dataset)
-    data_yaml = args.data or str(defaults["data"])
-    inferred_label_dirs = infer_gcs_label_dirs_from_data(data_yaml)
-    train_gcs_labels = choose_gcs_label_dir(args.train_gcs_labels, args.train_images, inferred_label_dirs.get("train"))
-    val_gcs_labels = choose_gcs_label_dir(args.val_gcs_labels, args.val_images, inferred_label_dirs.get("val"))
     gcs_imgsz = normalize_imgsz(args.imgsz, dataset=args.dataset)
-    save_period = args.save_period
-    gcs_official_best_period = args.gcs_official_best_period
-    if args.gcs_official_best and gcs_official_best_period <= 0:
-        gcs_official_best_period = save_period if save_period > 0 else 10
-        if save_period > 0:
-            # Older commands used --save-period as the official sweep cadence. Keep that cadence without
-            # retaining epochN.pt checkpoint files; best.pt is still the ordinary val-F1 best.
-            save_period = -1
-    if args.gcs_official_best:
-        from tools.sweep_tusimple_official import validate_official_sweep_gt_json, validate_official_sweep_split
-
-        try:
-            args.gcs_official_best_split = validate_official_sweep_split(
-                args.gcs_official_best_split,
-                context="Training official_best selection",
-            )
-        except ValueError as exc:
-            raise SystemExit(f"ERROR: {exc}") from exc
-        args.gcs_official_best_gt_json = resolve_existing_path(
-            args.gcs_official_best_gt_json,
-            flag="--gcs-official-best-gt-json",
-        )
-        try:
-            validate_official_sweep_gt_json(
-                args.gcs_official_best_gt_json,
-                context="Training official_best selection",
-            )
-        except ValueError as exc:
-            raise SystemExit(f"ERROR: {exc}") from exc
-        args.gcs_official_best_archive_root = resolve_existing_path(
-            args.gcs_official_best_archive_root,
-            flag="--gcs-official-best-archive-root",
-        )
 
     overrides = {
         "task": "gcs_lane",
         "model": args.model,
-        "data": data_yaml,
+        "data": args.data or str(defaults["data"]),
         "pretrained": parse_pretrained(args.pretrained),
         "imgsz": trainer_imgsz(gcs_imgsz),
         "gcs_imgsz": list(gcs_imgsz),
@@ -1231,117 +304,40 @@ def main() -> None:
         "patience": args.patience,
         "fraction": args.fraction,
         "scale": args.scale,
-        "translate": args.translate,
         "erasing": args.erasing,
-        "auto_augment": None,
         "mosaic": args.mosaic,
         "val": not args.no_val,
         "resume": args.resume,
         "exist_ok": args.exist_ok,
-        "save_period": save_period,
-        "box": 0.0,
-        "cls": 0.0,
-        "dfl": 0.0,
-        "pose": 0.0,
-        "kobj": 0.0,
-        "rle": 0.0,
-        "angle": 0.0,
         "train_images": args.train_images,
-        "train_gcs_labels": train_gcs_labels,
+        "train_gcs_labels": args.train_gcs_labels,
         "val_images": args.val_images,
-        "val_gcs_labels": val_gcs_labels,
-        "gcs_train_include_val": args.gcs_train_include_val,
+        "val_gcs_labels": args.val_gcs_labels,
         "gcs_exist": args.gcs_exist,
         "gcs_point": args.gcs_point,
         "gcs_point_valid": args.gcs_point_valid,
-        "gcs_point_invalid_x": args.gcs_point_invalid_x,
-        "gcs_line_iou": args.gcs_line_iou,
-        "gcs_line_iou_width_px": args.gcs_line_iou_width_px,
-        "gcs_count_cls": args.gcs_count_cls,
-        "gcs_count_sum": args.gcs_count_sum,
-        "gcs_count_sum_normalize": args.gcs_count_sum_normalize,
-        "gcs_visible_count_sum": args.gcs_visible_count_sum,
-        "gcs_visible_count_sum_normalize": args.gcs_visible_count_sum_normalize,
-        "gcs_visible_count_sum_visible_thr": args.gcs_visible_count_sum_visible_thr,
-        "gcs_visible_count_sum_support_points": args.gcs_visible_count_sum_support_points,
-        "gcs_visible_count_sum_quality_weight": args.gcs_visible_count_sum_quality_weight,
-        "gcs_visible_count_sum_survival_weight": args.gcs_visible_count_sum_survival_weight,
-        "gcs_visible_count_boundary": args.gcs_visible_count_boundary,
-        "gcs_visible_count_boundary_temperature": args.gcs_visible_count_boundary_temperature,
-        "gcs_visible_count_boundary_label_smoothing": args.gcs_visible_count_boundary_label_smoothing,
-        "gcs_visible_count_sum_hard_weight": args.gcs_visible_count_sum_hard_weight,
-        "gcs_quality": args.gcs_quality,
-        "gcs_quality_dist_thr_px": args.gcs_quality_dist_thr_px,
-        "gcs_quality_neg_weight": args.gcs_quality_neg_weight,
-        "gcs_quality_point_weight": args.gcs_quality_point_weight,
-        "gcs_quality_gt5_edge_floor": args.gcs_quality_gt5_edge_floor,
-        "gcs_quality_hard_negative_weight": args.gcs_quality_hard_negative_weight,
-        "gcs_quality_duplicate_negative_weight": args.gcs_quality_duplicate_negative_weight,
-        "gcs_quality_hard_negative_from_head": args.gcs_quality_hard_negative_from_head,
-        "gcs_survival": args.gcs_survival,
-        "gcs_survival_pos_weight": args.gcs_survival_pos_weight,
-        "gcs_survival_neg_weight": args.gcs_survival_neg_weight,
-        "gcs_survival_hard_negative_weight": args.gcs_survival_hard_negative_weight,
-        "gcs_survival_duplicate_negative_weight": args.gcs_survival_duplicate_negative_weight,
-        "gcs_survival_target_mode": args.gcs_survival_target_mode,
-        "gcs_fifth_gate_hard_negative_weight": args.gcs_fifth_gate_hard_negative_weight,
-        "gcs_decoder_aux": args.gcs_decoder_aux,
-        "gcs_hard_negative_visible_segment": args.gcs_hard_negative_visible_segment,
-        "gcs_hard_negative_visible_thr": args.gcs_hard_negative_visible_thr,
-        "gcs_hard_negative_visible_support_points": args.gcs_hard_negative_visible_support_points,
-        "gcs_count_head_warmup_epochs": args.gcs_count_head_warmup_epochs,
-        "gcs_count_min_gt_points": args.gcs_count_min_gt_points,
-        "gcs_count_cls_w2": args.gcs_count_cls_w2,
-        "gcs_count_cls_w3": args.gcs_count_cls_w3,
-        "gcs_count_cls_w4": args.gcs_count_cls_w4,
-        "gcs_count_cls_w5": args.gcs_count_cls_w5,
-        "gcs_count_boundary": args.gcs_count_boundary,
-        "gcs_count_boundary_label_smoothing": args.gcs_count_boundary_label_smoothing,
-        "gcs_count_boundary_gt5_pos_weight": args.gcs_count_boundary_gt5_pos_weight,
-        "gcs_count_boundary_hard_margin": args.gcs_count_boundary_hard_margin,
-        "gcs_count_boundary_hard_margin_gain": args.gcs_count_boundary_hard_margin_gain,
-        "gcs_count_adjacent_margin": args.gcs_count_adjacent_margin,
-        "gcs_count_adjacent_margin_gain": args.gcs_count_adjacent_margin_gain,
-        "gcs_count_adjacent_margin_gt45_weight": args.gcs_count_adjacent_margin_gt45_weight,
+        "gcs_smooth": args.gcs_smooth,
+        "gcs_curve": args.gcs_curve,
+        "gcs_mask": args.gcs_mask,
+        "gcs_edge": args.gcs_edge,
+        "gcs_count": args.gcs_count,
+        "gcs_count_under5": args.gcs_count_under5,
+        "gcs_count_under5_min_lanes": args.gcs_count_under5_min_lanes,
         "gcs_exist_pos_weight": args.gcs_exist_pos_weight,
         "gcs_exist_focal_gamma": args.gcs_exist_focal_gamma,
         "gcs_exist_focal_alpha": args.gcs_exist_focal_alpha,
-        "gcs_hard_negative_quality_thr": args.gcs_hard_negative_quality_thr,
-        "gcs_hard_negative_topk": args.gcs_hard_negative_topk,
-        "gcs_hard_negative_exist_weight": args.gcs_hard_negative_exist_weight,
-        "gcs_duplicate_negative_exist_weight": args.gcs_duplicate_negative_exist_weight,
-        "gcs_duplicate_dist_thr_px": args.gcs_duplicate_dist_thr_px,
-        "gcs_duplicate_iou_thr": args.gcs_duplicate_iou_thr,
-        "gcs_exist_margin": args.gcs_exist_margin,
-        "gcs_exist_pos_margin": args.gcs_exist_pos_margin,
-        "gcs_exist_neg_margin": args.gcs_exist_neg_margin,
         "gcs_exist_quality_alpha": args.gcs_exist_quality_alpha,
-        "gcs_exist_quality_lane_iou_alpha": args.gcs_exist_quality_lane_iou_alpha,
         "gcs_exist_quality_mode": args.gcs_exist_quality_mode,
         "gcs_exist_quality_tau": args.gcs_exist_quality_tau,
         "gcs_exist_quality_floor": args.gcs_exist_quality_floor,
         "gcs_exist_quality_pos_px": args.gcs_exist_quality_pos_px,
         "gcs_exist_quality_neg_px": args.gcs_exist_quality_neg_px,
         "gcs_point_valid_pos_weight_max": args.gcs_point_valid_pos_weight_max,
-        "gcs_point_valid_gt5_pos_weight": args.gcs_point_valid_gt5_pos_weight,
-        "gcs_point_valid_unmatched_weight": args.gcs_point_valid_unmatched_weight,
-        "gcs_point_valid_hard_negative_weight": args.gcs_point_valid_hard_negative_weight,
-        "gcs_point_valid_duplicate_negative_weight": args.gcs_point_valid_duplicate_negative_weight,
-        "gcs_gt5_edge_loss_weight": args.gcs_gt5_edge_loss_weight,
-        "gcs_candidate_gt5_edge_weight": args.gcs_candidate_gt5_edge_weight,
-        "gcs_point_valid_gt5_edge_continuity": args.gcs_point_valid_gt5_edge_continuity,
-        "gcs_point_valid_gt5_edge_continuity_thr": args.gcs_point_valid_gt5_edge_continuity_thr,
-        "gcs_point_valid_gt5_edge_segment": args.gcs_point_valid_gt5_edge_segment,
-        "gcs_point_valid_gt5_edge_segment_thr": args.gcs_point_valid_gt5_edge_segment_thr,
-        "gcs_point_valid_gt5_edge_segment_min_points": args.gcs_point_valid_gt5_edge_segment_min_points,
-        "gcs_hard_loss_file": args.gcs_hard_loss_file,
-        "gcs_hard_loss_lane_counts": args.gcs_hard_loss_lane_counts,
-        "gcs_hard_edge_loss_weight_by_count": args.gcs_hard_edge_loss_weight_by_count,
-        "gcs_hard_edge_loss_terms": args.gcs_hard_edge_loss_terms,
-        "gcs_hard_edge_only": args.gcs_hard_edge_only,
-        "gcs_point_valid_neg": args.gcs_point_valid_neg,
-        "gcs_point_valid_neg_thr": args.gcs_point_valid_neg_thr,
+        "gcs_mask_pos_weight_max": args.gcs_mask_pos_weight_max,
+        "gcs_edge_pos_weight_max": args.gcs_edge_pos_weight_max,
+        "gcs_aux_dice": args.gcs_aux_dice,
         "gcs_cost_point": args.gcs_cost_point,
+        "gcs_cost_curve": args.gcs_cost_curve,
         "gcs_cost_exist": args.gcs_cost_exist,
         "gcs_match_min_overlap": args.gcs_match_min_overlap,
         "gcs_match_max_x_dist": args.gcs_match_max_x_dist,
@@ -1351,118 +347,12 @@ def main() -> None:
         "gcs_eval_match_gate_px": args.gcs_eval_match_gate_px,
         "gcs_eval_max_x_dist": args.gcs_eval_max_x_dist,
         "gcs_eval_min_overlap": args.gcs_eval_min_overlap,
-        "gcs_eval_min_points": args.gcs_eval_min_points,
-        "gcs_eval_min_gt_cover_ratio": args.gcs_eval_min_gt_cover_ratio,
-        "gcs_eval_min_pred_cover_ratio": args.gcs_eval_min_pred_cover_ratio,
         "gcs_eval_nms_dist_px": args.gcs_eval_nms_dist_px,
-        "gcs_use_count_head_decode": args.gcs_use_count_head_decode,
-        "gcs_count_head_temp": args.gcs_count_head_temp,
-        "gcs_decode_candidate_conf": args.gcs_decode_candidate_conf,
-        "gcs_decode_candidate_point_valid_thr": args.gcs_decode_candidate_point_valid_thr,
-        "gcs_decode_candidate_min_points": args.gcs_decode_candidate_min_points,
-        "gcs_enable_rescue_candidate_pool": args.gcs_enable_rescue_candidate_pool,
-        "gcs_decode_rescue_candidate_conf": args.gcs_decode_rescue_candidate_conf,
-        "gcs_decode_rescue_candidate_point_valid_thr": args.gcs_decode_rescue_candidate_point_valid_thr,
-        "gcs_decode_rescue_candidate_min_points": args.gcs_decode_rescue_candidate_min_points,
-        "gcs_decode_final_min_points": args.gcs_decode_final_min_points,
-        "gcs_decode_fifth_min_points": args.gcs_decode_fifth_min_points,
-        "gcs_line_nms_min_overlap": args.gcs_line_nms_min_overlap,
-        "gcs_line_nms_rescue_dist_px": args.gcs_line_nms_rescue_dist_px,
-        "gcs_quality_rescue_5th": args.gcs_quality_rescue_5th,
-        "gcs_quality_rescue_count5_thr": args.gcs_quality_rescue_count5_thr,
-        "gcs_quality_rescue_conf_thr": args.gcs_quality_rescue_conf_thr,
-        "gcs_quality_rescue_mean_valid_thr": args.gcs_quality_rescue_mean_valid_thr,
-        "gcs_quality_rescue_quality_thr": args.gcs_quality_rescue_quality_thr,
-        "gcs_quality_rescue_min_points": args.gcs_quality_rescue_min_points,
-        "gcs_quality_rescue_dist_px": args.gcs_quality_rescue_dist_px,
-        "gcs_last_lane_rescue": args.gcs_last_lane_rescue,
-        "gcs_last_lane_rescue_min_policy_count": args.gcs_last_lane_rescue_min_policy_count,
-        "gcs_last_lane_rescue_conf_thr": args.gcs_last_lane_rescue_conf_thr,
-        "gcs_last_lane_rescue_point_valid_thr": args.gcs_last_lane_rescue_point_valid_thr,
-        "gcs_last_lane_rescue_min_points": args.gcs_last_lane_rescue_min_points,
-        "gcs_last_lane_rescue_mean_valid_thr": args.gcs_last_lane_rescue_mean_valid_thr,
-        "gcs_last_lane_rescue_quality_thr": args.gcs_last_lane_rescue_quality_thr,
-        "gcs_last_lane_rescue_dist_px": args.gcs_last_lane_rescue_dist_px,
-        "gcs_edge_last_lane_rescue": args.gcs_edge_last_lane_rescue,
-        "gcs_edge_rescue_conf_thr": args.gcs_edge_rescue_conf_thr,
-        "gcs_edge_rescue_point_valid_thr": args.gcs_edge_rescue_point_valid_thr,
-        "gcs_edge_rescue_min_points": args.gcs_edge_rescue_min_points,
-        "gcs_edge_rescue_mean_valid_thr": args.gcs_edge_rescue_mean_valid_thr,
-        "gcs_edge_rescue_quality_thr": args.gcs_edge_rescue_quality_thr,
-        "gcs_edge_rescue_outside_gap_px": args.gcs_edge_rescue_outside_gap_px,
-        "gcs_edge_rescue_dist_px": args.gcs_edge_rescue_dist_px,
-        "gcs_edge_rescue_min_policy_count": args.gcs_edge_rescue_min_policy_count,
-        "gcs_edge_count4_to5_upgrade": args.gcs_edge_count4_to5_upgrade,
-        "gcs_edge_count4_to5_prob_margin": args.gcs_edge_count4_to5_prob_margin,
-        "gcs_soft_count_decision": args.gcs_soft_count_decision,
-        "gcs_soft_count_prob_margin": args.gcs_soft_count_prob_margin,
-        "gcs_soft_count_quality_weight": args.gcs_soft_count_quality_weight,
-        "gcs_soft_count_prior_weight": args.gcs_soft_count_prior_weight,
-        "gcs_soft_count_duplicate_penalty": args.gcs_soft_count_duplicate_penalty,
-        "gcs_soft_count_invalid_penalty": args.gcs_soft_count_invalid_penalty,
         "gcs_eval_point_valid_thr": args.gcs_eval_point_valid_thr,
         "gcs_eval_max_det": args.gcs_eval_max_det,
-        "gcs_sampler_mode": args.gcs_sampler_mode,
-        "gcs_group_sampler_ratios": args.gcs_group_sampler_ratios,
         "gcs_lane_count_balanced": args.gcs_lane_count_balanced,
         "gcs_lane_count_balance_power": args.gcs_lane_count_balance_power,
         "gcs_lane_count_min_group": args.gcs_lane_count_min_group,
-        "gcs_hard_sampling": args.gcs_hard_sampling,
-        "gcs_hard_lane_counts": args.gcs_hard_lane_counts,
-        "gcs_hard_sampling_boost": args.gcs_hard_sampling_boost,
-        "gcs_hard_sampling_boost_by_count": args.gcs_hard_sampling_boost_by_count,
-        "gcs_hard_sample_file": args.gcs_hard_sample_file,
-        "gcs_hard_sample_boost": args.gcs_hard_sample_boost,
-        "gcs_gt5_oversample_weight": args.gcs_gt5_oversample_weight,
-        "gcs_gt5_extra_aug": args.gcs_gt5_extra_aug,
-        "gcs_gt5_aug_min_lanes": args.gcs_gt5_aug_min_lanes,
-        "gcs_gt5_erasing": args.gcs_gt5_erasing,
-        "gcs_gt5_lane_aware_erasing": args.gcs_gt5_lane_aware_erasing,
-        "gcs_gt5_erasing_lane_margin_px": args.gcs_gt5_erasing_lane_margin_px,
-        "gcs_gt5_blur": args.gcs_gt5_blur,
-        "gcs_gt5_noise": args.gcs_gt5_noise,
-        "gcs_gt5_shadow": args.gcs_gt5_shadow,
-        "gcs_official_best": args.gcs_official_best,
-        "gcs_official_best_period": gcs_official_best_period,
-        "gcs_official_best_top_k": args.gcs_official_best_top_k,
-        "gcs_official_best_gt_json": args.gcs_official_best_gt_json,
-        "gcs_official_best_archive_root": args.gcs_official_best_archive_root,
-        "gcs_official_best_split": args.gcs_official_best_split,
-        "gcs_official_best_confs": args.gcs_official_best_confs,
-        "gcs_official_best_point_valid_thrs": args.gcs_official_best_point_valid_thrs,
-        "gcs_official_best_nms_dist_pxs": args.gcs_official_best_nms_dist_pxs,
-        "gcs_official_best_max_dets": args.gcs_official_best_max_dets,
-        "gcs_official_best_min_points": args.gcs_official_best_min_points,
-        "gcs_official_best_rank_min_points": args.gcs_official_best_rank_min_points,
-        "gcs_official_best_last_lane_rescue_point_valid_thrs": args.gcs_official_best_last_lane_rescue_point_valid_thrs,
-        "gcs_official_best_last_lane_rescue_min_points": args.gcs_official_best_last_lane_rescue_min_points,
-        "gcs_official_best_last_lane_rescue_mean_valid_thrs": args.gcs_official_best_last_lane_rescue_mean_valid_thrs,
-        "gcs_official_best_last_lane_rescue_quality_thrs": args.gcs_official_best_last_lane_rescue_quality_thrs,
-        "gcs_official_best_last_lane_rescue_dist_pxs": args.gcs_official_best_last_lane_rescue_dist_pxs,
-        "gcs_official_best_max_images": args.gcs_official_best_max_images,
-        "gcs_official_best_warmup": args.gcs_official_best_warmup,
-        "gcs_official_best_half": args.gcs_official_best_half,
-        "gcs_official_best_score_fp_weight": args.gcs_official_best_score_fp_weight,
-        "gcs_official_best_score_fn_weight": args.gcs_official_best_score_fn_weight,
-        "gcs_official_best_count_acc3_weight": args.gcs_official_best_count_acc3_weight,
-        "gcs_official_best_count_acc4_weight": args.gcs_official_best_count_acc4_weight,
-        "gcs_official_best_count_acc5_weight": args.gcs_official_best_count_acc5_weight,
-        "gcs_official_best_rate_4_to_5_weight": args.gcs_official_best_rate_4_to_5_weight,
-        "gcs_official_best_rate_3_to_5_weight": args.gcs_official_best_rate_3_to_5_weight,
-        "gcs_official_best_rate_4_to_3_weight": args.gcs_official_best_rate_4_to_3_weight,
-        "gcs_official_best_rate_3_to_4_weight": args.gcs_official_best_rate_3_to_4_weight,
-        "gcs_official_best_rate_5_to_4_weight": args.gcs_official_best_rate_5_to_4_weight,
-        "gcs_official_best_min_count_acc3": args.gcs_official_best_min_count_acc3,
-        "gcs_official_best_min_count_acc4": args.gcs_official_best_min_count_acc4,
-        "gcs_official_best_min_count_acc5": args.gcs_official_best_min_count_acc5,
-        "gcs_official_best_min_gt5_output5_rate": args.gcs_official_best_min_gt5_output5_rate,
-        "gcs_official_best_max_gt5_count_head_under_rate": args.gcs_official_best_max_gt5_count_head_under_rate,
-        "gcs_official_best_max_gt5_valid_points_fail_rate": args.gcs_official_best_max_gt5_valid_points_fail_rate,
-        "gcs_official_best_max_rate_3_to_4": args.gcs_official_best_max_rate_3_to_4,
-        "gcs_official_best_max_rate_4_to_5": args.gcs_official_best_max_rate_4_to_5,
-        "gcs_official_best_max_rate_4_to_3": args.gcs_official_best_max_rate_4_to_3,
-        "gcs_official_best_max_rate_3_to_5": args.gcs_official_best_max_rate_3_to_5,
-        "gcs_official_best_max_rate_5_to_4": args.gcs_official_best_max_rate_5_to_4,
     }
 
     print(f"GCS input shape: {shape_str(gcs_imgsz)} (W x H), stored as H,W={gcs_imgsz}")

@@ -1,22 +1,40 @@
-# GCS-YOLO-Lane 超详细小白实现手册（历史归档）
+# Implementation Manual
 
-This file archives the long historical implementation manual that previously lived in root `AGENTS.md`.
+This branch is a minimal source import of `5-25-3.zip` with a K56 TuSimple contract adaptation.
 
-The active project instructions now live in root `AGENTS.md`, and active contracts are split across files in `docs/agent-context/`.
+## Implementation Rules
 
-Use this archive only for historical background and implementation context. It must not override:
+- Keep the 5-25-3 algorithm body unchanged unless a future task explicitly asks for an algorithm change.
+- Only change code/config needed for Q12/K56, `fixed_y_start=710/720`, `fixed_y_end=160/720`, `--imgsz 544 960`, and the K56 data/model YAMLs.
+- Do not import later mainline Count Head, Count Boundary, Quality Head, Survival Head, near-miss, official-best, or K56 candidate machinery.
+- Do not track `datasets/`, generated runs, checkpoints, caches, or converted labels in Git.
 
-- `AGENTS.md`
-- `docs/agent-context/current-contracts.md`
-- `docs/agent-context/experiment-rules.md`
-- `docs/agent-context/commands.md`
+## Main Files
 
-## Historical Scope
+```text
+data/tusimple_gcs_fixed_y_k56_960x544.yaml
+gcs_tools/label_utils.py
+tools/convert_tusimple_to_gcs.py
+tools/train_gcs.py
+tools/check_model.py
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml
+ultralytics/nn/modules/gcs_lane.py
+```
 
-The original manual described how to implement GCS-YOLO-Lane from a beginner perspective, including YOLO11 modification, structured lane labels, TuSimple/CULane preparation, fixed-y labels, model checks, dataset checks, overfit checks, training, inference, evaluation, ablations, and paper-style result organization.
+## Expected Output
 
-The current active project state is more advanced than that original beginner manual. Current work should follow the Q=12 fixed-y mainline, Count Head and Quality Head contracts, official-val/test separation, and the validation commands recorded in the active context files.
+```text
+pred_points: B x 12 x 56 x 2
+pred_logits: B x 12
+pred_valid_logits: B x 12 x 56
+aux_mask_logits: B x 2 x H x W
+aux_edge_logits: B x 1 x H x W
+```
 
-## Historical Principle
+## Validation Order
 
-Historical notes are useful for understanding why the repository looks the way it does. They are not allowed to override current contracts unless the user explicitly asks to create a controlled experimental candidate.
+1. Compile changed Python files.
+2. Check YAML contract values.
+3. Run `tools/check_model.py` with `--imgsz 544 960`.
+4. Check fixed-y anchors are exactly `710..160` step `-10`.
+5. If a K56 dataset root is available, run label order/split checks against that root.

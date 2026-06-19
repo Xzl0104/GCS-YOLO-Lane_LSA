@@ -484,8 +484,17 @@ class BaseTrainer:
 
                 # Log
                 if RANK in {-1, 0}:
-                    progress_loss_items = self.progress_loss_items(self.tloss)
-                    pbar.set_description(self.format_progress_values(epoch, progress_loss_items, batch))
+                    loss_length = self.tloss.shape[0] if len(self.tloss.shape) else 1
+                    pbar.set_description(
+                        ("%11s" * 2 + "%11.4g" * (2 + loss_length))
+                        % (
+                            f"{epoch + 1}/{self.epochs}",
+                            f"{self._get_memory():.3g}G",  # (GB) GPU memory util
+                            *(self.tloss if loss_length > 1 else torch.unsqueeze(self.tloss, 0)),  # losses
+                            batch["cls"].shape[0],  # batch size, i.e. 8
+                            batch["img"].shape[-1],  # imgsz, i.e 640
+                        )
+                    )
                     self.run_callbacks("on_batch_end")
                     if self.args.plots and ni in self.plot_idx:
                         self.plot_training_samples(batch, ni)
@@ -775,25 +784,6 @@ class BaseTrainer:
             This is not needed for classification but necessary for segmentation & detection.
         """
         return {"loss": loss_items} if loss_items is not None else ["loss"]
-
-    def progress_loss_items(self, loss_items):
-        """Return the loss items shown in the live progress bar."""
-        return loss_items
-
-    def format_progress_values(self, epoch, progress_loss_items, batch):
-        """Return a formatted live progress row matching the default YOLO progress header."""
-        loss_length = progress_loss_items.shape[0] if len(progress_loss_items.shape) else 1
-        return ("%11s" * 2 + "%11.4g" * (2 + loss_length)) % (
-            f"{epoch + 1}/{self.epochs}",
-            f"{self._get_memory():.3g}G",  # (GB) GPU memory util
-            *(
-                progress_loss_items
-                if loss_length > 1
-                else torch.unsqueeze(progress_loss_items, 0)
-            ),  # losses
-            batch["cls"].shape[0],  # batch size, i.e. 8
-            batch["img"].shape[-1],  # imgsz, i.e 640
-        )
 
     def set_model_attributes(self):
         """Set or update model parameters before training."""

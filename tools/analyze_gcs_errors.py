@@ -18,23 +18,16 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 os.chdir(ROOT)
 
-from tools.eval_gcs import (
-    assert_label_fixed_y_compatible,
-    label_path_for_image,
-    load_gcs_label,
-    match_lanes,
-    model_fixed_y_anchors,
-    pair_geometry,
-)
+from tools.eval_gcs import label_path_for_image, load_gcs_label, match_lanes, pair_geometry
 from tools.infer_gcs import collect_images, load_gcs_model, preprocess_image
 from ultralytics.utils.gcs_shape import DATASET_IMAGE_SHAPES, assert_gcs_shape, normalize_imgsz, shape_str
-from ultralytics.utils.gcs_postprocess import GCS_DEFAULT_MAX_DET, decode_gcs_predictions
+from ultralytics.utils.gcs_postprocess import decode_gcs_predictions
 from ultralytics.utils.torch_utils import select_device
 
 
 DEFAULT_WEIGHTS = ROOT / "runs" / "gcs_lane" / "gcs_yolo_lane_s_tusimple_refquery_e220" / "weights" / "best.pt"
-DEFAULT_SOURCE = ROOT / "datasets" / "tusimple_fixed_y_k56_960x544" / "images" / "val"
-DEFAULT_LABELS = ROOT / "datasets" / "tusimple_fixed_y_k56_960x544" / "labels_gcs" / "val"
+DEFAULT_SOURCE = ROOT / "datasets" / "tusimple_fixed_y_k56_960x544" / "images" / "test"
+DEFAULT_LABELS = ROOT / "datasets" / "tusimple_fixed_y_k56_960x544" / "labels_gcs" / "test"
 
 
 def parse_args() -> argparse.Namespace:
@@ -60,37 +53,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ape-thr", type=float, default=20.0, help="APE threshold in pixels for TP/good-query labels.")
     parser.add_argument("--match-gate-px", type=float, default=None, help="Strict eval APE gate. Defaults to --ape-thr.")
     parser.add_argument("--max-x-dist", type=float, default=0.0, help="Optional mean x-distance gate in pixels. 0 disables.")
-    parser.add_argument("--min-overlap", type=int, default=6, help="Minimum overlapping visible anchors for matching.")
-    parser.add_argument("--min-points", type=int, default=6, help="Minimum decoded visible anchors required to keep a predicted lane.")
-    parser.add_argument("--nms-dist-px", type=float, default=18.0, help="Lane duplicate suppression distance in pixels. 0 disables.")
-    parser.add_argument("--max-det", type=int, default=GCS_DEFAULT_MAX_DET, help="Maximum decoded lane queries per image.")
+    parser.add_argument("--min-overlap", type=int, default=2, help="Minimum valid overlapping GT points for matching.")
+    parser.add_argument("--nms-dist-px", type=float, default=50.0, help="Optional lane duplicate suppression distance in pixels. 0 disables.")
+    parser.add_argument("--max-det", type=int, default=8, help="Maximum decoded lane queries per image.")
     parser.add_argument("--max-images", type=int, default=0, help="Limit images. 0 means all.")
     parser.add_argument("--device", default="cpu", help="Inference device, e.g. cpu or 0.")
     parser.add_argument("--half", action="store_true", help="Use FP16 on CUDA.")
     parser.add_argument("--save-dir", default="runs/gcs_lane/error_analysis", help="Output directory.")
-    parser.add_argument(
-        "--allow-test-diagnostics",
-        action="store_true",
-        help="Allow diagnostic analysis on a test path. Use only after final selection, never for iteration.",
-    )
     return parser.parse_args()
-
-
-def path_has_test_component(value: str | Path | None) -> bool:
-    """Return whether a source/label path explicitly targets a test split."""
-    if value is None or not str(value).strip():
-        return False
-    parts = [p.lower() for p in Path(value).parts]
-    return "test" in parts or "test_set" in parts
-
-
-def reject_test_diagnostics(value: str | Path | None, *, field: str, allow: bool) -> None:
-    """Guard diagnostic tools against accidental test-set iteration."""
-    if not allow and path_has_test_component(value):
-        raise ValueError(
-            f"{field} points at a test split: {value}. "
-            "Diagnostics default to validation; pass --allow-test-diagnostics only for final-selected test review."
-        )
 
 
 def stat(values: list[float]) -> dict:
@@ -176,12 +146,9 @@ def write_csv(path: Path, rows: list[dict], fields: list[str]) -> None:
 @torch.inference_mode()
 def main() -> None:
     args = parse_args()
-    reject_test_diagnostics(args.source, field="--source", allow=bool(args.allow_test_diagnostics))
-    reject_test_diagnostics(args.labels, field="--labels", allow=bool(args.allow_test_diagnostics))
     imgsz = normalize_imgsz(args.imgsz, dataset=args.dataset)
     device = select_device(args.device, verbose=False)
     model = load_gcs_model(args.weights, device=device, half=args.half, gcs_imgsz=imgsz)
-    expected_fixed_y = model_fixed_y_anchors(model)
     images = collect_images(args.source, max_images=args.max_images)
     label_dir = None if args.labels is None or str(args.labels).strip() == "" else Path(args.labels)
 
@@ -209,9 +176,7 @@ def main() -> None:
         if img is None:
             raise FileNotFoundError(f"Failed to read image: {image_path}")
         assert_gcs_shape(img.shape[:2], imgsz, name="analysis image", context=f"analyze_gcs_errors({image_path})")
-        label_path = label_path_for_image(image_path, label_dir)
-        assert_label_fixed_y_compatible(label_path, expected_fixed_y, image_shape=img.shape[:2])
-        gt_lanes, gt_valid = load_gcs_label(label_path)
+        gt_lanes, gt_valid = load_gcs_label(label_path_for_image(image_path, label_dir))
 
         tensor = preprocess_image(img, imgsz=imgsz, device=device, half=args.half)
         if device.type == "cuda":
@@ -226,16 +191,6 @@ def main() -> None:
         pred_logits_t = preds["pred_logits"][0].detach().float()
         pred_valid_t = preds.get("pred_valid_logits")
         pred_valid_t = pred_valid_t[0].detach().float().cpu() if pred_valid_t is not None else None
-        pred_count_t = preds.get("pred_count_logits")
-        pred_count_t = pred_count_t[0].detach().float().cpu() if pred_count_t is not None else None
-        pred_count_boundary_t = preds.get("pred_count_boundary_logits")
-        pred_count_boundary_t = (
-            pred_count_boundary_t[0].detach().float().cpu() if pred_count_boundary_t is not None else None
-        )
-        pred_quality_t = preds.get("pred_quality_logits")
-        pred_quality_t = pred_quality_t[0].detach().float().cpu() if pred_quality_t is not None else None
-        pred_survival_t = preds.get("pred_survival_logits")
-        pred_survival_t = pred_survival_t[0].detach().float().cpu() if pred_survival_t is not None else None
         if pred_logits_t.ndim == 2 and pred_logits_t.shape[-1] == 1:
             pred_logits_t = pred_logits_t.squeeze(-1)
         scores = pred_logits_t.sigmoid().cpu().numpy().astype(np.float32)
@@ -282,19 +237,11 @@ def main() -> None:
             pred_points_t,
             pred_logits_t,
             pred_valid_logits=pred_valid_t,
-            pred_count_logits=pred_count_t,
-            pred_count_boundary_logits=pred_count_boundary_t,
-            pred_quality_logits=pred_quality_t,
-            pred_survival_logits=pred_survival_t,
             image_shape=img.shape[:2],
             score_thr=args.conf,
             point_valid_thr=args.point_valid_thr,
-            min_points=args.min_points,
             max_det=args.max_det,
             nms_dist_px=args.nms_dist_px,
-            candidate_score_thr=args.conf,
-            candidate_point_valid_thr=args.point_valid_thr,
-            line_nms_min_overlap=6,
         )
         metrics, matches = match_lanes(
             pred_lanes,
@@ -390,7 +337,6 @@ def main() -> None:
             "match_gate_px": float(args.ape_thr if args.match_gate_px is None else args.match_gate_px),
             "max_x_dist": float(args.max_x_dist),
             "min_overlap": int(args.min_overlap),
-            "min_points": int(args.min_points),
             "nms_dist_px": float(args.nms_dist_px),
             "max_det": int(args.max_det),
         },

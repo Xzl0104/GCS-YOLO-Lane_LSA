@@ -14,12 +14,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 os.chdir(ROOT)
 
-from gcs_tools.label_utils import (
-    TUSIMPLE_OFFICIAL_BOTTOM_Y_NORM,
-    TUSIMPLE_OFFICIAL_TOP_Y_NORM,
-    resample_polyline,
-    sample_polyline_fixed_y,
-)
+from gcs_tools.label_utils import build_edge_mask, build_semantic_mask, resample_polyline, sample_polyline_fixed_y
 from gcs_tools.tusimple_utils import (
     ensure_dataset_dirs,
     find_archive_root,
@@ -57,18 +52,9 @@ def parse_args() -> argparse.Namespace:
         default="fixed_y",
         help="free uses arc-length Kx2 labels; fixed_y samples x at shared y anchors for x-only heads.",
     )
-    parser.add_argument(
-        "--fixed-y-start",
-        type=float,
-        default=TUSIMPLE_OFFICIAL_BOTTOM_Y_NORM,
-        help="Bottom normalized y anchor for fixed_y mode. Defaults to TuSimple h=710 over H=720.",
-    )
-    parser.add_argument(
-        "--fixed-y-end",
-        type=float,
-        default=TUSIMPLE_OFFICIAL_TOP_Y_NORM,
-        help="Top normalized y anchor for fixed_y mode. Defaults to TuSimple h=160 over H=720.",
-    )
+    parser.add_argument("--fixed-y-start", type=float, default=0.9861111111111112, help="Bottom normalized y anchor for fixed_y mode.")
+    parser.add_argument("--fixed-y-end", type=float, default=0.2222222222222222, help="Top normalized y anchor for fixed_y mode.")
+    parser.add_argument("--line-width", type=int, default=12, help="Lane mask line width in output pixels.")
     parser.add_argument("--val-ratio", type=float, default=0.1, help="Validation ratio from training labels.")
     parser.add_argument("--split-seed", type=int, default=0, help="Seed for deterministic train/val split.")
     split_group = parser.add_mutually_exclusive_group()
@@ -93,9 +79,10 @@ def build_gcs_arrays(
     lanes: list[list[tuple[float, float]]],
     img_shape: tuple[int, int],
     num_points: int,
+    line_width: int,
     point_mode: str = "free",
-    fixed_y_start: float = TUSIMPLE_OFFICIAL_BOTTOM_Y_NORM,
-    fixed_y_end: float = TUSIMPLE_OFFICIAL_TOP_Y_NORM,
+    fixed_y_start: float = 0.9861111111111112,
+    fixed_y_end: float = 0.2222222222222222,
 ) -> dict[str, np.ndarray]:
     img_h, img_w = img_shape
     point_mode = str(point_mode).lower()
@@ -104,6 +91,7 @@ def build_gcs_arrays(
 
     all_lanes: list[np.ndarray] = []
     all_valid: list[np.ndarray] = []
+    kept_mask_lanes: list[list[tuple[float, float]]] = []
     fixed_y = None
     for lane in lanes:
         if point_mode == "fixed_y":
@@ -124,6 +112,10 @@ def build_gcs_arrays(
         sampled = np.clip(sampled, 0.0, 1.0).astype(np.float32)
         all_lanes.append(sampled)
         all_valid.append(valid.astype(np.float32))
+        kept_mask_lanes.append(lane)
+
+    semantic_mask = build_semantic_mask(kept_mask_lanes, h=img_h, w=img_w, line_width=line_width)
+    edge_mask = build_edge_mask(semantic_mask)
 
     if all_lanes:
         lane_arr = np.stack(all_lanes, axis=0).astype(np.float32)
@@ -133,6 +125,8 @@ def build_gcs_arrays(
         valid_arr = np.zeros((0, num_points), dtype=np.float32)
 
     arrays = {
+        "semantic_mask": semantic_mask.astype(np.uint8),
+        "edge_mask": edge_mask.astype(np.float32),
         "lanes": lane_arr,
         "lane_valid": valid_arr,
         "num_lanes": np.array([lane_arr.shape[0]], dtype=np.int64),
@@ -154,16 +148,23 @@ def build_gcs_arrays(
 
 def validate_gcs_arrays(arrays: dict[str, np.ndarray], img_shape: tuple[int, int], num_points: int) -> None:
     """Fail fast when a generated label violates the structured lane contract."""
-    required = {"lanes", "lane_valid", "num_lanes", "point_mode"}
+    img_h, img_w = img_shape
+    required = {"semantic_mask", "edge_mask", "lanes", "lane_valid", "num_lanes"}
     missing = required.difference(arrays)
     if missing:
         raise KeyError(f"Missing GCS arrays: {sorted(missing)}")
 
+    semantic_mask = arrays["semantic_mask"]
+    edge_mask = arrays["edge_mask"]
     lanes = arrays["lanes"]
     lane_valid = arrays["lane_valid"]
     num_lanes = arrays["num_lanes"]
     point_mode = str(np.asarray(arrays.get("point_mode", np.array("free"))).item())
 
+    if semantic_mask.shape != (img_h, img_w):
+        raise ValueError(f"semantic_mask shape must be {(img_h, img_w)}, got {semantic_mask.shape}")
+    if edge_mask.shape != (img_h, img_w):
+        raise ValueError(f"edge_mask shape must be {(img_h, img_w)}, got {edge_mask.shape}")
     if lanes.ndim != 3 or lanes.shape[1:] != (num_points, 2):
         raise ValueError(f"lanes shape must be N x {num_points} x 2, got {lanes.shape}")
     if lane_valid.shape != lanes.shape[:2]:
@@ -191,6 +192,7 @@ def convert_one(
     output_root: Path,
     img_shape: tuple[int, int],
     num_points: int,
+    line_width: int,
     point_mode: str,
     fixed_y_start: float,
     fixed_y_end: float,
@@ -208,6 +210,7 @@ def convert_one(
         lanes,
         img_shape=img_shape,
         num_points=num_points,
+        line_width=line_width,
         point_mode=point_mode,
         fixed_y_start=fixed_y_start,
         fixed_y_end=fixed_y_end,
@@ -239,16 +242,15 @@ def report_outputs(output_root: Path, include_test: bool, img_shape: tuple[int, 
         if not labels:
             continue
         with np.load(labels[0]) as data:
-            arrays = {k: data[k] for k in data.files if k in {"lanes", "lane_valid", "num_lanes", "point_mode", "fixed_y"}}
+            arrays = {k: data[k] for k in data.files if k in {"semantic_mask", "edge_mask", "lanes", "lane_valid", "num_lanes", "point_mode", "fixed_y"}}
             validate_gcs_arrays(
                 arrays,
                 img_shape,
                 num_points,
             )
-            point_mode = str(np.asarray(data["point_mode"]).item()) if "point_mode" in data.files else "free"
             print(
                 f"{split}: sample={labels[0].name} lanes_shape={data['lanes'].shape} "
-                f"point_mode={point_mode}"
+                f"mask_shape={data['semantic_mask'].shape}"
             )
 
 
@@ -289,6 +291,7 @@ def main() -> None:
             output_root,
             img_shape=img_shape,
             num_points=args.num_points,
+            line_width=args.line_width,
             point_mode=args.point_mode,
             fixed_y_start=args.fixed_y_start,
             fixed_y_end=args.fixed_y_end,

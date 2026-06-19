@@ -1,42 +1,20 @@
 # Ultralytics AGPL-3.0 License - https://ultralytics.com/license
 """GCS-YOLO-Lane neural network modules."""
 
-import re
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-TUSIMPLE_OFFICIAL_BOTTOM_Y_NORM = 710.0 / 720.0
-TUSIMPLE_OFFICIAL_TOP_Y_NORM = 160.0 / 720.0
-
 __all__ = (
     "CoordReweight",
-    "LaneStripPyramidAttention",
     "LineStripAttention",
     "LSEM",
     "WeightedFusion",
     "ConvBNAct",
-    "LaneFeatureProjection",
     "LaneBiFPN",
-    "LaneCountHead",
     "build_2d_sincos_position_embedding",
     "GCSLaneHead",
 )
-
-
-def _parse_bool(value, default: bool = False) -> bool:
-    """Parse bool-like YAML/module args without treating non-empty strings as truthy."""
-    if value is None:
-        return bool(default)
-    if isinstance(value, bool):
-        return value
-    text = str(value).strip().lower()
-    if text in {"true", "1", "yes", "y", "on"}:
-        return True
-    if text in {"false", "0", "no", "n", "off", "none", ""}:
-        return False
-    raise ValueError(f"Expected a boolean value, got {value!r}.")
 
 
 class CoordReweight(nn.Module):
@@ -153,58 +131,6 @@ class LSEM(nn.Module):
         return self.act(x + identity)
 
 
-class LaneStripPyramidAttention(nn.Module):
-    """Optional lightweight strip attention after P2-P5 fusion."""
-
-    def __init__(self, c, levels="p2,p3", k=9):
-        """Initialize strip-attention residuals for selected pyramid levels."""
-        super().__init__()
-        self.level_names = ("p2", "p3", "p4", "p5")
-        selected = self._parse_levels(levels)
-        self.selected = selected
-        self.blocks = nn.ModuleList(LineStripAttention(c, k=k) if i in selected else nn.Identity() for i in range(4))
-        self.gains = nn.Parameter(torch.zeros(4, dtype=torch.float32))
-
-    @staticmethod
-    def _parse_levels(levels) -> set[int]:
-        """Parse selected P2-P5 levels from a YAML-friendly string/list/bitmask."""
-        if levels is None or levels is False:
-            return set()
-        if isinstance(levels, int):
-            return {i for i in range(4) if levels & (1 << i)}
-        if isinstance(levels, (list, tuple, set)):
-            parts = [str(x).strip().lower() for x in levels]
-        else:
-            text = str(levels).strip().lower()
-            if text in {"", "none", "off", "false", "0"}:
-                return set()
-            if text in {"all", "p2p3p4p5"}:
-                return {0, 1, 2, 3}
-            parts = [x for x in re.split(r"[,;|\s]+", text.replace("+", ",")) if x]
-        mapping = {"0": 0, "1": 0, "2": 0, "p2": 0, "3": 1, "p3": 1, "4": 2, "p4": 2, "5": 3, "p5": 3}
-        selected = set()
-        for part in parts:
-            if part in {"p2p3", "23"}:
-                selected.update({0, 1})
-                continue
-            if part not in mapping:
-                raise ValueError(f"Unsupported LaneStripPyramidAttention level {part!r}; use p2,p3,p4,p5.")
-            selected.add(mapping[part])
-        return selected
-
-    def forward(self, xs):
-        """Apply zero-initialized residual strip attention to selected pyramid features."""
-        if len(xs) != 4:
-            raise ValueError(f"LaneStripPyramidAttention expects [P2, P3, P4, P5], got {len(xs)} feature maps.")
-        out = []
-        for i, (x, block) in enumerate(zip(xs, self.blocks)):
-            if i in self.selected:
-                out.append(x + self.gains[i].to(device=x.device, dtype=x.dtype) * block(x))
-            else:
-                out.append(x)
-        return out
-
-
 class WeightedFusion(nn.Module):
     """Learnable normalized feature fusion used by Lane-BiFPN."""
 
@@ -264,513 +190,6 @@ def build_2d_sincos_position_embedding(h, w, dim, device):
     return torch.cat((torch.sin(out_x), torch.cos(out_x), torch.sin(out_y), torch.cos(out_y)), dim=1)
 
 
-class CandidateAwareCountHead(nn.Module):
-    """Image-level lane count head using global context plus ranked lane-candidate evidence."""
-
-    def __init__(
-        self,
-        feat_channels,
-        query_dim: int,
-        hidden_dim: int = 256,
-        dropout: float = 0.1,
-        topq: int = 8,
-        use_query_feat: bool = True,
-        use_score_feat: bool = True,
-        use_geometry_feat: bool = True,
-    ):
-        """Initialize the count classification head."""
-        super().__init__()
-        if not isinstance(feat_channels, (list, tuple)) or len(feat_channels) == 0:
-            raise ValueError(f"CandidateAwareCountHead requires a non-empty feat_channels list, got {feat_channels!r}.")
-        self.feat_channels = [int(c) for c in feat_channels]
-        self.query_dim = int(query_dim)
-        self.topq = max(int(topq), 1)
-        self.use_query_feat = bool(use_query_feat)
-        self.use_score_feat = bool(use_score_feat)
-        self.use_geometry_feat = bool(use_geometry_feat)
-        self.visible_valid_thr = 0.5
-        self.visible_support_points = 12.0
-        self.score_extra_dim = 7
-        self.geometry_extra_dim = 3
-        self.cardinality_feature_names = (
-            "exist_soft_count",
-            "exist_valid_soft_count",
-            "valid_mean",
-            "quality_soft_count",
-            "lane_quality_top4",
-            "lane_quality_top5",
-            "lane_quality_4to5_gap",
-            "lane_quality_top5_mean",
-        )
-        self.cardinality_feature_dim = len(self.cardinality_feature_names)
-        extra_dim = self.score_extra_dim + self.geometry_extra_dim
-        self.feat_projs = nn.ModuleList(
-            nn.Sequential(
-                nn.AdaptiveAvgPool2d(1),
-                nn.Flatten(),
-                nn.Linear(int(c), hidden_dim),
-                nn.LayerNorm(hidden_dim),
-                nn.SiLU(),
-            )
-            for c in self.feat_channels
-        )
-        self.query_proj = nn.Sequential(
-            nn.Linear(int(query_dim) * 2, hidden_dim),
-            nn.LayerNorm(hidden_dim),
-            nn.SiLU(),
-        )
-        fuse_dim = hidden_dim * (len(self.feat_channels) + 1)
-        self.fuse = nn.Sequential(
-            nn.Linear(fuse_dim, hidden_dim),
-            nn.LayerNorm(hidden_dim),
-            nn.SiLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.LayerNorm(hidden_dim),
-            nn.SiLU(),
-        )
-        self.candidate_proj = nn.Sequential(
-            nn.Linear(int(query_dim) + extra_dim, hidden_dim),
-            nn.LayerNorm(hidden_dim),
-            nn.SiLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.LayerNorm(hidden_dim),
-            nn.SiLU(),
-        )
-        self.candidate_attn_score = nn.Linear(hidden_dim, 1)
-        self.candidate_out = nn.Sequential(
-            nn.Linear(hidden_dim * 2, hidden_dim),
-            nn.LayerNorm(hidden_dim),
-            nn.SiLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim, hidden_dim),
-        )
-        self.cardinality_residual = self._build_cardinality_residual(hidden_dim, dropout)
-        self.count_cls = nn.Linear(hidden_dim, 4)
-        self.count_boundary_cls = nn.Linear(hidden_dim, 2)
-        nn.init.zeros_(self.count_boundary_cls.weight)
-        nn.init.zeros_(self.count_boundary_cls.bias)
-
-    def _ensure_candidate_aware_compat(self, query_embed: torch.Tensor) -> None:
-        """Add candidate-aware submodules for checkpoints saved with the legacy Count Head."""
-        self.query_dim = int(getattr(self, "query_dim", query_embed.shape[-1]))
-        self.topq = max(int(getattr(self, "topq", 8)), 1)
-        self.use_query_feat = bool(getattr(self, "use_query_feat", True))
-        self.use_score_feat = bool(getattr(self, "use_score_feat", True))
-        self.use_geometry_feat = bool(getattr(self, "use_geometry_feat", True))
-        self.visible_valid_thr = float(getattr(self, "visible_valid_thr", 0.5))
-        self.visible_support_points = float(getattr(self, "visible_support_points", 12.0))
-        self.score_extra_dim = int(getattr(self, "score_extra_dim", 7))
-        self.geometry_extra_dim = int(getattr(self, "geometry_extra_dim", 3))
-        self.cardinality_feature_names = tuple(
-            getattr(
-                self,
-                "cardinality_feature_names",
-                (
-                    "exist_soft_count",
-                    "exist_valid_soft_count",
-                    "valid_mean",
-                    "quality_soft_count",
-                    "lane_quality_top4",
-                    "lane_quality_top5",
-                    "lane_quality_4to5_gap",
-                    "lane_quality_top5_mean",
-                ),
-            )
-        )
-        self.cardinality_feature_dim = int(getattr(self, "cardinality_feature_dim", len(self.cardinality_feature_names)))
-
-        hidden_dim = int(self.count_cls.in_features)
-        extra_dim = self.score_extra_dim + self.geometry_extra_dim
-        device, dtype = query_embed.device, query_embed.dtype
-
-        def _attach(name: str, module: nn.Module) -> None:
-            setattr(self, name, module.to(device=device, dtype=dtype))
-
-        if not hasattr(self, "candidate_proj"):
-            _attach(
-                "candidate_proj",
-                nn.Sequential(
-                    nn.Linear(self.query_dim + extra_dim, hidden_dim),
-                    nn.LayerNorm(hidden_dim),
-                    nn.SiLU(),
-                    nn.Linear(hidden_dim, hidden_dim),
-                    nn.LayerNorm(hidden_dim),
-                    nn.SiLU(),
-                ),
-            )
-        if not hasattr(self, "candidate_attn_score"):
-            _attach("candidate_attn_score", nn.Linear(hidden_dim, 1))
-        if not hasattr(self, "candidate_out"):
-            candidate_out = nn.Sequential(
-                nn.Linear(hidden_dim * 2, hidden_dim),
-                nn.LayerNorm(hidden_dim),
-                nn.SiLU(),
-                nn.Dropout(0.1),
-                nn.Linear(hidden_dim, hidden_dim),
-            )
-            nn.init.zeros_(candidate_out[-1].weight)
-            nn.init.zeros_(candidate_out[-1].bias)
-            _attach(
-                "candidate_out",
-                candidate_out,
-            )
-        if not hasattr(self, "cardinality_residual"):
-            _attach("cardinality_residual", self._build_cardinality_residual(hidden_dim, 0.1))
-        if not hasattr(self, "count_boundary_cls"):
-            boundary = nn.Linear(hidden_dim, 2)
-            nn.init.zeros_(boundary.weight)
-            nn.init.zeros_(boundary.bias)
-            _attach("count_boundary_cls", boundary)
-
-    def _build_cardinality_residual(self, hidden_dim: int, dropout: float) -> nn.Sequential:
-        """Build a zero-initialized full-query count evidence residual."""
-        residual = nn.Sequential(
-            nn.Linear(int(self.cardinality_feature_dim), hidden_dim),
-            nn.LayerNorm(hidden_dim),
-            nn.SiLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim, hidden_dim),
-        )
-        nn.init.zeros_(residual[-1].weight)
-        nn.init.zeros_(residual[-1].bias)
-        return residual
-
-    def _global_context(self, feats, query_embed: torch.Tensor) -> torch.Tensor:
-        """Return the legacy global-image/query count context."""
-        if len(feats) != len(self.feat_projs):
-            raise ValueError(f"CandidateAwareCountHead expected {len(self.feat_projs)} feature maps, got {len(feats)}.")
-        if query_embed.ndim != 3:
-            raise ValueError(
-                f"CandidateAwareCountHead query_embed must have shape B x Q x C, got {tuple(query_embed.shape)}."
-            )
-        if query_embed.shape[-1] != self.query_dim:
-            raise ValueError(
-                f"CandidateAwareCountHead expected query_dim={self.query_dim}, got {query_embed.shape[-1]}."
-            )
-        global_tokens = [proj(feat) for proj, feat in zip(self.feat_projs, feats)]
-        q_mean = query_embed.mean(dim=1)
-        q_max = query_embed.max(dim=1).values
-        q_token = self.query_proj(torch.cat((q_mean, q_max), dim=-1))
-        return self.fuse(torch.cat((*global_tokens, q_token), dim=-1))
-
-    @staticmethod
-    def _safe_std(x: torch.Tensor, dim: int) -> torch.Tensor:
-        """Return a finite standard deviation for short candidate point sequences."""
-        if x.shape[dim] <= 1:
-            return torch.zeros_like(x.mean(dim=dim, keepdim=True))
-        return x.std(dim=dim, unbiased=False, keepdim=True)
-
-    @staticmethod
-    def _visible_segment_stats(
-        valid_prob_full: torch.Tensor,
-        valid_thr: float = 0.5,
-        support_points: float = 12.0,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Return longest-visible-segment mean/support plus the all-anchor mean."""
-        if valid_prob_full.ndim != 3:
-            raise ValueError(f"valid_prob_full must have shape B x Q x K, got {tuple(valid_prob_full.shape)}.")
-        b, q, k = valid_prob_full.shape
-        dtype = valid_prob_full.dtype
-        device = valid_prob_full.device
-        all_anchor_mean = valid_prob_full.mean(dim=2, keepdim=True)
-        if k <= 0:
-            zeros = valid_prob_full.new_zeros((b, q, 1))
-            return zeros, zeros, zeros, all_anchor_mean
-
-        flat_prob = valid_prob_full.reshape(-1, k)
-        active = (flat_prob >= float(valid_thr)).to(dtype=dtype)
-        run_len = torch.zeros((flat_prob.shape[0],), device=device, dtype=dtype)
-        run_sum = torch.zeros_like(run_len)
-        best_len = torch.zeros_like(run_len)
-        best_sum = torch.zeros_like(run_len)
-        for i in range(k):
-            m = active[:, i]
-            run_len = (run_len + 1.0) * m
-            run_sum = (run_sum + flat_prob[:, i]) * m
-            update = (run_len > best_len) | ((run_len == best_len) & (run_sum > best_sum))
-            best_len = torch.where(update, run_len, best_len)
-            best_sum = torch.where(update, run_sum, best_sum)
-
-        visible_mean = best_sum / best_len.clamp_min(1.0)
-        visible_mean = torch.where(best_len > 0.0, visible_mean, torch.zeros_like(visible_mean))
-        support_den = max(float(support_points), 1.0)
-        visible_support = (best_len / support_den).clamp(0.0, 1.0)
-        return (
-            visible_mean.view(b, q, 1),
-            visible_support.view(b, q, 1),
-            best_len.view(b, q, 1),
-            all_anchor_mean,
-        )
-
-    def _candidate_extra_features(
-        self,
-        pred_logits: torch.Tensor,
-        pred_valid_logits: torch.Tensor | None,
-        pred_points: torch.Tensor | None,
-        pred_quality_logits: torch.Tensor | None,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Build per-query score and geometry features used by the candidate-aware branch."""
-        if pred_logits.ndim == 3 and pred_logits.shape[-1] == 1:
-            pred_logits = pred_logits.squeeze(-1)
-        if pred_logits.ndim != 2:
-            raise ValueError(f"pred_logits must have shape B x Q for CandidateAwareCountHead, got {tuple(pred_logits.shape)}.")
-        b, q = pred_logits.shape
-        device, dtype = pred_logits.device, pred_logits.dtype
-
-        exist_logit = pred_logits.unsqueeze(-1)
-        exist_prob = pred_logits.sigmoid().unsqueeze(-1)
-        if pred_valid_logits is None:
-            valid_prob = torch.ones((b, q, 1), device=device, dtype=dtype)
-            valid_mean = valid_prob
-            valid_max = valid_prob
-            valid_count_soft = valid_prob
-        else:
-            if pred_valid_logits.ndim == 4 and pred_valid_logits.shape[-1] == 1:
-                pred_valid_logits = pred_valid_logits.squeeze(-1)
-            if pred_valid_logits.ndim != 3 or pred_valid_logits.shape[:2] != (b, q):
-                raise ValueError(
-                    "pred_valid_logits must have shape B x Q x K for CandidateAwareCountHead, "
-                    f"got {tuple(pred_valid_logits.shape)} vs B,Q={(b, q)}."
-                )
-            valid_prob_full = pred_valid_logits.sigmoid().to(dtype=dtype)
-            valid_mean, valid_count_soft, _, _ = self._visible_segment_stats(
-                valid_prob_full,
-                valid_thr=float(getattr(self, "visible_valid_thr", 0.5)),
-                support_points=float(getattr(self, "visible_support_points", 12.0)),
-            )
-            valid_max = valid_prob_full.max(dim=2, keepdim=True).values
-
-        if pred_quality_logits is None:
-            quality_prob = exist_prob * valid_mean * valid_count_soft
-        else:
-            if pred_quality_logits.ndim == 3 and pred_quality_logits.shape[-1] == 1:
-                pred_quality_logits = pred_quality_logits.squeeze(-1)
-            if pred_quality_logits.ndim != 2 or pred_quality_logits.shape != (b, q):
-                raise ValueError(
-                    "pred_quality_logits must have shape B x Q for CandidateAwareCountHead, "
-                    f"got {tuple(pred_quality_logits.shape)} vs {(b, q)}."
-                )
-            quality_prob = pred_quality_logits.sigmoid().unsqueeze(-1).to(dtype=dtype)
-        lane_quality = (exist_prob * valid_mean * valid_count_soft).clamp(0.0, 1.0)
-        score_extra = torch.cat(
-            (exist_logit, exist_prob, valid_mean, valid_max, valid_count_soft, lane_quality, quality_prob),
-            dim=-1,
-        )
-
-        if pred_points is None:
-            geometry_extra = torch.zeros((b, q, self.geometry_extra_dim), device=device, dtype=dtype)
-        else:
-            if pred_points.ndim != 4 or pred_points.shape[:2] != (b, q) or pred_points.shape[-1] != 2:
-                raise ValueError(
-                    "pred_points must have shape B x Q x K x 2 for CandidateAwareCountHead, "
-                    f"got {tuple(pred_points.shape)} vs B,Q={(b, q)}."
-                )
-            pts = pred_points.to(device=device, dtype=dtype).clamp(0.0, 1.0)
-            x = pts[..., 0]
-            y = pts[..., 1]
-            x_mean = x.mean(dim=2, keepdim=True)
-            x_std = self._safe_std(x, dim=2)
-            y_span = (y.max(dim=2, keepdim=True).values - y.min(dim=2, keepdim=True).values).clamp_min(0.0)
-            geometry_extra = torch.cat((x_mean, x_std, y_span), dim=-1)
-
-        if not self.use_score_feat:
-            score_extra = torch.zeros_like(score_extra)
-        if not self.use_geometry_feat:
-            geometry_extra = torch.zeros_like(geometry_extra)
-        return torch.cat((score_extra, geometry_extra), dim=-1), lane_quality.squeeze(-1)
-
-    def _cardinality_features(
-        self,
-        pred_logits: torch.Tensor,
-        pred_valid_logits: torch.Tensor | None,
-        pred_quality_logits: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        """Return permutation-invariant full-query count evidence for the Count Head."""
-        if pred_logits.ndim == 3 and pred_logits.shape[-1] == 1:
-            pred_logits = pred_logits.squeeze(-1)
-        if pred_logits.ndim != 2:
-            raise ValueError(f"pred_logits must have shape B x Q for Count Head cardinality, got {tuple(pred_logits.shape)}.")
-        b, q = pred_logits.shape
-        device, dtype = pred_logits.device, pred_logits.dtype
-        exist_prob = pred_logits.sigmoid()
-
-        if pred_valid_logits is None:
-            valid_mean = torch.ones((b, q), device=device, dtype=dtype)
-            visible_support = torch.ones_like(valid_mean)
-            all_anchor_mean = valid_mean
-        else:
-            if pred_valid_logits.ndim == 4 and pred_valid_logits.shape[-1] == 1:
-                pred_valid_logits = pred_valid_logits.squeeze(-1)
-            if pred_valid_logits.ndim != 3 or pred_valid_logits.shape[:2] != (b, q):
-                raise ValueError(
-                    "pred_valid_logits must have shape B x Q x K for Count Head cardinality, "
-                    f"got {tuple(pred_valid_logits.shape)} vs B,Q={(b, q)}."
-                )
-            valid_prob_full = pred_valid_logits.sigmoid().to(dtype=dtype)
-            valid_mean_3d, visible_support_3d, _, all_anchor_mean_3d = self._visible_segment_stats(
-                valid_prob_full,
-                valid_thr=float(getattr(self, "visible_valid_thr", 0.5)),
-                support_points=float(getattr(self, "visible_support_points", 12.0)),
-            )
-            valid_mean = valid_mean_3d.squeeze(-1)
-            visible_support = visible_support_3d.squeeze(-1)
-            all_anchor_mean = all_anchor_mean_3d.squeeze(-1)
-
-        if pred_quality_logits is None:
-            quality_prob = exist_prob * valid_mean * visible_support
-        else:
-            if pred_quality_logits.ndim == 3 and pred_quality_logits.shape[-1] == 1:
-                pred_quality_logits = pred_quality_logits.squeeze(-1)
-            if pred_quality_logits.ndim != 2 or pred_quality_logits.shape != (b, q):
-                raise ValueError(
-                    "pred_quality_logits must have shape B x Q for Count Head cardinality, "
-                    f"got {tuple(pred_quality_logits.shape)} vs {(b, q)}."
-                )
-            quality_prob = pred_quality_logits.sigmoid().to(dtype=dtype)
-
-        lane_quality = (exist_prob * valid_mean * visible_support).clamp(0.0, 1.0)
-        topk = min(5, q)
-        top_values = lane_quality.topk(k=topk, dim=1).values
-        if topk < 5:
-            pad = torch.zeros((b, 5 - topk), device=device, dtype=dtype)
-            top_values = torch.cat((top_values, pad), dim=1)
-        top4 = top_values[:, 3:4]
-        top5 = top_values[:, 4:5]
-
-        features = torch.cat(
-            (
-                exist_prob.sum(dim=1, keepdim=True) / max(float(q), 1.0),
-                lane_quality.sum(dim=1, keepdim=True) / max(float(q), 1.0),
-                all_anchor_mean.mean(dim=1, keepdim=True),
-                quality_prob.sum(dim=1, keepdim=True) / max(float(q), 1.0),
-                top4,
-                top5,
-                top4 - top5,
-                top_values.mean(dim=1, keepdim=True),
-            ),
-            dim=1,
-        )
-        if not self.use_score_feat:
-            features = torch.zeros_like(features)
-        return features
-
-    def _cardinality_context(
-        self,
-        query_embed: torch.Tensor,
-        pred_logits: torch.Tensor | None,
-        pred_valid_logits: torch.Tensor | None,
-        pred_quality_logits: torch.Tensor | None,
-    ) -> torch.Tensor:
-        """Return full-query count evidence, zero for legacy calls without score logits."""
-        if pred_logits is None:
-            return query_embed.new_zeros((query_embed.shape[0], self.count_cls.in_features))
-        features = self._cardinality_features(pred_logits, pred_valid_logits, pred_quality_logits)
-        return self.cardinality_residual(features.to(device=query_embed.device, dtype=query_embed.dtype))
-
-    def _candidate_context(
-        self,
-        query_embed: torch.Tensor,
-        pred_logits: torch.Tensor | None,
-        pred_valid_logits: torch.Tensor | None,
-        pred_points: torch.Tensor | None,
-        pred_quality_logits: torch.Tensor | None,
-    ) -> torch.Tensor:
-        """Return an attention-pooled top-query candidate context."""
-        b, q, c = query_embed.shape
-        if pred_logits is None:
-            return query_embed.new_zeros((b, self.count_cls.in_features))
-
-        extra, lane_quality = self._candidate_extra_features(
-            pred_logits,
-            pred_valid_logits,
-            pred_points,
-            pred_quality_logits,
-        )
-        topq = min(self.topq, q)
-        top_idx = lane_quality.detach().topk(k=topq, dim=1).indices
-        gather_query = top_idx.unsqueeze(-1).expand(-1, -1, c)
-        query_top = query_embed.gather(dim=1, index=gather_query)
-        if not self.use_query_feat:
-            query_top = torch.zeros_like(query_top)
-        extra_top = extra.gather(dim=1, index=top_idx.unsqueeze(-1).expand(-1, -1, extra.shape[-1]))
-        candidate_token = self.candidate_proj(torch.cat((query_top, extra_top), dim=-1))
-        attn = torch.softmax(self.candidate_attn_score(candidate_token), dim=1)
-        attn_pool = (candidate_token * attn).sum(dim=1)
-        max_pool = candidate_token.max(dim=1).values
-        return self.candidate_out(torch.cat((attn_pool, max_pool), dim=-1))
-
-    def _fused_context(
-        self,
-        feats,
-        query_embed: torch.Tensor,
-        pred_logits: torch.Tensor | None = None,
-        pred_valid_logits: torch.Tensor | None = None,
-        pred_points: torch.Tensor | None = None,
-        pred_quality_logits: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        """Return the shared fused context used by Count Head sub-branches."""
-        self._ensure_candidate_aware_compat(query_embed)
-        fused = self._global_context(feats, query_embed)
-        fused = fused + self._candidate_context(
-            query_embed,
-            pred_logits=pred_logits,
-            pred_valid_logits=pred_valid_logits,
-            pred_points=pred_points,
-            pred_quality_logits=pred_quality_logits,
-        )
-        fused = fused + self._cardinality_context(
-            query_embed,
-            pred_logits=pred_logits,
-            pred_valid_logits=pred_valid_logits,
-            pred_quality_logits=pred_quality_logits,
-        )
-        return fused
-
-    def forward_with_boundary(
-        self,
-        feats,
-        query_embed: torch.Tensor,
-        pred_logits: torch.Tensor | None = None,
-        pred_valid_logits: torch.Tensor | None = None,
-        pred_points: torch.Tensor | None = None,
-        pred_quality_logits: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Return count=2/3/4/5 logits and count>=4/count>=5 boundary logits."""
-        fused = self._fused_context(
-            feats,
-            query_embed,
-            pred_logits=pred_logits,
-            pred_valid_logits=pred_valid_logits,
-            pred_points=pred_points,
-            pred_quality_logits=pred_quality_logits,
-        )
-        return self.count_cls(fused), self.count_boundary_cls(fused)
-
-    def forward(
-        self,
-        feats,
-        query_embed: torch.Tensor,
-        pred_logits: torch.Tensor | None = None,
-        pred_valid_logits: torch.Tensor | None = None,
-        pred_points: torch.Tensor | None = None,
-        pred_quality_logits: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        """Return count=2/3/4/5 logits for backward API compatibility."""
-        return self.forward_with_boundary(
-            feats,
-            query_embed,
-            pred_logits=pred_logits,
-            pred_valid_logits=pred_valid_logits,
-            pred_points=pred_points,
-            pred_quality_logits=pred_quality_logits,
-        )[0]
-
-
-class LaneCountHead(CandidateAwareCountHead):
-    """Backward-compatible alias for checkpoints and imports using the old head name."""
-
-
 class GCSLaneHead(nn.Module):
     """Query-based structured lane head for GCS-YOLO-Lane.
 
@@ -786,19 +205,13 @@ class GCSLaneHead(nn.Module):
         num_points=56,
         num_decoder_layers=3,
         nhead=8,
+        aux=True,
         point_mode="free",
-        fixed_y_start=TUSIMPLE_OFFICIAL_BOTTOM_Y_NORM,
-        fixed_y_end=TUSIMPLE_OFFICIAL_TOP_Y_NORM,
-        count_quality_calib_dim=0,
-        survival_head=False,
-        decoder_aux_loss=False,
+        fixed_y_start=0.9861111111111112,
+        fixed_y_end=0.2222222222222222,
     ):
-        """Initialize the GCS lane query decoder."""
+        """Initialize the GCS lane query decoder and training-only auxiliary heads."""
         super().__init__()
-        if isinstance(c1, (list, tuple)):
-            count_feat_channels = [int(c) for c in c1]
-        else:
-            count_feat_channels = [int(c1)] * 4
         if isinstance(c1, (list, tuple)):
             if len(c1) == 0:
                 raise ValueError("GCSLaneHead received an empty channel list.")
@@ -813,6 +226,7 @@ class GCSLaneHead(nn.Module):
         self.c1 = c1
         self.num_queries = num_queries
         self.num_points = num_points
+        self.aux = aux
         self.point_mode = str(point_mode).lower()
         if self.point_mode in {"fixed-y", "fixedy"}:
             self.point_mode = "fixed_y"
@@ -820,15 +234,13 @@ class GCSLaneHead(nn.Module):
             raise ValueError(f"GCSLaneHead point_mode must be 'free' or 'fixed_y', got {point_mode!r}.")
         self.fixed_y_start = float(fixed_y_start)
         self.fixed_y_end = float(fixed_y_end)
-        self.count_quality_calib_dim = int(count_quality_calib_dim or 0)
-        self.survival_head_enabled = _parse_bool(survival_head, default=False)
-        self.decoder_aux_outputs = _parse_bool(decoder_aux_loss, default=False)
         if not (0.0 <= self.fixed_y_end < self.fixed_y_start <= 1.0):
             raise ValueError(
                 f"Expected 0 <= fixed_y_end < fixed_y_start <= 1, got "
                 f"{self.fixed_y_end} < {self.fixed_y_start}."
             )
         self.point_dims = 1 if self.point_mode == "fixed_y" else 2
+        self.return_aux = False
         self.min_spatial_tokens = 1024
         self._last_spatial_debug = None
 
@@ -858,13 +270,6 @@ class GCSLaneHead(nn.Module):
             nn.ReLU(inplace=True),
             nn.Linear(c1, num_points),
         )
-        self.count_head = CandidateAwareCountHead(
-            feat_channels=count_feat_channels,
-            query_dim=c1,
-            hidden_dim=256,
-            dropout=0.1,
-            topq=8,
-        )
         self.point_embed = nn.Embedding(num_points, c1)
         self.point_coord_mlp = nn.Sequential(
             nn.Linear(2, c1),
@@ -888,34 +293,21 @@ class GCSLaneHead(nn.Module):
             nn.ReLU(inplace=True),
             nn.Linear(c1, 1),
         )
-        self.quality_mlp = nn.Sequential(
-            nn.Linear(c1, c1),
-            nn.ReLU(inplace=True),
-            nn.Linear(c1, 1),
+
+        self.aux_mask = nn.Sequential(
+            ConvBNAct(c1, c1, k=3),
+            nn.Conv2d(c1, 2, kernel_size=1),
         )
-        if self.survival_head_enabled:
-            self.survival_mlp = nn.Sequential(
-                nn.Linear(c1, c1),
-                nn.ReLU(inplace=True),
-                nn.Linear(c1, 1),
-            )
-        if self.count_quality_calib_dim > 0:
-            self.count_quality_calib = nn.Sequential(
-                nn.Linear(c1 * 3, self.count_quality_calib_dim),
-                nn.LayerNorm(self.count_quality_calib_dim),
-                nn.SiLU(),
-                nn.Linear(self.count_quality_calib_dim, c1),
-            )
-            nn.init.zeros_(self.count_quality_calib[-1].weight)
-            nn.init.zeros_(self.count_quality_calib[-1].bias)
+        self.aux_edge = nn.Sequential(
+            ConvBNAct(c1, c1 // 2, k=3),
+            nn.Conv2d(c1 // 2, 1, kernel_size=1),
+        )
         self.register_buffer("point_reference_logits", self._build_point_references(), persistent=False)
         self.register_buffer("fixed_y_anchors", self._build_fixed_y_anchors(), persistent=False)
         self._init_point_delta_head()
         self._init_point_valid_head()
         self._init_point_refine_head()
         self._init_point_valid_refine_head()
-        self._init_quality_head()
-        self._init_survival_head()
 
     def _build_fixed_y_anchors(self):
         """Build shared bottom-to-top y anchors for fixed-y x-only prediction."""
@@ -963,29 +355,6 @@ class GCSLaneHead(nn.Module):
         final = self.point_valid_refine_mlp[-1]
         nn.init.normal_(final.weight, mean=0.0, std=5e-3)
         nn.init.zeros_(final.bias)
-
-    def _init_quality_head(self):
-        """Initialize lane-quality logits near the BCE decision boundary."""
-        final = self.quality_mlp[-1]
-        nn.init.normal_(final.weight, mean=0.0, std=1e-3)
-        nn.init.zeros_(final.bias)
-
-    def _init_survival_head(self):
-        """Initialize optional lane-survival logits near the BCE decision boundary."""
-        if not hasattr(self, "survival_mlp"):
-            return
-        final = self.survival_mlp[-1]
-        nn.init.normal_(final.weight, mean=0.0, std=1e-3)
-        nn.init.zeros_(final.bias)
-
-    def _count_quality_tokens(self, hs):
-        """Return optional shared Count/Quality calibrated query tokens."""
-        if not hasattr(self, "count_quality_calib"):
-            return hs
-        mean_token = hs.mean(dim=1, keepdim=True).expand_as(hs)
-        max_token = hs.max(dim=1, keepdim=True).values.expand_as(hs)
-        delta = self.count_quality_calib(torch.cat((hs, mean_token, max_token), dim=-1))
-        return hs + delta
 
     def _sample_point_features(self, xs, points):
         """Sample high-resolution image features at normalized point coordinates.
@@ -1046,72 +415,11 @@ class GCSLaneHead(nn.Module):
         valid_delta = self.point_valid_refine_mlp(refine_tokens).squeeze(-1)
         return coarse_valid + valid_delta
 
-    def _run_decoder(self, query, memory):
-        """Run the Transformer decoder and optionally retain intermediate layer states."""
-        output = query
-        intermediate = []
-        decoder_aux_outputs = bool(getattr(self, "decoder_aux_outputs", False))
-        for layer in self.decoder.layers:
-            output = layer(output, memory)
-            if decoder_aux_outputs:
-                intermediate.append(output)
-        if self.decoder.norm is not None:
-            output = self.decoder.norm(output)
-            if intermediate:
-                intermediate[-1] = output
-        aux = intermediate[:-1] if decoder_aux_outputs and len(intermediate) > 1 else []
-        return output, aux
-
-    def _lane_outputs_from_hs(self, xs, hs):
-        """Project one decoder state into lane query outputs without Count Head logits."""
-        b = hs.shape[0]
-        point_dims = int(getattr(self, "point_dims", 2))
-        point_delta = self.point_mlp(hs).view(b, self.num_queries, self.num_points, point_dims)
-        point_ref = getattr(self, "point_reference_logits", None)
-        point_mode = getattr(self, "point_mode", "free")
-        if point_mode == "fixed_y":
-            if point_ref is None:
-                x_logits = point_delta.squeeze(-1)
-            else:
-                point_ref = point_ref.to(device=point_delta.device, dtype=point_delta.dtype).unsqueeze(0)
-                x_logits = point_delta.squeeze(-1) + point_ref
-            fixed_y = getattr(self, "fixed_y_anchors", None)
-            if fixed_y is None:
-                fixed_y = self._build_fixed_y_anchors()
-            x_logits = self._refine_fixed_y_logits(xs, hs, x_logits, fixed_y)
-            pred_x = torch.sigmoid(x_logits)
-            y = fixed_y.to(device=pred_x.device, dtype=pred_x.dtype).view(1, 1, self.num_points)
-            pred_y = y.expand(b, self.num_queries, -1)
-            pred_points = torch.stack((pred_x, pred_y), dim=-1)
-        elif point_ref is None:
-            pred_points = torch.sigmoid(point_delta)
-        else:
-            point_ref = point_ref.to(device=point_delta.device, dtype=point_delta.dtype).unsqueeze(0)
-            pred_points = torch.sigmoid(point_delta + point_ref)
-
-        pred_logits = self.exist_mlp(hs).squeeze(-1)
-        if hasattr(self, "point_valid_mlp"):
-            if point_mode == "fixed_y" and hasattr(self, "point_valid_refine_mlp"):
-                pred_valid_logits = self._refine_fixed_y_valid_logits(xs, hs, pred_points)
-            else:
-                pred_valid_logits = self.point_valid_mlp(hs).view(b, self.num_queries, self.num_points)
-        else:
-            pred_valid_logits = pred_logits.new_full((b, self.num_queries, self.num_points), 20.0)
-
-        count_quality_hs = self._count_quality_tokens(hs)
-        if hasattr(self, "quality_mlp"):
-            pred_quality_logits = self.quality_mlp(count_quality_hs).squeeze(-1)
-        else:
-            pred_quality_logits = pred_logits.new_zeros((b, self.num_queries))
-        out = {
-            "pred_points": pred_points,
-            "pred_logits": pred_logits,
-            "pred_valid_logits": pred_valid_logits,
-            "pred_quality_logits": pred_quality_logits,
-        }
-        if hasattr(self, "survival_mlp"):
-            out["pred_survival_logits"] = self.survival_mlp(hs).squeeze(-1)
-        return out, count_quality_hs
+    def aux_output_size(self, orig_size=None):
+        """Return auxiliary supervision size from the explicit original input image size."""
+        if orig_size is not None:
+            return tuple(int(v) for v in orig_size)
+        raise ValueError("GCSLaneHead requires orig_size=(H, W) for auxiliary mask/edge outputs.")
 
     def profile_flops(self, xs):
         """Estimate inference GFLOPs for the query decoder and prediction MLPs."""
@@ -1140,7 +448,6 @@ class GCSLaneHead(nn.Module):
         refine_mlp_macs = b * q * k * ((2 * d) * d + d)
         valid_refine_mlp_macs = b * q * k * ((2 * d) * d + d)
         exist_mlp_macs = b * q * (d * d + d)
-        quality_mlp_macs = b * q * (d * d + d)
         return (
             2.0
             * (
@@ -1152,7 +459,6 @@ class GCSLaneHead(nn.Module):
                 + refine_mlp_macs
                 + valid_refine_mlp_macs
                 + exist_mlp_macs
-                + quality_mlp_macs
             )
             / 1e9
         )
@@ -1199,48 +505,74 @@ class GCSLaneHead(nn.Module):
 
     def forward(self, xs, orig_size=None):
         """Predict normalized lane point sequences and existence logits."""
-        b = xs[0].shape[0]
+        p2, _, _, _ = xs
+        b = p2.shape[0]
 
         memory = self.flatten_features(xs)
         query = self.query_embed.weight.unsqueeze(0).expand(b, -1, -1)
-        hs, aux_hs = self._run_decoder(query, memory)
-        out, count_quality_hs = self._lane_outputs_from_hs(xs, hs)
-        if hasattr(self, "count_head"):
-            # Count CE trains only the Count Head; shared lane features and candidate branches keep their own losses.
-            survival_head_enabled = bool(getattr(self, "survival_head_enabled", False))
-            count_quality_logits = None if survival_head_enabled else out["pred_quality_logits"].detach()
-            pred_count_logits, pred_count_boundary_logits = self.count_head.forward_with_boundary(
-                [x.detach() for x in xs],
-                count_quality_hs.detach(),
-                pred_logits=out["pred_logits"].detach(),
-                pred_valid_logits=out["pred_valid_logits"].detach(),
-                pred_points=out["pred_points"].detach(),
-                pred_quality_logits=count_quality_logits,
+        hs = self.decoder(tgt=query, memory=memory)
+
+        point_dims = int(getattr(self, "point_dims", 2))
+        point_delta = self.point_mlp(hs).view(b, self.num_queries, self.num_points, point_dims)
+        point_ref = getattr(self, "point_reference_logits", None)
+        point_mode = getattr(self, "point_mode", "free")
+        if point_mode == "fixed_y":
+            if point_ref is None:
+                x_logits = point_delta.squeeze(-1)
+            else:
+                point_ref = point_ref.to(device=point_delta.device, dtype=point_delta.dtype).unsqueeze(0)
+                x_logits = point_delta.squeeze(-1) + point_ref
+            fixed_y = getattr(self, "fixed_y_anchors", None)
+            if fixed_y is None:
+                fixed_y = self._build_fixed_y_anchors()
+            x_logits = self._refine_fixed_y_logits(xs, hs, x_logits, fixed_y)
+            pred_x = torch.sigmoid(x_logits)
+            y = fixed_y.to(device=pred_x.device, dtype=pred_x.dtype).view(1, 1, self.num_points)
+            pred_y = y.expand(b, self.num_queries, -1)
+            pred_points = torch.stack((pred_x, pred_y), dim=-1)
+        elif point_ref is None:
+            # Backward compatibility for checkpoints created before query-specific references existed.
+            pred_points = torch.sigmoid(point_delta)
+        else:
+            point_ref = point_ref.to(device=point_delta.device, dtype=point_delta.dtype).unsqueeze(0)
+            pred_points = torch.sigmoid(point_delta + point_ref)
+        pred_logits = self.exist_mlp(hs).squeeze(-1)
+        if hasattr(self, "point_valid_mlp"):
+            if point_mode == "fixed_y" and hasattr(self, "point_valid_refine_mlp"):
+                pred_valid_logits = self._refine_fixed_y_valid_logits(xs, hs, pred_points)
+            else:
+                pred_valid_logits = self.point_valid_mlp(hs).view(b, self.num_queries, self.num_points)
+        else:
+            pred_valid_logits = pred_logits.new_full((b, self.num_queries, self.num_points), 20.0)
+
+        out = {
+            "pred_points": pred_points,
+            "pred_logits": pred_logits,
+            "pred_valid_logits": pred_valid_logits,
+        }
+
+        if self.aux and (self.training or self.return_aux):
+            aux_size = self.aux_output_size(orig_size=orig_size)
+            aux_mask_logits = self.aux_mask(p2)
+            aux_mask_logits = F.interpolate(
+                aux_mask_logits,
+                size=aux_size,
+                mode="bilinear",
+                align_corners=False,
             )
-            out["pred_count_logits"] = pred_count_logits
-            out["pred_count_boundary_logits"] = pred_count_boundary_logits
-        if aux_hs:
-            out["aux_outputs"] = [self._lane_outputs_from_hs(xs, aux)[0] for aux in aux_hs]
+
+            aux_edge_logits = self.aux_edge(p2)
+            aux_edge_logits = F.interpolate(
+                aux_edge_logits,
+                size=aux_size,
+                mode="bilinear",
+                align_corners=False,
+            )
+
+            out["aux_mask_logits"] = aux_mask_logits
+            out["aux_edge_logits"] = aux_edge_logits
 
         return out
-
-
-class LaneFeatureProjection(nn.Module):
-    """Projection-only P2-P5 adapter for Lane-BiFPN ablations."""
-
-    def __init__(self, channels, out_channels=128):
-        """Project each P2-P5 input to a common channel count without cross-scale fusion."""
-        super().__init__()
-        if len(channels) != 4:
-            raise ValueError(f"LaneFeatureProjection expects 4 input channel values for P2-P5, got {channels}.")
-
-        self.projections = nn.ModuleList(ConvBNAct(c, out_channels, k=1, p=0) for c in channels)
-
-    def forward(self, xs):
-        """Return independently projected P2-P5 features."""
-        if len(xs) != 4:
-            raise ValueError(f"LaneFeatureProjection expects [P2, P3, P4, P5], got {len(xs)} feature maps.")
-        return [proj(x) for proj, x in zip(self.projections, xs)]
 
 
 class LaneBiFPN(nn.Module):

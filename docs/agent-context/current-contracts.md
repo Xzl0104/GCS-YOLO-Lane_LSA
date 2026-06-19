@@ -1,6 +1,17 @@
 # Current Contracts
 
-This file records active GCS-YOLO-Lane contracts. It is the first reference for current behavior.
+This file records the active contracts for branch `codex/5-25-3-k56`.
+
+## Branch Scope
+
+This branch imports the historical `5-25-3.zip` algorithm and changes only the TuSimple fixed-y contract:
+
+```text
+legacy archive: Q=8, K=32, fixed_y=[0.98, 0.25]
+this branch:    Q=12, K=56, fixed_y=[710/720, 160/720]
+```
+
+Do not silently import later mainline mechanisms such as Count Head, Count Boundary, Quality Head, Survival Head, near-miss mining, or official-best checkpoint preservation into this branch unless a future task explicitly asks for that algorithm change.
 
 ## Input Contract
 
@@ -17,68 +28,35 @@ This is H,W order. Do not reverse it.
 Default data YAML:
 
 ```text
-data/tusimple_gcs_fixed_y_960x544.yaml
+data/tusimple_gcs_fixed_y_k56_960x544.yaml
 ```
 
 Default data root:
 
 ```text
-datasets/tusimple_fixed_y_960x544
-```
-
-The test split must not participate in training split rebuilds, threshold search, checkpoint selection, or postprocess tuning.
-
-Active experimental K56 data YAML:
-
-```text
-data/tusimple_gcs_fixed_y_k56_960x544.yaml
-```
-
-Active experimental K56 data root:
-
-```text
 datasets/tusimple_fixed_y_k56_960x544
 ```
 
-The K56 dataset must be rebuilt from original TuSimple JSON and images. Do not resample existing K32 labels into K56 labels.
+The K56 dataset must be rebuilt from original TuSimple JSON and images, not resampled from historical K32 labels.
 
 ## Model Contract
 
 Default model:
 
 ```text
-ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12.yaml
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml
 ```
 
-Legacy Q=8 config is retained for historical reproduction, ablation, or controlled experimental candidates.
-
-Active K56 experimental model variants are explicit and not mainline promotions:
+Branch aliases also use the same K56 fixed-y contract:
 
 ```text
-ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml
-ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-dec4.yaml
-ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-bifpn192.yaml
-ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-bifpn256.yaml
-ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-cqcalib.yaml
-ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-dec4-cqcalib.yaml
-ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-strip-p23.yaml
-ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-dec4-bifpn256-cqcalib-strip-p23.yaml
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-fixed-y.yaml
 ```
 
-All K56 variants keep `Q=12`, `K=56`, fixed-y anchors `710/720 -> 160/720`, and `--imgsz 544 960`. They differ only in the named architecture candidate.
+All branch configs keep `Q=12`, `K=56`, fixed-y anchors `710/720 -> 160/720`, and `--imgsz 544 960`.
 
 ## Label Contract
-
-Current label mode:
-
-```text
-point_mode = fixed_y
-fixed_y_start = 710 / 720 = 0.9861111111111112
-fixed_y_end = 0.25
-K = 32
-```
-
-Active experimental K56 label mode:
 
 ```text
 point_mode = fixed_y
@@ -102,186 +80,46 @@ raw_file
 image_shape
 ```
 
-Do not silently mix old `0.98` fixed-y labels with current `710/720` labels.
+Do not mix old `0.98`/K32 fixed-y labels with this branch.
 
 ## Output Contract
 
-The model output must include:
+This 5-25-3 branch model output must include:
 
 ```text
 pred_points: B x Q x K x 2
 pred_logits: B x Q
 pred_valid_logits: B x Q x K
-pred_quality_logits: B x Q
-pred_count_logits: B x 4
-pred_count_boundary_logits: B x 2
+aux_mask_logits: B x 2 x H x W
+aux_edge_logits: B x 1 x H x W
 ```
 
-`pred_count_logits` is the image-level Count Head for classes count=2/3/4/5. `pred_quality_logits` is lane-level quality for training, diagnostics, and gated rescue behavior.
-`pred_count_boundary_logits` is the count>=4/count>=5 boundary calibration sub-head used by the default Count Head loss/decode path.
-
-The candidate-aware Count Head uses the same short-lane visibility semantics as decode when building count evidence:
+With the default K56 model this means:
 
 ```text
-visible_lane_quality = exist_score * visible_segment_mean_valid * visible_support_score
-visible_support_score = min(1, visible_segment_points / 12)
+pred_points: B x 12 x 56 x 2
+pred_logits: B x 12
+pred_valid_logits: B x 12 x 56
 ```
-
-`visible_segment_mean_valid` is computed on the longest contiguous segment with point-valid probability at least `0.5`. This visible-lane quality drives Count Head top-query selection and top4/top5 cardinality evidence so short but reliable TuSimple edge lanes are not structurally suppressed by the all-anchor mean. The all-anchor point-valid mean remains available as an auxiliary aggregate feature; it must not be used as the primary fifth-lane evidence.
 
 ## Loss Contract
 
-Default mainline loss items:
+Default logged loss items on this branch:
 
 ```text
 exist_loss
 point_loss
 point_valid_loss
-line_iou_loss
-count_cls_loss
-count_sum_loss
-quality_loss
+smooth_loss
+curve_loss
+mask_loss
+edge_loss
+count_loss
+count_under5_loss
 ```
 
-Training, validation, and CSV loss logging should keep these items explicit.
+## Decode And Evaluation Contract
 
-## Mainline Count And Quality Defaults
+Decode must use real query predictions only, must not use GT during inference, and must not fabricate lanes. Final output should be sorted from left to right by bottom visible x.
 
-Current conservative count-generalization defaults:
-
-```text
-gcs_count_sum = 0.03
-gcs_quality = 0.4
-gcs_quality_neg_weight = 0.5
-gcs_quality_point_weight = 0.5
-gcs_count_cls_w2/w3/w4/w5 = 0.5/1.2/1.4/1.8
-gcs_count_boundary_gt5_pos_weight = 1.15
-gcs_point_valid_gt5_pos_weight = 2.0
-gcs_gt5_edge_loss_weight = 1.15
-gcs_candidate_gt5_edge_weight = 1.10
-gcs_point_valid_gt5_edge_continuity = 0.05
-gcs_point_valid_gt5_edge_continuity_thr = 0.55
-gcs_gt5_oversample_weight = 1.0
-gcs_group_sampler_ratios = 2:0.01,3:0.29,4:0.42,5:0.28
-```
-
-The GT5 candidate-quality knobs above are training-side only. They strengthen real matched query supervision inside the existing 7 loss items:
-
-- `gcs_count_boundary_gt5_pos_weight` weights the Count Boundary `count>=5` positive target inside `count_cls_loss`.
-- `gcs_candidate_gt5_edge_weight` weights matched left/right GT5 edge queries/lanes inside `exist_loss`, `point_loss`, `point_valid_loss`, `line_iou_loss`, and `quality_loss`; it is matched edge-query/lane weighting, not per-anchor positive-target-only weighting.
-- `gcs_point_valid_gt5_edge_continuity` adds a small adjacent-anchor continuity penalty inside `point_valid_loss`.
-- `gcs_hard_edge_loss_terms` defaults to `exist,point,point_valid,line_iou`. `quality` is also a supported explicit term for controlled experiments, but it is not in the default list.
-
-They do not change decode, do not use GT during inference/decode, and do not fabricate lanes.
-
-`gcs_soft_count_decision`, `gcs_last_lane_rescue`, and `gcs_edge_last_lane_rescue` remain default-off unless selected by official-val evidence.
-
-Current default-preserving/default-off training-side experimental knobs:
-
-```text
-gcs_count_adjacent_margin = 0.2
-gcs_count_adjacent_margin_gain = 0.0
-gcs_count_adjacent_margin_gt45_weight = 1.0
-gcs_quality_point_weight ablations = 0.8 tried and rejected; 1.0 only with a new false-fifth-lane guardrail
-gcs_quality_gt5_edge_floor = 0.0
-gcs_quality_hard_negative_from_head = False
-gcs_hard_negative_visible_segment = False
-gcs_hard_negative_visible_thr = 0.5
-gcs_hard_negative_visible_support_points = 12.0
-gcs_point_valid_gt5_edge_segment = 0.0
-gcs_point_valid_gt5_edge_segment_thr = 0.65
-gcs_point_valid_gt5_edge_segment_min_points = 5
-```
-
-`gcs_count_adjacent_margin_gain` enables a default-off training-side margin term inside `count_cls_loss` that pushes the GT count logit above neighboring count classes. It is intended for controlled GT3/GT4/GT5 calibration experiments and does not add a new logged loss item.
-
-`gcs_quality_point_weight` controls the matched Quality Head target blend:
-
-```text
-quality_target = gcs_quality_point_weight * point_score + (1 - gcs_quality_point_weight) * line_iou_score
-```
-
-The default `0.5` preserves existing behavior. The 2026-06-16 K56 `0.8` gate tested the official point-inlier hypothesis and is not promotable: it improved GT5 `quality_too_low` but reduced official-val Accuracy and increased GT4->5 pressure. The 2026-06-17 `qpoint08+dec4+cqcalib` follow-up is also not promotable: it lowered GT4->5 pressure but increased GT5 underprediction and reduced official-val Accuracy. Do not run `1.0` as the next gate under the same hypothesis unless a new false-fifth-lane guardrail is added. This is training-side target construction only and does not change decode, use GT during inference, fabricate lanes, or alter official metrics.
-
-`gcs_quality_gt5_edge_floor` is a default-off training-side candidate that floors matched Quality Head targets only for real left/right edge lanes in GT5 images. It is intended to test whether true short GT5 edge lanes are being assigned quality targets too low to survive quality-gated fifth-lane decode behavior.
-
-The `gcs_quality_gt5_edge_floor`, `gcs_quality_hard_negative_from_head`, `gcs_hard_negative_visible_segment*`, and `gcs_point_valid_gt5_edge_segment*` knobs are intended for controlled GT5 quality experiments. They do not change decode, read GT during inference, fabricate lanes, or alter official metrics.
-
-When `gcs_quality_hard_negative_from_head` is enabled, Quality Head hard negatives are mined from unmatched queries only. Hungarian-matched queries remain matched quality targets even when their current continuous quality target is `0.0`; they must not be reclassified as hard negatives.
-
-When `gcs_hard_negative_visible_segment` is enabled, the shared unmatched hard-negative mask uses the same longest-visible-segment support semantics as Count/decode evidence instead of the all-anchor point-valid mean. It still mines unmatched queries only; Hungarian-matched queries remain protected.
-
-These knobs remain default-off after the 2026-06-13 `gcs_yolo_lane_s_q12_gt5segq_vishn_countvis_ft12_seed1_b8w0` and `gcs_yolo_lane_s_q12_quality_gt5edgefloor_ft12_seed1_b8w0` official-val gates; neither recipe is promoted to mainline defaults.
-
-## Experimental Loss Policy
-
-The current 7-loss setup is a default baseline, not a permanent restriction.
-
-Previously removed losses or modules may be restored as controlled experimental candidates if the goal is to improve official ACC.
-
-When restoring or adding a module:
-
-- make it explicit
-- make it configurable
-- make it traceable
-- document whether it is baseline or experimental
-- do not silently mix it into the default mainline
-- define an official-val comparison plan
-
-## Decode Contract
-
-Default decode behavior:
-
-- Count Head Top-K determines the final policy K after explicit count-boundary calibration when boundary logits are present.
-- Candidate ranking must be explicit and traceable.
-- Default candidate ranking uses:
-
-```text
-rank_score = exist_score * visible_segment_mean_valid * visible_support_score
-```
-
-where `visible_segment_mean_valid` is the mean point-valid probability on the longest contiguous visible segment that passes the active visible-anchor floor, and `visible_support_score = min(1, visible_segment_points / 12)`. `mean_valid_score_all` remains diagnostic-only metadata for the all-anchor mean. This avoids structurally suppressing short but reliable TuSimple edge lanes.
-- Quality Head may be used for quality loss, diagnostics, and rescue gates.
-- Quality Head should not silently override the intended ranking policy unless that is an explicit experimental candidate.
-- Rescue may only use real query candidates.
-- Rescue must not read GT.
-- Rescue must not fabricate lanes.
-- Final output should be sorted from left to right by bottom visible x.
-
-## Evaluation Contract
-
-Default selection:
-
-```text
-official_best.pt is selected by official_acc.
-```
-
-`weights/best.pt` remains the ordinary validation-fitness checkpoint. `weights/official_best.pt` is maintained only by TuSimple official-val `official_acc`.
-
-`gcs_official_best_top_k` defaults to `1`. When set above `1`, training preserves the top-K official-val checkpoint candidates under `weights/official_topk/` and records them in `official_best_summary.json`. This is checkpoint preservation only; it does not change decode behavior, use diagnostics as selection tie-breakers, or allow test-driven selection.
-
-Diagnostic metrics include:
-
-```text
-official_score
-FP
-FN
-count_acc_3
-count_acc_4
-count_acc_5
-gt5_output5_rate
-gt5_count_head_under_rate
-gt5_valid_points_fail_rate
-candidate_pool_shortfall
-rescue_precision
-```
-
-These are diagnostics unless explicitly promoted into a controlled experimental objective.
-
-## Test Protection Contract
-
-The test set must not be used for threshold search, rescue parameter search, soft-count search, rank-min-points search, final/fifth min-points search, NMS distance search, checkpoint selection, model design iteration, or loss-weight tuning.
-
-`tools/sweep_tusimple_official.py` and `tools/diagnose_gcs_gt5.py` default to `--split val` and reject `--split test`. Training-time `official_best` selection also rejects `split=test`.
-
-Test is only for one-shot final evaluation of a candidate already selected on official-val, using `tools/eval_tusimple_official.py --split test`.
+This branch does not include later mainline official-val helper scripts such as `tools/sweep_tusimple_official.py`, `tools/diagnose_gcs_gt5.py`, or `tools/eval_tusimple_official.py`. If official TuSimple evaluation is needed, generate predictions with this branch and evaluate them from a compatible evaluation checkout, using official-val for selection and test only once for final evaluation.

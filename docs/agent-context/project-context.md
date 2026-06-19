@@ -6,35 +6,23 @@ The model is expected to output lane instances as ordered 2D point sequences, no
 
 ## Main Files
 
-- Default model: `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12.yaml`
-- Legacy Q=8 model: `ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml`
-- Data config: `data/tusimple_gcs_fixed_y_960x544.yaml`
+- Default model on this branch: `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml`
+- Legacy alias on this branch: `ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml`
+- Data config: `data/tusimple_gcs_fixed_y_k56_960x544.yaml`
 - Training entry: `tools/train_gcs.py`
 - Inference entry: `tools/infer_gcs.py`
 - Custom GCS eval: `tools/eval_gcs.py`
-- TuSimple official eval: `tools/eval_tusimple_official.py`
-- Official sweep: `tools/sweep_tusimple_official.py`
-- GT5 diagnosis: `tools/diagnose_gcs_gt5.py`
-- Loss cleanup check: `scripts/verify_loss_cleanup.py`
-- Count/decode contract check: `tools/check_gcs_count_head_topk_contract.py`
-- Decode meta check: `tools/check_gcs_decode_meta_contract.py`
-- Algorithm contract check: `tools/check_gcs_algorithm_contract.py`
+- Model shape check: `tools/check_model.py`
 
-## Current Default Direction
+## Current Branch Direction
 
-The current default line uses Q=12, fixed-y labels, Count Head with Count Boundary calibration, Quality Head, candidate-aware decode, strict official-val selection, and protected test usage.
+This branch imports the historical `5-25-3.zip` algorithm as a separate K56-compatible branch.
 
-The default line is not a research ban. Old or removed mechanisms can return as controlled experimental candidates when they are explicit, configurable, traceable, and evaluated on official-val without test leakage.
+Only the explicit TuSimple contract was changed from the legacy `Q=8/K=32/fixed_y=[0.98,0.25]` setup to the current `Q=12/K=56/fixed_y=710/720 -> 160/720` setup. The 5-25-3 algorithm body is intentionally not upgraded to the later Count Head, Count Boundary, Quality Head, Survival Head, or near-miss machinery.
 
 ## Data Summary
 
-Current TuSimple fixed-y data root:
-
-```text
-datasets/tusimple_fixed_y_960x544
-```
-
-Active experimental K56 TuSimple data root:
+Current TuSimple fixed-y data root on this branch:
 
 ```text
 datasets/tusimple_fixed_y_k56_960x544
@@ -50,9 +38,9 @@ test:  2782
 
 The official-val subset is aligned with the current validation split and must stay separate from test-driven tuning.
 
-The K56 experimental labels keep the same split sizes and align fixed-y anchors exactly to TuSimple official h-samples `710..160` at step `10`.
+The K56 labels keep the same split sizes and align fixed-y anchors exactly to TuSimple official h-samples `710..160` at step `10`.
 
-Official TuSimple Accuracy evaluation needs the original TuSimple archive layout, not only the fixed-y converted dataset.
+Official TuSimple Accuracy evaluation needs the original TuSimple archive layout, not only the fixed-y converted dataset. This 5-25-3 branch does not include the later mainline official evaluation helpers, so generate predictions with this branch and run official-val evaluation from a compatible evaluation checkout when needed.
 
 Required test archive shape:
 
@@ -62,8 +50,8 @@ archive/TUSimple/test_set/clips/<date>/<clip>/<frame>.jpg
 archive/TUSimple/train_set/
 ```
 
-`tools/eval_tusimple_official.py --split test` resolves `raw_file` entries from `test_label.json` against this archive root. A minimal test-only archive may include only the 2,782 images referenced by `test_label.json`; it does not need the full TuSimple `test_set/clips` frame dump for final test evaluation.
+A minimal test-only archive may include only the 2,782 images referenced by `test_label.json`; it does not need the full TuSimple `test_set/clips` frame dump for final test evaluation.
 
 ## Collaboration Model
 
-Project Agents and Skills are configured under `.codex/` and `.agents/skills/`. Use read-only Agents for exploration, review, experiment analysis, documentation research, and security review. Use only one writable Agent in the main worktree unless separate worktrees and disjoint ownership are explicit.
+This branch is a source import of `5-25-3.zip`; the zip did not include project `.codex/`, `.agents/`, `scripts/`, or `tests/` directories. Use the current Codex runtime tools for any multi-agent review, and keep write ownership in the main worktree unless separate worktrees and disjoint ownership are explicit.

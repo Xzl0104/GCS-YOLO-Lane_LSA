@@ -19,7 +19,7 @@ from gcs_tools.tusimple_utils import tusimple_group_id
 from ultralytics.utils.gcs_shape import DATASET_IMAGE_SHAPES, normalize_imgsz, shape_str
 
 
-REQUIRED_KEYS = ("lanes", "lane_valid", "num_lanes")
+REQUIRED_KEYS = ("semantic_mask", "edge_mask", "lanes", "lane_valid", "num_lanes")
 
 
 def parse_args() -> argparse.Namespace:
@@ -92,6 +92,8 @@ def check_label(
         lanes = data["lanes"]
         lane_valid = data["lane_valid"]
         num_lanes = data["num_lanes"]
+        semantic_mask = data["semantic_mask"]
+        edge_mask = data["edge_mask"]
         raw_file = _array_scalar_str(data["raw_file"]) if "raw_file" in data else ""
         image_shape = tuple(int(x) for x in data["image_shape"].reshape(-1)) if "image_shape" in data else None
         point_mode = _array_scalar_str(data["point_mode"]).lower() if "point_mode" in data else "free"
@@ -103,6 +105,10 @@ def check_label(
     bad_order: list[dict[str, Any]] = []
     img_h, img_w = expected_imgsz
 
+    if semantic_mask.shape != (img_h, img_w):
+        errors.append(f"semantic_mask shape {semantic_mask.shape} != {(img_h, img_w)}")
+    if edge_mask.shape != (img_h, img_w):
+        errors.append(f"edge_mask shape {edge_mask.shape} != {(img_h, img_w)}")
     if image_shape is not None and image_shape != (img_h, img_w):
         errors.append(f"image_shape {image_shape} != {(img_h, img_w)}")
     if lanes.ndim != 3 or lanes.shape[-1] != 2:

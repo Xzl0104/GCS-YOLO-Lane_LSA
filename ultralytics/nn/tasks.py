@@ -56,8 +56,6 @@ from ultralytics.nn.modules import (
     HGStem,
     ImagePoolingAttn,
     Index,
-    LaneStripPyramidAttention,
-    LaneFeatureProjection,
     LaneBiFPN,
     LRPCHead,
     LSEM,
@@ -1862,19 +1860,6 @@ def parse_model(d, ch, verbose=True):
             out_channels = args[0] if args else 128
             args = [c1, out_channels, *args[1:]]
             c2 = [out_channels, out_channels, out_channels, out_channels]
-        elif m is LaneStripPyramidAttention:
-            c1 = ch[f] if isinstance(f, int) else [ch[x] for x in f]
-            if not isinstance(c1, (list, tuple)) or len(c1) != 4:
-                raise ValueError(f"LaneStripPyramidAttention expects four P2-P5 channel values, got {c1}.")
-            if any(c != c1[0] for c in c1):
-                raise ValueError(f"LaneStripPyramidAttention expects equal P2-P5 channels, got {c1}.")
-            args = [c1[0], *args]
-            c2 = [c1[0], c1[0], c1[0], c1[0]]
-        elif m is LaneFeatureProjection:
-            c1 = [ch[x] for x in f]
-            out_channels = args[0] if args else 128
-            args = [c1, out_channels, *args[1:]]
-            c2 = [out_channels, out_channels, out_channels, out_channels]
         elif m is GCSLaneHead:
             c1 = ch[f] if isinstance(f, int) else [ch[x] for x in f]
             args = [c1, *args]
@@ -1933,7 +1918,7 @@ def guess_model_scale(model_path):
     if match:
         return match.group(2)
 
-    # Custom model names such as gcs-yolo-lane-s-q12-k56.yaml still encode the scale as a suffix.
+    # Custom model names such as gcs-yolo-lane-s.yaml still encode the scale as a suffix.
     match = re.search(r"(?:^|[-_])([nslmx])(?:[-_]|$)", stem)
     return match.group(1) if match else ""
 

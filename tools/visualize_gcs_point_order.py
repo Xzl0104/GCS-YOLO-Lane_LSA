@@ -17,7 +17,6 @@ os.chdir(ROOT)
 
 from tools.infer_gcs import load_gcs_model, preprocess_image
 from ultralytics.utils.gcs_shape import DATASET_IMAGE_SHAPES, normalize_imgsz, shape_str
-from ultralytics.utils.gcs_postprocess import GCS_DEFAULT_MAX_DET, decode_gcs_predictions
 from ultralytics.utils.torch_utils import select_device
 
 
@@ -48,9 +47,7 @@ def parse_args() -> argparse.Namespace:
         help="GCS input shape as H W. Defaults to the dataset preset.",
     )
     parser.add_argument("--conf", type=float, default=0.2, help="Existence confidence threshold for raw predictions.")
-    parser.add_argument("--point-valid-thr", type=float, default=0.5, help="Per-point visibility threshold for rank-score ordering.")
-    parser.add_argument("--min-points", type=int, default=6, help="Minimum visible anchors required before drawing a prediction.")
-    parser.add_argument("--max-det", type=int, default=GCS_DEFAULT_MAX_DET, help="Maximum raw prediction lanes to draw.")
+    parser.add_argument("--max-det", type=int, default=8, help="Maximum raw prediction lanes to draw.")
     parser.add_argument("--max-images", type=int, default=20, help="Maximum images to visualize.")
     parser.add_argument("--device", default="cpu", help="Inference device.")
     parser.add_argument("--half", action="store_true", help="Use FP16 on CUDA.")
@@ -146,8 +143,6 @@ def predict_raw_lanes(
     device: torch.device,
     half: bool,
     conf: float,
-    point_valid_thr: float,
-    min_points: int,
     max_det: int,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[dict]]:
     tensor = preprocess_image(image, imgsz=imgsz, device=device, half=half)
@@ -157,42 +152,11 @@ def predict_raw_lanes(
 
     points = preds["pred_points"][0].detach().float().cpu().clamp(0.0, 1.0)
     logits = preds["pred_logits"][0].detach().float().cpu()
-    pred_valid_logits = preds.get("pred_valid_logits")
-    pred_valid_logits = pred_valid_logits[0].detach().float().cpu() if pred_valid_logits is not None else None
-    pred_count_logits = preds.get("pred_count_logits")
-    pred_count_logits = pred_count_logits[0].detach().float().cpu() if pred_count_logits is not None else None
-    pred_count_boundary_logits = preds.get("pred_count_boundary_logits")
-    pred_count_boundary_logits = (
-        pred_count_boundary_logits[0].detach().float().cpu() if pred_count_boundary_logits is not None else None
-    )
-    pred_quality_logits = preds.get("pred_quality_logits")
-    pred_quality_logits = pred_quality_logits[0].detach().float().cpu() if pred_quality_logits is not None else None
-    pred_survival_logits = preds.get("pred_survival_logits")
-    pred_survival_logits = (
-        pred_survival_logits[0].detach().float().cpu() if pred_survival_logits is not None else None
-    )
     if logits.ndim == 2 and logits.shape[-1] == 1:
         logits = logits.squeeze(-1)
     scores = logits.sigmoid()
-    decoded = decode_gcs_predictions(
-        points,
-        logits,
-        pred_valid_logits=pred_valid_logits,
-        pred_count_logits=pred_count_logits,
-        pred_count_boundary_logits=pred_count_boundary_logits,
-        pred_quality_logits=pred_quality_logits,
-        pred_survival_logits=pred_survival_logits,
-        image_shape=image.shape[:2],
-        score_thr=conf,
-        point_valid_thr=point_valid_thr,
-        min_points=min_points,
-        max_det=max_det,
-        nms_dist_px=18.0,
-        candidate_score_thr=conf,
-        candidate_point_valid_thr=point_valid_thr,
-        line_nms_min_overlap=6,
-    )
-    if not decoded:
+    keep = torch.nonzero(scores >= float(conf), as_tuple=False).flatten()
+    if keep.numel() == 0:
         return (
             np.zeros((0, points.shape[1], 2), dtype=np.float32),
             np.zeros((0,), dtype=np.float32),
@@ -200,9 +164,11 @@ def predict_raw_lanes(
             [],
         )
 
-    order = torch.tensor([int(lane["query"]) for lane in decoded], dtype=torch.long)
+    order = keep[torch.argsort(scores[keep], descending=True)]
+    if max_det and max_det > 0:
+        order = order[: int(max_det)]
     kept_points = points[order].numpy().astype(np.float32)
-    kept_scores = np.asarray([float(lane.get("rank_score", lane["score"])) for lane in decoded], dtype=np.float32)
+    kept_scores = scores[order].numpy().astype(np.float32)
     kept_queries = order.numpy().astype(np.int64)
 
     monotonic = []
@@ -258,8 +224,6 @@ def main() -> None:
                 device=device,
                 half=args.half,
                 conf=args.conf,
-                point_valid_thr=args.point_valid_thr,
-                min_points=args.min_points,
                 max_det=args.max_det,
             )
             pred_count = int(pred_lanes.shape[0])

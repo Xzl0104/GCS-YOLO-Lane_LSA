@@ -5,8 +5,6 @@ import csv
 from pathlib import Path
 import yaml
 
-from ultralytics.utils.gcs_loss import GCSLoss
-
 
 MAX_METRICS = {"val/precision", "val/recall", "val/f1"}
 
@@ -51,18 +49,26 @@ def trend(rows: list[dict[str, float]], key: str, window: int) -> float:
 
 
 def print_metric_summary(rows: list[dict[str, float]]) -> None:
-    keys = (
-        [f"train/{name}" for name in GCSLoss.loss_names]
-        + [f"val/{name}" for name in GCSLoss.loss_names]
-        + [
-            "val/precision",
-            "val/recall",
-            "val/f1",
-            "val/ape_mean_px",
-            "val/lane_count_mae",
-            "val/total_loss",
-        ]
-    )
+    keys = [
+        "train/exist_loss",
+        "train/point_loss",
+        "train/point_valid_loss",
+        "train/curve_loss",
+        "train/count_loss",
+        "train/count_under5_loss",
+        "val/exist_loss",
+        "val/point_loss",
+        "val/point_valid_loss",
+        "val/curve_loss",
+        "val/count_loss",
+        "val/count_under5_loss",
+        "val/precision",
+        "val/recall",
+        "val/f1",
+        "val/ape_mean_px",
+        "val/lane_count_mae",
+        "val/total_loss",
+    ]
     print("Metric Summary")
     for key in keys:
         if key not in rows[0]:
@@ -92,7 +98,7 @@ def print_diagnosis(rows: list[dict[str, float]], late_window: int, gains: dict[
             print("- Mean APE is still above 20px, so geometry is the main bottleneck.")
 
     if "val/exist_loss" in last and "val/point_loss" in last:
-        exist_contrib = last["val/exist_loss"] * gains.get("exist", 0.5)
+        exist_contrib = last["val/exist_loss"] * gains.get("exist", 2.0)
         point_contrib = last["val/point_loss"] * gains.get("point", 15.0)
         if exist_contrib > point_contrib:
             print("- Existence calibration contributes more loss than point geometry; lower gcs_exist/pos_weight or tune conf.")
@@ -119,8 +125,6 @@ def print_late_rows(rows: list[dict[str, float]], count: int) -> None:
             f"exist={row.get('val/exist_loss', 0.0):.4f}",
             f"point={row.get('val/point_loss', 0.0):.4f}",
             f"pvalid={row.get('val/point_valid_loss', 0.0):.4f}",
-            f"line_iou={row.get('val/line_iou_loss', 0.0):.4f}",
-            f"quality={row.get('val/quality_loss', 0.0):.4f}",
             f"ape={row.get('val/ape_mean_px', 0.0):.2f}",
             f"count={row.get('val/lane_count_mae', 0.0):.3f}",
         ]
@@ -130,12 +134,15 @@ def print_late_rows(rows: list[dict[str, float]], count: int) -> None:
 def load_loss_gains(csv_path: Path, args_yaml: str | None) -> dict[str, float]:
     """Load loss gains from args.yaml, falling back to current training defaults."""
     gains = {
-        "exist": 1.0,
-        "point": 5.0,
-        "point_valid": 0.5,
-        "line_iou": 0.3,
-        "count_cls": 0.3,
-        "quality": 0.3,
+        "exist": 2.0,
+        "point": 15.0,
+        "point_valid": 1.0,
+        "smooth": 0.05,
+        "curve": 0.1,
+        "mask": 0.2,
+        "edge": 0.2,
+        "count": 0.0,
+        "count_under5": 0.0,
     }
     path = Path(args_yaml) if args_yaml else csv_path.with_name("args.yaml")
     if not path.exists():
@@ -145,18 +152,15 @@ def load_loss_gains(csv_path: Path, args_yaml: str | None) -> dict[str, float]:
         "exist": "gcs_exist",
         "point": "gcs_point",
         "point_valid": "gcs_point_valid",
-        "line_iou": "gcs_line_iou",
-        "count_cls": "gcs_count_cls",
-        "quality": "gcs_quality",
+        "smooth": "gcs_smooth",
+        "curve": "gcs_curve",
+        "mask": "gcs_mask",
+        "edge": "gcs_edge",
+        "count": "gcs_count",
+        "count_under5": "gcs_count_under5",
     }
     for key, arg_name in mapping.items():
-        if isinstance(arg_name, tuple):
-            primary, legacy = arg_name
-            if primary in args:
-                gains[key] = float(args[primary])
-            elif legacy in args:
-                gains[key] = float(args[legacy])
-        elif arg_name in args:
+        if arg_name in args:
             gains[key] = float(args[arg_name])
     return gains
 

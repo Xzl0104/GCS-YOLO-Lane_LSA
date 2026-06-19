@@ -15,7 +15,7 @@ if str(ROOT) not in sys.path:
 os.chdir(ROOT)
 
 
-REQUIRED_KEYS = ("lanes", "lane_valid", "num_lanes")
+REQUIRED_KEYS = ("semantic_mask", "edge_mask", "lanes", "lane_valid", "num_lanes")
 
 
 def parse_args() -> argparse.Namespace:
@@ -77,6 +77,14 @@ def draw_lanes(img: np.ndarray, lanes: np.ndarray, lane_valid: np.ndarray) -> np
     return out
 
 
+def colorize_mask(mask: np.ndarray, color: tuple[int, int, int]) -> np.ndarray:
+    """Convert a binary mask to a colored BGR panel."""
+    binary = (mask > 0).astype(np.uint8)
+    panel = np.zeros((*binary.shape, 3), dtype=np.uint8)
+    panel[binary > 0] = color
+    return panel
+
+
 def main() -> None:
     args = parse_args()
     dataset_root = ROOT / args.dataset_root if not Path(args.dataset_root).is_absolute() else Path(args.dataset_root)
@@ -100,7 +108,9 @@ def main() -> None:
             continue
         data = load_label(label_path)
         lane_img = draw_lanes(img, data["lanes"], data["lane_valid"])
-        canvas = np.concatenate([img, lane_img], axis=1)
+        mask_vis = colorize_mask(data["semantic_mask"], (0, 220, 0))
+        edge_vis = colorize_mask(data["edge_mask"], (0, 220, 255))
+        canvas = np.concatenate([img, lane_img, mask_vis, edge_vis], axis=1)
         cv2.imwrite(str(save_dir / f"{image_path.stem}.jpg"), canvas)
         written += 1
 

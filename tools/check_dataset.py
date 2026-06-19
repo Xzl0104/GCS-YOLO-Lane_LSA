@@ -95,6 +95,8 @@ def main() -> None:
     print(f"input shape: {shape_str(imgsz)} (W x H), stored as H,W={imgsz}")
     print(f"lane_count_hist: {label_lane_histogram(label_dir)}")
     print("img:", tuple(batch["img"].shape), batch["img"].dtype)
+    print("semantic_mask:", tuple(batch["semantic_mask"].shape), batch["semantic_mask"].dtype)
+    print("edge_mask:", tuple(batch["edge_mask"].shape), batch["edge_mask"].dtype)
     print("num_lanes:", batch["num_lanes"].tolist())
     print("lanes[0]:", tuple(batch["lanes"][0].shape))
     print("lane_valid[0]:", tuple(batch["lane_valid"][0].shape))

@@ -23,7 +23,6 @@ from ultralytics.models.yolo.gcs_lane.train import GCSLaneTrainer
 from tools.eval_gcs import match_lanes
 from tools.infer_gcs import run_inference
 from ultralytics.utils.gcs_shape import DATASET_IMAGE_SHAPES, normalize_imgsz, shape_str, trainer_imgsz
-from ultralytics.utils.gcs_postprocess import GCS_DEFAULT_MAX_DET
 
 
 DEFAULT_MODEL = ROOT / "ultralytics" / "cfg" / "models" / "gcs" / "gcs-yolo-lane-s-q12-k56.yaml"
@@ -31,13 +30,15 @@ DEFAULT_DATA = ROOT / "data" / "tusimple_gcs_fixed_y_k56_960x544.yaml"
 DEFAULT_TRAIN_IMAGES = ROOT / "datasets" / "tusimple_fixed_y_k56_960x544" / "images" / "train"
 DEFAULT_TRAIN_LABELS = ROOT / "datasets" / "tusimple_fixed_y_k56_960x544" / "labels_gcs" / "train"
 DEFAULT_LOSS_GAINS = {
-    "exist_loss": 1.0,
-    "point_loss": 5.0,
-    "point_valid_loss": 0.5,
-    "line_iou_loss": 0.3,
-    "count_cls_loss": 0.3,
-    "count_sum_loss": 0.02,
-    "quality_loss": 0.3,
+    "exist_loss": 2.0,
+    "point_loss": 15.0,
+    "point_valid_loss": 1.0,
+    "smooth_loss": 0.05,
+    "curve_loss": 0.1,
+    "mask_loss": 0.2,
+    "edge_loss": 0.2,
+    "count_loss": 0.0,
+    "count_under5_loss": 0.0,
 }
 
 
@@ -92,63 +93,36 @@ def parse_args() -> argparse.Namespace:
         "--mosaic",
         type=float,
         default=0.0,
-        help="Mosaic probability for the overfit check. Default stays 0.0 so mosaic GT lanes do not exceed the query budget.",
+        help="Mosaic probability for the overfit check. Default stays 0.0 so GT lanes do not exceed 8 queries.",
     )
-    parser.add_argument("--gcs-exist", type=float, default=1.0, help="Overfit gain for quality-aware lane existence loss.")
-    parser.add_argument("--gcs-point", type=float, default=5.0, help="Overfit gain for structured point loss.")
-    parser.add_argument("--gcs-point-valid", type=float, default=0.5, help="Overfit gain for per-point visibility loss.")
+    parser.add_argument("--gcs-exist", type=float, default=2.0, help="Overfit gain for lane existence loss.")
+    parser.add_argument("--gcs-point", type=float, default=15.0, help="Overfit gain for structured point loss.")
+    parser.add_argument("--gcs-point-valid", type=float, default=1.0, help="Overfit gain for per-point visibility loss.")
+    parser.add_argument("--gcs-smooth", type=float, default=0.05, help="Overfit gain for smoothness regularization.")
+    parser.add_argument("--gcs-curve", type=float, default=0.1, help="Overfit gain for curvature-aware loss.")
+    parser.add_argument("--gcs-mask", type=float, default=0.2, help="Overfit gain for auxiliary semantic mask loss.")
+    parser.add_argument("--gcs-edge", type=float, default=0.2, help="Overfit gain for auxiliary edge loss.")
+    parser.add_argument("--gcs-count", type=float, default=0.0, help="Overfit gain for lane-count/cardinality loss.")
     parser.add_argument(
-        "--gcs-point-invalid-x",
+        "--gcs-count-under5",
         type=float,
-        default=0.05,
-        help="Relative pseudo-x penalty inside point loss for matched invisible anchors weighted by point-valid probability.",
-    )
-    parser.add_argument("--gcs-line-iou", type=float, default=0.3, help="Overfit gain for whole-lane LineIoU loss.")
-    parser.add_argument("--gcs-quality", type=float, default=0.3, help="Overfit gain for lane-level Quality Head loss.")
-    parser.add_argument(
-        "--gcs-quality-dist-thr-px",
-        type=float,
-        default=20.0,
-        help="Pixel inlier threshold used to build Quality Head point-inlier targets.",
+        default=0.0,
+        help="Extra undercount loss gain for samples with GT lane count >= --gcs-count-under5-min-lanes.",
     )
     parser.add_argument(
-        "--gcs-quality-neg-weight",
-        type=float,
-        default=0.25,
-        help="Unmatched-query BCE weight for Quality Head loss.",
+        "--gcs-count-under5-min-lanes",
+        type=int,
+        default=5,
+        help="Minimum GT lane count that enables the targeted undercount penalty.",
     )
-    parser.add_argument("--gcs-quality-hard-negative-weight", type=float, default=1.0)
-    parser.add_argument("--gcs-quality-duplicate-negative-weight", type=float, default=1.5)
-    parser.add_argument(
-        "--gcs-line-iou-width-px",
-        type=float,
-        default=15.0,
-        help="Half-width in pixels used to expand lane points into horizontal strips for LineIoU.",
-    )
-    parser.add_argument("--gcs-count-cls", type=float, default=0.3)
-    parser.add_argument("--gcs-count-head-warmup-epochs", type=float, default=5.0)
-    parser.add_argument("--gcs-count-min-gt-points", type=int, default=1)
-    parser.add_argument("--gcs-count-cls-w2", type=float, default=0.5)
-    parser.add_argument("--gcs-count-cls-w3", type=float, default=1.2)
-    parser.add_argument("--gcs-count-cls-w4", type=float, default=1.4)
-    parser.add_argument("--gcs-count-cls-w5", type=float, default=2.0)
     parser.add_argument("--gcs-exist-pos-weight", type=float, default=1.0, help="Positive query weight for existence BCE.")
-    parser.add_argument("--gcs-exist-focal-gamma", type=float, default=2.0, help="Quality focal gamma for existence BCE.")
+    parser.add_argument("--gcs-exist-focal-gamma", type=float, default=0.0, help="Optional focal gamma for existence BCE.")
     parser.add_argument(
         "--gcs-exist-focal-alpha",
         type=float,
         default=-1.0,
         help="Optional focal alpha for existence BCE. Use a value in [0, 1] to enable alpha weighting.",
     )
-    parser.add_argument("--gcs-hard-negative-quality-thr", type=float, default=0.5)
-    parser.add_argument("--gcs-hard-negative-topk", type=int, default=2)
-    parser.add_argument("--gcs-hard-negative-exist-weight", type=float, default=4.0)
-    parser.add_argument("--gcs-duplicate-negative-exist-weight", type=float, default=4.0)
-    parser.add_argument("--gcs-duplicate-dist-thr-px", type=float, default=25.0)
-    parser.add_argument("--gcs-duplicate-iou-thr", type=float, default=0.30)
-    parser.add_argument("--gcs-exist-margin", type=float, default=0.5, help="Relative exist probability margin loss gain.")
-    parser.add_argument("--gcs-exist-pos-margin", type=float, default=0.55)
-    parser.add_argument("--gcs-exist-neg-margin", type=float, default=0.20)
     parser.add_argument(
         "--gcs-exist-quality-alpha",
         type=float,
@@ -156,16 +130,10 @@ def parse_args() -> argparse.Namespace:
         help="Blend factor for quality-aware existence targets. Keep 1.0 so poor-geometry matches are not high-confidence lanes.",
     )
     parser.add_argument(
-        "--gcs-exist-quality-lane-iou-alpha",
-        type=float,
-        default=1.0,
-        help="Blend factor inside existence geometry quality. 1 uses LineIoU quality, 0 uses APE quality.",
-    )
-    parser.add_argument(
         "--gcs-exist-quality-mode",
         choices=("linear", "exp"),
         default="linear",
-        help="Quality target shape. linear makes APE >= neg-px a zero target; exp uses exponential APE decay.",
+        help="Quality target shape. linear makes APE >= neg-px a zero target; exp keeps the old exp(-APE/tau) behavior.",
     )
     parser.add_argument(
         "--gcs-exist-quality-tau",
@@ -188,33 +156,28 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--gcs-exist-quality-neg-px",
         type=float,
-        default=25.0,
+        default=20.0,
         help="APE at or above this value receives quality 0.0 in linear quality mode.",
     )
+    parser.add_argument("--gcs-mask-pos-weight-max", type=float, default=20.0, help="Maximum foreground weight for mask aux loss.")
     parser.add_argument(
         "--gcs-point-valid-pos-weight-max",
         type=float,
         default=10.0,
         help="Maximum positive weight for per-point visibility loss.",
     )
-    parser.add_argument("--gcs-point-valid-gt5-pos-weight", type=float, default=3.0)
-    parser.add_argument("--gcs-point-valid-unmatched-weight", type=float, default=0.35)
-    parser.add_argument("--gcs-point-valid-hard-negative-weight", type=float, default=1.25)
-    parser.add_argument("--gcs-point-valid-duplicate-negative-weight", type=float, default=1.5)
-    parser.add_argument("--gcs-point-valid-neg", type=float, default=0.25)
-    parser.add_argument("--gcs-point-valid-neg-thr", type=float, default=0.20)
+    parser.add_argument("--gcs-edge-pos-weight-max", type=float, default=50.0, help="Maximum foreground weight for edge aux loss.")
+    parser.add_argument("--gcs-aux-dice", type=float, default=0.5, help="Dice-loss gain inside mask/edge auxiliary losses.")
     parser.add_argument("--gcs-cost-point", type=float, default=5.0, help="Hungarian matching point cost weight.")
+    parser.add_argument("--gcs-cost-curve", type=float, default=0.05, help="Hungarian matching pixel-curvature cost weight.")
     parser.add_argument("--gcs-cost-exist", type=float, default=0.1, help="Hungarian matching existence cost weight.")
     parser.add_argument("--gcs-match-min-overlap", type=int, default=2, help="Minimum valid GT points for training Hungarian matching.")
     parser.add_argument("--gcs-match-max-x-dist", type=float, default=0.0, help="Optional training matcher mean x-distance gate in pixels. 0 disables.")
     parser.add_argument("--gcs-match-gate-px", type=float, default=160.0, help="Training matcher APE gate in pixels. 0 disables.")
     parser.add_argument("--gcs-eval-match-gate-px", type=float, default=None, help="Strict validation APE gate in pixels. Defaults to --ape-thr.")
     parser.add_argument("--gcs-eval-max-x-dist", type=float, default=0.0, help="Optional strict validation mean x-distance gate in pixels. 0 disables.")
-    parser.add_argument("--gcs-eval-min-overlap", type=int, default=6, help="Minimum overlapping visible anchors for strict validation matching.")
-    parser.add_argument("--gcs-eval-min-points", type=int, default=6, help="Minimum decoded visible anchors required to keep a validation prediction.")
-    parser.add_argument("--gcs-eval-min-gt-cover-ratio", type=float, default=0.3, help="Minimum GT visible-anchor coverage ratio for strict validation matching.")
-    parser.add_argument("--gcs-eval-min-pred-cover-ratio", type=float, default=0.3, help="Minimum predicted visible-anchor coverage ratio for strict validation matching.")
-    parser.add_argument("--gcs-eval-nms-dist-px", type=float, default=18.0, help="Validation/inference lane NMS distance in pixels. 0 disables.")
+    parser.add_argument("--gcs-eval-min-overlap", type=int, default=2, help="Minimum valid overlapping GT points for strict validation matching.")
+    parser.add_argument("--gcs-eval-nms-dist-px", type=float, default=50.0, help="Optional validation/inference lane NMS distance in pixels. 0 disables.")
     parser.add_argument(
         "--gcs-eval-point-valid-thr",
         type=float,
@@ -338,19 +301,15 @@ def _load_loss_gains(save_dir: Path) -> dict[str, float]:
         "exist_loss": "gcs_exist",
         "point_loss": "gcs_point",
         "point_valid_loss": "gcs_point_valid",
-        "line_iou_loss": "gcs_line_iou",
-        "count_cls_loss": "gcs_count_cls",
-        "count_sum_loss": "gcs_count_sum",
-        "quality_loss": "gcs_quality",
+        "smooth_loss": "gcs_smooth",
+        "curve_loss": "gcs_curve",
+        "mask_loss": "gcs_mask",
+        "edge_loss": "gcs_edge",
+        "count_loss": "gcs_count",
+        "count_under5_loss": "gcs_count_under5",
     }
     for loss_name, arg_name in key_map.items():
-        if isinstance(arg_name, tuple):
-            primary, legacy = arg_name
-            if primary in args:
-                gains[loss_name] = float(args[primary])
-            elif legacy in args:
-                gains[loss_name] = float(args[legacy])
-        elif arg_name in args:
+        if arg_name in args:
             gains[loss_name] = float(args[arg_name])
     return gains
 
@@ -384,17 +343,21 @@ def summarize_overfit_results(save_dir: str | Path) -> Path | None:
         "train/exist_loss",
         "train/point_loss",
         "train/point_valid_loss",
-        "train/line_iou_loss",
-        "train/count_cls_loss",
-        "train/count_sum_loss",
-        "train/quality_loss",
+        "train/smooth_loss",
+        "train/curve_loss",
+        "train/mask_loss",
+        "train/edge_loss",
+        "train/count_loss",
+        "train/count_under5_loss",
         "val/exist_loss",
         "val/point_loss",
         "val/point_valid_loss",
-        "val/line_iou_loss",
-        "val/count_cls_loss",
-        "val/count_sum_loss",
-        "val/quality_loss",
+        "val/smooth_loss",
+        "val/curve_loss",
+        "val/mask_loss",
+        "val/edge_loss",
+        "val/count_loss",
+        "val/count_under5_loss",
     )
 
     losses = {}
@@ -432,8 +395,8 @@ def summarize_overfit_results(save_dir: str | Path) -> Path | None:
         },
         "losses": losses,
         "interpretation": (
-            "20-image overfit is considered healthy only when total, existence, point, point-valid, LineIoU, "
-            "Count Head, and Quality Head losses trend down and rendered predictions align with GT lanes."
+            "20-image overfit is considered healthy only when total, existence, point, point-valid, mask, edge, "
+            "and enabled count losses trend down and rendered predictions align with GT lanes."
         ),
     }
     out_path = save_dir / "overfit_summary.json"
@@ -447,7 +410,7 @@ def evaluate_overfit_predictions(
     ape_thr: float = 20.0,
     match_gate_px: float | None = None,
     max_x_dist: float = 0.0,
-    min_overlap: int = 6,
+    min_overlap: int = 2,
 ) -> Path | None:
     """Evaluate decoded overfit predictions against the exact 20-image GT subset."""
     predictions_path = Path(predictions_path)
@@ -612,13 +575,6 @@ def main() -> None:
         "fliplr": args.fliplr,
         "val": True,
         "exist_ok": args.exist_ok,
-        "box": 0.0,
-        "cls": 0.0,
-        "dfl": 0.0,
-        "pose": 0.0,
-        "kobj": 0.0,
-        "rle": 0.0,
-        "angle": 0.0,
         "train_images": str(image_list.resolve()),
         "train_gcs_labels": train_gcs_labels,
         "val_images": str(image_list.resolve()),
@@ -626,48 +582,28 @@ def main() -> None:
         "gcs_exist": args.gcs_exist,
         "gcs_point": args.gcs_point,
         "gcs_point_valid": args.gcs_point_valid,
-        "gcs_point_invalid_x": args.gcs_point_invalid_x,
-        "gcs_line_iou": args.gcs_line_iou,
-        "gcs_quality": args.gcs_quality,
-        "gcs_quality_dist_thr_px": args.gcs_quality_dist_thr_px,
-        "gcs_quality_neg_weight": args.gcs_quality_neg_weight,
-        "gcs_quality_hard_negative_weight": args.gcs_quality_hard_negative_weight,
-        "gcs_quality_duplicate_negative_weight": args.gcs_quality_duplicate_negative_weight,
-        "gcs_line_iou_width_px": args.gcs_line_iou_width_px,
-        "gcs_count_cls": args.gcs_count_cls,
-        "gcs_count_head_warmup_epochs": args.gcs_count_head_warmup_epochs,
-        "gcs_count_min_gt_points": args.gcs_count_min_gt_points,
-        "gcs_count_cls_w2": args.gcs_count_cls_w2,
-        "gcs_count_cls_w3": args.gcs_count_cls_w3,
-        "gcs_count_cls_w4": args.gcs_count_cls_w4,
-        "gcs_count_cls_w5": args.gcs_count_cls_w5,
+        "gcs_smooth": args.gcs_smooth,
+        "gcs_curve": args.gcs_curve,
+        "gcs_mask": args.gcs_mask,
+        "gcs_edge": args.gcs_edge,
+        "gcs_count": args.gcs_count,
+        "gcs_count_under5": args.gcs_count_under5,
+        "gcs_count_under5_min_lanes": args.gcs_count_under5_min_lanes,
         "gcs_exist_pos_weight": args.gcs_exist_pos_weight,
         "gcs_exist_focal_gamma": args.gcs_exist_focal_gamma,
         "gcs_exist_focal_alpha": args.gcs_exist_focal_alpha,
-        "gcs_hard_negative_quality_thr": args.gcs_hard_negative_quality_thr,
-        "gcs_hard_negative_topk": args.gcs_hard_negative_topk,
-        "gcs_hard_negative_exist_weight": args.gcs_hard_negative_exist_weight,
-        "gcs_duplicate_negative_exist_weight": args.gcs_duplicate_negative_exist_weight,
-        "gcs_duplicate_dist_thr_px": args.gcs_duplicate_dist_thr_px,
-        "gcs_duplicate_iou_thr": args.gcs_duplicate_iou_thr,
-        "gcs_exist_margin": args.gcs_exist_margin,
-        "gcs_exist_pos_margin": args.gcs_exist_pos_margin,
-        "gcs_exist_neg_margin": args.gcs_exist_neg_margin,
         "gcs_exist_quality_alpha": args.gcs_exist_quality_alpha,
-        "gcs_exist_quality_lane_iou_alpha": args.gcs_exist_quality_lane_iou_alpha,
         "gcs_exist_quality_mode": args.gcs_exist_quality_mode,
         "gcs_exist_quality_tau": args.gcs_exist_quality_tau,
         "gcs_exist_quality_floor": args.gcs_exist_quality_floor,
         "gcs_exist_quality_pos_px": args.gcs_exist_quality_pos_px,
         "gcs_exist_quality_neg_px": args.gcs_exist_quality_neg_px,
         "gcs_point_valid_pos_weight_max": args.gcs_point_valid_pos_weight_max,
-        "gcs_point_valid_gt5_pos_weight": args.gcs_point_valid_gt5_pos_weight,
-        "gcs_point_valid_unmatched_weight": args.gcs_point_valid_unmatched_weight,
-        "gcs_point_valid_hard_negative_weight": args.gcs_point_valid_hard_negative_weight,
-        "gcs_point_valid_duplicate_negative_weight": args.gcs_point_valid_duplicate_negative_weight,
-        "gcs_point_valid_neg": args.gcs_point_valid_neg,
-        "gcs_point_valid_neg_thr": args.gcs_point_valid_neg_thr,
+        "gcs_mask_pos_weight_max": args.gcs_mask_pos_weight_max,
+        "gcs_edge_pos_weight_max": args.gcs_edge_pos_weight_max,
+        "gcs_aux_dice": args.gcs_aux_dice,
         "gcs_cost_point": args.gcs_cost_point,
+        "gcs_cost_curve": args.gcs_cost_curve,
         "gcs_cost_exist": args.gcs_cost_exist,
         "gcs_match_min_overlap": args.gcs_match_min_overlap,
         "gcs_match_max_x_dist": args.gcs_match_max_x_dist,
@@ -675,15 +611,8 @@ def main() -> None:
         "gcs_eval_match_gate_px": args.gcs_eval_match_gate_px,
         "gcs_eval_max_x_dist": args.gcs_eval_max_x_dist,
         "gcs_eval_min_overlap": args.gcs_eval_min_overlap,
-        "gcs_eval_min_points": args.gcs_eval_min_points,
-        "gcs_eval_min_gt_cover_ratio": args.gcs_eval_min_gt_cover_ratio,
-        "gcs_eval_min_pred_cover_ratio": args.gcs_eval_min_pred_cover_ratio,
         "gcs_eval_nms_dist_px": args.gcs_eval_nms_dist_px,
         "gcs_eval_point_valid_thr": args.gcs_eval_point_valid_thr,
-        "gcs_sampler_mode": "none",
-        "gcs_hard_sampling": False,
-        "gcs_hard_sample_file": "",
-        "gcs_gt5_extra_aug": False,
     }
 
     trainer = GCSLaneTrainer(overrides=overrides)
@@ -703,11 +632,10 @@ def main() -> None:
             imgsz=gcs_imgsz,
             conf=args.pred_conf,
             point_valid_thr=args.gcs_eval_point_valid_thr,
-            min_points=args.gcs_eval_min_points,
             nms_dist_px=args.gcs_eval_nms_dist_px,
             device=args.device,
             half=False,
-            max_det=GCS_DEFAULT_MAX_DET,
+            max_det=8,
             max_images=args.limit,
             save_img=True,
             save_txt=True,
@@ -731,7 +659,7 @@ def main() -> None:
     if metrics_path is not None:
         print(f"overfit metrics: {metrics_path.resolve()}")
     print(
-        "success signals: weighted total, existence, point, point-valid, LineIoU, and Count Head losses should fall; "
+        "success signals: weighted total, existence, point, point-valid, mask, edge, and enabled count losses should fall; "
         "overfit_metrics.json should show low APE and high F1."
     )
 

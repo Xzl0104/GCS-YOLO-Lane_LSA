@@ -1,197 +1,77 @@
-# GCS-YOLO-Lane
+# GCS-YOLO-Lane 5-25-3 K56 Branch
 
-GCS-YOLO-Lane is a YOLO11-based structured lane detection project. It is not a standard YOLO segmentation setup: the model predicts lane instances as ordered 2D point sequences.
+This branch imports the historical `5-25-3.zip` GCS-YOLO-Lane algorithm as a separate Git branch and adapts only the TuSimple fixed-y contract.
 
-The current research target is clean TuSimple official Accuracy under a reproducible, leakage-free protocol.
-
-## Current Mainline
-
-- Default model: `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12.yaml`
-- Default data config: `data/tusimple_gcs_fixed_y_960x544.yaml`
-- TuSimple input size: `--imgsz 544 960` in H,W order
-- Label mode: fixed-y, `K=32`, `fixed_y_start=710/720`, `fixed_y_end=0.25`
-- Default split root: `datasets/tusimple_fixed_y_960x544`
-
-The model output contract includes:
-
-```text
-pred_points: B x Q x K x 2
-pred_logits: B x Q
-pred_valid_logits: B x Q x K
-pred_quality_logits: B x Q
-pred_count_logits: B x 4
-pred_count_boundary_logits: B x 2
-```
-
-`pred_count_logits` predicts image-level lane count classes 2/3/4/5. `pred_count_boundary_logits` calibrates count>=4 and count>=5 inside the default Count Head loss/decode path.
-
-## Count Head Status
-
-The current mainline uses conservative count-generalization defaults:
-
-```text
-gcs_count_sum = 0.03
-gcs_quality = 0.4
-gcs_quality_neg_weight = 0.5
-gcs_quality_point_weight = 0.5
-gcs_count_cls_w2/w3/w4/w5 = 0.5/1.2/1.4/1.8
-gcs_count_boundary_gt5_pos_weight = 1.15
-gcs_point_valid_gt5_pos_weight = 2.0
-gcs_gt5_edge_loss_weight = 1.15
-gcs_candidate_gt5_edge_weight = 1.10
-gcs_point_valid_gt5_edge_continuity = 0.05
-gcs_point_valid_gt5_edge_continuity_thr = 0.55
-gcs_gt5_oversample_weight = 1.0
-gcs_group_sampler_ratios = 2:0.01,3:0.29,4:0.42,5:0.28
-```
-
-The GT5 candidate-quality knobs are training-side only. They add small extra supervision to real matched GT5 edge queries and adjacent visible point-valid anchors; they do not change decode or fabricate lanes.
-
-`gcs_soft_count_decision`, `gcs_last_lane_rescue`, and `gcs_edge_last_lane_rescue` remain default-off. Select rescue, soft-count, thresholds, and checkpoints on official-val only.
-
-## Current Experiment Status
-
-The 2026-06-13 GT5-only gates inside the current `K=32` contract are not promotable:
-
-```text
-gcs_yolo_lane_s_q12_gt5segq_vishn_countvis_ft12_seed1_b8w0
-gcs_yolo_lane_s_q12_quality_gt5edgefloor_ft12_seed1_b8w0
-```
-
-They reached independent official-val `0.953639` and `0.953587`, below the active references `0.954137` and `0.954782`.
-
-For the `0.97` objective, the higher-level bottleneck is now the current `K=32` fixed-y representation and official-grid alignment. The official-val label oracle for the current `K=32` fixed-y contract is only `Accuracy=0.956249`, `FP=0`, `FN=0.003444`, leaving too little headroom over the current-code audit baseline `0.953756`.
-
-The current experimental K56 family/reference is a separate `Q12-K56` official-h-sample-aligned candidate:
+## Contract
 
 ```text
 model: ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml
 data:  data/tusimple_gcs_fixed_y_k56_960x544.yaml
 root:  datasets/tusimple_fixed_y_k56_960x544
-K:     56, fixed-y anchors aligned to TuSimple h_samples 710..160 step 10
+Q:     12
+K:     56
+fixed_y_start: 710 / 720 = 0.9861111111111112
+fixed_y_end:   160 / 720 = 0.2222222222222222
+imgsz: 544 960
 ```
 
-K56 labels are regenerated from original TuSimple JSON and images, not resampled from K32 labels. The K56 official-val label oracle is `Accuracy=0.998256`, `FN=0.001377`, `FP=-0.000689` on the 363-image official-val split. The current mainline remains `K=32`; do not silently mix `K=56` labels with existing `K=32` data or checkpoints.
+`--imgsz 544 960` is H,W order.
 
-The completed formal K56 baseline ran on the remote RTX 4090 24GB server as:
+The 56 fixed-y anchors are TuSimple official h-samples `710, 700, 690, ..., 160`. K56 labels must be regenerated from original TuSimple JSON and images, not resampled from old K32 labels.
+
+The 5-25-3 algorithm body is intentionally not upgraded to later mainline Count Head, Count Boundary, Quality Head, Survival Head, near-miss, or official-best checkpoint machinery.
+
+## Full Training
+
+Run formal training on the remote CUDA server from a clone checked out to this branch:
+
+```bash
+source /root/miniconda3/etc/profile.d/conda.sh
+conda activate ssh_lane
+
+python tools/train_gcs.py \
+  --model ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml \
+  --data data/tusimple_gcs_fixed_y_k56_960x544.yaml \
+  --imgsz 544 960 \
+  --name gcs_5_25_3_q12_k56_e220_seed1_b32w4 \
+  --pretrained yolo11s-seg.pt \
+  --epochs 220 \
+  --batch 32 \
+  --workers 4 \
+  --seed 1
+```
+
+If `batch=32` OOMs, reduce it only for OOM or instability and record the change in the run notes.
+
+## Label Rebuild
+
+```bash
+python tools/convert_tusimple_to_gcs.py \
+  --archive-root archive/TUSimple \
+  --output-root datasets/tusimple_fixed_y_k56_960x544 \
+  --imgsz 544 960 \
+  --point-mode fixed_y \
+  --num-points 56 \
+  --fixed-y-start 0.9861111111111112 \
+  --fixed-y-end 0.2222222222222222
+```
+
+## Local Checks
+
+```bash
+python tools/check_model.py \
+  --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml \
+  --imgsz 544 960 \
+  --batch 1 \
+  --device cpu
+```
+
+Expected key shapes:
 
 ```text
-gcs_yolo_lane_s_q12_k56_offhs_e180_seed1_b32w4
-batch=32
-workers=4
+pred_points: B x 12 x 56 x 2
+pred_logits: B x 12
+pred_valid_logits: B x 12 x 56
+aux_mask_logits: B x 2 x 544 x 960
+aux_edge_logits: B x 1 x 544 x 960
 ```
-
-The run completed on `2026-06-14` at 180/180 epochs with no NaN, shape error, traceback, or test-split leakage found in run artifacts. Independent official-val sweep of `weights/official_best.pt` reproduced the training-time selection: epoch 152, `official_acc=0.959315`, `FP=0.045225`, `FN=0.028466`, `official_score=0.957841`, using `conf=0.005`, `point_valid_thr=0.35`, `nms_dist_px=18.0`, `max_det=5`, `min_points=6`, and `rank_min_points=none`. This exceeds the current-code K32 audit `0.953756` by `+0.005559` and legacy `0.959224` by `+0.000091`, but it is not promoted or test-ready because the margin is tiny and the 0.97 objective remains unmet. Final retained official Top-K is `152=0.959315`, `170=0.959247`, `166=0.959244`, `168=0.959217`, `165=0.959215`; ordinary val best remains epoch 142 with `val/f1=0.962083`.
-
-Independent GT5 diagnosis on official-val found 63/74 GT5 images kept; remaining GT5 drops are `count_head_under_predict=5` and `quality_too_low=6`, with candidate-pool shortfall, GT5 NMS suppression, and rank-score-low all at zero. Two K56 Count/Quality fine-tune gates from the epoch152 parent were stopped early because they regressed official-val: `gcs_yolo_lane_s_q12_k56_cqcalib_ft12_seed1_b32w4` best `0.953415`, and `gcs_yolo_lane_s_q12_k56_cqcalib_lr1e4_ft8_seed1_b32w4` best `0.957787`. The 2026-06-16 ordered K56 candidate gate also failed to beat the parent:
-
-```text
-parent:     official_acc=0.959315, rate_4_to_5=0.075758, gt5_output5_rate=0.851351
-qpoint08:   official_acc=0.956912, rate_4_to_5=0.106061, gt5_output5_rate=0.878378
-cqcalib:    official_acc=0.956004, rate_4_to_5=0.045455, gt5_output5_rate=0.797297
-dec4:       official_acc=0.956595, rate_4_to_5=0.121212, gt5_output5_rate=0.945946
-bifpn192:   official_acc=0.946124, rate_4_to_5=0.045455, gt5_output5_rate=0.148649
-bifpn256:   official_acc=0.933101, rate_4_to_5=0.000000, gt5_output5_rate=0.067568, batch=8 after batch=32 OOM
-strip-p23:  official_acc=0.948057, rate_4_to_5=0.075758, gt5_output5_rate=0.783784
-qpoint08+dec4+cqcalib: official_acc=0.956884, rate_4_to_5=0.060606, gt5_output5_rate=0.824324
-```
-
-Do not promote or stack these recipes. The `qpoint08+dec4+cqcalib` follow-up lowered false fifth-lane pressure but raised real GT5 underprediction (`count_head_under_predict=10/74`), so it is also rejected. Do not rerun `gcs_quality_point_weight=1.0` from the same hypothesis without a new guardrail for false fifth-lane pressure. The strongest reference remains the K56 parent `official_best.pt` from epoch 152.
-
-The current code retains explicit, validation-only K56 structural candidates for reproducibility:
-
-```text
-decoder_layers=4:        ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-dec4.yaml
-LaneBiFPN channels=192:  ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-bifpn192.yaml
-LaneBiFPN channels=256:  ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-bifpn256.yaml
-Count/Quality calib:     ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-cqcalib.yaml
-decoder+calib combo:     ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-dec4-cqcalib.yaml
-post-BiFPN strip P2/P3:  ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-strip-p23.yaml
-combined candidate:      ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-dec4-bifpn256-cqcalib-strip-p23.yaml
-```
-
-The completed gate order was `qpoint08 -> cqcalib -> dec4 -> bifpn192 -> bifpn256/strip-p23`, followed by `qpoint08+dec4+cqcalib`. Official-val rejected every candidate, so the combined candidate should not be run as the next path without a new hypothesis that specifically fixes the observed Count/Quality tradeoff.
-
-Use the local RTX 4060 8GB workstation for smoke, contract, label/oracle, and model-shape checks only. Run formal training and official-val evaluation on the remote server.
-
-Default-preserving/default-off training knobs remain available for controlled experiments:
-
-```text
-gcs_quality_point_weight = 0.5 default; 0.8 tried and rejected on 2026-06-16; 1.0 is not the next gate without a new hypothesis
-gcs_quality_gt5_edge_floor = 0.0
-gcs_quality_hard_negative_from_head = False
-gcs_hard_negative_visible_segment = False
-gcs_hard_negative_visible_thr = 0.5
-gcs_hard_negative_visible_support_points = 12.0
-gcs_point_valid_gt5_edge_segment = 0.0
-gcs_point_valid_gt5_edge_segment_thr = 0.65
-gcs_point_valid_gt5_edge_segment_min_points = 5
-```
-
-When `gcs_quality_hard_negative_from_head` is enabled, Quality Head hard negatives are mined from unmatched queries only; matched queries remain matched quality targets even if their current continuous quality target is `0.0`.
-
-The visible-segment hard-negative and GT5 edge Quality floor recipes remain default-off infrastructure only. Do not rerun the same recipes as the next gate unless checking reproducibility, and do not use test to rescue or tune them.
-
-## Environment
-
-Use the existing Windows CUDA conda environment:
-
-```text
-D:\miniconda3\envs\lsa_yolo
-```
-
-If activation is unavailable, call Python directly:
-
-```powershell
-D:\miniconda3\envs\lsa_yolo\python.exe
-```
-
-## Common Commands
-
-Train:
-
-```powershell
-python tools/train_gcs.py --model ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12.yaml --data data/tusimple_gcs_fixed_y_960x544.yaml --imgsz 544 960
-```
-
-Remote experiment commands live in `docs/agent-context/commands.md`. Keep longer training and official-val evaluation on the remote CUDA server with the `ssh_lane` conda environment.
-
-Official-val sweep:
-
-```powershell
-python tools/sweep_tusimple_official.py --weights <weights.pt> --split val --imgsz 544 960
-```
-
-GT5 diagnosis on official-val:
-
-```powershell
-python tools/diagnose_gcs_gt5.py --weights <weights.pt> --split val --imgsz 544 960
-```
-
-Final test evaluation, only after selecting the candidate on official-val:
-
-```powershell
-python tools/eval_tusimple_official.py --weights <weights.pt> --split test --imgsz 544 960
-```
-
-## Validation
-
-Run targeted checks before metric work:
-
-```powershell
-python scripts/verify_loss_cleanup.py
-python tools/check_gcs_count_head_topk_contract.py
-python tools/check_gcs_decode_meta_contract.py
-python tools/check_gcs_algorithm_contract.py
-python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12.yaml --imgsz 544 960
-```
-
-## Protocol Rules
-
-- Use official-val for checkpoint, threshold, rescue, ranking, count-policy, and postprocess selection.
-- Use test only once for final evaluation of an already selected candidate.
-- Do not use GT during inference/decode.
-- Do not fabricate lanes.
-- Do not claim improvement without official-val evidence.
-
-Detailed agent and experiment context lives in `docs/agent-context/`.

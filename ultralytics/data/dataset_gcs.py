@@ -10,12 +10,13 @@ from typing import Any
 import cv2
 import numpy as np
 import torch
+import torch.nn.functional as F
 from torch.utils.data import Dataset
 
 from ultralytics.data.utils import IMG_FORMATS
 from ultralytics.utils.gcs_shape import assert_gcs_shape, normalize_imgsz
 
-__all__ = ("GCSLaneDataset", "gcs_collate_fn")
+__all__ = ("GCSLaneDataset", "gcs_collate_fn", "resize_gcs_masks")
 
 
 class GCSLaneDataset(Dataset):
@@ -24,9 +25,12 @@ class GCSLaneDataset(Dataset):
     The GCS-YOLO-Lane target contract is:
         lanes: normalized N x K x 2 point sequences, ordered bottom-to-top
         lane_valid: N x K point-valid masks
+        semantic_mask: H x W binary auxiliary region mask
+        edge_mask: H x W binary auxiliary edge mask
 
     Lane counts are intentionally variable per image. The collate function
-    stacks only images, while keeping lane tensors as per-image lists for Hungarian matching.
+    stacks only images and masks, while keeping lane tensors as per-image lists
+    for Hungarian matching.
     """
 
     def __init__(
@@ -35,7 +39,7 @@ class GCSLaneDataset(Dataset):
         imgsz: int | tuple[int, int] | list[int] = (544, 960),
         fraction: float = 1.0,
         image_dir: str | Path | list[str | Path] | None = None,
-        label_dir: str | Path | list[str | Path] | None = None,
+        label_dir: str | Path | None = None,
         img_size: int | tuple[int, int] | list[int] | None = None,
         strict: bool = True,
         augment: bool = False,
@@ -44,18 +48,9 @@ class GCSLaneDataset(Dataset):
         hsv_v: float = 0.0,
         fliplr: float = 0.0,
         flipud: float = 0.0,
-        translate: float = 0.0,
         scale: float = 0.0,
         erasing: float = 0.0,
         mosaic: float = 0.0,
-        gt5_extra_aug: bool = False,
-        gt5_aug_min_lanes: int = 5,
-        gt5_erasing: float = 0.0,
-        gt5_lane_aware_erasing: bool = False,
-        gt5_erasing_lane_margin_px: float = 8.0,
-        gt5_blur: float = 0.0,
-        gt5_noise: float = 0.0,
-        gt5_shadow: float = 0.0,
     ):
         """Create a GCS lane dataset from Ultralytics or reference-style arguments.
 
@@ -73,19 +68,9 @@ class GCSLaneDataset(Dataset):
             hsv_v: Random value gain.
             fliplr: Horizontal flip probability.
             flipud: Vertical flip probability.
-            translate: Random translation gain as a fraction of image width/height.
             scale: Random center scaling gain, e.g. 0.3 samples a scale factor from 0.7 to 1.3.
             erasing: Random erasing probability applied to image pixels only.
             mosaic: Four-image mosaic probability.
-            gt5_extra_aug: Apply extra photometric multi-view augmentation to images with at least gt5_aug_min_lanes.
-            gt5_aug_min_lanes: Minimum GT lane count that receives extra photometric augmentation.
-            gt5_erasing: Additional erasing probability for gt5_extra_aug samples.
-            gt5_lane_aware_erasing: If True, avoid erasing visible lane anchors and adjacent visible
-                anchor-to-anchor segments in GT5 extra augmentation.
-            gt5_erasing_lane_margin_px: Pixel margin around visible lane anchors/segments protected from GT5 erasing.
-            gt5_blur: Random blur probability for gt5_extra_aug samples.
-            gt5_noise: Random Gaussian noise probability for gt5_extra_aug samples.
-            gt5_shadow: Random shadow probability for gt5_extra_aug samples.
         """
         source = img_path if img_path is not None else image_dir
         if source is None:
@@ -98,10 +83,7 @@ class GCSLaneDataset(Dataset):
         self.img_h, self.img_w = self.imgsz
         self.img_size = self.imgsz
         self.image_dir = source
-        if isinstance(label_dir, (list, tuple)):
-            self.label_dir = [Path(x) for x in label_dir]
-        else:
-            self.label_dir = Path(label_dir) if label_dir is not None else None
+        self.label_dir = Path(label_dir) if label_dir is not None else None
         self.strict = bool(strict)
         self.augment = bool(augment)
         self.hsv_h = float(hsv_h)
@@ -109,37 +91,14 @@ class GCSLaneDataset(Dataset):
         self.hsv_v = float(hsv_v)
         self.fliplr = float(fliplr)
         self.flipud = float(flipud)
-        self.translate = float(translate)
         self.scale = float(scale)
         self.erasing = float(erasing)
         self.mosaic_prob = float(mosaic)
         self.mosaic = self.augment and self.mosaic_prob > 0.0
-        self.gt5_extra_aug = bool(gt5_extra_aug)
-        self.gt5_aug_min_lanes = max(int(gt5_aug_min_lanes), 1)
-        self.gt5_erasing = float(gt5_erasing)
-        self.gt5_lane_aware_erasing = bool(gt5_lane_aware_erasing)
-        self.gt5_erasing_lane_margin_px = float(gt5_erasing_lane_margin_px)
-        self.gt5_blur = float(gt5_blur)
-        self.gt5_noise = float(gt5_noise)
-        self.gt5_shadow = float(gt5_shadow)
-        if self.translate < 0.0 or self.translate > 1.0:
-            raise ValueError(f"translate must be in [0, 1], got {self.translate}.")
         if self.scale < 0.0 or self.scale > 1.0:
             raise ValueError(f"scale must be in [0, 1], got {self.scale}.")
         if self.erasing < 0.0 or self.erasing > 1.0:
             raise ValueError(f"erasing must be in [0, 1], got {self.erasing}.")
-        if self.gt5_erasing_lane_margin_px < 0.0:
-            raise ValueError(
-                f"gt5_erasing_lane_margin_px must be >= 0, got {self.gt5_erasing_lane_margin_px}."
-            )
-        for name, value in (
-            ("gt5_erasing", self.gt5_erasing),
-            ("gt5_blur", self.gt5_blur),
-            ("gt5_noise", self.gt5_noise),
-            ("gt5_shadow", self.gt5_shadow),
-        ):
-            if value < 0.0 or value > 1.0:
-                raise ValueError(f"{name} must be in [0, 1], got {value}.")
 
         self.im_files = self._find_images(source)
         if 0.0 < fraction < 1.0:
@@ -201,12 +160,6 @@ class GCSLaneDataset(Dataset):
     def _label_path(self, img_file: Path) -> Path:
         """Map images/<split>/name.jpg to labels_gcs/<split>/name.npz."""
         if self.label_dir is not None:
-            if isinstance(self.label_dir, list):
-                for label_dir in self.label_dir:
-                    candidate = label_dir / f"{img_file.stem}.npz"
-                    if candidate.exists():
-                        return candidate
-                return self.label_dir[0] / f"{img_file.stem}.npz"
             return self.label_dir / f"{img_file.stem}.npz"
 
         parts = list(img_file.parts)
@@ -266,7 +219,6 @@ class GCSLaneDataset(Dataset):
         """Read shared fixed-y anchors for fixed-y labels, if the dataset uses them."""
         if getattr(self, "point_mode", "free") != "fixed_y":
             return None
-        expected = None
         for label_file in self.label_files:
             if not label_file.exists():
                 continue
@@ -283,22 +235,8 @@ class GCSLaneDataset(Dataset):
                 raise ValueError(f"{label_file}: fixed_y anchors must be strictly descending from bottom to top.")
             if anchors.min() < -1e-4 or anchors.max() > 1.0 + 1e-4:
                 raise ValueError(f"{label_file}: fixed_y anchors must be normalized to [0, 1].")
-            anchors = np.clip(anchors, 0.0, 1.0).astype(np.float32)
-            if expected is None:
-                expected = anchors
-                continue
-            if anchors.shape != expected.shape:
-                raise ValueError(
-                    f"{label_file}: fixed_y anchor shape {anchors.shape} does not match dataset anchor shape {expected.shape}."
-                )
-            max_err = float(np.max(np.abs(anchors - expected))) if anchors.size else 0.0
-            if max_err > 5e-5:
-                raise ValueError(
-                    f"{label_file}: fixed_y anchors differ from the dataset contract, max_err={max_err:.6g}. "
-                    f"dataset first/last=({expected[0]:.9f}, {expected[-1]:.9f}), "
-                    f"label first/last=({anchors[0]:.9f}, {anchors[-1]:.9f})."
-                )
-        return expected
+            return np.clip(anchors, 0.0, 1.0).astype(np.float32)
+        return None
 
     def __len__(self) -> int:
         """Return dataset size."""
@@ -307,10 +245,35 @@ class GCSLaneDataset(Dataset):
     @staticmethod
     def _require_label_keys(data: Any, label_file: Path) -> None:
         """Check that the compressed label contains all arrays used by GCS-YOLO-Lane."""
-        required = {"lanes", "lane_valid"}
+        required = {"semantic_mask", "edge_mask", "lanes", "lane_valid"}
         missing = sorted(k for k in required if k not in data)
         if missing:
             raise KeyError(f"{label_file} is missing required GCS arrays: {missing}")
+
+    @staticmethod
+    def _normalize_masks(
+        semantic_mask: np.ndarray,
+        edge_mask: np.ndarray,
+        size: tuple[int, int],
+        label_file: Path,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Resize and binarize mask targets for the auxiliary mask/edge branches."""
+        img_h, img_w = size
+        if semantic_mask.ndim != 2:
+            raise ValueError(f"{label_file}: semantic_mask must be H x W, got {semantic_mask.shape}.")
+        if edge_mask.ndim != 2:
+            raise ValueError(f"{label_file}: edge_mask must be H x W, got {edge_mask.shape}.")
+
+        if semantic_mask.shape != (img_h, img_w):
+            semantic_mask = cv2.resize(semantic_mask, (img_w, img_h), interpolation=cv2.INTER_NEAREST)
+        if edge_mask.shape != (img_h, img_w):
+            edge_mask = cv2.resize(edge_mask, (img_w, img_h), interpolation=cv2.INTER_NEAREST)
+        assert_gcs_shape(semantic_mask.shape[:2], size, name="semantic_mask", context=f"GCSLaneDataset({label_file})")
+        assert_gcs_shape(edge_mask.shape[:2], size, name="edge_mask", context=f"GCSLaneDataset({label_file})")
+
+        semantic_mask = (semantic_mask > 0).astype(np.int64)
+        edge_mask = (edge_mask > 0).astype(np.float32)
+        return semantic_mask, edge_mask
 
     @staticmethod
     def _normalize_lanes(
@@ -323,8 +286,6 @@ class GCSLaneDataset(Dataset):
     ) -> tuple[np.ndarray, np.ndarray]:
         """Validate normalized lanes and enforce bottom-to-top point order."""
         point_mode = str(point_mode).lower()
-        if point_mode in {"fixed-y", "fixedy"}:
-            point_mode = "fixed_y"
         lanes = np.asarray(lanes, dtype=np.float32)
         lane_valid = np.asarray(lane_valid, dtype=np.float32)
         if num_lanes is not None:
@@ -381,27 +342,16 @@ class GCSLaneDataset(Dataset):
         keep = ordered_valid.sum(axis=1) >= 2
         return ordered_lanes[keep].astype(np.float32), ordered_valid[keep].astype(np.float32)
 
-    @staticmethod
-    def _label_scalar_to_str(value: Any) -> str:
-        """Convert scalar npz metadata such as raw_file into a plain string."""
-        value = np.asarray(value)
-        if value.shape == ():
-            value = value.item()
-        elif value.size == 1:
-            value = value.reshape(-1)[0].item()
-        if isinstance(value, bytes):
-            value = value.decode("utf-8")
-        return str(value)
-
-    def _load_label(self, label_file: Path) -> tuple[np.ndarray, np.ndarray, str]:
+    def _load_label(self, label_file: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Load and validate one GCS npz label."""
         with np.load(label_file, allow_pickle=False) as data:
             self._require_label_keys(data, label_file)
             lanes = data["lanes"]
             lane_valid = data["lane_valid"]
+            semantic_mask = data["semantic_mask"]
+            edge_mask = data["edge_mask"]
             num_lanes = data["num_lanes"] if "num_lanes" in data else None
             point_mode = str(np.asarray(data["point_mode"]).item()) if "point_mode" in data else "free"
-            raw_file = self._label_scalar_to_str(data["raw_file"]) if "raw_file" in data else ""
 
         lanes, lane_valid = self._normalize_lanes(
             lanes,
@@ -410,25 +360,13 @@ class GCSLaneDataset(Dataset):
             num_lanes=num_lanes,
             point_mode=point_mode,
         )
-        mode = self._normalize_point_mode(point_mode)
-        if mode == "fixed_y" and self.fixed_y_anchors is not None and lanes.shape[0]:
-            expected_y = self.fixed_y_anchors.reshape(1, -1)
-            if lanes.shape[1] != expected_y.shape[1]:
-                raise ValueError(
-                    f"{label_file}: fixed_y lane K={lanes.shape[1]} does not match dataset anchors K={expected_y.shape[1]}."
-                )
-            y_err = np.abs(lanes[..., 1] - expected_y) * (lane_valid > 0.5)
-            max_err = float(y_err.max()) if y_err.size else 0.0
-            if max_err > 5e-5:
-                raise ValueError(
-                    f"{label_file}: fixed_y lane y coordinates do not match dataset anchors, max_err={max_err:.6g}."
-                )
-        return lanes, lane_valid, raw_file
+        semantic_mask, edge_mask = self._normalize_masks(semantic_mask, edge_mask, self.imgsz, label_file)
+        return lanes, lane_valid, semantic_mask, edge_mask
 
     def _load_resized_sample(
         self,
         index: int,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, Path, Path, str, tuple[int, int]]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, Path, Path, tuple[int, int]]:
         """Load one image/label pair and resize the image to the configured GCS training shape."""
         img_file = self.im_files[index]
         label_file = self.label_files[index]
@@ -444,8 +382,8 @@ class GCSLaneDataset(Dataset):
             img = cv2.resize(img, (self.img_w, self.img_h), interpolation=cv2.INTER_LINEAR)
         assert_gcs_shape(img.shape[:2], self.imgsz, name="image", context=f"GCSLaneDataset({img_file})")
 
-        lanes, lane_valid, raw_file = self._load_label(label_file)
-        return img, lanes, lane_valid, img_file, label_file, raw_file, (h0, w0)
+        lanes, lane_valid, semantic_mask, edge_mask = self._load_label(label_file)
+        return img, lanes, lane_valid, semantic_mask, edge_mask, img_file, label_file, (h0, w0)
 
     @staticmethod
     def _empty_lane_arrays(num_points: int) -> tuple[np.ndarray, np.ndarray]:
@@ -458,7 +396,7 @@ class GCSLaneDataset(Dataset):
     def _load_mosaic(
         self,
         index: int,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, Path, Path, str, tuple[int, int]]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, Path, Path, tuple[int, int]]:
         """Create a GCS-safe four-tile mosaic and remap normalized lane points."""
         out_h, out_w = self.imgsz
         half_h = out_h // 2
@@ -476,25 +414,31 @@ class GCSLaneDataset(Dataset):
             indices = [index, *random.choices(range(len(self.im_files)), k=3)]
 
         out_img = np.full((out_h, out_w, 3), 114, dtype=np.uint8)
+        out_semantic = np.zeros((out_h, out_w), dtype=np.int64)
+        out_edge = np.zeros((out_h, out_w), dtype=np.float32)
         lane_parts: list[np.ndarray] = []
         valid_parts: list[np.ndarray] = []
         num_points = 0
         first_img_file: Path | None = None
         first_label_file: Path | None = None
-        first_raw_file = ""
         first_shape = self.imgsz
 
         for tile, sample_index in zip(tiles, indices):
             x1, y1, x2, y2 = tile
             tile_w, tile_h = x2 - x1, y2 - y1
-            img, lanes, lane_valid, img_file, label_file, raw_file, ori_shape = self._load_resized_sample(sample_index)
+            img, lanes, lane_valid, semantic_mask, edge_mask, img_file, label_file, ori_shape = self._load_resized_sample(sample_index)
             if first_img_file is None:
                 first_img_file, first_label_file, first_shape = img_file, label_file, ori_shape
-                first_raw_file = raw_file
             if lanes.ndim == 3:
                 num_points = lanes.shape[1]
 
             out_img[y1:y2, x1:x2] = cv2.resize(img, (tile_w, tile_h), interpolation=cv2.INTER_LINEAR)
+            out_semantic[y1:y2, x1:x2] = cv2.resize(
+                semantic_mask.astype(np.uint8),
+                (tile_w, tile_h),
+                interpolation=cv2.INTER_NEAREST,
+            )
+            out_edge[y1:y2, x1:x2] = cv2.resize(edge_mask, (tile_w, tile_h), interpolation=cv2.INTER_NEAREST)
 
             if lanes.shape[0]:
                 remapped = lanes.copy()
@@ -516,7 +460,9 @@ class GCSLaneDataset(Dataset):
             lanes, lane_valid = self._empty_lane_arrays(num_points)
 
         assert_gcs_shape(out_img.shape[:2], self.imgsz, name="mosaic image", context="GCSLaneDataset._load_mosaic")
-        return out_img, lanes, lane_valid, first_img_file, first_label_file, first_raw_file, first_shape
+        assert_gcs_shape(out_semantic.shape[:2], self.imgsz, name="mosaic semantic_mask", context="GCSLaneDataset._load_mosaic")
+        assert_gcs_shape(out_edge.shape[:2], self.imgsz, name="mosaic edge_mask", context="GCSLaneDataset._load_mosaic")
+        return out_img, lanes, lane_valid, out_semantic, out_edge, first_img_file, first_label_file, first_shape
 
     def close_mosaic(self, hyp: dict | None = None) -> None:
         """Disable mosaic augmentation for late training epochs."""
@@ -642,26 +588,26 @@ class GCSLaneDataset(Dataset):
             return self._transform_fixed_y_lanes_affine(lanes, lane_valid, matrix)
         return self._transform_free_lanes_affine(lanes, lane_valid, matrix)
 
-    def _apply_affine_augment(
+    def _apply_scale_augment(
         self,
         img: np.ndarray,
         lanes: np.ndarray,
         lane_valid: np.ndarray,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Apply GCS-safe scale and translation augmentation to image and structured lane labels."""
-        if self.scale <= 0.0 and self.translate <= 0.0:
-            return img, lanes, lane_valid
+        semantic_mask: np.ndarray,
+        edge_mask: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Apply center scale augmentation to image, masks, and structured lane labels."""
+        if self.scale <= 0.0:
+            return img, lanes, lane_valid, semantic_mask, edge_mask
 
-        factor = max(random.uniform(1.0 - self.scale, 1.0 + self.scale), 1e-3) if self.scale > 0.0 else 1.0
-        shift_x = random.uniform(-self.translate, self.translate) * float(self.img_w) if self.translate > 0.0 else 0.0
-        shift_y = random.uniform(-self.translate, self.translate) * float(self.img_h) if self.translate > 0.0 else 0.0
-        if abs(factor - 1.0) < 1e-3 and abs(shift_x) < 1e-3 and abs(shift_y) < 1e-3:
-            return img, lanes, lane_valid
+        factor = max(random.uniform(1.0 - self.scale, 1.0 + self.scale), 1e-3)
+        if abs(factor - 1.0) < 1e-3:
+            return img, lanes, lane_valid, semantic_mask, edge_mask
 
         cx = (self.img_w - 1.0) * 0.5
         cy = (self.img_h - 1.0) * 0.5
         matrix = np.array(
-            [[factor, 0.0, (1.0 - factor) * cx + shift_x], [0.0, factor, (1.0 - factor) * cy + shift_y]],
+            [[factor, 0.0, (1.0 - factor) * cx], [0.0, factor, (1.0 - factor) * cy]],
             dtype=np.float32,
         )
         img = cv2.warpAffine(
@@ -672,13 +618,28 @@ class GCSLaneDataset(Dataset):
             borderMode=cv2.BORDER_CONSTANT,
             borderValue=(114, 114, 114),
         )
+        semantic_mask = cv2.warpAffine(
+            semantic_mask.astype(np.uint8),
+            matrix,
+            (self.img_w, self.img_h),
+            flags=cv2.INTER_NEAREST,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=0,
+        ).astype(np.int64)
+        edge_mask = cv2.warpAffine(
+            edge_mask.astype(np.float32),
+            matrix,
+            (self.img_w, self.img_h),
+            flags=cv2.INTER_NEAREST,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=0,
+        ).astype(np.float32)
         lanes, lane_valid = self._transform_lanes_affine(lanes, lane_valid, matrix)
-        return img, lanes, lane_valid
+        return img, lanes, lane_valid, semantic_mask, edge_mask
 
-    def _apply_random_erasing(self, img: np.ndarray, probability: float | None = None) -> np.ndarray:
+    def _apply_random_erasing(self, img: np.ndarray) -> np.ndarray:
         """Randomly erase one image rectangle while leaving structured labels unchanged."""
-        prob = self.erasing if probability is None else float(probability)
-        if prob <= 0.0 or random.random() >= prob:
+        if self.erasing <= 0.0 or random.random() >= self.erasing:
             return img
 
         h, w = img.shape[:2]
@@ -696,164 +657,35 @@ class GCSLaneDataset(Dataset):
                 break
         return img
 
-    @staticmethod
-    def _visible_lane_anchor_boxes(
-        lanes: np.ndarray,
-        lane_valid: np.ndarray,
-        image_shape: tuple[int, int],
-        margin_px: float,
-    ) -> list[tuple[int, int, int, int]]:
-        """Return protected pixel boxes around visible normalized lane anchors and adjacent visible segments."""
-        if lanes.ndim != 3 or lanes.shape[-1] != 2 or lane_valid.shape != lanes.shape[:2]:
-            return []
-        h, w = int(image_shape[0]), int(image_shape[1])
-        margin = int(round(max(float(margin_px), 0.0)))
-        boxes: list[tuple[int, int, int, int]] = []
-        for lane, valid in zip(lanes, lane_valid):
-            visible_idx = np.flatnonzero(valid > 0.5)
-            if visible_idx.size == 0:
-                continue
-            split_points = np.flatnonzero(np.diff(visible_idx) > 1) + 1
-            for run in np.split(visible_idx, split_points):
-                if run.size == 0:
-                    continue
-                lane_pixels: list[tuple[int, int]] = []
-                for idx in run:
-                    x_norm, y_norm = lane[int(idx)]
-                    x = int(round(float(np.clip(x_norm, 0.0, 1.0)) * max(w - 1, 1)))
-                    y = int(round(float(np.clip(y_norm, 0.0, 1.0)) * max(h - 1, 1)))
-                    lane_pixels.append((x, y))
-                    boxes.append(
-                        (
-                            max(0, x - margin),
-                            max(0, y - margin),
-                            min(w, x + margin + 1),
-                            min(h, y + margin + 1),
-                        )
-                    )
-                for (x1, y1), (x2, y2) in zip(lane_pixels, lane_pixels[1:]):
-                    boxes.append(
-                        (
-                            max(0, min(x1, x2) - margin),
-                            max(0, min(y1, y2) - margin),
-                            min(w, max(x1, x2) + margin + 1),
-                            min(h, max(y1, y2) + margin + 1),
-                        )
-                    )
-        return boxes
-
-    @staticmethod
-    def _boxes_overlap(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> bool:
-        """Return True when two x1,y1,x2,y2 boxes overlap with positive area."""
-        return int(a[0]) < int(b[2]) and int(a[2]) > int(b[0]) and int(a[1]) < int(b[3]) and int(a[3]) > int(b[1])
-
-    def _apply_lane_aware_random_erasing(
-        self,
-        img: np.ndarray,
-        lanes: np.ndarray,
-        lane_valid: np.ndarray,
-        probability: float,
-    ) -> np.ndarray:
-        """Randomly erase one image rectangle while avoiding visible lane anchors and segments."""
-        prob = float(probability)
-        if prob <= 0.0 or random.random() >= prob:
-            return img
-
-        h, w = img.shape[:2]
-        protected = self._visible_lane_anchor_boxes(
-            lanes,
-            lane_valid,
-            (h, w),
-            margin_px=float(self.gt5_erasing_lane_margin_px),
-        )
-        area = float(h * w)
-        for _ in range(20):
-            target_area = random.uniform(0.02, 0.20) * area
-            aspect = random.uniform(0.3, 3.3)
-            erase_h = int(round((target_area / aspect) ** 0.5))
-            erase_w = int(round((target_area * aspect) ** 0.5))
-            if not (0 < erase_h < h and 0 < erase_w < w):
-                continue
-            y1 = random.randint(0, h - erase_h)
-            x1 = random.randint(0, w - erase_w)
-            erase_box = (x1, y1, x1 + erase_w, y1 + erase_h)
-            if any(self._boxes_overlap(erase_box, box) for box in protected):
-                continue
-            img = img.copy()
-            img[y1 : y1 + erase_h, x1 : x1 + erase_w] = np.array([114, 114, 114], dtype=np.uint8)
-            break
-        return img
-
-    @staticmethod
-    def _apply_gaussian_noise(img: np.ndarray, sigma: float) -> np.ndarray:
-        """Apply small RGB Gaussian noise while preserving uint8 image format."""
-        noise = np.random.normal(0.0, float(sigma), img.shape).astype(np.float32)
-        return np.clip(img.astype(np.float32) + noise, 0, 255).astype(np.uint8)
-
-    def _apply_random_shadow(self, img: np.ndarray) -> np.ndarray:
-        """Apply a broad synthetic shadow band to diversify rare 5-lane lighting."""
-        h, w = img.shape[:2]
-        y1 = random.randint(0, max(h - 1, 0))
-        y2 = random.randint(0, max(h - 1, 0))
-        band = random.randint(max(12, h // 12), max(13, h // 4))
-        polygon = np.array(
-            [
-                [0, np.clip(y1 - band, 0, h - 1)],
-                [w - 1, np.clip(y2 - band, 0, h - 1)],
-                [w - 1, np.clip(y2 + band, 0, h - 1)],
-                [0, np.clip(y1 + band, 0, h - 1)],
-            ],
-            dtype=np.int32,
-        )
-        mask = np.zeros((h, w), dtype=np.uint8)
-        cv2.fillPoly(mask, [polygon], 1)
-        factor = random.uniform(0.55, 0.85)
-        out = img.astype(np.float32)
-        out[mask > 0] *= factor
-        return np.clip(out, 0, 255).astype(np.uint8)
-
-    def _apply_gt5_extra_photometric(
-        self,
-        img: np.ndarray,
-        lanes: np.ndarray,
-        lane_valid: np.ndarray,
-    ) -> np.ndarray:
-        """Apply extra image-only augmentation to rare >=5-lane training samples."""
-        if self.gt5_blur > 0.0 and random.random() < self.gt5_blur:
-            kernel = random.choice((3, 5))
-            img = cv2.GaussianBlur(img, (kernel, kernel), 0)
-        if self.gt5_noise > 0.0 and random.random() < self.gt5_noise:
-            img = self._apply_gaussian_noise(img, sigma=random.uniform(3.0, 10.0))
-        if self.gt5_shadow > 0.0 and random.random() < self.gt5_shadow:
-            img = self._apply_random_shadow(img)
-        if self.gt5_erasing > 0.0:
-            if self.gt5_lane_aware_erasing:
-                img = self._apply_lane_aware_random_erasing(img, lanes, lane_valid, probability=self.gt5_erasing)
-            else:
-                img = self._apply_random_erasing(img, probability=self.gt5_erasing)
-        return img
-
     def _apply_geometric_augment(
         self,
         img: np.ndarray,
         lanes: np.ndarray,
         lane_valid: np.ndarray,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Apply random scale/flips while keeping GCS points synchronized."""
-        img, lanes, lane_valid = self._apply_affine_augment(
+        semantic_mask: np.ndarray,
+        edge_mask: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Apply random scale/flips while keeping GCS points, semantic mask, and edge mask synchronized."""
+        img, lanes, lane_valid, semantic_mask, edge_mask = self._apply_scale_augment(
             img,
             lanes,
             lane_valid,
+            semantic_mask,
+            edge_mask,
         )
 
         if self.fliplr > 0.0 and random.random() < self.fliplr:
             img = np.ascontiguousarray(img[:, ::-1])
+            semantic_mask = np.ascontiguousarray(semantic_mask[:, ::-1])
+            edge_mask = np.ascontiguousarray(edge_mask[:, ::-1])
             if lanes.shape[0]:
                 lanes = lanes.copy()
                 lanes[..., 0] = 1.0 - lanes[..., 0]
 
         if self.flipud > 0.0 and random.random() < self.flipud:
             img = np.ascontiguousarray(img[::-1])
+            semantic_mask = np.ascontiguousarray(semantic_mask[::-1])
+            edge_mask = np.ascontiguousarray(edge_mask[::-1])
             if lanes.shape[0]:
                 lanes = lanes.copy()
                 lanes[..., 1] = 1.0 - lanes[..., 1]
@@ -865,47 +697,47 @@ class GCSLaneDataset(Dataset):
                 Path("<augment>"),
                 point_mode=getattr(self, "point_mode", "free"),
             )
-        return img, lanes, lane_valid
+        return img, lanes, lane_valid, semantic_mask, edge_mask
 
     def _apply_augmentations(
         self,
         img: np.ndarray,
         lanes: np.ndarray,
         lane_valid: np.ndarray,
-        gt5_extra: bool = False,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        semantic_mask: np.ndarray,
+        edge_mask: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Apply photometric and geometric GCS training augmentations."""
         img = self._augment_hsv(img)
-        if gt5_extra:
-            img = self._apply_gt5_extra_photometric(img, lanes, lane_valid)
-        img, lanes, lane_valid = self._apply_geometric_augment(
+        img, lanes, lane_valid, semantic_mask, edge_mask = self._apply_geometric_augment(
             img,
             lanes,
             lane_valid,
+            semantic_mask,
+            edge_mask,
         )
-        if self.erasing > 0.0 and gt5_extra and self.gt5_lane_aware_erasing:
-            img = self._apply_lane_aware_random_erasing(img, lanes, lane_valid, probability=self.erasing)
-        else:
-            img = self._apply_random_erasing(img)
-        return img, lanes, lane_valid
+        img = self._apply_random_erasing(img)
+        return img, lanes, lane_valid, semantic_mask, edge_mask
 
     def __getitem__(self, index: int) -> dict:
         """Load one image and its structured lane targets."""
         if self.mosaic and random.random() < self.mosaic_prob:
-            img, lanes, lane_valid, img_file, label_file, raw_file, ori_shape = self._load_mosaic(index)
+            img, lanes, lane_valid, semantic_mask, edge_mask, img_file, label_file, ori_shape = self._load_mosaic(index)
         else:
-            img, lanes, lane_valid, img_file, label_file, raw_file, ori_shape = self._load_resized_sample(index)
+            img, lanes, lane_valid, semantic_mask, edge_mask, img_file, label_file, ori_shape = self._load_resized_sample(index)
 
         if self.augment:
-            gt5_extra = self.gt5_extra_aug and lanes.shape[0] >= self.gt5_aug_min_lanes
-            img, lanes, lane_valid = self._apply_augmentations(
+            img, lanes, lane_valid, semantic_mask, edge_mask = self._apply_augmentations(
                 img,
                 lanes,
                 lane_valid,
-                gt5_extra=gt5_extra,
+                semantic_mask,
+                edge_mask,
             )
 
         assert_gcs_shape(img.shape[:2], self.imgsz, name="image", context=f"GCSLaneDataset.__getitem__({img_file})")
+        assert_gcs_shape(semantic_mask.shape[:2], self.imgsz, name="semantic_mask", context=f"GCSLaneDataset.__getitem__({label_file})")
+        assert_gcs_shape(edge_mask.shape[:2], self.imgsz, name="edge_mask", context=f"GCSLaneDataset.__getitem__({label_file})")
         img = np.ascontiguousarray(img.transpose(2, 0, 1))
         lanes_t = torch.from_numpy(lanes)
         lane_valid_t = torch.from_numpy(lane_valid)
@@ -913,7 +745,6 @@ class GCSLaneDataset(Dataset):
             "img": torch.from_numpy(img),
             "im_file": str(img_file),
             "path": str(img_file),
-            "raw_file": raw_file,
             "label_file": str(label_file),
             "ori_shape": ori_shape,
             "resized_shape": self.imgsz,
@@ -921,12 +752,14 @@ class GCSLaneDataset(Dataset):
             "lane_valid": lane_valid_t,
             "gt_lanes": lanes_t,
             "gt_lane_valid": lane_valid_t,
+            "semantic_mask": torch.from_numpy(semantic_mask).long(),
+            "edge_mask": torch.from_numpy(edge_mask).float(),
             "num_lanes": torch.tensor(lanes.shape[0], dtype=torch.long),
         }
 
     @staticmethod
     def collate_fn(batch: list[dict]) -> dict:
-        """Collate variable-lane targets while stacking only image tensors."""
+        """Collate variable-lane targets while stacking image and mask tensors."""
         lanes = [b["lanes"] for b in batch]
         lane_valid = [b["lane_valid"] for b in batch]
         num_lanes = torch.stack([b["num_lanes"] for b in batch])
@@ -936,7 +769,6 @@ class GCSLaneDataset(Dataset):
             "img": torch.stack([b["img"] for b in batch], dim=0),
             "im_file": [b["im_file"] for b in batch],
             "path": [b["path"] for b in batch],
-            "raw_file": [b.get("raw_file", "") for b in batch],
             "label_file": [b["label_file"] for b in batch],
             "ori_shape": [b["ori_shape"] for b in batch],
             "resized_shape": [b["resized_shape"] for b in batch],
@@ -944,6 +776,8 @@ class GCSLaneDataset(Dataset):
             "lane_valid": lane_valid,
             "gt_lanes": lanes,
             "gt_lane_valid": lane_valid,
+            "semantic_mask": torch.stack([b["semantic_mask"] for b in batch], dim=0),
+            "edge_mask": torch.stack([b["edge_mask"] for b in batch], dim=0),
             "num_lanes": num_lanes,
             "cls": torch.zeros((total_lanes, 1), dtype=torch.float32),
             "batch_idx": torch.cat(
@@ -957,3 +791,12 @@ class GCSLaneDataset(Dataset):
 def gcs_collate_fn(batch: list[dict]) -> dict:
     """Reference-compatible GCS collate function."""
     return GCSLaneDataset.collate_fn(batch)
+
+
+def resize_gcs_masks(batch: dict, size: tuple[int, int]) -> dict:
+    """Resize auxiliary masks after multi-scale image resizing."""
+    batch["semantic_mask"] = (
+        F.interpolate(batch["semantic_mask"].unsqueeze(1).float(), size=size, mode="nearest").squeeze(1).long()
+    )
+    batch["edge_mask"] = F.interpolate(batch["edge_mask"].unsqueeze(1), size=size, mode="nearest").squeeze(1)
+    return batch
