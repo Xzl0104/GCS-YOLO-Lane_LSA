@@ -125,11 +125,9 @@ For this project, use `reasoning_effort: "xhigh"` for project Agent calls unless
 
 Put the intended project role, read-only/write scope, no-edit constraints, and task scope in whichever payload field you use. If using `message`, list materials in a `Materials:` sentence. If using `items`, include the task instruction as a text item alongside any material references supported by the runtime.
 
-Wrapper code must drop empty strings and empty arrays at the final adapter boundary before calling `spawn_agent`; an empty `items` array and an empty `message` string are still treated as present by the runtime.
+Wrapper code must drop empty strings and empty arrays at the final adapter boundary before calling `spawn_agent`; an empty `items` array and an empty `message` string are still treated as present by the runtime. This branch does not ship repository wrapper scripts to the remote training server.
 
-Repository wrappers that own the host `spawn_agent` callable must call `scripts/gcs_spawn_adapter.py::spawn_agent_with_normalized_payload`. If a wrapper cannot use that adapter directly, it must call `scripts/gcs_spawn_payload.py::normalize_spawn_payload` immediately before sending the low-level runtime call, after any UI or schema defaults have been applied.
-
-The low-level chat-exposed low-level spawn surface must not be used directly when it serializes omitted payload fields as empty defaults. Use user-originated Skill/App orchestration, assistant-originated `multi_agent_v1.spawn_agent` tool calls, or route repository wrapper calls through the adapter above in the actual UI/tool layer.
+The low-level chat-exposed low-level spawn surface must not be used directly when it serializes omitted payload fields as empty defaults. Use user-originated Skill/App orchestration or assistant-originated `multi_agent_v1.spawn_agent` tool calls in Codex.
 
 Do not describe local work as delegated Agent output. In short, do not describe local analysis or loaded Skill execution as if a subagent produced it.
 

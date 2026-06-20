@@ -313,15 +313,7 @@ python -m py_compile <changed-python-files>
 
 ## Known Validation Limitation
 
-This branch was imported from `5-25-3.zip` and now has project `.codex/`, `.agents/`, agent helper scripts, and standalone TuSimple official eval/sweep helpers synchronized from the main repository. Mainline Count/Quality/Survival tests and training-time official-best checkpoint preservation are intentionally not part of this branch unless a future task explicitly restores them.
-
-## Agent Setup Check
-
-After Agent, Skill, context, or delegation-policy changes:
-
-```bash
-python scripts/check_gcs_agent_setup.py
-```
+This branch was imported from `5-25-3.zip` and includes standalone TuSimple official eval/sweep helpers. Server-side sync only needs algorithm/runtime code. Mainline Count/Quality/Survival tests, agent setup checks, and training-time official-best checkpoint preservation are intentionally not part of the server payload unless a future task explicitly restores them.
 
 ## Official TuSimple Evaluation Helpers
 

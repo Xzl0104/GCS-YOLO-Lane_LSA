@@ -146,10 +146,4 @@ aux_edge_logits: B x 1 x 544 x 960
 
 ## Agent Tooling
 
-This branch includes the project `.codex/`, `.agents/`, and agent helper scripts from the main repository. They support Codex Agent/Skill workflows only; they do not change the 5-25-3 K56 algorithm contract or enable later mainline Count/Quality/Boundary machinery.
-
-After Agent, Skill, context, or delegation-policy changes, run:
-
-```bash
-python scripts/check_gcs_agent_setup.py
-```
+Agent/Skill configuration is local Codex workspace context, not part of the server-side algorithm payload for this branch. Server synchronization only needs the training, evaluation, diagnostic, model, config, and data-conversion code required to run experiments.

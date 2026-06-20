@@ -78,29 +78,29 @@ Preservation rule:
 
 Do not delete previous q12-k56 experiment documentation. Keep it as historical experiment context, and do not let it override `docs/agent-context/current-contracts.md`.
 
-## 2026-06-20: Synchronize Agent/Skill Tooling Into K56 Branch
+## 2026-06-20: Keep Agent Workflow Local to Codex
 
 Decision:
 
-Synchronize project `.codex/`, `.agents/`, and repository wrapper scripts into this branch while preserving the `5-25-3.zip` + Q12/K56 fixed-y algorithm contract.
+Document project Agent/Skill workflow rules for Codex collaboration while keeping the server-side branch payload focused on algorithm/runtime code.
 
 Why:
 
-The branch should support the same Codex Agent, Skill, and wrapper validation workflow as the main repository without implying that later mainline Count/Quality/Boundary/Survival algorithm mechanisms are active.
+The remote training server only needs code required for training, evaluation, diagnostics, model/config contracts, and data conversion. Agent setup files and wrapper scripts are local Codex workspace concerns and must not imply that later mainline Count/Quality/Boundary/Survival algorithm mechanisms are active.
 
 Policy:
 
 Permit assistant-originated runtime delegation through `multi_agent_v1.spawn_agent` only when the user explicitly asks for multi-Agent, delegation, subagents, or parallel agent work. If the tool is absent from the initial surface, the assistant must call `tool_search` with query `multi_agent_v1 spawn_agent` before declaring that the current API/tool surface does not expose runtime multi-Agent delegation. The assistant must not simulate Agent roles or describe local work as delegated output. Skill loading remains separate from delegation.
 
-Close completed runtime agents and raise max_threads to 8. For every assistant-originated runtime agent, use `wait_agent` when the result is needed and `close_agent` after the result is integrated. Repository wrapper calls still must use `scripts/gcs_spawn_adapter.py::spawn_agent_with_normalized_payload` or `scripts/gcs_spawn_payload.py::normalize_spawn_payload` so empty `message`/`items` defaults are dropped before host calls.
+Close completed runtime agents after their results are integrated. Do not describe local Skill loading as delegated Agent output.
 
 Validation evidence:
 
-Run `python scripts/check_gcs_agent_setup.py` after Agent, Skill, context, or delegation-policy changes.
+No server-side agent setup check is required for this branch.
 
 Mainline or experiment:
 
-Branch tooling synchronization, not an algorithm promotion.
+Branch collaboration policy, not an algorithm promotion.
 
 ## 2026-06-20: Freeze count03_under5_03 Official-Val Selected Candidate
 

@@ -59,4 +59,4 @@ A minimal test-only archive may include only the 2,782 images referenced by `tes
 
 ## Collaboration Model
 
-This branch is a source import of `5-25-3.zip` with project `.codex/`, `.agents/`, and agent helper scripts synchronized from the main repository. Use the branch-local Agent/Skill tooling for multi-agent review when explicitly requested, and keep write ownership in the main worktree unless separate worktrees and disjoint ownership are explicit.
+This branch is a source import of `5-25-3.zip`. Agent/Skill configuration is local Codex workspace context, not part of the server-side algorithm payload. Use multi-agent review only when explicitly requested, and keep write ownership in the main worktree unless separate worktrees and disjoint ownership are explicit.

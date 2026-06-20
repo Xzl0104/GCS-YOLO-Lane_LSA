@@ -109,7 +109,7 @@ Historical q12-k56 experiment notes and compatibility paths must stay as old rec
 
 Do not silently import later mainline mechanisms into this branch. In particular, do not add Count Head, Count Boundary, Quality Head, Survival Head, near-miss mining, official-best checkpoint preservation, or mainline K56 candidate scripts unless a future task explicitly asks for that algorithm change.
 
-This branch now tracks project Agent/Skill tooling under `.codex/`, `.agents/`, and the repository wrapper scripts under `scripts/`. Datasets, generated runs, checkpoints, caches, converted labels, and large runtime artifacts must stay out of Git.
+Agent/Skill tooling may exist in a local Codex workspace, but it is not part of the server-side algorithm payload for this branch. Datasets, generated runs, checkpoints, caches, converted labels, and large runtime artifacts must stay out of Git.
 
 ## Output Contract
 
@@ -184,9 +184,7 @@ reasoning_effort = how deeply the subagent should reason
 service_tier = runtime service tier
 ```
 
-message and items are alternative payload fields. Repository wrappers must drop empty strings and empty arrays at the final adapter boundary before calling the host runtime.
-
-Use `scripts/gcs_spawn_adapter.py::spawn_agent_with_normalized_payload` or `scripts/gcs_spawn_payload.py::normalize_spawn_payload` for wrapper-owned low-level calls. Default to natural-language or Skill-triggered delegation when Codex App/CLI owns orchestration.
+message and items are alternative payload fields. Default to natural-language or Skill-triggered delegation when Codex App/CLI owns orchestration.
 
 ## Skills
 
@@ -211,12 +209,6 @@ Recommended local checks after code/config changes:
 python -m py_compile <changed-python-files>
 python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml --imgsz 544 960 --batch 1 --device cpu
 python tools/check_gcs_label_order_split.py --dataset-root <path-to-tusimple_fixed_y_k56_960x544>
-```
-
-After Agent, Skill, context, or delegation-policy changes, run:
-
-```bash
-python scripts/check_gcs_agent_setup.py
 ```
 
 For changed Python helper files, also run:

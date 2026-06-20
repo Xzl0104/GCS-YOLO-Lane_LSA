@@ -57,18 +57,4 @@ aux_edge_logits: B x 1 x H x W
 
 ## Agent Tooling
 
-This branch tracks `.codex/`, `.agents/`, and the repository wrapper scripts:
-
-```text
-scripts/check_gcs_agent_setup.py
-scripts/gcs_spawn_adapter.py
-scripts/gcs_spawn_payload.py
-```
-
-After Agent, Skill, context, or delegation-policy edits, run:
-
-```bash
-python scripts/check_gcs_agent_setup.py
-```
-
-These tools are synchronized for workflow parity only. They do not change the 5-25-3 algorithm body or activate later mainline Count/Quality/Boundary behavior.
+Agent/Skill configuration is local Codex workspace context, not part of the server-side algorithm payload for this branch. Do not require agent setup checks on the remote training server. These workflow rules do not change the 5-25-3 algorithm body or activate later mainline Count/Quality/Boundary behavior.
