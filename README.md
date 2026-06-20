@@ -23,6 +23,26 @@ Compatibility paths `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml` an
 
 The 5-25-3 algorithm body is intentionally not upgraded to later mainline Count Head, Count Boundary, Quality Head, Survival Head, near-miss, or official-best checkpoint machinery.
 
+## Evaluated Candidate
+
+The 2026-06-20 evaluated candidate is:
+
+```text
+run: gcs_yolo_lane_s_tusimple_fixed_y_visible_iou_count03_under5_03
+weights: runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_visible_iou_count03_under5_03/weights/best.pt
+official-val decode: conf=0.05, point_valid_thr=0.5, nms_dist_px=50.0, max_det=8, min_points=5
+official-val363: ACC=0.969976, FP=0.019559, FN=0.014463
+final test: ACC=0.965459, FP=0.029439, FN=0.026270
+```
+
+The decode was selected on official-val only. The final test result is reporting evidence and must not be used for threshold, checkpoint, or postprocess tuning.
+
+Current bottleneck evidence is documented in `docs/agent-context/known-bottlenecks.md`. The 2026-06-20 train/val diagnostic localizes the main count weakness to `GT4` scenes with short visible side lanes, not to a simple decode-threshold issue. The remote diagnostic artifact is:
+
+```text
+runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_visible_iou_count03_under5_03_count_confusion_train_val_by_visibility/summary.json
+```
+
 ## Full Training
 
 Run formal training on the remote CUDA server from a clone checked out to this branch:
@@ -41,7 +61,6 @@ python tools/train_gcs.py \
   --batch 32 \
   --workers 4 \
   --device 0 \
-  --no-amp \
   --optimizer AdamW \
   --lr0 5e-4 \
   --lrf 0.05 \
@@ -59,12 +78,12 @@ python tools/train_gcs.py \
   --gcs-curve 0.1 \
   --gcs-mask 0.2 \
   --gcs-edge 0.2 \
-  --gcs-count 0.2 \
+  --gcs-count 0.3 \
   --gcs-count-under5 0.3 \
   --gcs-count-under5-min-lanes 5 \
   --gcs-lane-count-balanced \
   --project runs/gcs_lane \
-  --name gcs_yolo_lane_s_tusimple_fixed_y_visible_iou_count02_under5_03
+  --name gcs_yolo_lane_s_tusimple_fixed_y_visible_iou_count03_under5_03
 ```
 
 If `batch=32` OOMs, reduce it only for OOM or instability and record the change in the run notes.
@@ -123,4 +142,14 @@ pred_logits: B x 12
 pred_valid_logits: B x 12 x 56
 aux_mask_logits: B x 2 x 544 x 960
 aux_edge_logits: B x 1 x 544 x 960
+```
+
+## Agent Tooling
+
+This branch includes the project `.codex/`, `.agents/`, and agent helper scripts from the main repository. They support Codex Agent/Skill workflows only; they do not change the 5-25-3 K56 algorithm contract or enable later mainline Count/Quality/Boundary machinery.
+
+After Agent, Skill, context, or delegation-policy changes, run:
+
+```bash
+python scripts/check_gcs_agent_setup.py
 ```

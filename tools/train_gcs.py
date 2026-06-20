@@ -246,6 +246,18 @@ def parse_args() -> argparse.Namespace:
         default=50,
         help="Minimum group size used when balancing lane counts, preventing tiny groups from dominating an epoch.",
     )
+    parser.add_argument(
+        "--gcs-gt4-short-boost",
+        type=float,
+        default=1.0,
+        help="Extra sampler multiplier for GT4 images whose shortest visible lane is <= --gcs-gt4-short-min-visible-max. 1 disables.",
+    )
+    parser.add_argument(
+        "--gcs-gt4-short-min-visible-max",
+        type=int,
+        default=10,
+        help="Shortest visible-lane point threshold used by --gcs-gt4-short-boost.",
+    )
     parser.add_argument("--no-val", action="store_true")
     parser.add_argument(
         "--resume",
@@ -353,6 +365,8 @@ def main() -> None:
         "gcs_lane_count_balanced": args.gcs_lane_count_balanced,
         "gcs_lane_count_balance_power": args.gcs_lane_count_balance_power,
         "gcs_lane_count_min_group": args.gcs_lane_count_min_group,
+        "gcs_gt4_short_boost": args.gcs_gt4_short_boost,
+        "gcs_gt4_short_min_visible_max": args.gcs_gt4_short_min_visible_max,
     }
 
     print(f"GCS input shape: {shape_str(gcs_imgsz)} (W x H), stored as H,W={gcs_imgsz}")

@@ -215,6 +215,7 @@ CFG_FLOAT_KEYS = frozenset(
         "gcs_eval_max_x_dist",
         "gcs_eval_nms_dist_px",
         "gcs_lane_count_balance_power",
+        "gcs_gt4_short_boost",
     }
 )
 CFG_FRACTION_KEYS = frozenset(
@@ -267,6 +268,7 @@ CFG_INT_KEYS = frozenset(
         "gcs_eval_min_overlap",
         "gcs_lane_count_min_group",
         "gcs_count_under5_min_lanes",
+        "gcs_gt4_short_min_visible_max",
     }
 )
 CFG_BOOL_KEYS = frozenset(

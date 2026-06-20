@@ -154,6 +154,8 @@ gcs_eval_max_det: 8 # (int) maximum decoded lane queries kept for GCS validation
 gcs_lane_count_balanced: True # (bool) sample GCS training images with inverse-frequency lane-count weights
 gcs_lane_count_balance_power: 1.0 # (float) lane-count sampler exponent; 1.0 gives equal lane-count groups
 gcs_lane_count_min_group: 50 # (int) minimum group size used to smooth lane-count sampler weights
+gcs_gt4_short_boost: 1.0 # (float) extra sampler multiplier for GT4 samples with short visible side lanes; 1 disables
+gcs_gt4_short_min_visible_max: 10 # (int) max shortest visible-lane points for GT4 short-lane sampler boost
 nbs: 64 # (int) nominal batch size used for loss normalization
 hsv_h: 0.015 # (float) HSV hue augmentation fraction
 hsv_s: 0.7 # (float) HSV saturation augmentation fraction

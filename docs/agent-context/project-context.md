@@ -45,7 +45,7 @@ The official-val subset is aligned with the current validation split and must st
 
 The K56 labels keep the same split sizes and align fixed-y anchors exactly to TuSimple official h-samples `710..160`, descending by `10` pixels.
 
-Official TuSimple Accuracy evaluation needs the original TuSimple archive layout, not only the fixed-y converted dataset. This branch includes `tools/eval_tusimple_official.py` and `tools/sweep_tusimple_official.py`; use official-val for threshold/postprocess selection and test only once for the selected candidate.
+Official TuSimple Accuracy evaluation needs the original TuSimple archive layout, not only the fixed-y converted dataset. This branch includes `tools/eval_tusimple_official.py`, `tools/sweep_tusimple_official.py`, and `gcs_tools/tusimple_official_eval.py` for official-val evaluation and threshold sweeps, but it does not include later mainline training-time `official_best` checkpoint preservation. Use official-val for threshold/postprocess selection and test only once for the selected candidate.
 
 Required test archive shape:
 
@@ -59,4 +59,4 @@ A minimal test-only archive may include only the 2,782 images referenced by `tes
 
 ## Collaboration Model
 
-This branch is a source import of `5-25-3.zip`; the zip did not include project `.codex/`, `.agents/`, `scripts/`, or `tests/` directories. Use the current Codex runtime tools for any multi-agent review, and keep write ownership in the main worktree unless separate worktrees and disjoint ownership are explicit.
+This branch is a source import of `5-25-3.zip` with project `.codex/`, `.agents/`, and agent helper scripts synchronized from the main repository. Use the branch-local Agent/Skill tooling for multi-agent review when explicitly requested, and keep write ownership in the main worktree unless separate worktrees and disjoint ownership are explicit.

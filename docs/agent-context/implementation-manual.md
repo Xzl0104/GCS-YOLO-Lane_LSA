@@ -54,3 +54,21 @@ aux_edge_logits: B x 1 x H x W
 3. Run `tools/check_model.py` with `--imgsz 544 960`.
 4. Check fixed-y anchors are exactly `710..160` step `-10`.
 5. If a K56 dataset root is available, run label order/split checks against that root.
+
+## Agent Tooling
+
+This branch tracks `.codex/`, `.agents/`, and the repository wrapper scripts:
+
+```text
+scripts/check_gcs_agent_setup.py
+scripts/gcs_spawn_adapter.py
+scripts/gcs_spawn_payload.py
+```
+
+After Agent, Skill, context, or delegation-policy edits, run:
+
+```bash
+python scripts/check_gcs_agent_setup.py
+```
+
+These tools are synchronized for workflow parity only. They do not change the 5-25-3 algorithm body or activate later mainline Count/Quality/Boundary behavior.

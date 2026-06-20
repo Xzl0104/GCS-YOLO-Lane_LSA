@@ -128,4 +128,4 @@ count_under5_loss
 
 Decode must use real query predictions only, must not use GT during inference, and must not fabricate lanes. Final output should be sorted from left to right by bottom visible x.
 
-This branch includes `tools/sweep_tusimple_official.py` and `tools/eval_tusimple_official.py` for TuSimple official-val and final test evaluation. It still does not include later Count/Quality/Survival/near-miss/official-best machinery. Use official-val for selection and test only once for final evaluation.
+This branch includes `tools/eval_tusimple_official.py`, `tools/sweep_tusimple_official.py`, `gcs_tools/tusimple_official_eval.py`, and the branch-local `tools/diagnose_tusimple_count_confusion.py` train/val diagnostic. It still does not include `tools/diagnose_gcs_gt5.py`, training-time `official_best` checkpoint preservation, or later mainline Count/Quality/Boundary diagnostics unless a future task explicitly ports them. Use official-val for selection and test only once for final evaluation.
