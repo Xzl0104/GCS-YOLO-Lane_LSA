@@ -122,6 +122,8 @@ gcs_edge: 0.2 # (float) GCS auxiliary edge loss gain
 gcs_count: 0.0 # (float) GCS lane-count/cardinality loss gain; 0 disables
 gcs_count_under5: 0.0 # (float) extra GCS undercount loss gain for dense-lane samples; 0 disables
 gcs_count_under5_min_lanes: 5 # (int) minimum GT lane count that enables gcs_count_under5
+gcs_extra_exist: 0.0 # (float) extra BCE gain for high-score unmatched queries; 0 disables
+gcs_extra_exist_thr: 0.15 # (float) detached existence threshold for high-score unmatched query penalty
 gcs_exist_pos_weight: 1.0 # (float) positive query weight for GCS lane existence BCE
 gcs_exist_focal_gamma: 0.0 # (float) optional focal gamma for GCS existence BCE; 0 disables focal weighting
 gcs_exist_focal_alpha: -1.0 # (float) optional focal alpha for GCS existence BCE; set 0..1 to enable alpha weighting

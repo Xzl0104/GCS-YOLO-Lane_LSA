@@ -78,9 +78,107 @@ If `batch=32` OOMs on the target machine, reduce batch only for OOM/instability 
 
 `--no-amp` is included because the current remote run hit an Ultralytics AMP self-check failure while loading `yolo26n.pt`. If that server cache/checkpoint issue is fixed, AMP may be re-enabled only with a run note.
 
-## Current Evaluated Candidate
+## Current Official-Val Selection
 
-The 2026-06-20 evaluated candidate uses:
+The 2026-06-21 official-val selected candidate uses:
+
+```text
+source run:   runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03
+weights:      weights/best.pt
+val sweep:    runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03_official_val_sweep
+decode:       conf=0.15, point_valid_thr=0.5, nms_dist_px=0.0, max_det=6, min_points=4
+official-val: ACC=0.970851, FP=0.022084, FN=0.011708, count_acc=0.939394
+```
+
+This beats the previous selected official-val ACC by `+0.000875`, but it does so by lowering FN while worsening lane-count accuracy:
+
+```text
+previous count03_under5_03 official-val: ACC=0.969976, FP=0.019559, FN=0.014463, count_acc=0.969697, count_acc_4=0.909091
+gt4short15 official-val:                ACC=0.970851, FP=0.022084, FN=0.011708, count_acc=0.939394, count_acc_4=0.848485
+```
+
+The required train/val count-confusion diagnostic and one-shot final-test report for `gt4short15` are complete:
+
+```text
+diagnostic: runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03_count_confusion_train_val_by_visibility/summary.json
+final test: runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03_official_test_best_from_val/tusimple_official_summary.json
+
+train diagnostic count_acc = 0.952191
+val diagnostic count_acc = 0.920110
+val diagnostic GT3/GT4/GT5 count_acc = 0.925234 / 0.929167 / 0.733333
+
+final test ACC = 0.965369
+final test FP = 0.033309
+final test FN = 0.029236
+final test count_acc = 0.864486
+final test count_acc_4 = 0.482906
+final test count_acc_5 = 0.845343
+```
+
+This final-test report is reporting-only and did not improve over the previous `count03_under5_03` final-test ACC `0.965459`. Keep `gt4short15` as official-val selected, but do not claim a final-test improvement and do not tune from final test. The final-test run used `max_det=6` because that was the official-val selected postprocess, even though the train-time args recorded `gcs_eval_max_det=8`.
+
+Two follow-up diagnostics were run before changing any loss:
+
+```text
+failure trace:
+runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03_failure_trace_train_val/failure_trace_summary.json
+runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03_failure_trace_train_val/failure_trace_records.csv
+
+NMS-only 363 official-val sweep:
+runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03_official_val363_nms_only_conf015_maxdet6_minp4_half/tusimple_official_sweep_summary.json
+runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03_official_val363_nms_only_conf015_maxdet6_minp4_half/tusimple_official_sweep.csv
+```
+
+The NMS-only sweep must use the explicit 363-image official-val GT json. A
+plain `--split val` sweep covers `images=2858` and is not the selection surface:
+
+```bash
+python tools/sweep_tusimple_official.py \
+  --archive-root archive/TUSimple \
+  --split val \
+  --gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
+  --weights runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03/weights/best.pt \
+  --imgsz 544 960 \
+  --device 0 \
+  --half \
+  --confs 0.15 \
+  --point-valid-thrs 0.5 \
+  --max-dets 6 \
+  --min-points 4 \
+  --nms-dist-pxs 0 2 4 6 8 10 12 14 16 18 20 24 30 40 50 60 80 \
+  --save-dir runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03_official_val363_nms_only_conf015_maxdet6_minp4_half
+```
+
+Result: keep `nms_dist_px=0.0`. `nms=0/2/4/6` match the selected row
+(`official_acc=0.970851`, `FP=0.022084`, `FN=0.011708`,
+`count_acc=0.939394`). From `nms=8` onward, NMS lowers some overcount but raises
+FN to `0.012397` and reduces official ACC. At `nms=80`, count accuracy improves
+to `0.953168`, but official ACC drops to `0.970679`. This is diagnostic-only
+postprocess evidence, not a new selected decode.
+
+## Extra Exist Suppression Loss Experiment
+
+The high-score unmatched-query suppression loss is an explicit experimental
+option. Defaults preserve baseline behavior:
+
+```text
+gcs_extra_exist = 0.0
+gcs_extra_exist_thr = 0.15
+```
+
+It uses the training Hungarian matcher only: unmatched queries with detached
+`sigmoid(pred_logits) >= gcs_extra_exist_thr` receive a target-zero BCE penalty.
+Do not add NMS, `max_det`, `min_points`, decoded lane count, or GT-count gating
+inside this training loss.
+
+First experiment knobs should stay small:
+
+```bash
+--gcs-extra-exist 0.05 \
+--gcs-extra-exist-thr 0.15
+```
+
+The previous 2026-06-20 final-test-reported candidate was:
 
 ```text
 source run:   runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_visible_iou_count03_under5_03
@@ -92,7 +190,7 @@ official-val: ACC=0.969976, FP=0.019559, FN=0.014463, count_acc=0.969697
 final test:   ACC=0.965459, FP=0.029439, FN=0.026270, count_acc=0.872753
 ```
 
-Use this test result only as final reporting evidence for the selected official-val candidate. Do not use it to tune thresholds, checkpoint choice, or postprocess settings.
+Use this test result only as final reporting evidence for the previous `count03_under5_03` candidate. Do not use it to tune thresholds, checkpoint choice, or postprocess settings.
 
 ## Train/Val Count-Confusion Diagnostic
 
@@ -147,7 +245,7 @@ gcs_gt4_short_boost = 1.0
 gcs_gt4_short_min_visible_max = 10
 ```
 
-Recommended next formal train-side experiment:
+Completed diagnostic experiment, not a promoted next step:
 
 ```bash
 python tools/train_gcs.py \
@@ -191,6 +289,87 @@ python tools/train_gcs.py \
 ```
 
 After training, select checkpoint/decode only on official-val. Then run the train/val count-confusion diagnostic above on the selected candidate before any final-test evaluation.
+
+Result note:
+
+```text
+gcs_yolo_lane_s_tusimple_fixed_y_gt4short2_count03_under5_03 improved the
+target train/val short-GT4 diagnostic groups, but did not beat the baseline on
+363-image official-val ACC:
+
+A baseline official_acc = 0.969976
+B gt4short2 official_acc = 0.969726
+```
+
+Do not send this candidate to final test. The similarly named
+`gcs_yolo_lane_s_tusimple_fixed_y_gt4short2_count03_under5_03_official_val_sweep_maxdet8`
+artifact used `archive/TUSimple/train_set/label_data_0313.json` with
+`images=2858`, so it is not the 363-image official-val selection surface.
+
+Follow-up result:
+
+```text
+run: gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03
+sampler: --gcs-gt4-short-boost 1.5 --gcs-gt4-short-min-visible-max 10
+val sweep: runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03_official_val_sweep
+best: conf=0.15, point_valid_thr=0.5, nms_dist_px=0.0, max_det=6, min_points=4
+official-val ACC=0.970851, FP=0.022084, FN=0.011708, official_score=0.970175, count_acc=0.939394
+```
+
+This is now the official-val selected candidate, but its count accuracy is worse
+than both baseline and `gt4short2`. The train/val diagnostic below has been
+run and should be used as the reproducible count-bottleneck check.
+
+```bash
+python tools/diagnose_tusimple_count_confusion.py \
+  --weights runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03/weights/best.pt \
+  --dataset-root datasets/tusimple_fixed_y_k56_960x544 \
+  --splits train val \
+  --imgsz 544 960 \
+  --conf 0.15 \
+  --point-valid-thr 0.5 \
+  --nms-dist-px 0.0 \
+  --max-det 6 \
+  --min-points 4 \
+  --device 0 \
+  --half \
+  --save-json runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03_count_confusion_train_val_by_visibility/summary.json \
+  --save-csv runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03_count_confusion_train_val_by_visibility/groups.csv \
+  --topk 20
+```
+
+The one-shot final-test report used the same official-val selected decode:
+
+```bash
+python tools/eval_tusimple_official.py \
+  --archive-root archive/TUSimple \
+  --split test \
+  --weights runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03/weights/best.pt \
+  --imgsz 544 960 \
+  --device 0 \
+  --conf 0.15 \
+  --point-valid-thr 0.5 \
+  --nms-dist-px 0.0 \
+  --max-det 6 \
+  --min-points 4 \
+  --half \
+  --save-dir runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03_official_test_best_from_val \
+  --save-records
+```
+
+Result:
+
+```text
+official_acc = 0.965369
+official_FP = 0.033309
+official_FN = 0.029236
+official_score = 0.964118
+count_acc = 0.864486
+```
+
+This is reporting evidence only. It is lower than the previous `count03_under5_03`
+final-test ACC `0.965459`, so future changes must return to official-val and
+train/val diagnostics rather than test threshold search.
 
 ## Label Rebuild
 

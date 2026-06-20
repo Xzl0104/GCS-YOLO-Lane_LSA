@@ -23,9 +23,29 @@ Compatibility paths `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml` an
 
 The 5-25-3 algorithm body is intentionally not upgraded to later mainline Count Head, Count Boundary, Quality Head, Survival Head, near-miss, or official-best checkpoint machinery.
 
-## Evaluated Candidate
+## Evaluated Candidates
 
-The 2026-06-20 evaluated candidate is:
+The 2026-06-21 official-val selected candidate is:
+
+```text
+run: gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03
+weights: runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03/weights/best.pt
+official-val sweep: runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03_official_val_sweep
+official-val decode: conf=0.15, point_valid_thr=0.5, nms_dist_px=0.0, max_det=6, min_points=4
+official-val363: ACC=0.970851, FP=0.022084, FN=0.011708, count_acc=0.939394
+```
+
+It improves the 363-image official-val ACC over the previous selected candidate by `+0.000875`, mainly from lower FN. Its count accuracy is worse, especially GT4 count accuracy. The completed train/val diagnostic and one-shot final-test report confirm that this is an official-val recall gain, not a count-robustness fix.
+
+The 2026-06-21 reporting-only final-test result for `gt4short15` is:
+
+```text
+final test artifact: runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03_official_test_best_from_val/tusimple_official_summary.json
+final test: ACC=0.965369, FP=0.033309, FN=0.029236, count_acc=0.864486
+count_acc_4=0.482906, count_acc_5=0.845343
+```
+
+The previous 2026-06-20 final-test-reported candidate was:
 
 ```text
 run: gcs_yolo_lane_s_tusimple_fixed_y_visible_iou_count03_under5_03
@@ -35,13 +55,24 @@ official-val363: ACC=0.969976, FP=0.019559, FN=0.014463
 final test: ACC=0.965459, FP=0.029439, FN=0.026270
 ```
 
-The decode was selected on official-val only. The final test result is reporting evidence and must not be used for threshold, checkpoint, or postprocess tuning.
+Both decodes were selected on official-val only. `gt4short15` remains the official-val selected candidate, but its final-test report did not beat the previous final-test ACC `0.965459`; do not use final test for threshold, checkpoint, or postprocess tuning.
 
-Current bottleneck evidence is documented in `docs/agent-context/known-bottlenecks.md`. The 2026-06-20 train/val diagnostic localizes the main count weakness to `GT4` scenes with short visible side lanes, not to a simple decode-threshold issue. The remote diagnostic artifact is:
+Current bottleneck evidence is documented in `docs/agent-context/known-bottlenecks.md`. The train/val diagnostics localize the main count weakness to `GT4` scenes with short visible side lanes, not to a simple decode-threshold issue. The relevant remote diagnostic artifacts are:
 
 ```text
 runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_visible_iou_count03_under5_03_count_confusion_train_val_by_visibility/summary.json
+runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03_count_confusion_train_val_by_visibility/summary.json
+runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03_failure_trace_train_val/failure_trace_summary.json
+runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03_official_val363_nms_only_conf015_maxdet6_minp4_half/tusimple_official_sweep_summary.json
 ```
+
+The 2026-06-21 `gt4short15` diagnostics split the count failures into concrete
+failure modes: validation failures are overcount-heavy (`19` overcount images
+vs `10` undercount images), with extra lanes mainly `spurious_extra` plus some
+`duplicate_like_extra`. The NMS-only official-val363 sweep kept
+`conf=0.15`, `point_valid_thr=0.5`, `max_det=6`, and `min_points=4` fixed; it
+did not find a safe NMS replacement for `nms_dist_px=0.0` because NMS starts
+raising FN as soon as it removes duplicate-like predictions.
 
 ## Full Training
 

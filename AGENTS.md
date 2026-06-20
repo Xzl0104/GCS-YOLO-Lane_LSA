@@ -137,6 +137,7 @@ mask_loss
 edge_loss
 count_loss
 count_under5_loss
+extra_exist_loss
 ```
 
 ## Agent Coordination Rules

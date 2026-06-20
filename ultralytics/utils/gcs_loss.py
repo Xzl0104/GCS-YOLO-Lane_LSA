@@ -24,6 +24,7 @@ class GCSLoss(nn.Module):
         "edge_loss",
         "count_loss",
         "count_under5_loss",
+        "extra_exist_loss",
     )
 
     def __init__(
@@ -85,6 +86,10 @@ class GCSLoss(nn.Module):
         )
         if self.count_under5_min_lanes < 1:
             raise ValueError(f"gcs_count_under5_min_lanes must be >= 1, got {self.count_under5_min_lanes}.")
+        self.extra_exist_gain = float(self._arg(args, "gcs_extra_exist", 0.0))
+        self.extra_exist_thr = float(self._arg(args, "gcs_extra_exist_thr", 0.15))
+        if not 0.0 <= self.extra_exist_thr <= 1.0:
+            raise ValueError(f"gcs_extra_exist_thr must be in [0, 1], got {self.extra_exist_thr}.")
         self.curve_alpha = float(curve_alpha if curve_alpha is not None else self._arg(args, "gcs_curve_alpha", 5.0))
         self.curve_weight_max = float(
             curve_weight_max if curve_weight_max is not None else self._arg(args, "gcs_curve_weight_max", 5.0)
@@ -474,6 +479,22 @@ class GCSLoss(nn.Module):
         """Cardinality loss that aligns summed existence probability with GT lane count."""
         return self.count_losses(pred_logits, batch, gt_valid)[0]
 
+    def extra_exist_loss(
+        self, pred_logits: torch.Tensor, indices: list[tuple[torch.Tensor, torch.Tensor]]
+    ) -> torch.Tensor:
+        """BCE penalty for unmatched queries whose detached existence score is above the hard-extra threshold."""
+        score = pred_logits.detach().sigmoid()
+        target = torch.zeros_like(pred_logits)
+
+        unmatched = torch.ones_like(pred_logits, dtype=torch.bool)
+        for b, (src_idx, _) in enumerate(indices):
+            if src_idx.numel():
+                unmatched[b, src_idx] = False
+
+        hard_extra = unmatched & (score >= float(self.extra_exist_thr))
+        raw = F.binary_cross_entropy_with_logits(pred_logits, target, reduction="none")
+        return (raw * hard_extra.to(raw.dtype)).sum() / hard_extra.sum().clamp_min(1)
+
     @staticmethod
     def _foreground_pos_weight(target: torch.Tensor, max_weight: float) -> torch.Tensor:
         """Return a capped foreground weight for sparse binary auxiliary targets."""
@@ -572,6 +593,7 @@ class GCSLoss(nn.Module):
         smooth_loss = self.smooth_loss(pred_points, gt_valid, indices)
         curve_loss = self.curve_loss(pred_points, gt_points, gt_valid, indices)
         count_loss, count_under5_loss = self.count_losses(pred_logits, batch, gt_valid)
+        extra_exist_loss = self.extra_exist_loss(pred_logits, indices)
 
         mask_loss = self._zero_like(pred_points)
         if "aux_mask_logits" in preds and "semantic_mask" in batch:
@@ -593,6 +615,7 @@ class GCSLoss(nn.Module):
             + self.edge_gain * edge_loss
             + self.count_gain * count_loss
             + self.count_under5_gain * count_under5_loss
+            + self.extra_exist_gain * extra_exist_loss
         )
         loss_items = torch.stack(
             (
@@ -605,6 +628,7 @@ class GCSLoss(nn.Module):
                 edge_loss.detach(),
                 count_loss.detach(),
                 count_under5_loss.detach(),
+                extra_exist_loss.detach(),
             )
         )
         return total, loss_items

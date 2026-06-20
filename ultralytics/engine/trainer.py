@@ -485,8 +485,9 @@ class BaseTrainer:
                 # Log
                 if RANK in {-1, 0}:
                     loss_length = self.tloss.shape[0] if len(self.tloss.shape) else 1
+                    progress_column_width = getattr(self, "progress_column_width", 11)
                     pbar.set_description(
-                        ("%11s" * 2 + "%11.4g" * (2 + loss_length))
+                        (f"%{progress_column_width}s" * 2 + f"%{progress_column_width}.4g" * (2 + loss_length))
                         % (
                             f"{epoch + 1}/{self.epochs}",
                             f"{self._get_memory():.3g}G",  # (GB) GPU memory util

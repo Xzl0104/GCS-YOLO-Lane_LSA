@@ -192,6 +192,7 @@ CFG_FLOAT_KEYS = frozenset(
         "gcs_edge",
         "gcs_count",
         "gcs_count_under5",
+        "gcs_extra_exist",
         "gcs_exist_pos_weight",
         "gcs_exist_focal_gamma",
         "gcs_exist_focal_alpha",
@@ -247,6 +248,7 @@ CFG_FRACTION_KEYS = frozenset(
         "multi_scale",
         "gcs_exist_quality_alpha",
         "gcs_exist_quality_floor",
+        "gcs_extra_exist_thr",
         "gcs_eval_point_valid_thr",
     }
 )

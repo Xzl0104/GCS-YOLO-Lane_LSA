@@ -56,12 +56,14 @@ def print_metric_summary(rows: list[dict[str, float]]) -> None:
         "train/curve_loss",
         "train/count_loss",
         "train/count_under5_loss",
+        "train/extra_exist_loss",
         "val/exist_loss",
         "val/point_loss",
         "val/point_valid_loss",
         "val/curve_loss",
         "val/count_loss",
         "val/count_under5_loss",
+        "val/extra_exist_loss",
         "val/precision",
         "val/recall",
         "val/f1",
@@ -143,6 +145,7 @@ def load_loss_gains(csv_path: Path, args_yaml: str | None) -> dict[str, float]:
         "edge": 0.2,
         "count": 0.0,
         "count_under5": 0.0,
+        "extra_exist": 0.0,
     }
     path = Path(args_yaml) if args_yaml else csv_path.with_name("args.yaml")
     if not path.exists():
@@ -158,6 +161,7 @@ def load_loss_gains(csv_path: Path, args_yaml: str | None) -> dict[str, float]:
         "edge": "gcs_edge",
         "count": "gcs_count",
         "count_under5": "gcs_count_under5",
+        "extra_exist": "gcs_extra_exist",
     }
     for key, arg_name in mapping.items():
         if arg_name in args:

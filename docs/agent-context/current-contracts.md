@@ -122,6 +122,15 @@ mask_loss
 edge_loss
 count_loss
 count_under5_loss
+extra_exist_loss
+```
+
+`extra_exist_loss` is an explicit experimental high-score unmatched-query BCE
+penalty. Defaults preserve baseline behavior:
+
+```text
+gcs_extra_exist = 0.0
+gcs_extra_exist_thr = 0.15
 ```
 
 ## Decode And Evaluation Contract

@@ -153,6 +153,18 @@ def parse_args() -> argparse.Namespace:
         default=5,
         help="Minimum GT lane count that enables the targeted undercount penalty.",
     )
+    parser.add_argument(
+        "--gcs-extra-exist",
+        type=float,
+        default=0.0,
+        help="Extra BCE gain for unmatched queries with detached existence score >= --gcs-extra-exist-thr. 0 disables.",
+    )
+    parser.add_argument(
+        "--gcs-extra-exist-thr",
+        type=float,
+        default=0.15,
+        help="Detached existence threshold for the extra unmatched-query BCE penalty.",
+    )
     parser.add_argument("--gcs-exist-pos-weight", type=float, default=1.0)
     parser.add_argument("--gcs-exist-focal-gamma", type=float, default=0.0, help="Optional focal gamma for existence BCE. 0 disables focal weighting.")
     parser.add_argument(
@@ -335,6 +347,8 @@ def main() -> None:
         "gcs_count": args.gcs_count,
         "gcs_count_under5": args.gcs_count_under5,
         "gcs_count_under5_min_lanes": args.gcs_count_under5_min_lanes,
+        "gcs_extra_exist": args.gcs_extra_exist,
+        "gcs_extra_exist_thr": args.gcs_extra_exist_thr,
         "gcs_exist_pos_weight": args.gcs_exist_pos_weight,
         "gcs_exist_focal_gamma": args.gcs_exist_focal_gamma,
         "gcs_exist_focal_alpha": args.gcs_exist_focal_alpha,

@@ -266,3 +266,340 @@ Oversampling short `GT4` cases may improve `4->3` undercount but could increase 
 Mainline or experiment:
 
 Branch-local experimental option. It does not import later mainline Count/Quality/Survival machinery and does not promote a new candidate.
+
+## 2026-06-20: Reject gt4short2 as an Official-Val Promotion
+
+Decision:
+
+Do not promote `gcs_yolo_lane_s_tusimple_fixed_y_gt4short2_count03_under5_03`
+to final test. Keep `count03_under5_03` as the current selected branch
+candidate.
+
+Official-val evidence:
+
+```text
+A baseline sweep:
+directory = runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_visible_iou_count03_under5_03_official_val363_sweep
+images = 363
+best = conf=0.05, point_valid_thr=0.5, nms_dist_px=50.0, max_det=8, min_points=5
+official_acc = 0.969976
+official_FP = 0.019559
+official_FN = 0.014463
+official_score = 0.969296
+count_acc = 0.969697
+
+B gt4short2 sweep:
+directory = runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4short2_count03_under5_03_official_val_sweep
+images = 363
+best = conf=0.15, point_valid_thr=0.5, nms_dist_px=18.0, max_det=5, min_points=4
+official_acc = 0.969726
+official_FP = 0.017264
+official_FN = 0.016299
+official_score = 0.969055
+count_acc = 0.977961
+```
+
+Why:
+
+B improved count accuracy and reduced official FP on the 363-image official-val
+subset, but it did not improve the primary promotion metric:
+`official_acc` dropped by `0.000250`, `official_score` dropped by `0.000241`,
+and official FN rose by `0.001836`. The candidate is therefore diagnostic-only,
+not promotable.
+
+Train/val diagnostic evidence:
+
+```text
+decode = conf=0.05, point_valid_thr=0.5, nms_dist_px=50.0, max_det=8, min_points=5
+summary = runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4short2_count03_under5_03_count_confusion_train_val_by_visibility/summary.json
+
+val GT4|min_visible<=10: A 6/11 -> B 8/11, confusion A 4->3=1 4->4=6 4->5=4, B 4->3=0 4->4=8 4->5=3
+val 0313-2|GT4|min_visible<=10: A 1/6 -> B 4/6, confusion A 4->3=1 4->4=1 4->5=4, B 4->3=0 4->4=4 4->5=2
+val 0601|GT4|min_visible=11..20: unchanged at 2/6, confusion A/B 4->3=1 4->4=2 4->5=3
+train GT4|min_visible<=10: A 84/124 -> B 99/124, confusion A 4->3=15 4->4=84 4->5=25, B 4->3=5 4->4=99 4->5=20
+train 0313-2|GT4|min_visible<=10: A 46/70 -> B 58/70, confusion A 4->3=7 4->4=46 4->5=17, B 4->3=1 4->4=58 4->5=11
+train 0601|GT4|min_visible<=10: A 7/19 -> B 13/19, confusion A 4->3=6 4->4=7 4->5=6, B 4->3=3 4->4=13 4->5=3
+train 0601|GT4|min_visible=11..20: A 32/47 -> B 37/47, confusion A 4->3=3 4->4=32 4->5=12, B 4->3=2 4->4=37 4->5=7
+```
+
+Side effects:
+
+```text
+official-val count_acc_5: A 0.986486 -> B 0.972973
+train/val diagnostic GT5: val 0.866667 -> 0.800000, train 0.968610 -> 0.982063
+ordinary val GT3: 0.953271 -> 0.934579
+ordinary val GT4: 0.941667 -> 0.945833
+```
+
+The target short-GT4 bottleneck improved under the fixed diagnostic decode, but
+the improvement did not transfer into a higher official-val ACC. The side
+effect is not an FP rise on the comparable 363-image sweep; the larger risk is
+FN/GT5/GT3 degradation.
+
+Invalid or non-comparable artifact:
+
+```text
+directory = runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4short2_count03_under5_03_official_val_sweep_maxdet8
+gt_json = archive/TUSimple/train_set/label_data_0313.json
+images = 2858
+```
+
+Despite the directory name, this is not the 363-image official-val subset and
+must not be used for A/B promotion or threshold selection.
+
+Recommended next action:
+
+Run the next smallest train-side experiment against the 363-image official-val
+gate: keep the short-GT4 focus, but reduce the collateral FN/GT3/GT5 cost. A
+conservative next candidate is a weaker GT4 short-lane sampler multiplier, for
+example `--gcs-gt4-short-boost 1.5` with the same
+`--gcs-gt4-short-min-visible-max 10`, selected only on official-val and then
+checked with the same train/val count-confusion diagnostic.
+
+Mainline or experiment:
+
+Rejected experimental candidate. No final-test run should be launched from this
+candidate.
+
+## 2026-06-21: Select gt4short15 on Official-Val
+
+Decision:
+
+Select `gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03` as the
+current official-val selected candidate. Do not treat the previous
+`count03_under5_03` final-test result as evidence for this candidate.
+
+Official-val evidence:
+
+```text
+A baseline sweep:
+directory = runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_visible_iou_count03_under5_03_official_val363_sweep
+images = 363
+best = conf=0.05, point_valid_thr=0.5, nms_dist_px=50.0, max_det=8, min_points=5
+official_acc = 0.969976
+official_FP = 0.019559
+official_FN = 0.014463
+official_score = 0.969296
+count_acc = 0.969697
+count_acc_3 = 0.982063
+count_acc_4 = 0.909091
+count_acc_5 = 0.986486
+
+C gt4short15 sweep:
+directory = runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03_official_val_sweep
+images = 363
+best = conf=0.15, point_valid_thr=0.5, nms_dist_px=0.0, max_det=6, min_points=4
+official_acc = 0.970851
+official_FP = 0.022084
+official_FN = 0.011708
+official_score = 0.970175
+count_acc = 0.939394
+count_acc_3 = 0.964126
+count_acc_4 = 0.848485
+count_acc_5 = 0.945946
+```
+
+Why:
+
+The candidate improves the primary official-val metric by `+0.000875` and
+official score by `+0.000879` on the same 363-image validation subset. The gain
+comes from lower FN (`0.014463 -> 0.011708`) despite a higher FP
+(`0.019559 -> 0.022084`).
+
+Tradeoff:
+
+The sampler multiplier `1.5` avoids the official-val FN regression seen in
+`gt4short2`, but it does not solve the count bottleneck. It worsens total
+count accuracy (`0.969697 -> 0.939394`) and GT4 count accuracy
+(`0.909091 -> 0.848485`). This means the current selected candidate is a
+metric-improving recall tradeoff, not a count-robustness fix.
+
+Rejected or deferred actions:
+
+- Do not tune thresholds on test.
+- Do not reuse the old `count03_under5_03` final-test result for this candidate.
+- Do not launch final-test reporting before rerunning train/val
+  count-confusion diagnostics for `gt4short15`.
+
+Recommended next action:
+
+Run the branch-local train/val count-confusion diagnostic with the selected
+`gt4short15` decode:
+
+```text
+weights = runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03/weights/best.pt
+decode = conf=0.15, point_valid_thr=0.5, nms_dist_px=0.0, max_det=6, min_points=4
+splits = train val
+```
+
+At selection time, the next protocol step was the train/val diagnostic followed
+by one reporting-only final-test run if no blocker appeared. The follow-up
+decision below records that completed diagnostic and final-test report.
+
+Mainline or experiment:
+
+Official-val selected experimental candidate. Final-test reporting is recorded
+in the follow-up decision below.
+
+## 2026-06-21: Report gt4short15 Final Test Without Final-Test Improvement
+
+Decision:
+
+Keep `gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03` as the
+official-val selected candidate, but do not describe it as a final-test
+improvement. Its one-shot final-test report did not beat the previous
+`count03_under5_03` final-test report.
+
+Train/val diagnostic evidence:
+
+```text
+summary = runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03_count_confusion_train_val_by_visibility/summary.json
+decode = conf=0.15, point_valid_thr=0.5, nms_dist_px=0.0, max_det=6, min_points=4
+
+train images = 3263
+train count_acc = 0.952191
+train GT3 count_acc = 0.963855
+train GT4 count_acc = 0.945150
+train GT5 count_acc = 0.977578
+train 0313-2|GT4|min_visible<=10: n=70, count_acc=0.600000, confusion 4->3=3, 4->4=42, 4->5=23, 4->6=2
+train 0601|GT4|min_visible<=10: n=19, count_acc=0.315789, confusion 4->3=7, 4->4=6, 4->5=6
+train 0601|GT4|min_visible=11..20: n=47, count_acc=0.659574
+train 0601|GT5|min_visible<=10: n=143, count_acc=0.965035
+
+val images = 363
+val count_acc = 0.920110
+val GT3 count_acc = 0.925234
+val GT4 count_acc = 0.929167
+val GT5 count_acc = 0.733333
+val 0313-2|GT4|min_visible<=10: n=6, count_acc=0.666667
+val 0601|GT4|min_visible=11..20: n=6, count_acc=0.333333
+val 0601|GT5|min_visible<=10: n=11, count_acc=0.727273
+val 0531|GT4|min_visible=11..20: n=5, count_acc=0.200000
+```
+
+Final-test reporting evidence:
+
+```text
+summary = runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03_official_test_best_from_val/tusimple_official_summary.json
+images = 2782
+official_acc = 0.965369
+official_FP = 0.033309
+official_FN = 0.029236
+official_score = 0.964118
+count_acc = 0.864486
+count_acc_3 = 0.974713
+count_acc_4 = 0.482906
+count_acc_5 = 0.845343
+count_confusion = 4->3=118, 4->4=226, 4->5=117, 4->6=7, 5->3=25, 5->4=48, 5->5=481, 5->6=15
+```
+
+Comparison with the previous final-test report:
+
+```text
+previous count03_under5_03 final-test official_acc = 0.965459
+gt4short15 final-test official_acc = 0.965369
+delta = -0.000090
+
+previous count03_under5_03 final-test count_acc = 0.872753
+gt4short15 final-test count_acc = 0.864486
+delta = -0.008267
+
+previous count03_under5_03 final-test count_acc_4 = 0.542735
+gt4short15 final-test count_acc_4 = 0.482906
+delta = -0.059829
+```
+
+Why:
+
+The diagnostic did not expose a protocol blocker, so the one-shot final-test
+report was allowed under the branch rules. The final-test result shows that
+the official-val FN gain did not transfer into a better final-test ACC, and the
+count bottleneck worsened on `GT4`.
+
+Rejected actions:
+
+- Do not tune thresholds, `max_det`, `min_points`, checkpoint choice, or
+  postprocess settings from final test.
+- Do not claim `gt4short15` as a final-test improvement.
+- Do not import later Count/Quality/Survival machinery into this branch as an
+  undocumented fix.
+
+Recommended next action:
+
+Treat `gt4short15` as official-val selected but final-test non-improving.
+Future experiments should go back to official-val plus train/val diagnostics
+and target the count/visibility mechanism around short or ambiguous `GT4`
+lanes, especially separating false-fifth suppression from true `GT5` retention.
+
+Mainline or experiment:
+
+Official-val selected experimental candidate with a non-improving final-test
+report. Final test remains closed for tuning.
+
+## 2026-06-21: Reject NMS-Only Postprocess Change for gt4short15
+
+Decision:
+
+Keep the official-val selected `gt4short15` decode at `nms_dist_px=0.0`. Do not
+promote an NMS-only postprocess change, and do not change `count_under5_loss`
+until the train-side failure mode is targeted more precisely.
+
+Failure-trace evidence:
+
+```text
+artifact = runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03_failure_trace_train_val/failure_trace_summary.json
+decode = conf=0.15, point_valid_thr=0.5, nms_dist_px=0.0, max_det=6, min_points=4
+
+train failure_images = 156 / 3263 = 0.047809
+train direction = overcount 126, undercount 30
+train extra reasons = spurious_extra 102, duplicate_like_extra 62
+train missing reasons = geometry_miss_short_gt 28, geometry_miss 7, low_score 15, low_score_short_gt 8, matched_but_unassigned 1
+
+val failure_images = 29 / 363 = 0.079890
+val direction = overcount 19, undercount 10
+val extra reasons = spurious_extra 19, duplicate_like_extra 6
+val missing reasons = low_score 4, low_score_short_gt 4, geometry_miss 3, geometry_miss_short_gt 2, min_points_visibility 1
+```
+
+Why:
+
+The failure trace separates the previous coarse `4->3/4->5` diagnosis into
+actionable buckets. The selected decode's count failures are overcount-heavy,
+mainly from extra predicted lanes. Undercount misses are more often low score
+or geometry miss than point-valid contiguous-span collapse; validation has only
+one `min_points_visibility` miss. Because the selected decode disables NMS,
+`duplicate_like_extra` reports close duplicate-like predictions that are not
+suppressed, not an NMS bug.
+
+NMS-only official-val evidence:
+
+```text
+artifact = runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03_official_val363_nms_only_conf015_maxdet6_minp4_half/tusimple_official_sweep_summary.json
+gt_json = runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json
+fixed = conf=0.15, point_valid_thr=0.5, max_det=6, min_points=4, half=True
+
+nms=0/2/4/6: official_acc=0.970851, FP=0.022084, FN=0.011708, count_acc=0.939394
+nms=8..30:  official_acc=0.970728, FP=0.022222, FN=0.012397, count_acc=0.942149
+nms=50:     official_acc=0.970728, FP=0.020845, FN=0.012397, count_acc=0.947658
+nms=80:     official_acc=0.970679, FP=0.019238, FN=0.012397, count_acc=0.953168
+```
+
+Rejected action:
+
+Do not use NMS as the selected fix. It can improve count accuracy and FP at
+larger distances, but it also raises FN and lowers the primary official-val
+ACC on the 363-image selection surface.
+
+Recommended next action:
+
+Return to train-side work. The smallest defensible next experiment should
+target high-score spurious or duplicate-like extra queries while preserving true
+short side lanes, for example an existence/geometry calibration refinement.
+Avoid a blind `count_under5_loss` change unless it directly addresses those
+failure buckets. Select any follow-up only on official-val and keep final test
+closed.
+
+Mainline or experiment:
+
+Diagnostic-only postprocess and failure-bucket evidence. No new selected decode
+and no final-test tuning.

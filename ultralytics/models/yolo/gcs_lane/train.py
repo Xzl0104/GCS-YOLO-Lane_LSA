@@ -41,7 +41,9 @@ class GCSLaneTrainer(BaseTrainer):
         "edge_loss",
         "count_loss",
         "count_under5_loss",
+        "extra_exist_loss",
     )
+    progress_column_width = max(13, *(len(name) + 1 for name in loss_names))
     # YOLO11 backbone -> GCS-YOLO-Lane backbone. LSEM is inserted after old
     # layers 4 and 6, so all later backbone layers must be shifted explicitly.
     yolo11_to_gcs_backbone = {
@@ -480,7 +482,8 @@ class GCSLaneTrainer(BaseTrainer):
 
     def progress_string(self):
         """Return a progress header matching the GCS loss vector."""
-        return ("\n" + "%13s" * (4 + len(self.loss_names))) % (
+        width = self.progress_column_width
+        return ("\n" + f"%{width}s" * (4 + len(self.loss_names))) % (
             "Epoch",
             "GPU_mem",
             *self.loss_names,

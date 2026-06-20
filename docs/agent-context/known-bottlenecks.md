@@ -24,22 +24,52 @@ Do not read mainline Count Head, Count Boundary, Quality Head, Survival Head, ne
 - This branch includes `tools/diagnose_tusimple_count_confusion.py` for train/val count-confusion diagnostics by date, GT lane count, and shortest visible-lane bucket.
 - It still does not include later mainline `diagnose_gcs_gt5.py`, training-time `official_best` checkpoint preservation, Count/Quality/Boundary diagnostics, Survival, or near-miss machinery.
 
-## Evaluated Candidate Bottleneck
+## Official-Val Selection State
 
-The 2026-06-20 `gcs_yolo_lane_s_tusimple_fixed_y_visible_iou_count03_under5_03` candidate is promotable as the current branch result from official-val selection:
+The 2026-06-21 `gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03`
+candidate is the current official-val selected candidate:
+
+```text
+official-val363 ACC = 0.970851
+official-val363 FP = 0.022084
+official-val363 FN = 0.011708
+official-val363 count_acc = 0.939394
+decode = conf=0.15, point_valid_thr=0.5, nms_dist_px=0.0, max_det=6, min_points=4
+```
+
+It beats the previous selected official-val ACC by `+0.000875`, mainly by
+reducing FN. The tradeoff is worse count robustness:
+
+```text
+previous count03_under5_03 count_acc = 0.969697, count_acc_4 = 0.909091
+gt4short15 count_acc = 0.939394, count_acc_4 = 0.848485
+```
+
+The 2026-06-20 `gcs_yolo_lane_s_tusimple_fixed_y_visible_iou_count03_under5_03`
+candidate remains the stronger final-test report:
 
 ```text
 official-val363 ACC = 0.969976
 final test ACC = 0.965459
 ```
 
-The main remaining weakness is lane-count robustness, especially 4-lane scenes. The final test breakdown is diagnostic/reporting-only, not a tuning source:
+The 2026-06-21 `gt4short15` final-test report is reporting-only and did not
+beat that previous result:
 
 ```text
-count_acc_4 = 0.542735
-4->3 = 113
-4->5 = 96
-4->6 = 5
+final test ACC = 0.965369
+final test FP = 0.033309
+final test FN = 0.029236
+final test count_acc = 0.864486
+final test count_acc_4 = 0.482906
+final test count_acc_5 = 0.845343
+```
+
+Final-test count breakdowns are diagnostic/reporting-only, not tuning sources:
+
+```text
+count03_under5_03 count_acc_4 = 0.542735, confusion 4->3=113, 4->5=96, 4->6=5
+gt4short15 count_acc_4 = 0.482906, confusion 4->3=118, 4->5=117, 4->6=7
 ```
 
 Any threshold, max-det, min-points, checkpoint, or postprocess changes must be selected on official-val. Do not tune from the final test breakdown.
@@ -91,3 +121,226 @@ Integrated conclusion:
 - Supported fact: `GT5` is comparatively robust on the fixed-y train split, so the next change should not focus only on dense-lane undercount.
 - Hypothesis: the current `sum(sigmoid(pred_logits))` count loss plus `target>=5` undercount penalty does not provide enough targeted pressure for `GT4` short-lane undercount and overcount.
 - Smallest safe next action: use `tools/diagnose_tusimple_count_confusion.py` for reusable train/val `(date, lane_count, min_visible_points)` confusion, then run a train-only experiment with explicit `--gcs-gt4-short-boost` sampling for `GT4` short-side-lane samples. Selection must remain official-val only.
+
+## 2026-06-20 GT4 Short-Lane Boost Result
+
+The completed `gcs_yolo_lane_s_tusimple_fixed_y_gt4short2_count03_under5_03`
+experiment is rejected for promotion because the 363-image official-val ACC did
+not beat the baseline.
+
+```text
+A baseline official-val:
+best = conf=0.05, point_valid_thr=0.5, nms_dist_px=50.0, max_det=8, min_points=5
+official_acc = 0.969976
+official_FP = 0.019559
+official_FN = 0.014463
+official_score = 0.969296
+count_acc = 0.969697
+
+B gt4short2 official-val:
+best = conf=0.15, point_valid_thr=0.5, nms_dist_px=18.0, max_det=5, min_points=4
+official_acc = 0.969726
+official_FP = 0.017264
+official_FN = 0.016299
+official_score = 0.969055
+count_acc = 0.977961
+```
+
+The sampler boost did hit the intended train/val diagnostic bottleneck under
+the fixed decode `conf=0.05, point_valid_thr=0.5, nms_dist_px=50.0, max_det=8,
+min_points=5`:
+
+```text
+val GT4|min_visible<=10: A 6/11 -> B 8/11
+val 0313-2|GT4|min_visible<=10: A 1/6 -> B 4/6
+train GT4|min_visible<=10: A 84/124 -> B 99/124
+train 0313-2|GT4|min_visible<=10: A 46/70 -> B 58/70
+train 0601|GT4|min_visible<=10: A 7/19 -> B 13/19
+train 0601|GT4|min_visible=11..20: A 32/47 -> B 37/47
+```
+
+But it also left or introduced collateral issues:
+
+```text
+val GT3 count_acc: A 0.953271 -> B 0.934579
+val GT5 count_acc: A 0.866667 -> B 0.800000
+official-val count_acc_5: A 0.986486 -> B 0.972973
+official-val FN: A 0.014463 -> B 0.016299
+```
+
+Do not use
+`gcs_yolo_lane_s_tusimple_fixed_y_gt4short2_count03_under5_03_official_val_sweep_maxdet8`
+for promotion decisions: its summary points to
+`archive/TUSimple/train_set/label_data_0313.json` with `images=2858`, not the
+363-image official-val subset.
+
+Smallest next experiment: keep the same short-GT4 diagnostic target but reduce
+collateral FN/GT3/GT5 cost, for example `--gcs-gt4-short-boost 1.5` with
+`--gcs-gt4-short-min-visible-max 10`. Select only on the 363-image official-val
+sweep, then rerun the train/val count-confusion diagnostic before any final-test
+reporting.
+
+## 2026-06-21 GT4 Short-Lane Boost 1.5 Result
+
+The completed `gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03`
+experiment is accepted as the current official-val selected candidate because
+it beats the previous baseline on the same 363-image official-val surface.
+
+```text
+A baseline official-val:
+best = conf=0.05, point_valid_thr=0.5, nms_dist_px=50.0, max_det=8, min_points=5
+official_acc = 0.969976
+official_FP = 0.019559
+official_FN = 0.014463
+official_score = 0.969296
+count_acc = 0.969697
+count_acc_4 = 0.909091
+
+C gt4short15 official-val:
+best = conf=0.15, point_valid_thr=0.5, nms_dist_px=0.0, max_det=6, min_points=4
+official_acc = 0.970851
+official_FP = 0.022084
+official_FN = 0.011708
+official_score = 0.970175
+count_acc = 0.939394
+count_acc_4 = 0.848485
+```
+
+Interpretation:
+
+- Supported fact: `gt4short15` improves official ACC and official score on the
+  valid 363-image official-val subset.
+- Supported fact: the gain is not from better lane-count prediction. Count
+  accuracy drops by `0.030303`, and GT4 count accuracy drops by `0.060606`.
+- Supported fact: the metric gain comes from the FN reduction
+  `0.014463 -> 0.011708`, while FP rises `0.019559 -> 0.022084`.
+- Decision: keep `gt4short15` selected on official-val, but treat its final-test
+  report as non-improving reporting evidence.
+
+Completed train/val diagnostic:
+
+```text
+summary = runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03_count_confusion_train_val_by_visibility/summary.json
+decode = conf=0.15, point_valid_thr=0.5, nms_dist_px=0.0, max_det=6, min_points=4
+
+train images = 3263
+train count_acc = 0.952191
+train GT3 count_acc = 0.963855
+train GT4 count_acc = 0.945150
+train GT5 count_acc = 0.977578
+train 0313-2|GT4|min_visible<=10: n=70, count_acc=0.600000, confusion 4->3=3, 4->4=42, 4->5=23, 4->6=2
+train 0601|GT4|min_visible<=10: n=19, count_acc=0.315789, confusion 4->3=7, 4->4=6, 4->5=6
+train 0601|GT4|min_visible=11..20: n=47, count_acc=0.659574
+train 0601|GT5|min_visible<=10: n=143, count_acc=0.965035
+
+val images = 363
+val count_acc = 0.920110
+val GT3 count_acc = 0.925234
+val GT4 count_acc = 0.929167
+val GT5 count_acc = 0.733333
+val 0313-2|GT4|min_visible<=10: n=6, count_acc=0.666667
+val 0601|GT4|min_visible=11..20: n=6, count_acc=0.333333
+val 0601|GT5|min_visible<=10: n=11, count_acc=0.727273
+val 0531|GT4|min_visible=11..20: n=5, count_acc=0.200000
+```
+
+Completed final-test report:
+
+```text
+summary = runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03_official_test_best_from_val/tusimple_official_summary.json
+images = 2782
+official_acc = 0.965369
+official_FP = 0.033309
+official_FN = 0.029236
+official_score = 0.964118
+count_acc = 0.864486
+count_acc_3 = 0.974713
+count_acc_4 = 0.482906
+count_acc_5 = 0.845343
+count_confusion includes 4->3=118, 4->4=226, 4->5=117, 4->6=7, 5->3=25, 5->4=48, 5->5=481, 5->6=15
+```
+
+Integrated conclusion:
+
+- Supported fact: there is no protocol or execution blocker in the diagnostic; the selected decode runs cleanly on train/val and final test.
+- Supported fact: the official-val gain did not transfer into a better final-test report. `gt4short15` final-test ACC is lower by `0.000090` than `count03_under5_03`.
+- Supported fact: count robustness is worse on final test, especially `GT4` (`0.542735 -> 0.482906`), while `GT5` improves only modestly (`0.831283 -> 0.845343`).
+- Bottleneck: the branch still fails on count stability around short or ambiguous `GT4` side lanes, with both undercount and overcount. The problem is not solved by weaker GT4 short-lane oversampling plus a looser selected decode.
+- Smallest safe next action: do not tune on final test. Return to official-val and train/val diagnostics, and target a train-side count/visibility refinement that separates `GT4` false-fifth suppression from true `GT5` retention.
+
+## 2026-06-21 gt4short15 Failure Trace and NMS Check
+
+Before changing `count_under5_loss`, a train/val failure-trace diagnostic and a
+363-image official-val NMS-only sweep were run for the selected `gt4short15`
+decode.
+
+Failure-trace artifacts:
+
+```text
+summary = runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03_failure_trace_train_val/failure_trace_summary.json
+records = runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03_failure_trace_train_val/failure_trace_records.csv
+decode = conf=0.15, point_valid_thr=0.5, nms_dist_px=0.0, max_det=6, min_points=4
+```
+
+Train split:
+
+```text
+failure_images = 156 / 3263 = 0.047809
+direction = overcount 126, undercount 30
+missing reasons = geometry_miss_short_gt 28, geometry_miss 7, low_score 15, low_score_short_gt 8, matched_but_unassigned 1
+extra reasons = spurious_extra 102, duplicate_like_extra 62
+drop counts on failure images = score_below_conf 1158, min_points_filtered 8, max_det_dropped 2
+```
+
+Validation split:
+
+```text
+failure_images = 29 / 363 = 0.079890
+direction = overcount 19, undercount 10
+missing reasons = low_score 4, low_score_short_gt 4, geometry_miss 3, geometry_miss_short_gt 2, min_points_visibility 1
+extra reasons = spurious_extra 19, duplicate_like_extra 6
+drop counts on failure images = score_below_conf 222, min_points_filtered 3
+```
+
+Interpretation:
+
+- The main selected-decode count failure is overcount, not undercount.
+- The extra-lane failure is mostly `spurious_extra`; `duplicate_like_extra` is
+  present but not dominant.
+- The selected decode has `nms_dist_px=0.0`, so `duplicate_like_extra` means
+  close predictions that were not suppressed, not true NMS suppression mistakes.
+- Missed lanes are mostly low score or geometry miss; validation has only one
+  `min_points_visibility` missed-lane reason. This is not primarily a
+  point-valid contiguous-span or `min_points` failure.
+
+The controlled NMS sweep fixed `conf=0.15`, `point_valid_thr=0.5`, `max_det=6`,
+`min_points=4`, used `--half`, and swept only `nms_dist_px` on the 363-image
+official-val subset:
+
+```text
+summary = runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03_official_val363_nms_only_conf015_maxdet6_minp4_half/tusimple_official_sweep_summary.json
+gt_json = runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json
+```
+
+Key rows:
+
+```text
+nms=0/2/4/6: official_acc=0.970851, FP=0.022084, FN=0.011708, count_acc=0.939394
+nms=8..30:  official_acc=0.970728, FP=0.022222, FN=0.012397, count_acc=0.942149
+nms=50:     official_acc=0.970728, FP=0.020845, FN=0.012397, count_acc=0.947658
+nms=80:     official_acc=0.970679, FP=0.019238, FN=0.012397, count_acc=0.953168
+```
+
+Integrated conclusion:
+
+- Supported fact: NMS improves count shape and reduces FP at large distances,
+  but it raises FN and lowers official ACC on the valid 363-image selection
+  surface.
+- Decision: keep the selected postprocess at `nms_dist_px=0.0`; do not promote
+  an NMS-only decode change.
+- Bottleneck: the next train-side work should suppress high-score spurious or
+  duplicate-like extra queries while preserving true short side lanes. This is
+  an existence/geometry calibration problem more than a `min_points` problem.
+- Smallest safe next action: design a train-side refinement for
+  spurious/duplicate extra-lane suppression and short-lane score/geometry
+  retention, then select only on official-val. Keep final test closed.
