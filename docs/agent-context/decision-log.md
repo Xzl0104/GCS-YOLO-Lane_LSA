@@ -768,3 +768,103 @@ Mainline or experiment:
 
 Rejected experimental candidate. The loss remains useful as a branch-local
 diagnostic knob, but `0.05` is too strong for promotion.
+
+## 2026-06-21: Reject extraexist0025 and Stop the extra_exist Gain Sweep
+
+Decision:
+
+Do not promote
+`gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_extraexist0025_count03_under5_03`.
+Keep `gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03` as the
+current official-val selected candidate and keep final test closed.
+
+Official-val evidence:
+
+```text
+sweep = runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_extraexist0025_count03_under5_03_official_val_sweep
+rows = 1800
+images = 363
+gt_json = runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json
+best = conf=0.05, point_valid_thr=0.5, nms_dist_px=0.0, max_det=6, min_points=4
+official_acc = 0.961513
+official_FP = 0.049633
+official_FN = 0.029844
+official_score = 0.959923
+count_acc = 0.887052
+count_acc_3 = 0.928251
+count_acc_4 = 0.772727
+count_acc_5 = 0.864865
+count_confusion = 3->3=207, 3->4=14, 3->5=2, 4->3=3, 4->4=51, 4->5=12, 5->4=1, 5->5=64, 5->6=9
+```
+
+Comparison:
+
+```text
+current gt4short15 official-val ACC = 0.970851
+extraexist0025 official-val ACC     = 0.961513
+delta                                = -0.009338
+
+previous count03_under5_03 official-val ACC = 0.969976
+extraexist0025 official-val ACC             = 0.961513
+delta                                        = -0.008463
+
+extraexist005 official-val ACC  = 0.969603
+extraexist0025 official-val ACC = 0.961513
+delta                            = -0.008090
+
+gt4short15 FP/FN/count_acc = 0.022084 / 0.011708 / 0.939394
+extraexist0025 FP/FN/count_acc = 0.049633 / 0.029844 / 0.887052
+```
+
+Additional checks:
+
+```text
+old gt4short15 decode on extraexist0025:
+  conf=0.15, point_valid_thr=0.5, nms_dist_px=0.0, max_det=6, min_points=4
+  official_acc=0.961450, FP=0.045638, FN=0.029844, count_acc=0.909091
+
+best count row:
+  count_acc=0.928375, official_acc=0.961400, FP=0.043159, FN=0.030533
+  count_acc_4=0.818182, count_acc_5=0.986486
+
+training results.csv:
+  rows=83, requested epochs=160
+  val/f1 best epoch=43, best=0.972376, last=0.963891
+  val/extra_exist_loss first=0.20858, last=0.63395, max=1.14812
+```
+
+Interpretation:
+
+- Supported fact: `extraexist0025` is not a near miss. It regresses official ACC,
+  FP, FN, and count accuracy far below `gt4short15`, `count03_under5_03`, and
+  the rejected `extraexist005` run.
+- Supported fact: unlike `extraexist005`, this smaller gain does not retain a
+  useful diagnostic FP/count improvement. Its best count row still has lower
+  count accuracy than the selected `gt4short15` row and much lower ACC.
+- Supported fact: the sweep uses the correct 363-image official-val JSON and
+  `best_metric=official_acc`, so this is valid rejection evidence rather than a
+  split mismatch.
+- Supported caveat: the run stopped with 83 `results.csv` rows despite
+  `epochs=160`, so training completion differs from `extraexist005`. That
+  caveat does not make the candidate promotable because the available
+  official-val evidence is far below the gate and below all relevant baselines.
+
+Rejected actions:
+
+- Do not send `extraexist0025` to final test.
+- Do not tune final-test thresholds or checkpoint choice from this result.
+- Do not continue the `gcs_extra_exist` gain sweep by trying `0.0125`, `0.01`,
+  or stronger values. The `0.05` run was a diagnostic FP/count tradeoff but
+  missed ACC; the `0.025` run lost both ACC and count shape.
+
+Recommended next action:
+
+Stop this loss family for now and return to short-lane score/geometry retention
+work. The next train-side mechanism should protect true short side lanes while
+controlling extra queries, rather than applying a direct unmatched-query score
+penalty. Selection must remain on the same 363-image official-val surface, with
+final test closed unless a candidate beats `0.970851`.
+
+Mainline or experiment:
+
+Rejected experimental candidate. No final-test run and no selected decode change.

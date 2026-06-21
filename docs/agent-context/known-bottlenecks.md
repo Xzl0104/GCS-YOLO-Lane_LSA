@@ -352,6 +352,15 @@ Integrated conclusion:
   `min_points=5`, `official_acc=0.969603`, `FP=0.017815`, `FN=0.012856`,
   `count_acc=0.961433`, `count_acc_4=0.878788`, `count_acc_5=0.986486`.
   Reject it for promotion and keep final test closed.
-- Updated smallest safe experiment: reduce the extra existence gain, e.g.
-  `--gcs-extra-exist 0.025 --gcs-extra-exist-thr 0.15`, because the first run's
-  best row needed `conf=0.005`, indicating score over-suppression.
+- Completed follow-up: `gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_extraexist0025_count03_under5_03`
+  is worse across official-val ACC, FP, FN, and count. Best 363-image
+  official-val row: `conf=0.05`, `point_valid_thr=0.5`, `nms_dist_px=0.0`,
+  `max_det=6`, `min_points=4`, `official_acc=0.961513`, `FP=0.049633`,
+  `FN=0.029844`, `count_acc=0.887052`, `count_acc_4=0.772727`,
+  `count_acc_5=0.864865`. Its best count row reaches only
+  `count_acc=0.928375` with `official_acc=0.961400`, still below the selected
+  `gt4short15` count accuracy.
+- Updated decision: stop the `extra_exist_loss` gain-sweep family for now. The
+  `0.05` run gave diagnostic FP/count improvement but missed ACC; the `0.025`
+  run gives no useful diagnostic tradeoff. Return to short-lane score/geometry
+  retention rather than stronger or weaker unmatched-query suppression.

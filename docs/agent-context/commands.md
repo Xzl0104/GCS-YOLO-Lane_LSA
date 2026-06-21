@@ -171,7 +171,7 @@ It uses the training Hungarian matcher only: unmatched queries with detached
 Do not add NMS, `max_det`, `min_points`, decoded lane count, or GT-count gating
 inside this training loss.
 
-Completed first experiment:
+Completed experiments:
 
 ```text
 run: gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_extraexist005_count03_under5_03
@@ -187,58 +187,28 @@ relative to `gt4short15`, but it missed the current official-val ACC gate
 `count03_under5_03` official-val ACC `0.969976`. Its best row requiring
 `conf=0.005` shows the extra existence penalty over-suppressed query scores.
 
-Next smallest experiment should reduce the extra penalty gain rather than
-increase it:
+The smaller gain run also fails and should stop this loss-family sweep:
 
-```bash
---gcs-extra-exist 0.025 \
---gcs-extra-exist-thr 0.15
+```text
+run: gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_extraexist0025_count03_under5_03
+sweep: runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_extraexist0025_count03_under5_03_official_val_sweep
+best: conf=0.05, point_valid_thr=0.5, nms_dist_px=0.0, max_det=6, min_points=4
+official-val ACC=0.961513, FP=0.049633, FN=0.029844, official_score=0.959923, count_acc=0.887052
+count_acc_3=0.928251, count_acc_4=0.772727, count_acc_5=0.864865
 ```
 
-Runnable remote command:
+At the current `gt4short15` decode (`conf=0.15`, `point_valid_thr=0.5`,
+`nms_dist_px=0.0`, `max_det=6`, `min_points=4`), the `extraexist0025` run gets
+only `ACC=0.961450`, `FP=0.045638`, `FN=0.029844`, `count_acc=0.909091`. Its
+best count row reaches only `count_acc=0.928375` with `ACC=0.961400`, still
+below current `gt4short15` count accuracy and far below the ACC gate. No row in
+the 1800-row sweep reaches `extraexist005` ACC `0.969603`, previous
+`count03_under5_03` ACC `0.969976`, or current `gt4short15` ACC `0.970851`.
 
-```bash
-python tools/train_gcs.py \
-  --dataset tusimple \
-  --model ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml \
-  --data data/tusimple_gcs_fixed_y_960x544.yaml \
-  --pretrained yolo11s-seg.pt \
-  --imgsz 544 960 \
-  --epochs 160 \
-  --batch 32 \
-  --workers 4 \
-  --device 0 \
-  --no-amp \
-  --optimizer AdamW \
-  --lr0 5e-4 \
-  --lrf 0.05 \
-  --cos-lr \
-  --weight-decay 1e-4 \
-  --warmup-epochs 3.0 \
-  --warmup-bias-lr 0.0 \
-  --patience 40 \
-  --erasing 0.1 \
-  --scale 0.3 \
-  --gcs-exist 2.0 \
-  --gcs-point 15.0 \
-  --gcs-point-valid 1.0 \
-  --gcs-smooth 0.05 \
-  --gcs-curve 0.1 \
-  --gcs-mask 0.2 \
-  --gcs-edge 0.2 \
-  --gcs-count 0.3 \
-  --gcs-count-under5 0.3 \
-  --gcs-count-under5-min-lanes 5 \
-  --gcs-extra-exist 0.025 \
-  --gcs-extra-exist-thr 0.15 \
-  --gcs-lane-count-balanced \
-  --gcs-lane-count-balance-power 1.0 \
-  --gcs-lane-count-min-group 50 \
-  --gcs-gt4-short-boost 1.5 \
-  --gcs-gt4-short-min-visible-max 10 \
-  --project runs/gcs_lane \
-  --name gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_extraexist0025_count03_under5_03
-```
+Decision: do not promote `extraexist0025`, do not run final test, and do not
+continue sweeping `gcs_extra_exist` gains. Return to train-side short-lane
+score/geometry retention work; select any new mechanism only on the same
+363-image official-val surface.
 
 The previous 2026-06-20 final-test-reported candidate was:
 

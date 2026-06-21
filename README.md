@@ -74,19 +74,23 @@ vs `10` undercount images), with extra lanes mainly `spurious_extra` plus some
 did not find a safe NMS replacement for `nms_dist_px=0.0` because NMS starts
 raising FN as soon as it removes duplicate-like predictions.
 
-The first high-score unmatched-query suppression run,
+The high-score unmatched-query suppression runs are rejected for promotion.
+The first run,
 `gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_extraexist005_count03_under5_03`,
-is rejected for promotion. Its best 363-image official-val row was
+had best 363-image official-val
 `ACC=0.969603`, `FP=0.017815`, `FN=0.012856`, `count_acc=0.961433` with
 `conf=0.005`, `point_valid_thr=0.5`, `nms_dist_px=18.0`, `max_det=6`, and
 `min_points=5`. It improved FP/count shape but missed the current official-val
 ACC gate `0.970851`, and the very low selected confidence indicates score
-over-suppression.
-
-The next train-side experiment should halve the extra existence gain:
-`--gcs-extra-exist 0.025 --gcs-extra-exist-thr 0.15`. Select only on
-official-val and keep final test closed unless it beats the current official-val
-selection.
+over-suppression. The smaller
+`gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_extraexist0025_count03_under5_03`
+run was worse: best official-val `ACC=0.961513`, `FP=0.049633`,
+`FN=0.029844`, `count_acc=0.887052` with `conf=0.05`,
+`point_valid_thr=0.5`, `nms_dist_px=0.0`, `max_det=6`, and `min_points=4`.
+No `extraexist0025` sweep row reached the previous `extraexist005`,
+`count03_under5_03`, or current `gt4short15` official-val ACC. Do not continue
+extra-exist gain sweeps or send these candidates to final test; return to
+short-lane score/geometry retention work selected only on official-val.
 
 ## Full Training
 
