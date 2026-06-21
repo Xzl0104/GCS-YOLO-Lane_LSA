@@ -1104,3 +1104,168 @@ Mainline or experiment:
 
 Reporting-only final-test evidence requested by the user. Official-val remains
 the only allowed selection surface for future experiments.
+
+## 2026-06-22: Reject count03_under5_00 as an Official-Val Promotion
+
+Decision:
+
+Do not promote
+`gcs_yolo_lane_s_tusimple_fixed_y_visible_iou_count03_under5_00`. Treat its
+official test result as reporting-only evidence from the official-val selected
+decode, not as a selection surface.
+
+Official-val evidence:
+
+```text
+run = gcs_yolo_lane_s_tusimple_fixed_y_visible_iou_count03_under5_00
+args = gcs_count=0.3, gcs_count_under5=0.0, gcs_count_under5_min_lanes=5, amp=true, gcs_eval_max_det=8
+sweep = runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_visible_iou_count03_under5_00_official_val_sweep
+images = 363
+best = conf=0.08, point_valid_thr=0.5, nms_dist_px=50.0, max_det=6, min_points=6
+official_acc = 0.968578
+official_FP = 0.022590
+official_FN = 0.016529
+official_score = 0.967796
+count_acc = 0.955923
+count_acc_3 = 0.973094
+count_acc_4 = 0.893939
+count_acc_5 = 0.959459
+count_confusion = 3->3=217, 3->4=5, 3->5=1, 4->3=2, 4->4=59, 4->5=5, 5->4=3, 5->5=71
+```
+
+Official-test reporting evidence:
+
+```text
+summary = runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_visible_iou_count03_under5_00_official_test_best_from_val/tusimple_official_summary.json
+images = 2782
+official_acc = 0.965118
+official_FP = 0.031908
+official_FN = 0.029745
+official_score = 0.963885
+count_acc = 0.875270
+count_acc_2 = 0.400000
+count_acc_3 = 0.975862
+count_acc_4 = 0.566239
+count_acc_5 = 0.826011
+count_confusion = 2->2=2, 2->3=3, 3->2=3, 3->3=1698, 3->4=34, 3->5=5, 4->3=110, 4->4=265, 4->5=89, 4->6=4, 5->3=26, 5->4=60, 5->5=470, 5->6=13
+```
+
+Comparison:
+
+```text
+count03_under5_03 final-test:
+  ACC=0.965459, FP=0.029439, FN=0.026270, official_score=0.964345, count_acc=0.872753
+
+count03_under5_00 final-test:
+  ACC=0.965118, FP=0.031908, FN=0.029745, official_score=0.963885, count_acc=0.875270
+
+delta count03_under5_00 - count03_under5_03:
+  ACC=-0.000341, FP=+0.002469, FN=+0.003475, official_score=-0.000460, count_acc=+0.002517
+```
+
+Interpretation:
+
+- Supported fact: setting `gcs_count_under5=0.0` did not pass the promotion gate.
+  Official-val ACC is below the previous `count03_under5_03` official-val result
+  `0.969976` and the later legacy `gt4short15` gate `0.970851`.
+- Supported fact: the final-test total `count_acc` improved slightly, and GT4
+  final-test count accuracy improved versus `count03_under5_03`, but this came
+  with lower ACC and higher FP/FN. GT5 count accuracy fell.
+- Supported caveat: the official-val selected decode uses `max_det=6`, while the
+  train args record `gcs_eval_max_det=8`. This follows the official-val
+  selection protocol but should be recorded when comparing count behavior.
+
+Rejected actions:
+
+- Do not promote `count03_under5_00`.
+- Do not tune final-test thresholds, `max_det`, `min_points`, NMS, checkpoint
+  choice, or loss weights from this test breakdown.
+- Do not treat the small final-test `count_acc` gain as a count-robustness fix
+  without official-val ACC support.
+
+Mainline or experiment:
+
+Rejected experiment result and reporting-only final-test evidence. It does not
+change the active rollback code contract.
+
+## 2026-06-22: Add Default-Disabled Visibility-Aware Duplicate Margin Loss
+
+Decision:
+
+Add a default-disabled `duplicate_margin_loss` experiment knob for the next
+short-GT4 overcount attempt.
+
+Implementation:
+
+```text
+ultralytics/utils/gcs_loss.py
+  duplicate_margin_loss log item
+  gcs_duplicate_margin = 0.0 default-disabled gain
+  pairwise softplus(logit(q-) - logit(q+) + margin) ranking loss
+  best-GT ownership filter for q- candidates
+
+tools/train_gcs.py
+ultralytics/cfg/default.yaml
+ultralytics/cfg/__init__.py
+  CLI/default/config typing for gcs_duplicate_* parameters
+
+ultralytics/models/yolo/gcs_lane/train.py
+ultralytics/models/yolo/gcs_lane/val.py
+  train/val loss item alignment
+```
+
+Why:
+
+The earlier `extra_exist_loss` and short matched existence floor experiments
+showed that broad score suppression can improve FP/count shape but usually pays
+for it with higher FN or score collapse. This loss is narrower: it only
+penalizes an unmatched query when the same GT already has a reliable matched
+query and the unmatched query looks like a nearby duplicate of that GT. It does
+not push down all unmatched queries.
+
+P2 ownership fix:
+
+The first implementation risk was that an unmatched query between adjacent
+lanes could be selected independently as `q-` for multiple nearby GT lanes when
+`gcs_duplicate_neg_ape_px=120`. The current implementation computes each
+query's nearest valid GT by APE and requires `best_gt_for_query == gt_j` before
+adding the duplicate-pair loss. This keeps the constraint aligned with the
+intended rule: only suppress the duplicate-like query owned by the GT that has
+already been explained by a reliable matched `q+`.
+
+Default behavior:
+
+The feature is disabled by default with `gcs_duplicate_margin=0.0`, so baseline
+training behavior is unchanged unless the experiment flag is explicitly set.
+It does not change model outputs, decode, postprocess, official metrics, K56
+fixed-y anchors, or the `--imgsz 544 960` contract.
+
+Recommended experiment:
+
+```text
+--gcs-duplicate-margin 0.05
+--gcs-duplicate-margin-logit 1.0
+--gcs-duplicate-gt-count 4
+--gcs-duplicate-short-visible-max 20
+--gcs-duplicate-min-overlap 2
+--gcs-duplicate-min-visible-iou 0.4
+--gcs-duplicate-pos-ape-px 20.0
+--gcs-duplicate-neg-ape-px 120.0
+--gcs-duplicate-ape-gap-px 5.0
+--gcs-duplicate-max-pairs-per-gt 2
+```
+
+Validation evidence:
+
+```text
+python -m py_compile ultralytics/utils/gcs_loss.py tools/train_gcs.py ultralytics/models/yolo/gcs_lane/train.py ultralytics/models/yolo/gcs_lane/val.py ultralytics/cfg/__init__.py
+python tools/train_gcs.py --help
+python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml --imgsz 544 960 --batch 1 --device cpu
+direct duplicate_margin_loss tensor behavior check
+best-GT ownership synthetic check for adjacent GT lanes
+```
+
+Mainline or experiment:
+
+Branch-local experimental option. Defaults preserve baseline behavior and do
+not import later Count/Quality/Survival/near-miss/official-best machinery.

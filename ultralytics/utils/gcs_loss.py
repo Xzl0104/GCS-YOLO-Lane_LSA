@@ -24,6 +24,7 @@ class GCSLoss(nn.Module):
         "edge_loss",
         "count_loss",
         "count_under5_loss",
+        "duplicate_margin_loss",
     )
 
     def __init__(
@@ -38,6 +39,16 @@ class GCSLoss(nn.Module):
         lambda_edge: float | None = None,
         lambda_count: float | None = None,
         lambda_count_under5: float | None = None,
+        duplicate_margin_gain: float | None = None,
+        duplicate_margin_logit: float | None = None,
+        duplicate_gt_count: int | None = None,
+        duplicate_short_visible_max: int | None = None,
+        duplicate_min_overlap: int | None = None,
+        duplicate_min_visible_iou: float | None = None,
+        duplicate_pos_ape_px: float | None = None,
+        duplicate_neg_ape_px: float | None = None,
+        duplicate_ape_gap_px: float | None = None,
+        duplicate_max_pairs_per_gt: int | None = None,
         count_under5_min_lanes: int | None = None,
         curve_alpha: float | None = None,
         curve_weight_max: float | None = None,
@@ -78,6 +89,83 @@ class GCSLoss(nn.Module):
             if lambda_count_under5 is not None
             else self._arg(args, "gcs_count_under5", 0.0)
         )
+        self.duplicate_margin_gain = float(
+            duplicate_margin_gain
+            if duplicate_margin_gain is not None
+            else self._arg(args, "gcs_duplicate_margin", 0.0)
+        )
+        self.duplicate_margin_logit = float(
+            duplicate_margin_logit
+            if duplicate_margin_logit is not None
+            else self._arg(args, "gcs_duplicate_margin_logit", 1.0)
+        )
+        self.duplicate_gt_count = int(
+            duplicate_gt_count
+            if duplicate_gt_count is not None
+            else self._arg(args, "gcs_duplicate_gt_count", 4)
+        )
+        self.duplicate_short_visible_max = int(
+            duplicate_short_visible_max
+            if duplicate_short_visible_max is not None
+            else self._arg(args, "gcs_duplicate_short_visible_max", 20)
+        )
+        self.duplicate_min_overlap = int(
+            duplicate_min_overlap
+            if duplicate_min_overlap is not None
+            else self._arg(args, "gcs_duplicate_min_overlap", 2)
+        )
+        self.duplicate_min_visible_iou = float(
+            duplicate_min_visible_iou
+            if duplicate_min_visible_iou is not None
+            else self._arg(args, "gcs_duplicate_min_visible_iou", 0.4)
+        )
+        self.duplicate_pos_ape_px = float(
+            duplicate_pos_ape_px
+            if duplicate_pos_ape_px is not None
+            else self._arg(args, "gcs_duplicate_pos_ape_px", 20.0)
+        )
+        self.duplicate_neg_ape_px = float(
+            duplicate_neg_ape_px
+            if duplicate_neg_ape_px is not None
+            else self._arg(args, "gcs_duplicate_neg_ape_px", 120.0)
+        )
+        self.duplicate_ape_gap_px = float(
+            duplicate_ape_gap_px
+            if duplicate_ape_gap_px is not None
+            else self._arg(args, "gcs_duplicate_ape_gap_px", 5.0)
+        )
+        self.duplicate_max_pairs_per_gt = int(
+            duplicate_max_pairs_per_gt
+            if duplicate_max_pairs_per_gt is not None
+            else self._arg(args, "gcs_duplicate_max_pairs_per_gt", 2)
+        )
+        if self.duplicate_margin_gain < 0.0:
+            raise ValueError(f"gcs_duplicate_margin must be >= 0, got {self.duplicate_margin_gain}.")
+        if self.duplicate_margin_logit < 0.0:
+            raise ValueError(f"gcs_duplicate_margin_logit must be >= 0, got {self.duplicate_margin_logit}.")
+        if self.duplicate_gt_count < 1:
+            raise ValueError(f"gcs_duplicate_gt_count must be >= 1, got {self.duplicate_gt_count}.")
+        if self.duplicate_short_visible_max < 1:
+            raise ValueError(
+                f"gcs_duplicate_short_visible_max must be >= 1, got {self.duplicate_short_visible_max}."
+            )
+        if self.duplicate_min_overlap < 0:
+            raise ValueError(f"gcs_duplicate_min_overlap must be >= 0, got {self.duplicate_min_overlap}.")
+        if not (0.0 <= self.duplicate_min_visible_iou <= 1.0):
+            raise ValueError(
+                "gcs_duplicate_min_visible_iou must be in [0, 1], "
+                f"got {self.duplicate_min_visible_iou}."
+            )
+        if self.duplicate_pos_ape_px < 0.0:
+            raise ValueError(f"gcs_duplicate_pos_ape_px must be >= 0, got {self.duplicate_pos_ape_px}.")
+        if self.duplicate_neg_ape_px <= 0.0:
+            raise ValueError(f"gcs_duplicate_neg_ape_px must be > 0, got {self.duplicate_neg_ape_px}.")
+        if self.duplicate_ape_gap_px < 0.0:
+            raise ValueError(f"gcs_duplicate_ape_gap_px must be >= 0, got {self.duplicate_ape_gap_px}.")
+        if self.duplicate_max_pairs_per_gt < 1:
+            raise ValueError(
+                f"gcs_duplicate_max_pairs_per_gt must be >= 1, got {self.duplicate_max_pairs_per_gt}."
+            )
         self.count_under5_min_lanes = int(
             count_under5_min_lanes
             if count_under5_min_lanes is not None
@@ -474,6 +562,116 @@ class GCSLoss(nn.Module):
         """Cardinality loss that aligns summed existence probability with GT lane count."""
         return self.count_losses(pred_logits, batch, gt_valid)[0]
 
+    def duplicate_margin_loss(
+        self,
+        pred_logits: torch.Tensor,
+        pred_points: torch.Tensor,
+        pred_valid_logits: torch.Tensor | None,
+        batch: dict,
+        gt_points: list[torch.Tensor],
+        gt_valid: list[torch.Tensor],
+        indices: list[tuple[torch.Tensor, torch.Tensor]],
+    ) -> torch.Tensor:
+        """Penalize unmatched duplicate-like queries near a reliably matched short GT lane."""
+        if self.duplicate_margin_gain <= 0.0 or pred_valid_logits is None:
+            return self._zero_like(pred_points)
+
+        num_lanes = batch.get("num_lanes")
+        if num_lanes is not None:
+            num_lanes = torch.as_tensor(num_lanes, device=pred_logits.device).reshape(-1)
+            if num_lanes.numel() != pred_logits.shape[0]:
+                raise ValueError(
+                    f"batch['num_lanes'] must have one value per image, got {num_lanes.numel()} "
+                    f"vs B={pred_logits.shape[0]}."
+                )
+
+        losses = []
+        device, dtype = pred_points.device, pred_points.dtype
+        scale = self._pixel_scale_for(pred_points)
+        min_iou = float(self.duplicate_min_visible_iou)
+        min_overlap = int(self.duplicate_min_overlap)
+        max_pairs = int(self.duplicate_max_pairs_per_gt)
+        margin_logit = float(self.duplicate_margin_logit)
+
+        for b, (src_idx, tgt_idx) in enumerate(indices):
+            if src_idx.numel() == 0:
+                continue
+
+            if num_lanes is not None:
+                image_lane_count = int(num_lanes[b].item())
+            else:
+                valid_b = gt_valid[b].detach().to(device=device)
+                image_lane_count = int((valid_b.float().sum(dim=1) >= 2).sum().item())
+            if image_lane_count != self.duplicate_gt_count:
+                continue
+
+            points_b = pred_points[b].detach()
+            logits_b = pred_logits[b]
+            valid_prob_b = pred_valid_logits[b].detach().sigmoid().to(device=device, dtype=dtype)
+            gt_points_b = gt_points[b].to(device=device, dtype=dtype)
+            gt_valid_b = gt_valid[b].to(device=device, dtype=dtype)
+            if gt_points_b.numel() == 0:
+                continue
+            valid_counts_all = gt_valid_b.sum(dim=1)
+            valid_gt_mask = valid_counts_all >= 2
+            if not valid_gt_mask.any():
+                continue
+
+            all_diff_px = (points_b[:, None] - gt_points_b[None]) * scale
+            all_point_error = torch.norm(all_diff_px, dim=-1)
+            all_ape = (all_point_error * gt_valid_b[None]).sum(dim=2) / valid_counts_all[None].clamp_min(1.0)
+            all_ape = all_ape.masked_fill(~valid_gt_mask[None], float("inf"))
+            # Assign each unmatched query to its nearest valid GT before applying duplicate penalties.
+            best_gt_for_query = torch.argmin(all_ape, dim=1)
+
+            matched_mask = torch.zeros(pred_logits.shape[1], dtype=torch.bool, device=device)
+            matched_mask[src_idx] = True
+            unmatched_mask = ~matched_mask
+            if not unmatched_mask.any():
+                continue
+
+            for q_pos, gt_j in zip(src_idx.tolist(), tgt_idx.tolist()):
+                gt_mask = gt_valid_b[gt_j]
+                visible_count = gt_mask.sum()
+                if visible_count <= 0.0 or visible_count > float(self.duplicate_short_visible_max):
+                    continue
+
+                diff_px = (points_b - gt_points_b[gt_j]) * scale
+                point_error = torch.norm(diff_px, dim=-1)
+                ape = (point_error * gt_mask).sum(dim=1) / visible_count.clamp_min(1.0)
+
+                intersection = (valid_prob_b * gt_mask).sum(dim=1)
+                union = valid_prob_b.sum(dim=1) + visible_count - intersection
+                visible_iou = intersection / union.clamp_min(1e-6)
+                overlap = ((valid_prob_b > 0.5) & (gt_mask > 0.5)).sum(dim=1)
+
+                pos_ape = ape[q_pos]
+                pos_visible_iou = visible_iou[q_pos]
+                if pos_ape > float(self.duplicate_pos_ape_px) or pos_visible_iou < min_iou:
+                    continue
+
+                neg_worse = (ape > pos_ape + float(self.duplicate_ape_gap_px)) | (
+                    ape > float(self.duplicate_pos_ape_px)
+                )
+                neg_mask = (
+                    unmatched_mask
+                    & (overlap >= min_overlap)
+                    & (visible_iou >= min_iou)
+                    & neg_worse
+                    & (ape <= float(self.duplicate_neg_ape_px))
+                    & (best_gt_for_query == int(gt_j))
+                )
+                candidates = torch.nonzero(neg_mask, as_tuple=False).flatten()
+                if candidates.numel() == 0:
+                    continue
+                if candidates.numel() > max_pairs:
+                    order = torch.argsort(logits_b.detach()[candidates], descending=True)[:max_pairs]
+                    candidates = candidates[order]
+                for q_neg in candidates:
+                    losses.append(F.softplus(logits_b[q_neg] - logits_b[q_pos] + margin_logit))
+
+        return torch.stack(losses).mean() if losses else self._zero_like(pred_points)
+
     @staticmethod
     def _foreground_pos_weight(target: torch.Tensor, max_weight: float) -> torch.Tensor:
         """Return a capped foreground weight for sparse binary auxiliary targets."""
@@ -572,6 +770,9 @@ class GCSLoss(nn.Module):
         smooth_loss = self.smooth_loss(pred_points, gt_valid, indices)
         curve_loss = self.curve_loss(pred_points, gt_points, gt_valid, indices)
         count_loss, count_under5_loss = self.count_losses(pred_logits, batch, gt_valid)
+        duplicate_margin_loss = self.duplicate_margin_loss(
+            pred_logits, pred_points, pred_valid_logits, batch, gt_points, gt_valid, indices
+        )
 
         mask_loss = self._zero_like(pred_points)
         if "aux_mask_logits" in preds and "semantic_mask" in batch:
@@ -593,6 +794,7 @@ class GCSLoss(nn.Module):
             + self.edge_gain * edge_loss
             + self.count_gain * count_loss
             + self.count_under5_gain * count_under5_loss
+            + self.duplicate_margin_gain * duplicate_margin_loss
         )
         loss_items = torch.stack(
             (
@@ -605,6 +807,7 @@ class GCSLoss(nn.Module):
                 edge_loss.detach(),
                 count_loss.detach(),
                 count_under5_loss.detach(),
+                duplicate_margin_loss.detach(),
             )
         )
         return total, loss_items

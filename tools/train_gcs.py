@@ -153,6 +153,66 @@ def parse_args() -> argparse.Namespace:
         default=5,
         help="Minimum GT lane count that enables the targeted undercount penalty.",
     )
+    parser.add_argument(
+        "--gcs-duplicate-margin",
+        type=float,
+        default=0.0,
+        help="Pairwise duplicate-like unmatched query margin loss gain. 0 disables.",
+    )
+    parser.add_argument(
+        "--gcs-duplicate-margin-logit",
+        type=float,
+        default=1.0,
+        help="Required logit margin between reliable matched q+ and duplicate-like q-.",
+    )
+    parser.add_argument(
+        "--gcs-duplicate-gt-count",
+        type=int,
+        default=4,
+        help="Only apply duplicate margin loss to images with this GT lane count.",
+    )
+    parser.add_argument(
+        "--gcs-duplicate-short-visible-max",
+        type=int,
+        default=20,
+        help="Only apply duplicate margin loss to GT lanes with at most this many visible anchors.",
+    )
+    parser.add_argument(
+        "--gcs-duplicate-min-overlap",
+        type=int,
+        default=2,
+        help="Minimum hard visible-anchor overlap between q- and the short GT lane.",
+    )
+    parser.add_argument(
+        "--gcs-duplicate-min-visible-iou",
+        type=float,
+        default=0.4,
+        help="Minimum soft visibility IoU for q+ reliability and q- duplicate selection.",
+    )
+    parser.add_argument(
+        "--gcs-duplicate-pos-ape-px",
+        type=float,
+        default=20.0,
+        help="Maximum APE in pixels for the matched q+ to be treated as reliable.",
+    )
+    parser.add_argument(
+        "--gcs-duplicate-neg-ape-px",
+        type=float,
+        default=120.0,
+        help="Maximum APE in pixels for q- duplicate selection; filters far background queries.",
+    )
+    parser.add_argument(
+        "--gcs-duplicate-ape-gap-px",
+        type=float,
+        default=5.0,
+        help="q- must be this much worse than q+, unless above the absolute q+ APE threshold.",
+    )
+    parser.add_argument(
+        "--gcs-duplicate-max-pairs-per-gt",
+        type=int,
+        default=2,
+        help="Maximum high-logit q- pairs kept per matched GT lane.",
+    )
     parser.add_argument("--gcs-exist-pos-weight", type=float, default=1.0)
     parser.add_argument("--gcs-exist-focal-gamma", type=float, default=0.0, help="Optional focal gamma for existence BCE. 0 disables focal weighting.")
     parser.add_argument(
@@ -323,6 +383,16 @@ def main() -> None:
         "gcs_count": args.gcs_count,
         "gcs_count_under5": args.gcs_count_under5,
         "gcs_count_under5_min_lanes": args.gcs_count_under5_min_lanes,
+        "gcs_duplicate_margin": args.gcs_duplicate_margin,
+        "gcs_duplicate_margin_logit": args.gcs_duplicate_margin_logit,
+        "gcs_duplicate_gt_count": args.gcs_duplicate_gt_count,
+        "gcs_duplicate_short_visible_max": args.gcs_duplicate_short_visible_max,
+        "gcs_duplicate_min_overlap": args.gcs_duplicate_min_overlap,
+        "gcs_duplicate_min_visible_iou": args.gcs_duplicate_min_visible_iou,
+        "gcs_duplicate_pos_ape_px": args.gcs_duplicate_pos_ape_px,
+        "gcs_duplicate_neg_ape_px": args.gcs_duplicate_neg_ape_px,
+        "gcs_duplicate_ape_gap_px": args.gcs_duplicate_ape_gap_px,
+        "gcs_duplicate_max_pairs_per_gt": args.gcs_duplicate_max_pairs_per_gt,
         "gcs_exist_pos_weight": args.gcs_exist_pos_weight,
         "gcs_exist_focal_gamma": args.gcs_exist_focal_gamma,
         "gcs_exist_focal_alpha": args.gcs_exist_focal_alpha,

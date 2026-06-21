@@ -59,11 +59,29 @@ official-val363: ACC=0.969976, FP=0.019559, FN=0.014463
 final test: ACC=0.965459, FP=0.029439, FN=0.026270
 ```
 
-Both decodes were selected on official-val only in their historical experiment
-contexts. Neither decode is a current active-code contract after the rollback,
-and the `gt4short15` final-test report did not beat the previous final-test ACC
-`0.965459`; do not use final test for threshold, checkpoint, or postprocess
-tuning.
+The 2026-06-22 `count03_under5_00` ablation is also a rejected legacy result,
+not a promoted baseline:
+
+```text
+run: gcs_yolo_lane_s_tusimple_fixed_y_visible_iou_count03_under5_00
+weights: runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_visible_iou_count03_under5_00/weights/best.pt
+official-val sweep: runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_visible_iou_count03_under5_00_official_val_sweep
+official-val decode: conf=0.08, point_valid_thr=0.5, nms_dist_px=50.0, max_det=6, min_points=6
+official-val363: ACC=0.968578, FP=0.022590, FN=0.016529, count_acc=0.955923
+final test: ACC=0.965118, FP=0.031908, FN=0.029745, count_acc=0.875270
+```
+
+It set `gcs_count_under5=0.0` and slightly improved final-test total
+`count_acc` versus `count03_under5_03`, but official-val ACC, final-test ACC,
+FP, and FN were worse. Its final-test run used the official-val selected
+`max_det=6`, while the train args recorded `gcs_eval_max_det=8`; keep that as a
+comparability caveat, not a reason to tune test.
+
+These decodes were selected on official-val only in their historical experiment
+contexts. None is a current active-code contract after the rollback, and neither
+the `gt4short15` nor `count03_under5_00` final-test report beat the previous
+final-test ACC `0.965459`; do not use final test for threshold, checkpoint, or
+postprocess tuning.
 
 Current bottleneck evidence is documented in `docs/agent-context/known-bottlenecks.md`. The train/val diagnostics localize the main count weakness to `GT4` scenes with short visible side lanes, not to a simple decode-threshold issue. The relevant remote diagnostic artifacts are:
 

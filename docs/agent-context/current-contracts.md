@@ -128,7 +128,12 @@ mask_loss
 edge_loss
 count_loss
 count_under5_loss
+duplicate_margin_loss
 ```
+
+`duplicate_margin_loss` is a default-disabled experimental log item controlled
+by `gcs_duplicate_margin=0.0`. With the default gain it contributes `0` to the
+training objective; enabling it is an explicit experiment contract change.
 
 ## Decode And Evaluation Contract
 

@@ -420,3 +420,63 @@ Integrated conclusion:
 - Decision: keep final-test evidence reporting-only. Future changes must return
   to official-val and train/val diagnostics instead of using these test results
   for selection.
+
+## 2026-06-22 count03_under5_00 Under5-Loss Ablation
+
+The completed `gcs_yolo_lane_s_tusimple_fixed_y_visible_iou_count03_under5_00`
+run set `gcs_count=0.3`, `gcs_count_under5=0.0`, and
+`gcs_count_under5_min_lanes=5`. It is rejected for promotion because the
+363-image official-val ACC is below both `count03_under5_03` and the later
+legacy `gt4short15` gate.
+
+```text
+run = gcs_yolo_lane_s_tusimple_fixed_y_visible_iou_count03_under5_00
+sweep = runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_visible_iou_count03_under5_00_official_val_sweep
+best = conf=0.08, point_valid_thr=0.5, nms_dist_px=50.0, max_det=6, min_points=6
+official-val ACC = 0.968578
+official-val FP = 0.022590
+official-val FN = 0.016529
+official-val official_score = 0.967796
+official-val count_acc = 0.955923
+official-val count_acc_3/4/5 = 0.973094 / 0.893939 / 0.959459
+```
+
+The user-requested one-shot official test used that official-val selected
+decode and is reporting-only:
+
+```text
+summary = runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_visible_iou_count03_under5_00_official_test_best_from_val/tusimple_official_summary.json
+images = 2782
+official_test ACC = 0.965118
+FP = 0.031908
+FN = 0.029745
+official_score = 0.963885
+count_acc = 0.875270
+count_acc_2/3/4/5 = 0.400000 / 0.975862 / 0.566239 / 0.826011
+```
+
+Comparison to the previous `count03_under5_03` final-test report:
+
+```text
+count03_under5_03: ACC=0.965459, FP=0.029439, FN=0.026270, official_score=0.964345, count_acc=0.872753
+count03_under5_00: ACC=0.965118, FP=0.031908, FN=0.029745, official_score=0.963885, count_acc=0.875270
+delta: ACC=-0.000341, FP=+0.002469, FN=+0.003475, official_score=-0.000460, count_acc=+0.002517
+```
+
+Integrated conclusion:
+
+- Supported fact: removing the under-5 count penalty slightly improves total
+  final-test `count_acc`, mostly through better GT4 count accuracy versus
+  `count03_under5_03`.
+- Supported fact: the official-val selection metric is worse
+  (`0.968578 < 0.969976` baseline and `< 0.970851` legacy `gt4short15`), and
+  final-test ACC, FP, and FN are worse than `count03_under5_03`.
+- Supported fact: GT5 count accuracy falls versus `count03_under5_03`
+  (`0.831283 -> 0.826011` on final test), so the change is not a broad count
+  robustness fix.
+- Caveat: the test command used the official-val selected `max_det=6`, while
+  the train args recorded `gcs_eval_max_det=8`. This is valid for reporting the
+  selected decode but should be kept as a comparability note.
+- Decision: do not promote `count03_under5_00`; do not tune thresholds,
+  checkpoint choice, `max_det`, `min_points`, NMS, or loss weights from the
+  final-test breakdown.

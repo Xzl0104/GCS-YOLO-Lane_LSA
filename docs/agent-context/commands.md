@@ -334,6 +334,64 @@ closed. If this mechanism is revisited, run a train/val failure trace first to
 verify whether `low_score_short_gt` improved enough to justify a narrower
 variant; do not tune from final test.
 
+## Legacy count_under5=0.0 Ablation and Reporting Test
+
+The 2026-06-22 `count03_under5_00` official test was requested after its
+363-image official-val sweep completed. It is a reporting-only rejected
+ablation, not a new selected candidate:
+
+```text
+run: gcs_yolo_lane_s_tusimple_fixed_y_visible_iou_count03_under5_00
+train args: epochs=160, batch=32, amp=true, gcs_count=0.3, gcs_count_under5=0.0, gcs_count_under5_min_lanes=5, gcs_eval_max_det=8
+sweep: runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_visible_iou_count03_under5_00_official_val_sweep
+best: conf=0.08, point_valid_thr=0.5, nms_dist_px=50.0, max_det=6, min_points=6
+official-val363: ACC=0.968578, FP=0.022590, FN=0.016529, official_score=0.967796, count_acc=0.955923
+```
+
+One-shot official test command:
+
+```bash
+python tools/eval_tusimple_official.py \
+  --archive-root archive/TUSimple \
+  --split test \
+  --weights runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_visible_iou_count03_under5_00/weights/best.pt \
+  --imgsz 544 960 \
+  --device 0 \
+  --conf 0.08 \
+  --point-valid-thr 0.5 \
+  --nms-dist-px 50.0 \
+  --max-det 6 \
+  --min-points 6 \
+  --half \
+  --save-dir runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_visible_iou_count03_under5_00_official_test_best_from_val \
+  --save-records
+```
+
+Result:
+
+```text
+summary: runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_visible_iou_count03_under5_00_official_test_best_from_val/tusimple_official_summary.json
+images=2782
+ACC=0.965118
+FP=0.031908
+FN=0.029745
+official_score=0.963885
+count_acc=0.875270
+count_acc_2=0.400000
+count_acc_3=0.975862
+count_acc_4=0.566239
+count_acc_5=0.826011
+pred_lanes_hist: 2=5, 3=1837, 4=359, 5=564, 6=17
+gt_lanes_hist: 2=5, 3=1740, 4=468, 5=569
+count_confusion: 2->2=2, 2->3=3, 3->2=3, 3->3=1698, 3->4=34, 3->5=5, 4->3=110, 4->4=265, 4->5=89, 4->6=4, 5->3=26, 5->4=60, 5->5=470, 5->6=13
+```
+
+Do not promote this ablation. It slightly improves final-test total
+`count_acc` versus `count03_under5_03`, but lowers official-val ACC and
+final-test ACC while raising FP/FN. The official-val best decode uses
+`max_det=6` even though training args record `gcs_eval_max_det=8`; keep that as
+a comparability caveat and do not retune from test.
+
 The previous 2026-06-20 final-test-reported candidate was:
 
 ```text

@@ -122,6 +122,16 @@ gcs_edge: 0.2 # (float) GCS auxiliary edge loss gain
 gcs_count: 0.0 # (float) GCS lane-count/cardinality loss gain; 0 disables
 gcs_count_under5: 0.0 # (float) extra GCS undercount loss gain for dense-lane samples; 0 disables
 gcs_count_under5_min_lanes: 5 # (int) minimum GT lane count that enables gcs_count_under5
+gcs_duplicate_margin: 0.0 # (float) duplicate-like unmatched query pairwise logit margin loss gain; 0 disables
+gcs_duplicate_margin_logit: 1.0 # (float) required logit margin between reliable matched q+ and duplicate-like q-
+gcs_duplicate_gt_count: 4 # (int) only apply duplicate margin loss to images with this GT lane count
+gcs_duplicate_short_visible_max: 20 # (int) only apply to GT lanes with at most this many visible anchors
+gcs_duplicate_min_overlap: 2 # (int) minimum hard visible-anchor overlap between q- and the short GT lane
+gcs_duplicate_min_visible_iou: 0.4 # (float) minimum soft visibility IoU for q+ reliability and q- duplicate selection
+gcs_duplicate_pos_ape_px: 20.0 # (float) maximum APE in pixels for the matched q+ to be treated as reliable
+gcs_duplicate_neg_ape_px: 120.0 # (float) maximum APE in pixels for q- duplicate selection; filters far background queries
+gcs_duplicate_ape_gap_px: 5.0 # (float) q- must be this much worse than q+, unless above the absolute q+ APE threshold
+gcs_duplicate_max_pairs_per_gt: 2 # (int) maximum high-logit q- pairs kept per matched GT lane
 gcs_exist_pos_weight: 1.0 # (float) positive query weight for GCS lane existence BCE
 gcs_exist_focal_gamma: 0.0 # (float) optional focal gamma for GCS existence BCE; 0 disables focal weighting
 gcs_exist_focal_alpha: -1.0 # (float) optional focal alpha for GCS existence BCE; set 0..1 to enable alpha weighting
