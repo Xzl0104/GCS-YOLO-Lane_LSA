@@ -133,6 +133,18 @@ gcs_extra_exist = 0.0
 gcs_extra_exist_thr = 0.15
 ```
 
+Short matched existence floor is an explicit experimental refinement inside
+`exist_loss`, not a new logged loss item. It applies only to Hungarian-matched
+short GT lanes after the existing APE quality and visible-IoU quality are
+computed. Defaults preserve baseline behavior:
+
+```text
+gcs_short_exist_floor = 0.0
+gcs_short_exist_max_visible = 20
+gcs_short_exist_floor_max_ape = 20.0
+gcs_short_exist_floor_min_iou = 0.3
+```
+
 ## Decode And Evaluation Contract
 
 Decode must use real query predictions only, must not use GT during inference, and must not fabricate lanes. Final output should be sorted from left to right by bottom visible x.

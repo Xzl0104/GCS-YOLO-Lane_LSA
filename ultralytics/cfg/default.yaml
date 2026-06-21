@@ -133,6 +133,10 @@ gcs_exist_quality_tau: 25.0 # (float) APE decay scale in pixels for exp quality 
 gcs_exist_quality_floor: 0.0 # (float) minimum geometry quality for exp quality mode
 gcs_exist_quality_pos_px: 10.0 # (float) APE at or below this value receives quality 1.0 in linear mode
 gcs_exist_quality_neg_px: 20.0 # (float) APE at or above this value receives quality 0.0 in linear mode
+gcs_short_exist_floor: 0.0 # (float) minimum matched existence quality for gated short GT lanes; 0 disables
+gcs_short_exist_max_visible: 20 # (int) max visible GT anchors eligible for short-lane existence floor
+gcs_short_exist_floor_max_ape: 20.0 # (float) max matched APE in pixels eligible for short-lane existence floor
+gcs_short_exist_floor_min_iou: 0.3 # (float) min matched visible IoU eligible for short-lane existence floor
 gcs_point_valid_pos_weight_max: 10.0 # (float) maximum positive weight for GCS per-point visibility loss
 gcs_mask_pos_weight_max: 20.0 # (float) maximum foreground class weight for GCS mask auxiliary loss
 gcs_edge_pos_weight_max: 50.0 # (float) maximum foreground pos_weight for GCS edge auxiliary loss

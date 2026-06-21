@@ -92,6 +92,23 @@ No `extraexist0025` sweep row reached the previous `extraexist005`,
 extra-exist gain sweeps or send these candidates to final test; return to
 short-lane score/geometry retention work selected only on official-val.
 
+The next implemented branch-local experiment is a default-disabled short
+matched existence floor inside `GCSLoss.exist_loss()`. It protects only
+Hungarian-matched short GT lanes after the existing APE quality and visible-IoU
+quality are computed:
+
+```text
+--gcs-short-exist-floor 0.4
+--gcs-short-exist-max-visible 20
+--gcs-short-exist-floor-max-ape 20.0
+--gcs-short-exist-floor-min-iou 0.3
+```
+
+Select the result only on the same 363-image official-val surface. The gate is
+current `gt4short15`: official-val `ACC >= 0.970851`, `FN` not materially above
+`0.011708`, lower `GT4` short undercount and `low_score_short_gt`, and no
+obvious increase in `spurious_extra` or `duplicate_like_extra`.
+
 ## Full Training
 
 Run formal training on the remote CUDA server from a clone checked out to this branch:

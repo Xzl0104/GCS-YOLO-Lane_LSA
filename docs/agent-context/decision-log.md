@@ -868,3 +868,72 @@ final test closed unless a candidate beats `0.970851`.
 Mainline or experiment:
 
 Rejected experimental candidate. No final-test run and no selected decode change.
+
+## 2026-06-21: Add Default-Disabled Short Matched Existence Floor
+
+Decision:
+
+Add an explicit `GCSLoss.exist_loss()` refinement that can floor the matched
+existence target for short GT lanes only when geometry and visibility quality
+are already acceptable.
+
+Implementation:
+
+```text
+ultralytics/utils/gcs_loss.py
+  gcs_short_exist_floor = 0.0
+  gcs_short_exist_max_visible = 20
+  gcs_short_exist_floor_max_ape = 20.0
+  gcs_short_exist_floor_min_iou = 0.3
+
+tools/train_gcs.py
+ultralytics/cfg/default.yaml
+ultralytics/cfg/__init__.py
+  CLI/default/config typing for the four parameters above
+```
+
+Why:
+
+The rejected `extra_exist_loss` sweep showed that direct unmatched-query
+suppression can over-suppress scores. The next smallest train-side mechanism is
+to protect true short matched lanes whose APE and visible IoU already indicate
+a plausible short lane, so they are not trained to low existence targets because
+of unstable short-span quality estimates.
+
+Default behavior:
+
+The feature is disabled by default with `gcs_short_exist_floor=0.0`, so baseline
+training behavior is unchanged unless the experiment flag is explicitly set.
+It does not add a new logged loss item and does not change model outputs,
+decode, postprocess, official metrics, or the K56 fixed-y contract.
+
+Validation evidence:
+
+```text
+python -m py_compile ultralytics/utils/gcs_loss.py ultralytics/cfg/__init__.py tools/train_gcs.py
+python tools/train_gcs.py --help
+direct short-exist-floor tensor behavior check
+python -c "from ultralytics.cfg import DEFAULT_CFG_DICT, check_cfg; ..."
+python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml --imgsz 544 960 --batch 1 --device cpu
+```
+
+Recommended experiment:
+
+```text
+--gcs-short-exist-floor 0.4
+--gcs-short-exist-max-visible 20
+--gcs-short-exist-floor-max-ape 20.0
+--gcs-short-exist-floor-min-iou 0.3
+```
+
+Promote only if the same 363-image official-val surface reaches or exceeds the
+current `gt4short15` gate `ACC=0.970851` without materially raising
+`FN=0.011708`, while reducing `GT4` short undercount and
+`low_score_short_gt` without obvious `spurious_extra` or
+`duplicate_like_extra` growth.
+
+Mainline or experiment:
+
+Branch-local experimental option. No official-val evidence exists yet; do not
+claim improvement until the remote training run and official-val sweep are
+complete.

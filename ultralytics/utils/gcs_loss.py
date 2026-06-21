@@ -132,6 +132,10 @@ class GCSLoss(nn.Module):
             if exist_quality_neg_px is not None
             else self._arg(args, "gcs_exist_quality_neg_px", 20.0)
         )
+        self.short_exist_floor = float(self._arg(args, "gcs_short_exist_floor", 0.0))
+        self.short_exist_max_visible = int(self._arg(args, "gcs_short_exist_max_visible", 20))
+        self.short_exist_floor_max_ape = float(self._arg(args, "gcs_short_exist_floor_max_ape", 20.0))
+        self.short_exist_floor_min_iou = float(self._arg(args, "gcs_short_exist_floor_min_iou", 0.3))
         if self.exist_quality_mode in {"exponential"}:
             self.exist_quality_mode = "exp"
         if self.exist_quality_mode not in {"linear", "exp"}:
@@ -140,6 +144,18 @@ class GCSLoss(nn.Module):
             raise ValueError(
                 "gcs_exist_quality_neg_px must be greater than gcs_exist_quality_pos_px "
                 f"({self.exist_quality_neg_px} <= {self.exist_quality_pos_px})."
+            )
+        if not 0.0 <= self.short_exist_floor <= 1.0:
+            raise ValueError(f"gcs_short_exist_floor must be in [0, 1], got {self.short_exist_floor}.")
+        if self.short_exist_max_visible < 1:
+            raise ValueError(f"gcs_short_exist_max_visible must be >= 1, got {self.short_exist_max_visible}.")
+        if self.short_exist_floor_max_ape < 0.0:
+            raise ValueError(
+                f"gcs_short_exist_floor_max_ape must be >= 0, got {self.short_exist_floor_max_ape}."
+            )
+        if not 0.0 <= self.short_exist_floor_min_iou <= 1.0:
+            raise ValueError(
+                f"gcs_short_exist_floor_min_iou must be in [0, 1], got {self.short_exist_floor_min_iou}."
             )
         self.mask_pos_weight_max = float(
             mask_pos_weight_max if mask_pos_weight_max is not None else self._arg(args, "gcs_mask_pos_weight_max", 20.0)
@@ -313,12 +329,23 @@ class GCSLoss(nn.Module):
                 point_error = torch.norm((pred - target_points) * scale, dim=-1)
                 ape = (point_error * valid).sum(dim=1) / valid.sum(dim=1).clamp_min(1.0)
                 quality = self._exist_quality_from_ape(ape)
+                visible_quality = None
                 if pred_valid_logits is not None:
                     valid_prob = pred_valid_logits[b, src_idx].detach().sigmoid().to(dtype=dtype)
                     intersection = (valid_prob * valid).sum(dim=1)
                     union = valid_prob.sum(dim=1) + valid.sum(dim=1) - intersection
                     visible_quality = intersection / union.clamp_min(1e-6)
                     quality = quality * visible_quality.clamp(min=0.0, max=1.0)
+                floor = float(self.short_exist_floor)
+                if floor > 0.0 and visible_quality is not None:
+                    short = (
+                        (valid.sum(dim=1) <= float(self.short_exist_max_visible))
+                        & (ape <= float(self.short_exist_floor_max_ape))
+                        & (visible_quality >= float(self.short_exist_floor_min_iou))
+                    )
+                    if short.any():
+                        quality = quality.clone()
+                        quality[short] = torch.maximum(quality[short], quality.new_tensor(floor))
                 target[b, src_idx] = (1.0 - alpha) + alpha * quality.to(dtype=target.dtype)
         pos_weight = pred_logits.new_tensor(self.exist_pos_weight)
         loss = F.binary_cross_entropy_with_logits(pred_logits, target, pos_weight=pos_weight, reduction="none")

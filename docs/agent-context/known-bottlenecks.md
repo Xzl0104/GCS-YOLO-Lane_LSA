@@ -364,3 +364,12 @@ Integrated conclusion:
   `0.05` run gave diagnostic FP/count improvement but missed ACC; the `0.025`
   run gives no useful diagnostic tradeoff. Return to short-lane score/geometry
   retention rather than stronger or weaker unmatched-query suppression.
+- Implemented follow-up: `GCSLoss.exist_loss()` now has a default-disabled
+  short matched existence floor. It applies only after Hungarian matching and
+  only when the matched short GT lane passes APE and visible-IoU gates. Initial
+  experiment settings are `--gcs-short-exist-floor 0.4`,
+  `--gcs-short-exist-max-visible 20`,
+  `--gcs-short-exist-floor-max-ape 20.0`, and
+  `--gcs-short-exist-floor-min-iou 0.3`. No official-val evidence exists yet;
+  select only on the same 363-image official-val surface and keep final test
+  closed unless the gate `ACC >= 0.970851` is met.

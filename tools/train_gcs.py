@@ -209,6 +209,30 @@ def parse_args() -> argparse.Namespace:
         default=20.0,
         help="APE at or above this value receives quality 0.0 in linear quality mode.",
     )
+    parser.add_argument(
+        "--gcs-short-exist-floor",
+        type=float,
+        default=0.0,
+        help="Minimum matched existence quality for gated short GT lanes. 0 disables.",
+    )
+    parser.add_argument(
+        "--gcs-short-exist-max-visible",
+        type=int,
+        default=20,
+        help="Maximum visible GT anchors for a matched lane to be eligible for --gcs-short-exist-floor.",
+    )
+    parser.add_argument(
+        "--gcs-short-exist-floor-max-ape",
+        type=float,
+        default=20.0,
+        help="Maximum matched APE in pixels for short-lane existence floor eligibility.",
+    )
+    parser.add_argument(
+        "--gcs-short-exist-floor-min-iou",
+        type=float,
+        default=0.3,
+        help="Minimum matched visible IoU for short-lane existence floor eligibility.",
+    )
     parser.add_argument("--gcs-mask-pos-weight-max", type=float, default=20.0)
     parser.add_argument("--gcs-point-valid-pos-weight-max", type=float, default=10.0)
     parser.add_argument("--gcs-edge-pos-weight-max", type=float, default=50.0)
@@ -358,6 +382,10 @@ def main() -> None:
         "gcs_exist_quality_floor": args.gcs_exist_quality_floor,
         "gcs_exist_quality_pos_px": args.gcs_exist_quality_pos_px,
         "gcs_exist_quality_neg_px": args.gcs_exist_quality_neg_px,
+        "gcs_short_exist_floor": args.gcs_short_exist_floor,
+        "gcs_short_exist_max_visible": args.gcs_short_exist_max_visible,
+        "gcs_short_exist_floor_max_ape": args.gcs_short_exist_floor_max_ape,
+        "gcs_short_exist_floor_min_iou": args.gcs_short_exist_floor_min_iou,
         "gcs_point_valid_pos_weight_max": args.gcs_point_valid_pos_weight_max,
         "gcs_mask_pos_weight_max": args.gcs_mask_pos_weight_max,
         "gcs_edge_pos_weight_max": args.gcs_edge_pos_weight_max,

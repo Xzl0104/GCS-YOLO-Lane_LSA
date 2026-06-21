@@ -210,6 +210,79 @@ continue sweeping `gcs_extra_exist` gains. Return to train-side short-lane
 score/geometry retention work; select any new mechanism only on the same
 363-image official-val surface.
 
+## Short Matched Existence Floor Experiment
+
+The short matched existence floor is an explicit experimental option inside
+`GCSLoss.exist_loss()`. It does not add a new loss item. Defaults preserve
+baseline behavior:
+
+```text
+gcs_short_exist_floor = 0.0
+gcs_short_exist_max_visible = 20
+gcs_short_exist_floor_max_ape = 20.0
+gcs_short_exist_floor_min_iou = 0.3
+```
+
+It applies only to Hungarian-matched GT lanes whose visible-anchor count is at
+or below `gcs_short_exist_max_visible`, whose matched APE is at or below
+`gcs_short_exist_floor_max_ape`, and whose matched visible IoU is at or above
+`gcs_short_exist_floor_min_iou`. The target floor is applied after the existing
+APE quality and visible-IoU quality are computed.
+
+First experiment:
+
+```bash
+python tools/train_gcs.py \
+  --dataset tusimple \
+  --model ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml \
+  --data data/tusimple_gcs_fixed_y_960x544.yaml \
+  --pretrained yolo11s-seg.pt \
+  --imgsz 544 960 \
+  --epochs 160 \
+  --batch 32 \
+  --workers 4 \
+  --device 0 \
+  --no-amp \
+  --optimizer AdamW \
+  --lr0 5e-4 \
+  --lrf 0.05 \
+  --cos-lr \
+  --weight-decay 1e-4 \
+  --warmup-epochs 3.0 \
+  --warmup-bias-lr 0.0 \
+  --patience 40 \
+  --erasing 0.1 \
+  --scale 0.3 \
+  --gcs-exist 2.0 \
+  --gcs-point 15.0 \
+  --gcs-point-valid 1.0 \
+  --gcs-smooth 0.05 \
+  --gcs-curve 0.1 \
+  --gcs-mask 0.2 \
+  --gcs-edge 0.2 \
+  --gcs-count 0.3 \
+  --gcs-count-under5 0.3 \
+  --gcs-count-under5-min-lanes 5 \
+  --gcs-lane-count-balanced \
+  --gcs-lane-count-balance-power 1.0 \
+  --gcs-lane-count-min-group 50 \
+  --gcs-gt4-short-boost 1.5 \
+  --gcs-gt4-short-min-visible-max 10 \
+  --gcs-short-exist-floor 0.4 \
+  --gcs-short-exist-max-visible 20 \
+  --gcs-short-exist-floor-max-ape 20.0 \
+  --gcs-short-exist-floor-min-iou 0.3 \
+  --project runs/gcs_lane \
+  --name gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_shortexist04_count03_under5_03
+```
+
+Select only on the same 363-image official-val surface. Gate the result against
+current `gt4short15`: `ACC >= 0.970851`, `FN` not much above `0.011708`, lower
+`GT4` short undercount and `low_score_short_gt`, and no obvious increase in
+`spurious_extra` or `duplicate_like_extra`. If short misses improve but
+overcount rises, test a separate GT4 overcount margin later rather than mixing
+it into this first floor experiment.
+
 The previous 2026-06-20 final-test-reported candidate was:
 
 ```text
