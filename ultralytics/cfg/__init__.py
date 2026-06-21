@@ -192,14 +192,12 @@ CFG_FLOAT_KEYS = frozenset(
         "gcs_edge",
         "gcs_count",
         "gcs_count_under5",
-        "gcs_extra_exist",
         "gcs_exist_pos_weight",
         "gcs_exist_focal_gamma",
         "gcs_exist_focal_alpha",
         "gcs_exist_quality_tau",
         "gcs_exist_quality_pos_px",
         "gcs_exist_quality_neg_px",
-        "gcs_short_exist_floor_max_ape",
         "gcs_point_valid_pos_weight_max",
         "gcs_mask_pos_weight_max",
         "gcs_edge_pos_weight_max",
@@ -217,7 +215,6 @@ CFG_FLOAT_KEYS = frozenset(
         "gcs_eval_max_x_dist",
         "gcs_eval_nms_dist_px",
         "gcs_lane_count_balance_power",
-        "gcs_gt4_short_boost",
     }
 )
 CFG_FRACTION_KEYS = frozenset(
@@ -249,9 +246,6 @@ CFG_FRACTION_KEYS = frozenset(
         "multi_scale",
         "gcs_exist_quality_alpha",
         "gcs_exist_quality_floor",
-        "gcs_extra_exist_thr",
-        "gcs_short_exist_floor",
-        "gcs_short_exist_floor_min_iou",
         "gcs_eval_point_valid_thr",
     }
 )
@@ -273,8 +267,6 @@ CFG_INT_KEYS = frozenset(
         "gcs_eval_min_overlap",
         "gcs_lane_count_min_group",
         "gcs_count_under5_min_lanes",
-        "gcs_short_exist_max_visible",
-        "gcs_gt4_short_min_visible_max",
     }
 )
 CFG_BOOL_KEYS = frozenset(

@@ -2,6 +2,32 @@
 
 This file records decisions for branch `codex/5-25-3-k56`.
 
+## 2026-06-21: Roll Active Code Back to 50999d6af
+
+Decision:
+
+Restore the active source/config state to commit `50999d6af` (`Document 5-25-3
+K56 as mainline`).
+
+Scope:
+
+The active code baseline is the 5-25-3 K56 mainline contract at `50999d6af`.
+All later commits and notes, including reusable count diagnostics, GT4 short-lane
+sampling, `extra_exist_loss`, short matched existence floor, and reporting-only
+test batches, are retained below as legacy experiment conclusions only. They do
+not describe currently available CLI flags, loss items, scripts, or active
+selected candidates unless a future task explicitly restores those mechanisms.
+
+Why:
+
+The user requested the code rollback while keeping later experiment content in
+the documentation as old conclusions.
+
+Mainline or experiment:
+
+Current mainline rollback decision. Later experiment sections remain historical
+records.
+
 ## 2026-06-19: Import 5-25-3 as a Separate K56 Branch
 
 Decision:
@@ -1021,3 +1047,60 @@ Mainline or experiment:
 
 Rejected experimental candidate. No final-test run and no selected decode
 change.
+
+## 2026-06-21: User-Requested Reporting-Only Final Test Batch
+
+Decision:
+
+Run official TuSimple test once for the recent experiment checkpoints using
+each run's official-val selected decode, because the user explicitly requested
+test ACC for the recent experiments. Treat these results as reporting-only
+evidence, not as a threshold, checkpoint, or postprocess selection surface.
+
+Official-test evidence:
+
+```text
+baseline count03_under5_03:
+  decode = conf=0.05, point_valid_thr=0.5, nms_dist_px=50.0, max_det=8, min_points=5
+  ACC=0.965459, FP=0.029439, FN=0.026270, official_score=0.964345, count_acc=0.872753
+
+gt4short2:
+  decode = conf=0.15, point_valid_thr=0.5, nms_dist_px=18.0, max_det=5, min_points=4
+  ACC=0.965206, FP=0.026432, FN=0.027079, official_score=0.964136, count_acc=0.884256
+
+gt4short15:
+  decode = conf=0.15, point_valid_thr=0.5, nms_dist_px=0.0, max_det=6, min_points=4
+  ACC=0.965369, FP=0.033309, FN=0.029236, official_score=0.964118, count_acc=0.864486
+
+extraexist005:
+  decode = conf=0.005, point_valid_thr=0.5, nms_dist_px=18.0, max_det=6, min_points=5
+  ACC=0.965032, FP=0.029661, FN=0.027139, official_score=0.963896, count_acc=0.878864
+
+shortexist04:
+  decode = conf=0.1, point_valid_thr=0.5, nms_dist_px=30.0, max_det=8, min_points=5
+  ACC=0.964992, FP=0.031381, FN=0.028876, official_score=0.963787, count_acc=0.875988
+
+extraexist0025:
+  decode = conf=0.05, point_valid_thr=0.5, nms_dist_px=0.0, max_det=6, min_points=4
+  ACC=0.961330, FP=0.044764, FN=0.034508, official_score=0.959745, count_acc=0.838605
+```
+
+Interpretation:
+
+- Supported fact: no recent rejected experiment beats the previous
+  `count03_under5_03` final-test ACC `0.965459`.
+- Supported fact: `gt4short15` still has the best official-val ACC, but its
+  test ACC `0.965369` is below the previous final-test report.
+- Supported fact: `extraexist0025` is a clear final-test regression, matching
+  its official-val failure.
+
+Rejected actions:
+
+- Do not use these final-test values to tune thresholds, `max_det`,
+  `min_points`, NMS, checkpoint choice, or future loss settings.
+- Do not promote any rejected experiment based on this reporting-only batch.
+
+Mainline or experiment:
+
+Reporting-only final-test evidence requested by the user. Official-val remains
+the only allowed selection surface for future experiments.

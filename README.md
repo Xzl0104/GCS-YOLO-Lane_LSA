@@ -2,6 +2,8 @@
 
 This is the current GCS-YOLO-Lane mainline branch. It imports the historical `5-25-3.zip` algorithm and adapts only the TuSimple fixed-y contract.
 
+Active source/config is rolled back to commit `50999d6af` (`Document 5-25-3 K56 as mainline`). Results and mechanisms from later commits are retained below as legacy experiment conclusions only; they do not describe currently available CLI flags, loss items, diagnostic scripts, or selected candidates.
+
 ## Contract
 
 ```text
@@ -23,9 +25,11 @@ Compatibility paths `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml` an
 
 The 5-25-3 algorithm body is intentionally not upgraded to later mainline Count Head, Count Boundary, Quality Head, Survival Head, near-miss, or official-best checkpoint machinery.
 
-## Evaluated Candidates
+## Legacy Evaluated Candidates
 
-The 2026-06-21 official-val selected candidate is:
+The 2026-06-21 `gt4short15` run was selected on official-val in a later
+post-`50999d6af` experiment line. After the rollback, it is a legacy result,
+not the active code baseline:
 
 ```text
 run: gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03
@@ -35,7 +39,7 @@ official-val decode: conf=0.15, point_valid_thr=0.5, nms_dist_px=0.0, max_det=6,
 official-val363: ACC=0.970851, FP=0.022084, FN=0.011708, count_acc=0.939394
 ```
 
-It improves the 363-image official-val ACC over the previous selected candidate by `+0.000875`, mainly from lower FN. Its count accuracy is worse, especially GT4 count accuracy. The completed train/val diagnostic and one-shot final-test report confirm that this is an official-val recall gain, not a count-robustness fix.
+It improved the 363-image official-val ACC over the previous selected candidate by `+0.000875`, mainly from lower FN. Its count accuracy was worse, especially GT4 count accuracy. The completed train/val diagnostic and one-shot final-test report confirm that this was an official-val recall gain, not a count-robustness fix.
 
 The 2026-06-21 reporting-only final-test result for `gt4short15` is:
 
@@ -55,7 +59,11 @@ official-val363: ACC=0.969976, FP=0.019559, FN=0.014463
 final test: ACC=0.965459, FP=0.029439, FN=0.026270
 ```
 
-Both decodes were selected on official-val only. `gt4short15` remains the official-val selected candidate, but its final-test report did not beat the previous final-test ACC `0.965459`; do not use final test for threshold, checkpoint, or postprocess tuning.
+Both decodes were selected on official-val only in their historical experiment
+contexts. Neither decode is a current active-code contract after the rollback,
+and the `gt4short15` final-test report did not beat the previous final-test ACC
+`0.965459`; do not use final test for threshold, checkpoint, or postprocess
+tuning.
 
 Current bottleneck evidence is documented in `docs/agent-context/known-bottlenecks.md`. The train/val diagnostics localize the main count weakness to `GT4` scenes with short visible side lanes, not to a simple decode-threshold issue. The relevant remote diagnostic artifacts are:
 
@@ -74,26 +82,29 @@ vs `10` undercount images), with extra lanes mainly `spurious_extra` plus some
 did not find a safe NMS replacement for `nms_dist_px=0.0` because NMS starts
 raising FN as soon as it removes duplicate-like predictions.
 
-The high-score unmatched-query suppression runs are rejected for promotion.
+The high-score unmatched-query suppression runs are rejected legacy experiments.
+Their `--gcs-extra-exist` flags and `extra_exist_loss` logging are not present
+in the active `50999d6af` code state.
 The first run,
 `gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_extraexist005_count03_under5_03`,
 had best 363-image official-val
 `ACC=0.969603`, `FP=0.017815`, `FN=0.012856`, `count_acc=0.961433` with
 `conf=0.005`, `point_valid_thr=0.5`, `nms_dist_px=18.0`, `max_det=6`, and
-`min_points=5`. It improved FP/count shape but missed the current official-val
-ACC gate `0.970851`, and the very low selected confidence indicates score
+`min_points=5`. It improved FP/count shape but missed the then-current
+official-val ACC gate `0.970851`, and the very low selected confidence indicates score
 over-suppression. The smaller
 `gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_extraexist0025_count03_under5_03`
 run was worse: best official-val `ACC=0.961513`, `FP=0.049633`,
 `FN=0.029844`, `count_acc=0.887052` with `conf=0.05`,
 `point_valid_thr=0.5`, `nms_dist_px=0.0`, `max_det=6`, and `min_points=4`.
 No `extraexist0025` sweep row reached the previous `extraexist005`,
-`count03_under5_03`, or current `gt4short15` official-val ACC. Do not continue
+`count03_under5_03`, or then-current `gt4short15` official-val ACC. Do not continue
 extra-exist gain sweeps or send these candidates to final test; return to
 short-lane score/geometry retention work selected only on official-val.
 
-The short matched existence floor experiment is rejected for promotion. It used
-the default-disabled `GCSLoss.exist_loss()` floor to protect only
+The short matched existence floor experiment is a rejected legacy experiment.
+Its `--gcs-short-exist-*` flags are not present in the active `50999d6af` code
+state. It used a then-experimental `GCSLoss.exist_loss()` floor to protect only
 Hungarian-matched short GT lanes after the existing APE quality and visible-IoU
 quality were computed:
 
@@ -114,8 +125,8 @@ official-val ACC=0.968966, FP=0.019972, FN=0.014922, official_score=0.968268, co
 count_acc_3=0.968610, count_acc_4=0.863636, count_acc_5=0.972973
 ```
 
-It improves FP and count accuracy relative to the current `gt4short15`
-candidate, but misses the current official-val ACC gate `0.970851` by
+It improved FP and count accuracy relative to the then-current `gt4short15`
+candidate, but missed that official-val ACC gate `0.970851` by
 `0.001885` and raises FN by `0.003214`. Do not send it to final test. Its
 `args.yaml` records `amp: true`, unlike the original `--no-amp` template, so
 reproducibility notes should use the recorded args rather than the template.
@@ -156,12 +167,12 @@ python tools/train_gcs.py \
   --gcs-curve 0.1 \
   --gcs-mask 0.2 \
   --gcs-edge 0.2 \
-  --gcs-count 0.3 \
+  --gcs-count 0.2 \
   --gcs-count-under5 0.3 \
   --gcs-count-under5-min-lanes 5 \
   --gcs-lane-count-balanced \
   --project runs/gcs_lane \
-  --name gcs_yolo_lane_s_tusimple_fixed_y_visible_iou_count03_under5_03
+  --name gcs_yolo_lane_s_tusimple_fixed_y_visible_iou_count02_under5_03
 ```
 
 If `batch=32` OOMs, reduce it only for OOM or instability and record the change in the run notes.

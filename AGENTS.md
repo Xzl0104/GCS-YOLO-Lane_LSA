@@ -105,6 +105,8 @@ The K56 labels must be regenerated from original TuSimple JSON and images, not r
 
 Historical q12-k56 experiment notes and compatibility paths must stay as old records. They do not override the active 5-25-3 K56 mainline contract.
 
+The active source code is rolled back to commit `50999d6af` (`Document 5-25-3 K56 as mainline`). Later experiment commits and their documentation are legacy conclusions only unless a future task explicitly re-enables those mechanisms.
+
 ## Branch Scope
 
 Do not silently import later mainline mechanisms into this branch. In particular, do not add Count Head, Count Boundary, Quality Head, Survival Head, near-miss mining, official-best checkpoint preservation, or mainline K56 candidate scripts unless a future task explicitly asks for that algorithm change.
@@ -137,7 +139,6 @@ mask_loss
 edge_loss
 count_loss
 count_under5_loss
-extra_exist_loss
 ```
 
 ## Agent Coordination Rules

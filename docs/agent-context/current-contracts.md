@@ -60,6 +60,12 @@ All branch configs keep `Q=12`, `K=56`, fixed-y anchors `710/720 -> 160/720`, an
 
 Historical q12-k56 experiment docs are old records. Preserve them, but do not let them override the active 5-25-3 K56 mainline contract.
 
+Active source/config is intentionally rolled back to commit `50999d6af`
+(`Document 5-25-3 K56 as mainline`). Later commits such as GT4 short-lane
+sampling, `extra_exist_loss`, short matched existence floor, and count-confusion
+diagnostic tooling are preserved only as legacy experiment conclusions in the
+docs. They are not active CLI, loss, or tool contracts in this code state.
+
 ## Label Contract
 
 ```text
@@ -122,31 +128,10 @@ mask_loss
 edge_loss
 count_loss
 count_under5_loss
-extra_exist_loss
-```
-
-`extra_exist_loss` is an explicit experimental high-score unmatched-query BCE
-penalty. Defaults preserve baseline behavior:
-
-```text
-gcs_extra_exist = 0.0
-gcs_extra_exist_thr = 0.15
-```
-
-Short matched existence floor is an explicit experimental refinement inside
-`exist_loss`, not a new logged loss item. It applies only to Hungarian-matched
-short GT lanes after the existing APE quality and visible-IoU quality are
-computed. Defaults preserve baseline behavior:
-
-```text
-gcs_short_exist_floor = 0.0
-gcs_short_exist_max_visible = 20
-gcs_short_exist_floor_max_ape = 20.0
-gcs_short_exist_floor_min_iou = 0.3
 ```
 
 ## Decode And Evaluation Contract
 
 Decode must use real query predictions only, must not use GT during inference, and must not fabricate lanes. Final output should be sorted from left to right by bottom visible x.
 
-This branch includes `tools/eval_tusimple_official.py`, `tools/sweep_tusimple_official.py`, `gcs_tools/tusimple_official_eval.py`, and the branch-local `tools/diagnose_tusimple_count_confusion.py` train/val diagnostic. It still does not include `tools/diagnose_gcs_gt5.py`, training-time `official_best` checkpoint preservation, or later mainline Count/Quality/Boundary diagnostics unless a future task explicitly ports them. Use official-val for selection and test only once for final evaluation.
+This branch includes `tools/eval_tusimple_official.py`, `tools/sweep_tusimple_official.py`, and `gcs_tools/tusimple_official_eval.py`. It does not include `tools/diagnose_tusimple_count_confusion.py`, `tools/diagnose_gcs_gt5.py`, training-time `official_best` checkpoint preservation, or later mainline Count/Quality/Boundary diagnostics unless a future task explicitly ports them. Use official-val for selection and test only once for final evaluation.

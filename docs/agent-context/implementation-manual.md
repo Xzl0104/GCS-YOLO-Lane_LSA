@@ -6,9 +6,13 @@ This branch is the current mainline source import of `5-25-3.zip` with a K56 TuS
 
 - Keep the 5-25-3 algorithm body unchanged unless a future task explicitly asks for an algorithm change.
 - Only change code/config needed for Q=12/K=56, `fixed_y_start=710/720`, `fixed_y_end=160/720`, `--imgsz 544 960`, and the K56 data/model YAMLs.
-- Explicit branch-local experiment knobs must preserve baseline behavior by default, as with `gcs_gt4_short_boost=1.0` and `gcs_extra_exist=0.0`.
 - Do not import later mainline Count Head, Count Boundary, Quality Head, Survival Head, near-miss, official-best, or K56 candidate machinery.
 - Do not track `datasets/`, generated runs, checkpoints, caches, or converted labels in Git.
+
+Active source/config is rolled back to commit `50999d6af`. Post-`50999d6af`
+experiment knobs such as `gcs_gt4_short_boost`, `gcs_extra_exist`, and
+`gcs_short_exist_floor` are legacy records only and are not available in the
+current code unless a future task explicitly restores them.
 
 ## Main Files
 

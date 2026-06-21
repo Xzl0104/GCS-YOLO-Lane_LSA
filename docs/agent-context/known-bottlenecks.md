@@ -8,6 +8,13 @@ The current mainline imports the historical `5-25-3.zip` algorithm and changes o
 
 Do not read mainline Count Head, Count Boundary, Quality Head, Survival Head, near-miss, or official-best bottlenecks as active branch behavior. Those mechanisms are not part of this 5-25-3 branch.
 
+Active source/config is rolled back to commit `50999d6af` (`Document 5-25-3
+K56 as mainline`). All bottleneck notes below that depend on
+`tools/diagnose_tusimple_count_confusion.py`, `--gcs-gt4-short-*`,
+`extra_exist_loss`, or `--gcs-short-exist-*` are legacy post-`50999d6af`
+experiment conclusions only. They do not describe currently available code,
+CLI flags, loss terms, or active selected candidates.
+
 ## Data And Geometry
 
 - The active fixed-y anchors must be `710, 700, 690, ..., 160` normalized by original height `720`.
@@ -21,13 +28,14 @@ Do not read mainline Count Head, Count Boundary, Quality Head, Survival Head, ne
 - Local validation can check parser defaults, YAML contracts, fixed-y anchors, model output shape, and sample labels.
 - Formal training and official-val evaluation should run on the remote CUDA server.
 - This branch includes `tools/eval_tusimple_official.py` and `tools/sweep_tusimple_official.py` for official-val and final TuSimple test evaluation.
-- This branch includes `tools/diagnose_tusimple_count_confusion.py` for train/val count-confusion diagnostics by date, GT lane count, and shortest visible-lane bucket.
+- The active rollback code does not include `tools/diagnose_tusimple_count_confusion.py`.
 - It still does not include later mainline `diagnose_gcs_gt5.py`, training-time `official_best` checkpoint preservation, Count/Quality/Boundary diagnostics, Survival, or near-miss machinery.
 
-## Official-Val Selection State
+## Legacy Post-50999 Official-Val Selection State
 
 The 2026-06-21 `gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03`
-candidate is the current official-val selected candidate:
+candidate was selected on official-val in a later post-`50999d6af` experiment
+line. After the rollback, it is a legacy result, not the active code baseline:
 
 ```text
 official-val363 ACC = 0.970851
@@ -120,7 +128,7 @@ Integrated conclusion:
 - Supported fact: the count weakness is reproducible on train/val without touching final test. The sharpest train/val failure is `GT4` with short side lanes, especially `0601|GT4|min_visible<=10`.
 - Supported fact: `GT5` is comparatively robust on the fixed-y train split, so the next change should not focus only on dense-lane undercount.
 - Hypothesis: the current `sum(sigmoid(pred_logits))` count loss plus `target>=5` undercount penalty does not provide enough targeted pressure for `GT4` short-lane undercount and overcount.
-- Smallest safe next action: use `tools/diagnose_tusimple_count_confusion.py` for reusable train/val `(date, lane_count, min_visible_points)` confusion, then run a train-only experiment with explicit `--gcs-gt4-short-boost` sampling for `GT4` short-side-lane samples. Selection must remain official-val only.
+- Legacy next action at the time: use `tools/diagnose_tusimple_count_confusion.py` for reusable train/val `(date, lane_count, min_visible_points)` confusion, then run a train-only experiment with explicit `--gcs-gt4-short-boost` sampling for `GT4` short-side-lane samples. This is historical context only because the active rollback code no longer includes that diagnostic or sampler flag.
 
 ## 2026-06-20 GT4 Short-Lane Boost Result
 
@@ -183,7 +191,8 @@ reporting.
 ## 2026-06-21 GT4 Short-Lane Boost 1.5 Result
 
 The completed `gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03`
-experiment is accepted as the current official-val selected candidate because
+experiment was accepted as the official-val selected candidate in the legacy
+post-`50999d6af` line because
 it beats the previous baseline on the same 363-image official-val surface.
 
 ```text
@@ -214,7 +223,7 @@ Interpretation:
   accuracy drops by `0.030303`, and GT4 count accuracy drops by `0.060606`.
 - Supported fact: the metric gain comes from the FN reduction
   `0.014463 -> 0.011708`, while FP rises `0.019559 -> 0.022084`.
-- Decision: keep `gt4short15` selected on official-val, but treat its final-test
+- Legacy decision at the time: keep `gt4short15` selected on official-val, but treat its final-test
   report as non-improving reporting evidence.
 
 Completed train/val diagnostic:
@@ -341,7 +350,7 @@ Integrated conclusion:
 - Bottleneck: the next train-side work should suppress high-score spurious or
   duplicate-like extra queries while preserving true short side lanes. This is
   an existence/geometry calibration problem more than a `min_points` problem.
-- Implemented next action: `extra_exist_loss` adds a default-disabled
+- Legacy implemented next action: `extra_exist_loss` added a default-disabled
   high-score unmatched-query BCE penalty using only training Hungarian matches
   and detached query existence scores. It must not use NMS, `max_det`,
   `min_points`, decoded lane counts, or GT-count gating.
@@ -360,11 +369,11 @@ Integrated conclusion:
   `count_acc_5=0.864865`. Its best count row reaches only
   `count_acc=0.928375` with `official_acc=0.961400`, still below the selected
   `gt4short15` count accuracy.
-- Updated decision: stop the `extra_exist_loss` gain-sweep family for now. The
+- Legacy updated decision: stop the `extra_exist_loss` gain-sweep family for now. The
   `0.05` run gave diagnostic FP/count improvement but missed ACC; the `0.025`
   run gives no useful diagnostic tradeoff. Return to short-lane score/geometry
   retention rather than stronger or weaker unmatched-query suppression.
-- Implemented follow-up: `GCSLoss.exist_loss()` now has a default-disabled
+- Legacy implemented follow-up: `GCSLoss.exist_loss()` had a default-disabled
   short matched existence floor. It applies only after Hungarian matching and
   only when the matched short GT lane passes APE and visible-IoU gates. Initial
   experiment settings are `--gcs-short-exist-floor 0.4`,
@@ -380,8 +389,34 @@ Integrated conclusion:
   `count_acc_4=0.863636`, `count_acc_5=0.972973`. It improves FP and count
   accuracy relative to `gt4short15`, but misses the ACC gate `0.970851` by
   `0.001885` and raises FN by `0.003214`. No final test should be run.
-- Updated decision: do not promote `shortexist04`; keep `gt4short15` selected.
+- Legacy updated decision: do not promote `shortexist04`; keep `gt4short15` selected in that experiment line.
   The next smallest safe action is diagnostic rather than another immediate
   training knob: run a train/val failure trace for the `shortexist04` best
   decode if we need to confirm whether the floor reduced `low_score_short_gt`
   while shifting errors into FN or count tradeoffs.
+
+## 2026-06-21 User-Requested Reporting-Only Test Batch
+
+The user requested official test ACC for the recent experiments. The runs below
+use each experiment's official-val selected decode and must not be used to tune
+thresholds, checkpoints, or postprocess settings:
+
+```text
+run                         official_test_ACC  FP        FN        count_acc
+count03_under5_03           0.965459           0.029439  0.026270  0.872753
+gt4short2                   0.965206           0.026432  0.027079  0.884256
+gt4short15                  0.965369           0.033309  0.029236  0.864486
+extraexist005               0.965032           0.029661  0.027139  0.878864
+shortexist04                0.964992           0.031381  0.028876  0.875988
+extraexist0025              0.961330           0.044764  0.034508  0.838605
+```
+
+Integrated conclusion:
+
+- Supported fact: none of the recent rejected experiments beats the existing
+  `count03_under5_03` final-test report `ACC=0.965459`.
+- Supported fact: `gt4short15` remained the official-val selected candidate in the legacy experiment line, but
+  its final-test ACC `0.965369` is still below the previous report.
+- Decision: keep final-test evidence reporting-only. Future changes must return
+  to official-val and train/val diagnostics instead of using these test results
+  for selection.

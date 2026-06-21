@@ -30,7 +30,6 @@ LOSS_NAMES = (
     "edge_loss",
     "count_loss",
     "count_under5_loss",
-    "extra_exist_loss",
 )
 LOSS_GAIN_ARGS = (
     "gcs_exist",
@@ -42,9 +41,8 @@ LOSS_GAIN_ARGS = (
     "gcs_edge",
     "gcs_count",
     "gcs_count_under5",
-    "gcs_extra_exist",
 )
-DEFAULT_LOSS_GAINS = (2.0, 15.0, 1.0, 0.05, 0.1, 0.2, 0.2, 0.0, 0.0, 0.0)
+DEFAULT_LOSS_GAINS = (2.0, 15.0, 1.0, 0.05, 0.1, 0.2, 0.2, 0.0, 0.0)
 METRIC_NAMES = (
     "precision",
     "recall",

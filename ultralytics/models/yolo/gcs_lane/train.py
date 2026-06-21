@@ -41,9 +41,7 @@ class GCSLaneTrainer(BaseTrainer):
         "edge_loss",
         "count_loss",
         "count_under5_loss",
-        "extra_exist_loss",
     )
-    progress_column_width = max(13, *(len(name) + 1 for name in loss_names))
     # YOLO11 backbone -> GCS-YOLO-Lane backbone. LSEM is inserted after old
     # layers 4 and 6, so all later backbone layers must be shifted explicitly.
     yolo11_to_gcs_backbone = {
@@ -189,50 +187,25 @@ class GCSLaneTrainer(BaseTrainer):
             )
 
     @staticmethod
-    def _label_sampling_stats(label_file: Path) -> tuple[int, int]:
-        """Read GT lane count and shortest visible-lane length from one GCS npz label."""
+    def _label_lane_count(label_file: Path) -> int:
+        """Read the number of valid GT lanes from one GCS npz label."""
         with np.load(label_file, allow_pickle=False) as data:
-            lane_valid = np.asarray(data["lane_valid"], dtype=np.float32) if "lane_valid" in data else None
             if "num_lanes" in data:
-                count = int(np.asarray(data["num_lanes"]).reshape(-1)[0])
-            elif lane_valid is not None:
-                count = int((lane_valid.sum(axis=1) >= 2).sum())
-            else:
-                count = int(data["lanes"].shape[0])
-        if lane_valid is None or count <= 0:
-            return count, 0
-        visible = [int(x) for x in lane_valid.sum(axis=1).tolist()[:count]]
-        return count, min(visible) if visible else 0
+                return int(np.asarray(data["num_lanes"]).reshape(-1)[0])
+            if "lane_valid" in data:
+                return int((data["lane_valid"].sum(axis=1) >= 2).sum())
+            return int(data["lanes"].shape[0])
 
     def _lane_count_sampler(self, dataset: GCSLaneDataset) -> WeightedRandomSampler:
-        """Build a replacement sampler with optional lane-count and GT4 short-lane weighting."""
-        stats = [self._label_sampling_stats(Path(p)) for p in dataset.label_files]
-        counts = [count for count, _ in stats]
+        """Build a replacement sampler that balances samples by GT lane count."""
+        counts = [self._label_lane_count(Path(p)) for p in dataset.label_files]
         hist = Counter(counts)
         power = float(getattr(self.args, "gcs_lane_count_balance_power", 1.0))
         min_group = max(int(getattr(self.args, "gcs_lane_count_min_group", 50) or 0), 1)
-        count_balanced = bool(getattr(self.args, "gcs_lane_count_balanced", False))
-        if count_balanced:
-            weights = [1.0 / (float(max(hist[c], min_group)) ** power) for c in counts]
-        else:
-            weights = [1.0 for _ in counts]
-
-        gt4_short_boost = float(getattr(self.args, "gcs_gt4_short_boost", 1.0) or 1.0)
-        gt4_short_thr = int(getattr(self.args, "gcs_gt4_short_min_visible_max", 10) or 0)
-        gt4_short_count = 0
-        if gt4_short_boost <= 0.0:
-            raise ValueError(f"gcs_gt4_short_boost must be > 0, got {gt4_short_boost}.")
-        if gt4_short_thr > 0 and gt4_short_boost != 1.0:
-            for i, (count, min_visible) in enumerate(stats):
-                if count == 4 and 0 < min_visible <= gt4_short_thr:
-                    weights[i] *= gt4_short_boost
-                    gt4_short_count += 1
-        weights = torch.as_tensor(weights, dtype=torch.double)
+        weights = torch.as_tensor([1.0 / (float(max(hist[c], min_group)) ** power) for c in counts], dtype=torch.double)
         LOGGER.info(
-            "GCS weighted sampling enabled: "
+            "GCS lane-count balanced sampling enabled: "
             f"hist={dict(sorted(hist.items()))}, power={power:g}, min_group={min_group}, "
-            f"lane_count_balanced={count_balanced}, gt4_short_boost={gt4_short_boost:g}, "
-            f"gt4_short_min_visible_max={gt4_short_thr}, gt4_short_samples={gt4_short_count}, "
             f"samples_per_epoch={len(weights)}"
         )
         return WeightedRandomSampler(weights=weights, num_samples=len(weights), replacement=True)
@@ -246,11 +219,9 @@ class GCSLaneTrainer(BaseTrainer):
             dataset = self.build_dataset(dataset_path, mode, batch_size)
         sampler = None
         shuffle = mode == "train"
-        gt4_short_boost = float(getattr(self.args, "gcs_gt4_short_boost", 1.0) or 1.0)
-        weighted_sampling = bool(getattr(self.args, "gcs_lane_count_balanced", False)) or gt4_short_boost != 1.0
-        if mode == "train" and weighted_sampling:
+        if mode == "train" and bool(getattr(self.args, "gcs_lane_count_balanced", False)):
             if rank != -1:
-                LOGGER.warning("GCS weighted sampling is only enabled for single-process training.")
+                LOGGER.warning("GCS lane-count balanced sampling is only enabled for single-process training.")
             else:
                 sampler = self._lane_count_sampler(dataset)
                 shuffle = False
@@ -482,8 +453,7 @@ class GCSLaneTrainer(BaseTrainer):
 
     def progress_string(self):
         """Return a progress header matching the GCS loss vector."""
-        width = self.progress_column_width
-        return ("\n" + f"%{width}s" * (4 + len(self.loss_names))) % (
+        return ("\n" + "%13s" * (4 + len(self.loss_names))) % (
             "Epoch",
             "GPU_mem",
             *self.loss_names,

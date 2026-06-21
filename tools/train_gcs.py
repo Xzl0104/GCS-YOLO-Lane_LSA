@@ -153,18 +153,6 @@ def parse_args() -> argparse.Namespace:
         default=5,
         help="Minimum GT lane count that enables the targeted undercount penalty.",
     )
-    parser.add_argument(
-        "--gcs-extra-exist",
-        type=float,
-        default=0.0,
-        help="Extra BCE gain for unmatched queries with detached existence score >= --gcs-extra-exist-thr. 0 disables.",
-    )
-    parser.add_argument(
-        "--gcs-extra-exist-thr",
-        type=float,
-        default=0.15,
-        help="Detached existence threshold for the extra unmatched-query BCE penalty.",
-    )
     parser.add_argument("--gcs-exist-pos-weight", type=float, default=1.0)
     parser.add_argument("--gcs-exist-focal-gamma", type=float, default=0.0, help="Optional focal gamma for existence BCE. 0 disables focal weighting.")
     parser.add_argument(
@@ -208,30 +196,6 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=20.0,
         help="APE at or above this value receives quality 0.0 in linear quality mode.",
-    )
-    parser.add_argument(
-        "--gcs-short-exist-floor",
-        type=float,
-        default=0.0,
-        help="Minimum matched existence quality for gated short GT lanes. 0 disables.",
-    )
-    parser.add_argument(
-        "--gcs-short-exist-max-visible",
-        type=int,
-        default=20,
-        help="Maximum visible GT anchors for a matched lane to be eligible for --gcs-short-exist-floor.",
-    )
-    parser.add_argument(
-        "--gcs-short-exist-floor-max-ape",
-        type=float,
-        default=20.0,
-        help="Maximum matched APE in pixels for short-lane existence floor eligibility.",
-    )
-    parser.add_argument(
-        "--gcs-short-exist-floor-min-iou",
-        type=float,
-        default=0.3,
-        help="Minimum matched visible IoU for short-lane existence floor eligibility.",
     )
     parser.add_argument("--gcs-mask-pos-weight-max", type=float, default=20.0)
     parser.add_argument("--gcs-point-valid-pos-weight-max", type=float, default=10.0)
@@ -281,18 +245,6 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=50,
         help="Minimum group size used when balancing lane counts, preventing tiny groups from dominating an epoch.",
-    )
-    parser.add_argument(
-        "--gcs-gt4-short-boost",
-        type=float,
-        default=1.0,
-        help="Extra sampler multiplier for GT4 images whose shortest visible lane is <= --gcs-gt4-short-min-visible-max. 1 disables.",
-    )
-    parser.add_argument(
-        "--gcs-gt4-short-min-visible-max",
-        type=int,
-        default=10,
-        help="Shortest visible-lane point threshold used by --gcs-gt4-short-boost.",
     )
     parser.add_argument("--no-val", action="store_true")
     parser.add_argument(
@@ -371,8 +323,6 @@ def main() -> None:
         "gcs_count": args.gcs_count,
         "gcs_count_under5": args.gcs_count_under5,
         "gcs_count_under5_min_lanes": args.gcs_count_under5_min_lanes,
-        "gcs_extra_exist": args.gcs_extra_exist,
-        "gcs_extra_exist_thr": args.gcs_extra_exist_thr,
         "gcs_exist_pos_weight": args.gcs_exist_pos_weight,
         "gcs_exist_focal_gamma": args.gcs_exist_focal_gamma,
         "gcs_exist_focal_alpha": args.gcs_exist_focal_alpha,
@@ -382,10 +332,6 @@ def main() -> None:
         "gcs_exist_quality_floor": args.gcs_exist_quality_floor,
         "gcs_exist_quality_pos_px": args.gcs_exist_quality_pos_px,
         "gcs_exist_quality_neg_px": args.gcs_exist_quality_neg_px,
-        "gcs_short_exist_floor": args.gcs_short_exist_floor,
-        "gcs_short_exist_max_visible": args.gcs_short_exist_max_visible,
-        "gcs_short_exist_floor_max_ape": args.gcs_short_exist_floor_max_ape,
-        "gcs_short_exist_floor_min_iou": args.gcs_short_exist_floor_min_iou,
         "gcs_point_valid_pos_weight_max": args.gcs_point_valid_pos_weight_max,
         "gcs_mask_pos_weight_max": args.gcs_mask_pos_weight_max,
         "gcs_edge_pos_weight_max": args.gcs_edge_pos_weight_max,
@@ -407,8 +353,6 @@ def main() -> None:
         "gcs_lane_count_balanced": args.gcs_lane_count_balanced,
         "gcs_lane_count_balance_power": args.gcs_lane_count_balance_power,
         "gcs_lane_count_min_group": args.gcs_lane_count_min_group,
-        "gcs_gt4_short_boost": args.gcs_gt4_short_boost,
-        "gcs_gt4_short_min_visible_max": args.gcs_gt4_short_min_visible_max,
     }
 
     print(f"GCS input shape: {shape_str(gcs_imgsz)} (W x H), stored as H,W={gcs_imgsz}")

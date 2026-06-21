@@ -24,7 +24,6 @@ class GCSLoss(nn.Module):
         "edge_loss",
         "count_loss",
         "count_under5_loss",
-        "extra_exist_loss",
     )
 
     def __init__(
@@ -86,10 +85,6 @@ class GCSLoss(nn.Module):
         )
         if self.count_under5_min_lanes < 1:
             raise ValueError(f"gcs_count_under5_min_lanes must be >= 1, got {self.count_under5_min_lanes}.")
-        self.extra_exist_gain = float(self._arg(args, "gcs_extra_exist", 0.0))
-        self.extra_exist_thr = float(self._arg(args, "gcs_extra_exist_thr", 0.15))
-        if not 0.0 <= self.extra_exist_thr <= 1.0:
-            raise ValueError(f"gcs_extra_exist_thr must be in [0, 1], got {self.extra_exist_thr}.")
         self.curve_alpha = float(curve_alpha if curve_alpha is not None else self._arg(args, "gcs_curve_alpha", 5.0))
         self.curve_weight_max = float(
             curve_weight_max if curve_weight_max is not None else self._arg(args, "gcs_curve_weight_max", 5.0)
@@ -132,10 +127,6 @@ class GCSLoss(nn.Module):
             if exist_quality_neg_px is not None
             else self._arg(args, "gcs_exist_quality_neg_px", 20.0)
         )
-        self.short_exist_floor = float(self._arg(args, "gcs_short_exist_floor", 0.0))
-        self.short_exist_max_visible = int(self._arg(args, "gcs_short_exist_max_visible", 20))
-        self.short_exist_floor_max_ape = float(self._arg(args, "gcs_short_exist_floor_max_ape", 20.0))
-        self.short_exist_floor_min_iou = float(self._arg(args, "gcs_short_exist_floor_min_iou", 0.3))
         if self.exist_quality_mode in {"exponential"}:
             self.exist_quality_mode = "exp"
         if self.exist_quality_mode not in {"linear", "exp"}:
@@ -144,18 +135,6 @@ class GCSLoss(nn.Module):
             raise ValueError(
                 "gcs_exist_quality_neg_px must be greater than gcs_exist_quality_pos_px "
                 f"({self.exist_quality_neg_px} <= {self.exist_quality_pos_px})."
-            )
-        if not 0.0 <= self.short_exist_floor <= 1.0:
-            raise ValueError(f"gcs_short_exist_floor must be in [0, 1], got {self.short_exist_floor}.")
-        if self.short_exist_max_visible < 1:
-            raise ValueError(f"gcs_short_exist_max_visible must be >= 1, got {self.short_exist_max_visible}.")
-        if self.short_exist_floor_max_ape < 0.0:
-            raise ValueError(
-                f"gcs_short_exist_floor_max_ape must be >= 0, got {self.short_exist_floor_max_ape}."
-            )
-        if not 0.0 <= self.short_exist_floor_min_iou <= 1.0:
-            raise ValueError(
-                f"gcs_short_exist_floor_min_iou must be in [0, 1], got {self.short_exist_floor_min_iou}."
             )
         self.mask_pos_weight_max = float(
             mask_pos_weight_max if mask_pos_weight_max is not None else self._arg(args, "gcs_mask_pos_weight_max", 20.0)
@@ -329,23 +308,12 @@ class GCSLoss(nn.Module):
                 point_error = torch.norm((pred - target_points) * scale, dim=-1)
                 ape = (point_error * valid).sum(dim=1) / valid.sum(dim=1).clamp_min(1.0)
                 quality = self._exist_quality_from_ape(ape)
-                visible_quality = None
                 if pred_valid_logits is not None:
                     valid_prob = pred_valid_logits[b, src_idx].detach().sigmoid().to(dtype=dtype)
                     intersection = (valid_prob * valid).sum(dim=1)
                     union = valid_prob.sum(dim=1) + valid.sum(dim=1) - intersection
                     visible_quality = intersection / union.clamp_min(1e-6)
                     quality = quality * visible_quality.clamp(min=0.0, max=1.0)
-                floor = float(self.short_exist_floor)
-                if floor > 0.0 and visible_quality is not None:
-                    short = (
-                        (valid.sum(dim=1) <= float(self.short_exist_max_visible))
-                        & (ape <= float(self.short_exist_floor_max_ape))
-                        & (visible_quality >= float(self.short_exist_floor_min_iou))
-                    )
-                    if short.any():
-                        quality = quality.clone()
-                        quality[short] = torch.maximum(quality[short], quality.new_tensor(floor))
                 target[b, src_idx] = (1.0 - alpha) + alpha * quality.to(dtype=target.dtype)
         pos_weight = pred_logits.new_tensor(self.exist_pos_weight)
         loss = F.binary_cross_entropy_with_logits(pred_logits, target, pos_weight=pos_weight, reduction="none")
@@ -506,22 +474,6 @@ class GCSLoss(nn.Module):
         """Cardinality loss that aligns summed existence probability with GT lane count."""
         return self.count_losses(pred_logits, batch, gt_valid)[0]
 
-    def extra_exist_loss(
-        self, pred_logits: torch.Tensor, indices: list[tuple[torch.Tensor, torch.Tensor]]
-    ) -> torch.Tensor:
-        """BCE penalty for unmatched queries whose detached existence score is above the hard-extra threshold."""
-        score = pred_logits.detach().sigmoid()
-        target = torch.zeros_like(pred_logits)
-
-        unmatched = torch.ones_like(pred_logits, dtype=torch.bool)
-        for b, (src_idx, _) in enumerate(indices):
-            if src_idx.numel():
-                unmatched[b, src_idx] = False
-
-        hard_extra = unmatched & (score >= float(self.extra_exist_thr))
-        raw = F.binary_cross_entropy_with_logits(pred_logits, target, reduction="none")
-        return (raw * hard_extra.to(raw.dtype)).sum() / hard_extra.sum().clamp_min(1)
-
     @staticmethod
     def _foreground_pos_weight(target: torch.Tensor, max_weight: float) -> torch.Tensor:
         """Return a capped foreground weight for sparse binary auxiliary targets."""
@@ -620,7 +572,6 @@ class GCSLoss(nn.Module):
         smooth_loss = self.smooth_loss(pred_points, gt_valid, indices)
         curve_loss = self.curve_loss(pred_points, gt_points, gt_valid, indices)
         count_loss, count_under5_loss = self.count_losses(pred_logits, batch, gt_valid)
-        extra_exist_loss = self.extra_exist_loss(pred_logits, indices)
 
         mask_loss = self._zero_like(pred_points)
         if "aux_mask_logits" in preds and "semantic_mask" in batch:
@@ -642,7 +593,6 @@ class GCSLoss(nn.Module):
             + self.edge_gain * edge_loss
             + self.count_gain * count_loss
             + self.count_under5_gain * count_under5_loss
-            + self.extra_exist_gain * extra_exist_loss
         )
         loss_items = torch.stack(
             (
@@ -655,7 +605,6 @@ class GCSLoss(nn.Module):
                 edge_loss.detach(),
                 count_loss.detach(),
                 count_under5_loss.detach(),
-                extra_exist_loss.detach(),
             )
         )
         return total, loss_items

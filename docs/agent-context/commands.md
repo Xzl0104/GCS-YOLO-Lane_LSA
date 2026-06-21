@@ -26,6 +26,13 @@ The q12-k56-named model/data files are compatibility paths for old experiment re
 
 The 5-25-3 branch does not include later mainline `--gcs-official-best`, Count/Quality/Survival, near-miss, or training-time official-best machinery. It does include branch-local TuSimple official eval/sweep helpers: `tools/eval_tusimple_official.py` and `tools/sweep_tusimple_official.py`.
 
+Active source/config is rolled back to commit `50999d6af` (`Document 5-25-3
+K56 as mainline`). Sections below that mention `gt4short*`,
+`--gcs-gt4-short-*`, `--gcs-extra-exist`, `--gcs-short-exist-*`, or
+`tools/diagnose_tusimple_count_confusion.py` are legacy post-`50999d6af`
+experiment records only. They are not commands for the current code state
+unless a future task explicitly restores those commits.
+
 ## Full Remote Training
 
 Use the remote RTX 4090 environment for formal training:
@@ -66,21 +73,23 @@ python tools/train_gcs.py \
   --gcs-curve 0.1 \
   --gcs-mask 0.2 \
   --gcs-edge 0.2 \
-  --gcs-count 0.3 \
+  --gcs-count 0.2 \
   --gcs-count-under5 0.3 \
   --gcs-count-under5-min-lanes 5 \
   --gcs-lane-count-balanced \
   --project runs/gcs_lane \
-  --name gcs_yolo_lane_s_tusimple_fixed_y_visible_iou_count03_under5_03
+  --name gcs_yolo_lane_s_tusimple_fixed_y_visible_iou_count02_under5_03
 ```
 
 If `batch=32` OOMs on the target machine, reduce batch only for OOM/instability and record the change in the run notes.
 
 `--no-amp` is included because the current remote run hit an Ultralytics AMP self-check failure while loading `yolo26n.pt`. If that server cache/checkpoint issue is fixed, AMP may be re-enabled only with a run note.
 
-## Current Official-Val Selection
+## Legacy Post-50999 Official-Val Selection
 
-The 2026-06-21 official-val selected candidate uses:
+The 2026-06-21 `gt4short15` candidate was selected on official-val in a later
+post-`50999d6af` experiment line. After the rollback, it is a legacy result,
+not the active code baseline:
 
 ```text
 source run:   runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03
@@ -115,7 +124,7 @@ final test count_acc_4 = 0.482906
 final test count_acc_5 = 0.845343
 ```
 
-This final-test report is reporting-only and did not improve over the previous `count03_under5_03` final-test ACC `0.965459`. Keep `gt4short15` as official-val selected, but do not claim a final-test improvement and do not tune from final test. The final-test run used `max_det=6` because that was the official-val selected postprocess, even though the train-time args recorded `gcs_eval_max_det=8`.
+This final-test report is reporting-only and did not improve over the previous `count03_under5_03` final-test ACC `0.965459`. Treat `gt4short15` as a legacy official-val-selected experiment, not as the active rollback baseline; do not claim a final-test improvement and do not tune from final test. The final-test run used `max_det=6` because that was the official-val selected postprocess, even though the train-time args recorded `gcs_eval_max_det=8`.
 
 Two follow-up diagnostics were run before changing any loss:
 
@@ -156,10 +165,11 @@ FN to `0.012397` and reduces official ACC. At `nms=80`, count accuracy improves
 to `0.953168`, but official ACC drops to `0.970679`. This is diagnostic-only
 postprocess evidence, not a new selected decode.
 
-## Extra Exist Suppression Loss Experiment
+## Legacy Extra Exist Suppression Loss Experiment
 
-The high-score unmatched-query suppression loss is an explicit experimental
-option. Defaults preserve baseline behavior:
+The high-score unmatched-query suppression loss was an explicit post-`50999d6af`
+experimental option. It is not present in the active rollback code. Historical
+defaults were:
 
 ```text
 gcs_extra_exist = 0.0
@@ -182,7 +192,7 @@ count_acc_3=0.977578, count_acc_4=0.878788, count_acc_5=0.986486
 ```
 
 Decision: do not promote `extraexist005`. It improved FP and count robustness
-relative to `gt4short15`, but it missed the current official-val ACC gate
+relative to `gt4short15`, but it missed the then-current official-val ACC gate
 `0.970851` by `0.001248` and also stayed below the previous
 `count03_under5_03` official-val ACC `0.969976`. Its best row requiring
 `conf=0.005` shows the extra existence penalty over-suppressed query scores.
@@ -201,20 +211,21 @@ At the current `gt4short15` decode (`conf=0.15`, `point_valid_thr=0.5`,
 `nms_dist_px=0.0`, `max_det=6`, `min_points=4`), the `extraexist0025` run gets
 only `ACC=0.961450`, `FP=0.045638`, `FN=0.029844`, `count_acc=0.909091`. Its
 best count row reaches only `count_acc=0.928375` with `ACC=0.961400`, still
-below current `gt4short15` count accuracy and far below the ACC gate. No row in
+below then-current `gt4short15` count accuracy and far below the ACC gate. No row in
 the 1800-row sweep reaches `extraexist005` ACC `0.969603`, previous
-`count03_under5_03` ACC `0.969976`, or current `gt4short15` ACC `0.970851`.
+`count03_under5_03` ACC `0.969976`, or then-current `gt4short15` ACC `0.970851`.
 
-Decision: do not promote `extraexist0025`, do not run final test, and do not
+Default protocol decision: do not promote `extraexist0025`, keep final test
+closed unless explicitly requested for reporting-only evidence, and do not
 continue sweeping `gcs_extra_exist` gains. Return to train-side short-lane
 score/geometry retention work; select any new mechanism only on the same
 363-image official-val surface.
 
-## Short Matched Existence Floor Experiment
+## Legacy Short Matched Existence Floor Experiment
 
-The short matched existence floor is an explicit experimental option inside
-`GCSLoss.exist_loss()`. It does not add a new loss item. Defaults preserve
-baseline behavior:
+The short matched existence floor was an explicit post-`50999d6af`
+experimental option inside `GCSLoss.exist_loss()`. It is not present in the
+active rollback code. It did not add a new loss item. Historical defaults were:
 
 ```text
 gcs_short_exist_floor = 0.0
@@ -242,13 +253,29 @@ official-val ACC=0.968966, FP=0.019972, FN=0.014922, official_score=0.968268, co
 count_acc_3=0.968610, count_acc_4=0.863636, count_acc_5=0.972973
 ```
 
-Decision: do not promote `shortexist04`, do not run final test, and keep
-`gt4short15` as the current official-val selected candidate. The short matched
+Default protocol decision: do not promote `shortexist04`, keep final test
+closed unless explicitly requested for reporting-only evidence, and keep
+`gt4short15` as the then-current official-val selected candidate. The short matched
 existence floor improved FP and count accuracy relative to `gt4short15`, but it
 missed the official-val ACC gate `0.970851` by `0.001885` and raised FN from
 `0.011708` to `0.014922`. No row in the 1800-row sweep reached current
 `gt4short15` ACC, previous `count03_under5_03` ACC `0.969976`, or rejected
 `extraexist005` ACC `0.969603`.
+
+User-requested reporting-only final-test batch:
+
+```text
+baseline count03_under5_03: ACC=0.965459, FP=0.029439, FN=0.026270, count_acc=0.872753
+gt4short2:                 ACC=0.965206, FP=0.026432, FN=0.027079, count_acc=0.884256
+gt4short15:                ACC=0.965369, FP=0.033309, FN=0.029236, count_acc=0.864486
+extraexist005:             ACC=0.965032, FP=0.029661, FN=0.027139, count_acc=0.878864
+shortexist04:              ACC=0.964992, FP=0.031381, FN=0.028876, count_acc=0.875988
+extraexist0025:            ACC=0.961330, FP=0.044764, FN=0.034508, count_acc=0.838605
+```
+
+These test runs are reporting-only results from each run's official-val
+selected decode. They do not reopen test for threshold, checkpoint, or
+postprocess selection and do not change the official-val promotion decisions.
 
 Reproducibility note: the actual `args.yaml` for this completed run records
 `amp: true`, while the template below includes `--no-amp`. Treat the recorded
@@ -321,9 +348,9 @@ final test:   ACC=0.965459, FP=0.029439, FN=0.026270, count_acc=0.872753
 
 Use this test result only as final reporting evidence for the previous `count03_under5_03` candidate. Do not use it to tune thresholds, checkpoint choice, or postprocess settings.
 
-## Train/Val Count-Confusion Diagnostic
+## Legacy Train/Val Count-Confusion Diagnostic
 
-The 2026-06-20 train/val diagnostic for `count03_under5_03` groups decoded lane-count confusion by date, GT lane count, and the shortest visible GT lane bucket. It uses the frozen official-val selected decode and does not touch final test:
+The 2026-06-20 train/val diagnostic for `count03_under5_03` groups decoded lane-count confusion by date, GT lane count, and the shortest visible GT lane bucket. It is a legacy post-`50999d6af` diagnostic; `tools/diagnose_tusimple_count_confusion.py` is not present in the active rollback code. It used the frozen official-val selected decode and did not touch final test:
 
 ```text
 output: runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_visible_iou_count03_under5_03_count_confusion_train_val_by_visibility/summary.json
@@ -365,9 +392,11 @@ python tools/diagnose_tusimple_count_confusion.py \
 
 This diagnostic is for train/val bottleneck localization only. Do not use final test for count-policy, threshold, checkpoint, or postprocess selection.
 
-## GT4 Short-Lane Weighted Training
+## Legacy GT4 Short-Lane Weighted Training
 
-The GT4 short-lane sampler boost is an explicit experimental option. Defaults preserve baseline behavior:
+The GT4 short-lane sampler boost was an explicit post-`50999d6af`
+experimental option. It is not present in the active rollback code. Historical
+defaults were:
 
 ```text
 gcs_gt4_short_boost = 1.0
@@ -445,7 +474,7 @@ best: conf=0.15, point_valid_thr=0.5, nms_dist_px=0.0, max_det=6, min_points=4
 official-val ACC=0.970851, FP=0.022084, FN=0.011708, official_score=0.970175, count_acc=0.939394
 ```
 
-This is now the official-val selected candidate, but its count accuracy is worse
+This became the official-val selected candidate in the legacy experiment line, but its count accuracy is worse
 than both baseline and `gt4short2`. The train/val diagnostic below has been
 run and should be used as the reproducible count-bottleneck check.
 

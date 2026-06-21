@@ -39,7 +39,6 @@ DEFAULT_LOSS_GAINS = {
     "edge_loss": 0.2,
     "count_loss": 0.0,
     "count_under5_loss": 0.0,
-    "extra_exist_loss": 0.0,
 }
 
 
@@ -115,18 +114,6 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=5,
         help="Minimum GT lane count that enables the targeted undercount penalty.",
-    )
-    parser.add_argument(
-        "--gcs-extra-exist",
-        type=float,
-        default=0.0,
-        help="Extra BCE gain for unmatched queries with detached existence score >= --gcs-extra-exist-thr.",
-    )
-    parser.add_argument(
-        "--gcs-extra-exist-thr",
-        type=float,
-        default=0.15,
-        help="Detached existence threshold for the extra unmatched-query BCE penalty.",
     )
     parser.add_argument("--gcs-exist-pos-weight", type=float, default=1.0, help="Positive query weight for existence BCE.")
     parser.add_argument("--gcs-exist-focal-gamma", type=float, default=0.0, help="Optional focal gamma for existence BCE.")
@@ -320,7 +307,6 @@ def _load_loss_gains(save_dir: Path) -> dict[str, float]:
         "edge_loss": "gcs_edge",
         "count_loss": "gcs_count",
         "count_under5_loss": "gcs_count_under5",
-        "extra_exist_loss": "gcs_extra_exist",
     }
     for loss_name, arg_name in key_map.items():
         if arg_name in args:
@@ -363,7 +349,6 @@ def summarize_overfit_results(save_dir: str | Path) -> Path | None:
         "train/edge_loss",
         "train/count_loss",
         "train/count_under5_loss",
-        "train/extra_exist_loss",
         "val/exist_loss",
         "val/point_loss",
         "val/point_valid_loss",
@@ -373,7 +358,6 @@ def summarize_overfit_results(save_dir: str | Path) -> Path | None:
         "val/edge_loss",
         "val/count_loss",
         "val/count_under5_loss",
-        "val/extra_exist_loss",
     )
 
     losses = {}
@@ -605,8 +589,6 @@ def main() -> None:
         "gcs_count": args.gcs_count,
         "gcs_count_under5": args.gcs_count_under5,
         "gcs_count_under5_min_lanes": args.gcs_count_under5_min_lanes,
-        "gcs_extra_exist": args.gcs_extra_exist,
-        "gcs_extra_exist_thr": args.gcs_extra_exist_thr,
         "gcs_exist_pos_weight": args.gcs_exist_pos_weight,
         "gcs_exist_focal_gamma": args.gcs_exist_focal_gamma,
         "gcs_exist_focal_alpha": args.gcs_exist_focal_alpha,
