@@ -229,7 +229,32 @@ or below `gcs_short_exist_max_visible`, whose matched APE is at or below
 `gcs_short_exist_floor_min_iou`. The target floor is applied after the existing
 APE quality and visible-IoU quality are computed.
 
-First experiment:
+Completed first experiment:
+
+```text
+run: gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_shortexist04_count03_under5_03
+sweep: runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_shortexist04_count03_under5_03_official_val_sweep
+rows: 1800
+images: 363
+gt_json: runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json
+best: conf=0.1, point_valid_thr=0.5, nms_dist_px=30.0, max_det=8, min_points=5
+official-val ACC=0.968966, FP=0.019972, FN=0.014922, official_score=0.968268, count_acc=0.950413
+count_acc_3=0.968610, count_acc_4=0.863636, count_acc_5=0.972973
+```
+
+Decision: do not promote `shortexist04`, do not run final test, and keep
+`gt4short15` as the current official-val selected candidate. The short matched
+existence floor improved FP and count accuracy relative to `gt4short15`, but it
+missed the official-val ACC gate `0.970851` by `0.001885` and raised FN from
+`0.011708` to `0.014922`. No row in the 1800-row sweep reached current
+`gt4short15` ACC, previous `count03_under5_03` ACC `0.969976`, or rejected
+`extraexist005` ACC `0.969603`.
+
+Reproducibility note: the actual `args.yaml` for this completed run records
+`amp: true`, while the template below includes `--no-amp`. Treat the recorded
+run args as authoritative for the completed result.
+
+Original experiment template:
 
 ```bash
 python tools/train_gcs.py \
@@ -276,12 +301,11 @@ python tools/train_gcs.py \
   --name gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_shortexist04_count03_under5_03
 ```
 
-Select only on the same 363-image official-val surface. Gate the result against
-current `gt4short15`: `ACC >= 0.970851`, `FN` not much above `0.011708`, lower
-`GT4` short undercount and `low_score_short_gt`, and no obvious increase in
-`spurious_extra` or `duplicate_like_extra`. If short misses improve but
-overcount rises, test a separate GT4 overcount margin later rather than mixing
-it into this first floor experiment.
+The completed result was judged only on the same 363-image official-val
+surface. It failed the required gate `ACC >= 0.970851`, so final test remains
+closed. If this mechanism is revisited, run a train/val failure trace first to
+verify whether `low_score_short_gt` improved enough to justify a narrower
+variant; do not tune from final test.
 
 The previous 2026-06-20 final-test-reported candidate was:
 

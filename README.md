@@ -92,10 +92,10 @@ No `extraexist0025` sweep row reached the previous `extraexist005`,
 extra-exist gain sweeps or send these candidates to final test; return to
 short-lane score/geometry retention work selected only on official-val.
 
-The next implemented branch-local experiment is a default-disabled short
-matched existence floor inside `GCSLoss.exist_loss()`. It protects only
+The short matched existence floor experiment is rejected for promotion. It used
+the default-disabled `GCSLoss.exist_loss()` floor to protect only
 Hungarian-matched short GT lanes after the existing APE quality and visible-IoU
-quality are computed:
+quality were computed:
 
 ```text
 --gcs-short-exist-floor 0.4
@@ -104,10 +104,21 @@ quality are computed:
 --gcs-short-exist-floor-min-iou 0.3
 ```
 
-Select the result only on the same 363-image official-val surface. The gate is
-current `gt4short15`: official-val `ACC >= 0.970851`, `FN` not materially above
-`0.011708`, lower `GT4` short undercount and `low_score_short_gt`, and no
-obvious increase in `spurious_extra` or `duplicate_like_extra`.
+The completed 363-image official-val sweep was valid but diagnostic-only:
+
+```text
+run: gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_shortexist04_count03_under5_03
+sweep: runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_shortexist04_count03_under5_03_official_val_sweep
+best: conf=0.1, point_valid_thr=0.5, nms_dist_px=30.0, max_det=8, min_points=5
+official-val ACC=0.968966, FP=0.019972, FN=0.014922, official_score=0.968268, count_acc=0.950413
+count_acc_3=0.968610, count_acc_4=0.863636, count_acc_5=0.972973
+```
+
+It improves FP and count accuracy relative to the current `gt4short15`
+candidate, but misses the current official-val ACC gate `0.970851` by
+`0.001885` and raises FN by `0.003214`. Do not send it to final test. Its
+`args.yaml` records `amp: true`, unlike the original `--no-amp` template, so
+reproducibility notes should use the recorded args rather than the template.
 
 ## Full Training
 

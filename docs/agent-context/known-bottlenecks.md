@@ -370,6 +370,18 @@ Integrated conclusion:
   experiment settings are `--gcs-short-exist-floor 0.4`,
   `--gcs-short-exist-max-visible 20`,
   `--gcs-short-exist-floor-max-ape 20.0`, and
-  `--gcs-short-exist-floor-min-iou 0.3`. No official-val evidence exists yet;
-  select only on the same 363-image official-val surface and keep final test
-  closed unless the gate `ACC >= 0.970851` is met.
+  `--gcs-short-exist-floor-min-iou 0.3`.
+- Completed result: `gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_shortexist04_count03_under5_03`
+  is valid official-val evidence but rejected for promotion. Best 363-image
+  official-val row: `conf=0.1`, `point_valid_thr=0.5`,
+  `nms_dist_px=30.0`, `max_det=8`, `min_points=5`,
+  `official_acc=0.968966`, `FP=0.019972`, `FN=0.014922`,
+  `official_score=0.968268`, `count_acc=0.950413`,
+  `count_acc_4=0.863636`, `count_acc_5=0.972973`. It improves FP and count
+  accuracy relative to `gt4short15`, but misses the ACC gate `0.970851` by
+  `0.001885` and raises FN by `0.003214`. No final test should be run.
+- Updated decision: do not promote `shortexist04`; keep `gt4short15` selected.
+  The next smallest safe action is diagnostic rather than another immediate
+  training knob: run a train/val failure trace for the `shortexist04` best
+  decode if we need to confirm whether the floor reduced `low_score_short_gt`
+  while shifting errors into FN or count tradeoffs.

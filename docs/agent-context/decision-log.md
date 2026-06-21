@@ -934,6 +934,90 @@ current `gt4short15` gate `ACC=0.970851` without materially raising
 
 Mainline or experiment:
 
-Branch-local experimental option. No official-val evidence exists yet; do not
-claim improvement until the remote training run and official-val sweep are
-complete.
+Branch-local experimental option. This implementation note was superseded by
+the completed `shortexist04` official-val rejection recorded below.
+
+## 2026-06-21: Reject shortexist04 as an Official-Val Promotion
+
+Decision:
+
+Do not promote
+`gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_shortexist04_count03_under5_03`.
+Keep `gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03` as the
+current official-val selected candidate and keep final test closed.
+
+Official-val evidence:
+
+```text
+sweep = runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_shortexist04_count03_under5_03_official_val_sweep
+rows = 1800
+images = 363
+gt_json = runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json
+best = conf=0.1, point_valid_thr=0.5, nms_dist_px=30.0, max_det=8, min_points=5
+official_acc = 0.968966
+official_FP = 0.019972
+official_FN = 0.014922
+official_score = 0.968268
+count_acc = 0.950413
+count_acc_3 = 0.968610
+count_acc_4 = 0.863636
+count_acc_5 = 0.972973
+count_confusion = 3->2=1, 3->3=216, 3->4=6, 4->3=2, 4->4=57, 4->5=7, 5->4=2, 5->5=72
+```
+
+Comparison:
+
+```text
+current gt4short15 official-val ACC = 0.970851
+shortexist04 official-val ACC       = 0.968966
+delta                                = -0.001885
+
+previous count03_under5_03 official-val ACC = 0.969976
+shortexist04 official-val ACC               = 0.968966
+delta                                         = -0.001010
+
+extraexist005 official-val ACC = 0.969603
+shortexist04 official-val ACC  = 0.968966
+delta                           = -0.000637
+
+gt4short15 FP/FN/count_acc = 0.022084 / 0.011708 / 0.939394
+shortexist04 FP/FN/count_acc = 0.019972 / 0.014922 / 0.950413
+```
+
+Interpretation:
+
+- Supported fact: `shortexist04` is valid 363-image official-val evidence, not a
+  split mismatch. The sweep used `split=val`, the explicit 363-image official-val
+  GT JSON, `imgsz=[544, 960]`, `half=True`, and `best_metric=official_acc`.
+- Supported fact: no row in the 1800-row sweep reaches current `gt4short15`
+  ACC `0.970851`, previous `count03_under5_03` ACC `0.969976`, or rejected
+  `extraexist005` ACC `0.969603`.
+- Supported fact: the floor improves FP and count accuracy relative to
+  `gt4short15`, but the improvement is diagnostic-only because FN rises by
+  `0.003214` and official ACC falls by `0.001885`.
+- Supported caveat: the completed run's `args.yaml` records `amp: true`, while
+  the original command template included `--no-amp`. This does not change the
+  rejection, but any reproducibility note for this run must use the recorded
+  args rather than the template.
+
+Rejected actions:
+
+- Do not send `shortexist04` to final test.
+- Do not tune final-test thresholds, checkpoint choice, or postprocess from this
+  result.
+- Do not immediately raise the floor to `0.5` as a blind next step; this run
+  already shows the mechanism can trade FP/count for higher FN.
+
+Recommended next action:
+
+If more evidence is needed before another train-side change, run the train/val
+failure trace on `shortexist04` using its official-val best decode
+`conf=0.1`, `point_valid_thr=0.5`, `nms_dist_px=30.0`, `max_det=8`,
+`min_points=5`. Use it only to determine whether `low_score_short_gt` actually
+fell and what failure bucket replaced it. Selection remains official-val only,
+and final test stays closed.
+
+Mainline or experiment:
+
+Rejected experimental candidate. No final-test run and no selected decode
+change.
