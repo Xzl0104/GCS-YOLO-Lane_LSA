@@ -341,6 +341,17 @@ Integrated conclusion:
 - Bottleneck: the next train-side work should suppress high-score spurious or
   duplicate-like extra queries while preserving true short side lanes. This is
   an existence/geometry calibration problem more than a `min_points` problem.
-- Smallest safe next action: design a train-side refinement for
-  spurious/duplicate extra-lane suppression and short-lane score/geometry
-  retention, then select only on official-val. Keep final test closed.
+- Implemented next action: `extra_exist_loss` adds a default-disabled
+  high-score unmatched-query BCE penalty using only training Hungarian matches
+  and detached query existence scores. It must not use NMS, `max_det`,
+  `min_points`, decoded lane counts, or GT-count gating.
+- Completed result: `gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_extraexist005_count03_under5_03`
+  did suppress extras enough to improve official-val FP and count accuracy, but
+  it did not beat the official-val ACC gate. Best 363-image official-val row:
+  `conf=0.005`, `point_valid_thr=0.5`, `nms_dist_px=18.0`, `max_det=6`,
+  `min_points=5`, `official_acc=0.969603`, `FP=0.017815`, `FN=0.012856`,
+  `count_acc=0.961433`, `count_acc_4=0.878788`, `count_acc_5=0.986486`.
+  Reject it for promotion and keep final test closed.
+- Updated smallest safe experiment: reduce the extra existence gain, e.g.
+  `--gcs-extra-exist 0.025 --gcs-extra-exist-thr 0.15`, because the first run's
+  best row needed `conf=0.005`, indicating score over-suppression.

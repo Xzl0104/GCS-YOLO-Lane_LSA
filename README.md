@@ -74,6 +74,20 @@ vs `10` undercount images), with extra lanes mainly `spurious_extra` plus some
 did not find a safe NMS replacement for `nms_dist_px=0.0` because NMS starts
 raising FN as soon as it removes duplicate-like predictions.
 
+The first high-score unmatched-query suppression run,
+`gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_extraexist005_count03_under5_03`,
+is rejected for promotion. Its best 363-image official-val row was
+`ACC=0.969603`, `FP=0.017815`, `FN=0.012856`, `count_acc=0.961433` with
+`conf=0.005`, `point_valid_thr=0.5`, `nms_dist_px=18.0`, `max_det=6`, and
+`min_points=5`. It improved FP/count shape but missed the current official-val
+ACC gate `0.970851`, and the very low selected confidence indicates score
+over-suppression.
+
+The next train-side experiment should halve the extra existence gain:
+`--gcs-extra-exist 0.025 --gcs-extra-exist-thr 0.15`. Select only on
+official-val and keep final test closed unless it beats the current official-val
+selection.
+
 ## Full Training
 
 Run formal training on the remote CUDA server from a clone checked out to this branch:
@@ -92,6 +106,7 @@ python tools/train_gcs.py \
   --batch 32 \
   --workers 4 \
   --device 0 \
+  --no-amp \
   --optimizer AdamW \
   --lr0 5e-4 \
   --lrf 0.05 \

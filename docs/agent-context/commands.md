@@ -171,11 +171,73 @@ It uses the training Hungarian matcher only: unmatched queries with detached
 Do not add NMS, `max_det`, `min_points`, decoded lane count, or GT-count gating
 inside this training loss.
 
-First experiment knobs should stay small:
+Completed first experiment:
+
+```text
+run: gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_extraexist005_count03_under5_03
+sweep: runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_extraexist005_count03_under5_03_official_val_sweep
+best: conf=0.005, point_valid_thr=0.5, nms_dist_px=18.0, max_det=6, min_points=5
+official-val ACC=0.969603, FP=0.017815, FN=0.012856, official_score=0.968990, count_acc=0.961433
+count_acc_3=0.977578, count_acc_4=0.878788, count_acc_5=0.986486
+```
+
+Decision: do not promote `extraexist005`. It improved FP and count robustness
+relative to `gt4short15`, but it missed the current official-val ACC gate
+`0.970851` by `0.001248` and also stayed below the previous
+`count03_under5_03` official-val ACC `0.969976`. Its best row requiring
+`conf=0.005` shows the extra existence penalty over-suppressed query scores.
+
+Next smallest experiment should reduce the extra penalty gain rather than
+increase it:
 
 ```bash
---gcs-extra-exist 0.05 \
+--gcs-extra-exist 0.025 \
 --gcs-extra-exist-thr 0.15
+```
+
+Runnable remote command:
+
+```bash
+python tools/train_gcs.py \
+  --dataset tusimple \
+  --model ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml \
+  --data data/tusimple_gcs_fixed_y_960x544.yaml \
+  --pretrained yolo11s-seg.pt \
+  --imgsz 544 960 \
+  --epochs 160 \
+  --batch 32 \
+  --workers 4 \
+  --device 0 \
+  --no-amp \
+  --optimizer AdamW \
+  --lr0 5e-4 \
+  --lrf 0.05 \
+  --cos-lr \
+  --weight-decay 1e-4 \
+  --warmup-epochs 3.0 \
+  --warmup-bias-lr 0.0 \
+  --patience 40 \
+  --erasing 0.1 \
+  --scale 0.3 \
+  --gcs-exist 2.0 \
+  --gcs-point 15.0 \
+  --gcs-point-valid 1.0 \
+  --gcs-smooth 0.05 \
+  --gcs-curve 0.1 \
+  --gcs-mask 0.2 \
+  --gcs-edge 0.2 \
+  --gcs-count 0.3 \
+  --gcs-count-under5 0.3 \
+  --gcs-count-under5-min-lanes 5 \
+  --gcs-extra-exist 0.025 \
+  --gcs-extra-exist-thr 0.15 \
+  --gcs-lane-count-balanced \
+  --gcs-lane-count-balance-power 1.0 \
+  --gcs-lane-count-min-group 50 \
+  --gcs-gt4-short-boost 1.5 \
+  --gcs-gt4-short-min-visible-max 10 \
+  --project runs/gcs_lane \
+  --name gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_extraexist0025_count03_under5_03
 ```
 
 The previous 2026-06-20 final-test-reported candidate was:

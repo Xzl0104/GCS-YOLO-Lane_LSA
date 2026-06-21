@@ -603,3 +603,168 @@ Mainline or experiment:
 
 Diagnostic-only postprocess and failure-bucket evidence. No new selected decode
 and no final-test tuning.
+
+## 2026-06-21: Add Default-Disabled extra_exist_loss for High-Score Extra Queries
+
+Decision:
+
+Add an explicit `extra_exist_loss` item that penalizes high-score unmatched
+queries after Hungarian matching, while leaving the existing `exist_loss`
+semantics unchanged.
+
+Implementation:
+
+```text
+ultralytics/utils/gcs_loss.py
+  gcs_extra_exist = 0.0
+  gcs_extra_exist_thr = 0.15
+  hard_extra = unmatched query && detach(sigmoid(pred_logit)) >= threshold
+  target = 0
+
+tools/train_gcs.py
+  --gcs-extra-exist
+  --gcs-extra-exist-thr
+
+ultralytics/models/yolo/gcs_lane/train.py
+ultralytics/models/yolo/gcs_lane/val.py
+ultralytics/cfg/default.yaml
+ultralytics/cfg/__init__.py
+tools/overfit_gcs_20.py
+tools/analyze_gcs_results_csv.py
+  sync loss names, gains, defaults, logging, helper summaries
+```
+
+Why:
+
+The selected `gt4short15` failure trace shows overcount-heavy train/val
+failures, with extra lanes mainly `spurious_extra` and some
+`duplicate_like_extra`. The controlled official-val NMS sweep reduces some
+overcount shape but raises FN and lowers official ACC. This makes a
+train-side high-score extra-query penalty the smallest targeted next
+experiment.
+
+Rejected actions:
+
+- Do not fold this term into `exist_loss`; it needs an independent log item so
+  the experiment can show whether high-score extra queries are actually being
+  suppressed.
+- Do not penalize all unmatched queries; the existing `exist_loss` already
+  supervises unmatched queries as target zero.
+- Do not use NMS, `max_det`, `min_points`, decoded lane count, or GT-count
+  gating inside the training loss.
+- Do not touch `point_valid_loss`; this experiment is not a visible-span fix.
+
+Validation evidence:
+
+```text
+python -m py_compile ultralytics/utils/gcs_loss.py ultralytics/models/yolo/gcs_lane/train.py ultralytics/models/yolo/gcs_lane/val.py ultralytics/cfg/__init__.py tools/train_gcs.py tools/overfit_gcs_20.py tools/analyze_gcs_results_csv.py
+python tools/train_gcs.py --help
+direct extra_exist_loss behavior check
+GCSLoss.forward loss-vector/gain check
+python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml --imgsz 544 960 --batch 1 --device cpu
+```
+
+Recommended experiment:
+
+Start conservatively:
+
+```text
+--gcs-extra-exist 0.05
+--gcs-extra-exist-thr 0.15
+```
+
+Promote only if the 363-image official-val ACC is not below `0.970851`, FN is
+not materially above `0.011708`, count confusion improves on `3->4`, `4->5`,
+and `4->6`, and train/val failure traces reduce `spurious_extra` and
+`duplicate_like_extra` without worsening short-lane miss buckets.
+
+Mainline or experiment:
+
+Branch-local experimental option. Defaults preserve baseline behavior and do
+not import later Count/Quality/Survival/near-miss machinery.
+
+## 2026-06-21: Reject extraexist005 as an Official-Val Promotion
+
+Decision:
+
+Do not promote
+`gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_extraexist005_count03_under5_03`.
+Keep `gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03` as the
+current official-val selected candidate and keep final test closed.
+
+Official-val evidence:
+
+```text
+sweep = runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_extraexist005_count03_under5_03_official_val_sweep
+rows = 1800
+images = 363
+best = conf=0.005, point_valid_thr=0.5, nms_dist_px=18.0, max_det=6, min_points=5
+official_acc = 0.969603
+official_FP = 0.017815
+official_FN = 0.012856
+official_score = 0.968990
+count_acc = 0.961433
+count_acc_3 = 0.977578
+count_acc_4 = 0.878788
+count_acc_5 = 0.986486
+count_confusion = 3->3=218, 3->4=5, 4->3=2, 4->4=58, 4->5=6, 5->4=1, 5->5=73
+```
+
+Comparison:
+
+```text
+current gt4short15 official-val ACC = 0.970851
+extraexist005 official-val ACC      = 0.969603
+delta                                 = -0.001248
+
+previous count03_under5_03 official-val ACC = 0.969976
+extraexist005 official-val ACC              = 0.969603
+delta                                         = -0.000373
+
+gt4short15 FP/FN/count_acc = 0.022084 / 0.011708 / 0.939394
+extraexist005 FP/FN/count_acc = 0.017815 / 0.012856 / 0.961433
+```
+
+Interpretation:
+
+- Supported fact: `extraexist005` does what the new loss was meant to do in
+  one direction: it lowers FP and improves count accuracy relative to
+  `gt4short15`.
+- Supported fact: it does not satisfy the promotion gate. Official ACC is below
+  both the current `gt4short15` selection and the previous `count03_under5_03`
+  official-val result.
+- Supported fact: the best row moves to a very low `conf=0.005`; at the old
+  `gt4short15` decode (`conf=0.15`, `point_valid_thr=0.5`,
+  `nms_dist_px=0.0`, `max_det=6`, `min_points=4`), ACC is only `0.968380` and
+  FN rises to `0.016299`. This indicates query-score over-suppression, not a
+  postprocess-only issue.
+- Supported fact: the best count row reaches `count_acc=0.966942` and
+  `count_acc_4=0.909091`, but its ACC is only `0.968080` to `0.968946`, so the
+  count gain is diagnostic rather than promotable.
+
+Rejected actions:
+
+- Do not send `extraexist005` to final test.
+- Do not tune final-test thresholds or checkpoint choice from this result.
+- Do not increase `gcs_extra_exist` to `0.1`; the `0.05` run already suppresses
+  scores too much.
+
+Recommended next action:
+
+Run one smaller-gain ablation that keeps the same mechanism but reduces score
+collapse:
+
+```text
+--gcs-extra-exist 0.025
+--gcs-extra-exist-thr 0.15
+```
+
+Select only on the same 363-image official-val surface. Promote only if
+official ACC reaches or exceeds `0.970851` without raising FN above `0.011708`.
+If it again improves count/FP but misses ACC, stop this loss family and return
+to short-lane score/geometry retention rather than stronger extra suppression.
+
+Mainline or experiment:
+
+Rejected experimental candidate. The loss remains useful as a branch-local
+diagnostic knob, but `0.05` is too strong for promotion.
