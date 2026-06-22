@@ -17,7 +17,9 @@ class GCSLoss(nn.Module):
     loss_names = (
         "exist_loss",
         "point_loss",
+        "lane_balanced_point_loss",
         "point_valid_loss",
+        "short_valid_recall_loss",
         "smooth_loss",
         "curve_loss",
         "mask_loss",
@@ -34,6 +36,12 @@ class GCSLoss(nn.Module):
         lambda_exist: float | None = None,
         lambda_point: float | None = None,
         lambda_point_valid: float | None = None,
+        lane_balanced_point_gain: float | None = None,
+        short_valid_recall_gain: float | None = None,
+        short_valid_max_visible: int | None = None,
+        short_valid_min_visible: int | None = None,
+        short_valid_max_ape_px: float | None = None,
+        short_valid_min_visible_iou: float | None = None,
         lambda_smooth: float | None = None,
         lambda_curve: float | None = None,
         lambda_mask: float | None = None,
@@ -89,6 +97,36 @@ class GCSLoss(nn.Module):
         self.point_gain = float(lambda_point if lambda_point is not None else self._arg(args, "gcs_point", 15.0))
         self.point_valid_gain = float(
             lambda_point_valid if lambda_point_valid is not None else self._arg(args, "gcs_point_valid", 1.0)
+        )
+        self.lane_balanced_point_gain = float(
+            lane_balanced_point_gain
+            if lane_balanced_point_gain is not None
+            else self._arg(args, "gcs_lane_balanced_point", 0.0)
+        )
+        self.short_valid_recall_gain = float(
+            short_valid_recall_gain
+            if short_valid_recall_gain is not None
+            else self._arg(args, "gcs_short_valid_recall", 0.0)
+        )
+        self.short_valid_max_visible = int(
+            short_valid_max_visible
+            if short_valid_max_visible is not None
+            else self._arg(args, "gcs_short_valid_max_visible", 20)
+        )
+        self.short_valid_min_visible = int(
+            short_valid_min_visible
+            if short_valid_min_visible is not None
+            else self._arg(args, "gcs_short_valid_min_visible", 4)
+        )
+        self.short_valid_max_ape_px = float(
+            short_valid_max_ape_px
+            if short_valid_max_ape_px is not None
+            else self._arg(args, "gcs_short_valid_max_ape_px", 40.0)
+        )
+        self.short_valid_min_visible_iou = float(
+            short_valid_min_visible_iou
+            if short_valid_min_visible_iou is not None
+            else self._arg(args, "gcs_short_valid_min_visible_iou", 0.3)
         )
         self.smooth_gain = float(lambda_smooth if lambda_smooth is not None else self._arg(args, "gcs_smooth", 0.05))
         self.curve_gain = float(lambda_curve if lambda_curve is not None else self._arg(args, "gcs_curve", 0.1))
@@ -260,6 +298,24 @@ class GCSLoss(nn.Module):
         if self.spurious_max_pairs_per_image < 1:
             raise ValueError(
                 f"gcs_spurious_max_pairs_per_image must be >= 1, got {self.spurious_max_pairs_per_image}."
+            )
+        if self.lane_balanced_point_gain < 0.0:
+            raise ValueError(f"gcs_lane_balanced_point must be >= 0, got {self.lane_balanced_point_gain}.")
+        if self.short_valid_recall_gain < 0.0:
+            raise ValueError(f"gcs_short_valid_recall must be >= 0, got {self.short_valid_recall_gain}.")
+        if self.short_valid_min_visible < 1:
+            raise ValueError(f"gcs_short_valid_min_visible must be >= 1, got {self.short_valid_min_visible}.")
+        if self.short_valid_max_visible < self.short_valid_min_visible:
+            raise ValueError(
+                "gcs_short_valid_max_visible must be >= gcs_short_valid_min_visible "
+                f"({self.short_valid_max_visible} < {self.short_valid_min_visible})."
+            )
+        if self.short_valid_max_ape_px < 0.0:
+            raise ValueError(f"gcs_short_valid_max_ape_px must be >= 0, got {self.short_valid_max_ape_px}.")
+        if not (0.0 <= self.short_valid_min_visible_iou <= 1.0):
+            raise ValueError(
+                "gcs_short_valid_min_visible_iou must be in [0, 1], "
+                f"got {self.short_valid_min_visible_iou}."
             )
         self.count_under5_min_lanes = int(
             count_under5_min_lanes
@@ -551,6 +607,37 @@ class GCSLoss(nn.Module):
 
         return torch.stack(losses).mean() if losses else self._zero_like(pred_points)
 
+    def lane_balanced_point_loss(
+        self,
+        pred_points: torch.Tensor,
+        gt_points: list[torch.Tensor],
+        gt_valid: list[torch.Tensor],
+        indices: list[tuple[torch.Tensor, torch.Tensor]],
+    ) -> torch.Tensor:
+        """Matched point loss averaged per lane before averaging across lanes."""
+        if self.lane_balanced_point_gain <= 0.0:
+            return self._zero_like(pred_points)
+
+        losses = []
+        device, dtype = pred_points.device, pred_points.dtype
+        scale = self._scale_for(pred_points)
+        for b, (src_idx, tgt_idx) in enumerate(indices):
+            if src_idx.numel() == 0:
+                continue
+            pred = pred_points[b, src_idx]
+            target = gt_points[b].to(device=device, dtype=dtype)[tgt_idx]
+            valid = gt_valid[b].to(device=device, dtype=dtype)[tgt_idx]
+            visible = valid.sum(dim=1)
+            has_visible = visible > 0.0
+            if not has_visible.any():
+                continue
+
+            loss = ((pred - target).abs() * scale).sum(dim=-1) * valid
+            lane_loss = loss.sum(dim=1) / visible.clamp_min(1.0)
+            losses.append(lane_loss[has_visible])
+
+        return torch.cat(losses).mean() if losses else self._zero_like(pred_points)
+
     def point_valid_loss(
         self,
         pred_valid_logits: torch.Tensor | None,
@@ -572,6 +659,59 @@ class GCSLoss(nn.Module):
         neg = (target.numel() - target.sum()).clamp_min(1.0)
         pos_weight = (neg / pos).clamp(min=1.0, max=float(self.point_valid_pos_weight_max)).to(pred_valid_logits)
         return F.binary_cross_entropy_with_logits(pred_valid_logits, target, pos_weight=pos_weight)
+
+    def short_valid_recall_loss(
+        self,
+        pred_valid_logits: torch.Tensor | None,
+        pred_points: torch.Tensor,
+        gt_points: list[torch.Tensor],
+        gt_valid: list[torch.Tensor],
+        indices: list[tuple[torch.Tensor, torch.Tensor]],
+    ) -> torch.Tensor:
+        """Positive-only visibility BCE on geometrically plausible matched short GT lanes."""
+        if self.short_valid_recall_gain <= 0.0 or pred_valid_logits is None:
+            return self._zero_like(pred_points)
+
+        losses = []
+        device = pred_valid_logits.device
+        dtype = pred_valid_logits.dtype
+        min_visible = float(self.short_valid_min_visible)
+        max_visible = float(self.short_valid_max_visible)
+        max_ape = float(self.short_valid_max_ape_px)
+        min_iou = float(self.short_valid_min_visible_iou)
+        scale = self._pixel_scale_for(pred_points)
+        for b, (src_idx, tgt_idx) in enumerate(indices):
+            if src_idx.numel() == 0:
+                continue
+            valid = gt_valid[b].to(device=device, dtype=dtype)[tgt_idx]
+            visible = valid.sum(dim=1)
+            short_mask = (visible >= min_visible) & (visible <= max_visible)
+            if not short_mask.any():
+                continue
+
+            pred = pred_points[b, src_idx].detach()
+            target_points = gt_points[b].to(device=pred_points.device, dtype=pred_points.dtype)[tgt_idx]
+            valid_points = valid.to(dtype=pred_points.dtype)
+            point_error = torch.norm((pred - target_points) * scale, dim=-1)
+            ape = (point_error * valid_points).sum(dim=1) / visible.to(dtype=pred_points.dtype).clamp_min(1.0)
+
+            valid_prob = pred_valid_logits[b, src_idx].detach().sigmoid().to(dtype=dtype)
+            intersection = (valid_prob * valid).sum(dim=1)
+            union = valid_prob.sum(dim=1) + visible - intersection
+            visible_iou = intersection / union.clamp_min(1e-6)
+
+            lane_mask = short_mask & (ape.to(dtype=dtype) <= max_ape) & (visible_iou >= min_iou)
+            if not lane_mask.any():
+                continue
+
+            logits = pred_valid_logits[b, src_idx[lane_mask]]
+            valid = valid[lane_mask]
+            visible = visible[lane_mask]
+            bce = F.binary_cross_entropy_with_logits(logits, torch.ones_like(logits), reduction="none")
+            lane_loss = (bce * valid).sum(dim=1) / visible.clamp_min(1.0)
+            losses.append(lane_loss)
+
+        return torch.cat(losses).mean() if losses else self._zero_like(pred_points)
 
     def smooth_loss(
         self,
@@ -992,7 +1132,11 @@ class GCSLoss(nn.Module):
         indices = self.matcher(pred_points, pred_logits, gt_points, gt_valid)
         exist_loss = self.exist_loss(pred_logits, pred_points, pred_valid_logits, gt_points, gt_valid, indices)
         point_loss = self.point_loss(pred_points, gt_points, gt_valid, indices)
+        lane_balanced_point_loss = self.lane_balanced_point_loss(pred_points, gt_points, gt_valid, indices)
         point_valid_loss = self.point_valid_loss(pred_valid_logits, pred_points, gt_valid, indices)
+        short_valid_recall_loss = self.short_valid_recall_loss(
+            pred_valid_logits, pred_points, gt_points, gt_valid, indices
+        )
         smooth_loss = self.smooth_loss(pred_points, gt_valid, indices)
         curve_loss = self.curve_loss(pred_points, gt_points, gt_valid, indices)
         count_loss, count_under5_loss = self.count_losses(pred_logits, batch, gt_valid)
@@ -1016,7 +1160,9 @@ class GCSLoss(nn.Module):
         total = (
             self.exist_gain * exist_loss
             + self.point_gain * point_loss
+            + self.lane_balanced_point_gain * lane_balanced_point_loss
             + self.point_valid_gain * point_valid_loss
+            + self.short_valid_recall_gain * short_valid_recall_loss
             + self.smooth_gain * smooth_loss
             + self.curve_gain * curve_loss
             + self.mask_gain * mask_loss
@@ -1030,7 +1176,9 @@ class GCSLoss(nn.Module):
             (
                 exist_loss.detach(),
                 point_loss.detach(),
+                lane_balanced_point_loss.detach(),
                 point_valid_loss.detach(),
+                short_valid_recall_loss.detach(),
                 smooth_loss.detach(),
                 curve_loss.detach(),
                 mask_loss.detach(),

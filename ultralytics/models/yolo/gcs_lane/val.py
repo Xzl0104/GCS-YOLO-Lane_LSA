@@ -23,7 +23,9 @@ from ultralytics.utils.torch_utils import select_device
 LOSS_NAMES = (
     "exist_loss",
     "point_loss",
+    "lane_balanced_point_loss",
     "point_valid_loss",
+    "short_valid_recall_loss",
     "smooth_loss",
     "curve_loss",
     "mask_loss",
@@ -36,7 +38,9 @@ LOSS_NAMES = (
 LOSS_GAIN_ARGS = (
     "gcs_exist",
     "gcs_point",
+    "gcs_lane_balanced_point",
     "gcs_point_valid",
+    "gcs_short_valid_recall",
     "gcs_smooth",
     "gcs_curve",
     "gcs_mask",
@@ -46,7 +50,7 @@ LOSS_GAIN_ARGS = (
     "gcs_duplicate_margin",
     "gcs_spurious_margin",
 )
-DEFAULT_LOSS_GAINS = (2.0, 15.0, 1.0, 0.05, 0.1, 0.2, 0.2, 0.0, 0.0, 0.0, 0.0)
+DEFAULT_LOSS_GAINS = (2.0, 15.0, 0.0, 1.0, 0.0, 0.05, 0.1, 0.2, 0.2, 0.0, 0.0, 0.0, 0.0)
 METRIC_NAMES = (
     "precision",
     "recall",

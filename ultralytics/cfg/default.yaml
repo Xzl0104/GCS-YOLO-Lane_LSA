@@ -114,7 +114,13 @@ val_gcs_labels: # (str, optional) explicit GCS-YOLO-Lane val labels_gcs director
 gcs_imgsz: # (list[int], optional) real GCS input shape as [height, width], e.g. [544, 960]
 gcs_exist: 2.0 # (float) GCS lane existence loss gain
 gcs_point: 15.0 # (float) GCS normalized point L1 loss gain
+gcs_lane_balanced_point: 0.0 # (float) extra lane-balanced matched point loss gain; 0 disables
 gcs_point_valid: 1.0 # (float) GCS per-point visibility BCE loss gain for fixed-y lane anchors
+gcs_short_valid_recall: 0.0 # (float) positive-only point-valid recall loss gain for matched short lanes; 0 disables
+gcs_short_valid_max_visible: 20 # (int) maximum visible anchors for short-valid recall loss
+gcs_short_valid_min_visible: 4 # (int) minimum visible anchors for short-valid recall loss
+gcs_short_valid_max_ape_px: 40.0 # (float) maximum matched APE in pixels for short-valid recall loss
+gcs_short_valid_min_visible_iou: 0.3 # (float) minimum matched visible-IoU for short-valid recall loss
 gcs_smooth: 0.05 # (float) GCS second-order smoothness loss gain
 gcs_curve: 0.1 # (float) GCS adaptive curvature-aware loss gain
 gcs_mask: 0.2 # (float) GCS auxiliary semantic mask loss gain

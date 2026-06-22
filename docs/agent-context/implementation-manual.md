@@ -9,9 +9,9 @@ This branch is the current mainline source import of `5-25-3.zip` with a K56 TuS
 - Do not import later mainline Count Head, Count Boundary, Quality Head, Survival Head, near-miss, official-best, or K56 candidate machinery.
 - Do not track `datasets/`, generated runs, checkpoints, caches, or converted labels in Git.
 
-Active source/config is based on rollback commit `50999d6af` plus the
-default-disabled `duplicate_margin_loss` and `spurious_margin_loss` experiment
-knobs added on 2026-06-22.
+Active source/config is based on rollback commit `50999d6af` plus
+default-disabled `duplicate_margin_loss`, `spurious_margin_loss`,
+`lane_balanced_point_loss`, and `short_valid_recall_loss` experiment knobs.
 Other post-`50999d6af` experiment knobs such as `gcs_gt4_short_boost`,
 `gcs_extra_exist`, and `gcs_short_exist_floor` are legacy records only and are
 not available in the current code unless a future task explicitly restores them.

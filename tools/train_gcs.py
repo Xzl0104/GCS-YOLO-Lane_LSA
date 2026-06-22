@@ -130,7 +130,43 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--val-gcs-labels", default=None)
     parser.add_argument("--gcs-exist", type=float, default=2.0)
     parser.add_argument("--gcs-point", type=float, default=15.0)
+    parser.add_argument(
+        "--gcs-lane-balanced-point",
+        type=float,
+        default=0.0,
+        help="Extra lane-balanced matched point loss gain. 0 disables.",
+    )
     parser.add_argument("--gcs-point-valid", type=float, default=1.0)
+    parser.add_argument(
+        "--gcs-short-valid-recall",
+        type=float,
+        default=0.0,
+        help="Positive-only point-valid recall loss gain for matched short GT lanes. 0 disables.",
+    )
+    parser.add_argument(
+        "--gcs-short-valid-max-visible",
+        type=int,
+        default=20,
+        help="Maximum GT-visible anchors for short-valid recall loss.",
+    )
+    parser.add_argument(
+        "--gcs-short-valid-min-visible",
+        type=int,
+        default=4,
+        help="Minimum GT-visible anchors for short-valid recall loss.",
+    )
+    parser.add_argument(
+        "--gcs-short-valid-max-ape-px",
+        type=float,
+        default=40.0,
+        help="Maximum matched APE in pixels for short-valid recall loss.",
+    )
+    parser.add_argument(
+        "--gcs-short-valid-min-visible-iou",
+        type=float,
+        default=0.3,
+        help="Minimum matched visible-IoU for short-valid recall loss.",
+    )
     parser.add_argument("--gcs-smooth", type=float, default=0.05)
     parser.add_argument("--gcs-curve", type=float, default=0.1)
     parser.add_argument("--gcs-mask", type=float, default=0.2)
@@ -434,7 +470,13 @@ def main() -> None:
         "val_gcs_labels": args.val_gcs_labels,
         "gcs_exist": args.gcs_exist,
         "gcs_point": args.gcs_point,
+        "gcs_lane_balanced_point": args.gcs_lane_balanced_point,
         "gcs_point_valid": args.gcs_point_valid,
+        "gcs_short_valid_recall": args.gcs_short_valid_recall,
+        "gcs_short_valid_max_visible": args.gcs_short_valid_max_visible,
+        "gcs_short_valid_min_visible": args.gcs_short_valid_min_visible,
+        "gcs_short_valid_max_ape_px": args.gcs_short_valid_max_ape_px,
+        "gcs_short_valid_min_visible_iou": args.gcs_short_valid_min_visible_iou,
         "gcs_smooth": args.gcs_smooth,
         "gcs_curve": args.gcs_curve,
         "gcs_mask": args.gcs_mask,

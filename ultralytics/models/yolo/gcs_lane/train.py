@@ -34,7 +34,9 @@ class GCSLaneTrainer(BaseTrainer):
     loss_names = (
         "exist_loss",
         "point_loss",
+        "lane_balanced_point_loss",
         "point_valid_loss",
+        "short_valid_recall_loss",
         "smooth_loss",
         "curve_loss",
         "mask_loss",
@@ -48,7 +50,9 @@ class GCSLaneTrainer(BaseTrainer):
     progress_loss_names = (
         "exist",
         "point",
+        "lane_bal",
         "pt_valid",
+        "short_rec",
         "smooth",
         "curve",
         "mask",

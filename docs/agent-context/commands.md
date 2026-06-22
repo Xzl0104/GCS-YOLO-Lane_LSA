@@ -86,6 +86,73 @@ If `batch=32` OOMs on the target machine, reduce batch only for OOM/instability 
 
 `--no-amp` is included because the current remote run hit an Ultralytics AMP self-check failure while loading `yolo26n.pt`. If that server cache/checkpoint issue is fixed, AMP may be re-enabled only with a run note.
 
+## Positive Short-Lane Point/Visibility Experiment
+
+This default-disabled experiment targets true short-lane learning, not
+unmatched-query suppression. It keeps decode, NMS, official metrics, and final
+test closed:
+
+```bash
+python tools/train_gcs.py \
+  --dataset tusimple \
+  --model ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml \
+  --data data/tusimple_gcs_fixed_y_960x544.yaml \
+  --pretrained yolo11s-seg.pt \
+  --imgsz 544 960 \
+  --epochs 160 \
+  --batch 32 \
+  --workers 4 \
+  --device 0 \
+  --no-amp \
+  --optimizer AdamW \
+  --lr0 5e-4 \
+  --lrf 0.05 \
+  --cos-lr \
+  --weight-decay 1e-4 \
+  --warmup-epochs 3.0 \
+  --warmup-bias-lr 0.0 \
+  --patience 40 \
+  --erasing 0.1 \
+  --scale 0.3 \
+  --gcs-exist 2.0 \
+  --gcs-point 15.0 \
+  --gcs-point-valid 1.0 \
+  --gcs-smooth 0.05 \
+  --gcs-curve 0.1 \
+  --gcs-mask 0.2 \
+  --gcs-edge 0.2 \
+  --gcs-count 0.3 \
+  --gcs-count-under5 0.3 \
+  --gcs-count-under5-min-lanes 5 \
+  --gcs-lane-count-balanced \
+  --gcs-lane-count-balance-power 1.0 \
+  --gcs-lane-count-min-group 50 \
+  --gcs-duplicate-margin 0.0 \
+  --gcs-spurious-margin 0.0 \
+  --gcs-lane-balanced-point 3.0 \
+  --gcs-short-valid-recall 0.5 \
+  --gcs-short-valid-max-visible 20 \
+  --gcs-short-valid-min-visible 4 \
+  --gcs-short-valid-max-ape-px 40.0 \
+  --gcs-short-valid-min-visible-iou 0.3 \
+  --project runs/gcs_lane \
+  --name gcs_yolo_lane_s_tusimple_fixed_y_shortpos_count03_under5_03
+```
+
+Promotion must use official-val only. First-pass gates:
+
+```text
+ACC >= 0.970272, preferably near or above 0.970851
+FN <= 0.016070
+GT5 count_acc should not fall far below 0.972973
+GT4 count_acc should not drop sharply
+APE / matched geometry metrics should not regress
+```
+
+After training, run train/val failure traces and check that
+`geometry_miss_short_gt` and `min_points_visibility_short_gt` decrease without
+new `5->4` growth or score-threshold-only `4->5` behavior.
+
 ## Legacy Post-50999 Official-Val Selection
 
 The 2026-06-21 `gt4short15` candidate was selected on official-val in a later

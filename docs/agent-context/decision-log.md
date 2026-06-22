@@ -1270,6 +1270,84 @@ Mainline or experiment:
 Branch-local experimental option. Defaults preserve baseline behavior and do
 not import later Count/Quality/Survival/near-miss/official-best machinery.
 
+## 2026-06-23: Add Default-Disabled Positive Short-Lane Point/Visibility Losses
+
+Decision:
+
+Add two default-disabled positive short-lane supervision terms:
+`lane_balanced_point_loss` and `short_valid_recall_loss`.
+
+Implementation:
+
+```text
+ultralytics/utils/gcs_loss.py
+  lane_balanced_point_loss log item
+  gcs_lane_balanced_point = 0.0 default-disabled gain
+  matched lane point error is averaged per lane, then across lanes
+
+  short_valid_recall_loss log item
+  gcs_short_valid_recall = 0.0 default-disabled gain
+  gcs_short_valid_max_visible = 20
+  gcs_short_valid_min_visible = 4
+  gcs_short_valid_max_ape_px = 40.0
+  gcs_short_valid_min_visible_iou = 0.3
+  positive-only BCE on GT-visible anchors for matched short lanes whose matched
+  q+ passes APE and visible-IoU gates
+
+tools/train_gcs.py
+ultralytics/cfg/default.yaml
+ultralytics/cfg/__init__.py
+  CLI/default/config typing for gcs_lane_balanced_point and gcs_short_valid_* parameters
+
+ultralytics/models/yolo/gcs_lane/train.py
+ultralytics/models/yolo/gcs_lane/val.py
+  train/val loss item alignment
+```
+
+Why:
+
+The follow-up target is true short-lane learning, not another unmatched-query
+suppression loss. The standard `point_loss` normalizes over all visible matched
+points in an image, so long lanes naturally dominate short side lanes. The
+extra lane-balanced term gives each matched GT lane equal geometric weight when
+enabled. The short-valid recall term only boosts GT-visible anchors for matched
+short lanes whose matched q+ already has plausible geometry and visible-IoU,
+and does not add extra penalties on invisible anchors.
+
+Default behavior:
+
+Both gains default to `0.0`, so baseline training behavior is unchanged unless
+the experiment flags are explicitly set. The change does not alter model
+outputs, decode, NMS, postprocess, official metrics, K56 fixed-y anchors, or
+the `--imgsz 544 960` contract.
+
+Recommended first experiment:
+
+```text
+--gcs-count 0.3
+--gcs-count-under5 0.3
+--gcs-duplicate-margin 0.0
+--gcs-spurious-margin 0.0
+--gcs-lane-balanced-point 3.0
+--gcs-short-valid-recall 0.5
+--gcs-short-valid-max-visible 20
+--gcs-short-valid-min-visible 4
+--gcs-short-valid-max-ape-px 40.0
+--gcs-short-valid-min-visible-iou 0.3
+```
+
+Promotion gate:
+
+Use official-val only. Focus on `geometry_miss_short_gt` and
+`min_points_visibility_short_gt` in train/val failure traces, while requiring
+official-val ACC/FN and GT4/GT5 count behavior to stay within the recorded
+branch gates.
+
+Mainline or experiment:
+
+Branch-local experimental option. Defaults preserve baseline behavior and do
+not import later Count/Quality/Survival/near-miss/official-best machinery.
+
 ## 2026-06-23: Reject spurmargin003 as an Official-Val Promotion
 
 Decision:
