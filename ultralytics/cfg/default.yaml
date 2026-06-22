@@ -132,6 +132,16 @@ gcs_duplicate_pos_ape_px: 20.0 # (float) maximum APE in pixels for the matched q
 gcs_duplicate_neg_ape_px: 120.0 # (float) maximum APE in pixels for q- duplicate selection; filters far background queries
 gcs_duplicate_ape_gap_px: 5.0 # (float) q- must be this much worse than q+, unless above the absolute q+ APE threshold
 gcs_duplicate_max_pairs_per_gt: 2 # (int) maximum high-logit q- pairs kept per matched GT lane
+gcs_spurious_margin: 0.0 # (float) far-unmatched spurious query pairwise logit margin loss gain; 0 disables
+gcs_spurious_margin_logit: 1.0 # (float) required logit margin between reliable matched q+ and far spurious q-
+gcs_spurious_gt_counts: [3, 4] # (list[int]) GT lane counts that enable spurious margin loss
+gcs_spurious_pos_ape_px: 20.0 # (float) maximum APE in pixels for reliable matched q+
+gcs_spurious_pos_min_visible_iou: 0.4 # (float) minimum soft visible IoU for reliable matched q+
+gcs_spurious_neg_min_ape_px: 50.0 # (float) q- is spurious if its best GT APE is above this, unless duplicate-like
+gcs_spurious_neg_max_visible_iou: 0.2 # (float) q- is spurious if its best GT visible IoU is below this, unless duplicate-like
+gcs_spurious_duplicate_ape_px: 50.0 # (float) near-GT duplicate exclusion APE threshold
+gcs_spurious_duplicate_visible_iou: 0.4 # (float) near-GT duplicate exclusion visible-IoU threshold
+gcs_spurious_max_pairs_per_image: 4 # (int) maximum high-risk spurious ranking pairs kept per image
 gcs_exist_pos_weight: 1.0 # (float) positive query weight for GCS lane existence BCE
 gcs_exist_focal_gamma: 0.0 # (float) optional focal gamma for GCS existence BCE; 0 disables focal weighting
 gcs_exist_focal_alpha: -1.0 # (float) optional focal alpha for GCS existence BCE; set 0..1 to enable alpha weighting

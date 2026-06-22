@@ -31,6 +31,7 @@ LOSS_NAMES = (
     "count_loss",
     "count_under5_loss",
     "duplicate_margin_loss",
+    "spurious_margin_loss",
 )
 LOSS_GAIN_ARGS = (
     "gcs_exist",
@@ -43,8 +44,9 @@ LOSS_GAIN_ARGS = (
     "gcs_count",
     "gcs_count_under5",
     "gcs_duplicate_margin",
+    "gcs_spurious_margin",
 )
-DEFAULT_LOSS_GAINS = (2.0, 15.0, 1.0, 0.05, 0.1, 0.2, 0.2, 0.0, 0.0, 0.0)
+DEFAULT_LOSS_GAINS = (2.0, 15.0, 1.0, 0.05, 0.1, 0.2, 0.2, 0.0, 0.0, 0.0, 0.0)
 METRIC_NAMES = (
     "precision",
     "recall",

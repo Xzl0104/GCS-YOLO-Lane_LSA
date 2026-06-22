@@ -60,9 +60,10 @@ All branch configs keep `Q=12`, `K=56`, fixed-y anchors `710/720 -> 160/720`, an
 
 Historical q12-k56 experiment docs are old records. Preserve them, but do not let them override the active 5-25-3 K56 mainline contract.
 
-Active source/config is intentionally rolled back to commit `50999d6af`
-(`Document 5-25-3 K56 as mainline`). Later commits such as GT4 short-lane
-sampling, `extra_exist_loss`, short matched existence floor, and count-confusion
+Active source/config is based on rollback commit `50999d6af` (`Document 5-25-3
+K56 as mainline`) plus the default-disabled `duplicate_margin_loss` and
+`spurious_margin_loss` experiment knobs added on 2026-06-22. Later mechanisms such as GT4 short-lane sampling,
+`extra_exist_loss`, short matched existence floor, and count-confusion
 diagnostic tooling are preserved only as legacy experiment conclusions in the
 docs. They are not active CLI, loss, or tool contracts in this code state.
 
@@ -129,11 +130,13 @@ edge_loss
 count_loss
 count_under5_loss
 duplicate_margin_loss
+spurious_margin_loss
 ```
 
-`duplicate_margin_loss` is a default-disabled experimental log item controlled
-by `gcs_duplicate_margin=0.0`. With the default gain it contributes `0` to the
-training objective; enabling it is an explicit experiment contract change.
+`duplicate_margin_loss` and `spurious_margin_loss` are default-disabled
+experimental log items controlled by `gcs_duplicate_margin=0.0` and
+`gcs_spurious_margin=0.0`. With the default gains they contribute `0` to the
+training objective; enabling either is an explicit experiment contract change.
 
 ## Decode And Evaluation Contract
 

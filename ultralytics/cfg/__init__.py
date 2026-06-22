@@ -197,6 +197,11 @@ CFG_FLOAT_KEYS = frozenset(
         "gcs_duplicate_pos_ape_px",
         "gcs_duplicate_neg_ape_px",
         "gcs_duplicate_ape_gap_px",
+        "gcs_spurious_margin",
+        "gcs_spurious_margin_logit",
+        "gcs_spurious_pos_ape_px",
+        "gcs_spurious_neg_min_ape_px",
+        "gcs_spurious_duplicate_ape_px",
         "gcs_exist_pos_weight",
         "gcs_exist_focal_gamma",
         "gcs_exist_focal_alpha",
@@ -253,6 +258,9 @@ CFG_FRACTION_KEYS = frozenset(
         "gcs_exist_quality_floor",
         "gcs_eval_point_valid_thr",
         "gcs_duplicate_min_visible_iou",
+        "gcs_spurious_pos_min_visible_iou",
+        "gcs_spurious_neg_max_visible_iou",
+        "gcs_spurious_duplicate_visible_iou",
     }
 )
 CFG_INT_KEYS = frozenset(
@@ -277,6 +285,7 @@ CFG_INT_KEYS = frozenset(
         "gcs_duplicate_short_visible_max",
         "gcs_duplicate_min_overlap",
         "gcs_duplicate_max_pairs_per_gt",
+        "gcs_spurious_max_pairs_per_image",
     }
 )
 CFG_BOOL_KEYS = frozenset(

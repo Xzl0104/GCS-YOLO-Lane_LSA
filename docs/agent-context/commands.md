@@ -26,8 +26,9 @@ The q12-k56-named model/data files are compatibility paths for old experiment re
 
 The 5-25-3 branch does not include later mainline `--gcs-official-best`, Count/Quality/Survival, near-miss, or training-time official-best machinery. It does include branch-local TuSimple official eval/sweep helpers: `tools/eval_tusimple_official.py` and `tools/sweep_tusimple_official.py`.
 
-Active source/config is rolled back to commit `50999d6af` (`Document 5-25-3
-K56 as mainline`). Sections below that mention `gt4short*`,
+Active source/config is based on rollback commit `50999d6af` (`Document 5-25-3
+K56 as mainline`) plus the default-disabled `duplicate_margin_loss` and
+`spurious_margin_loss` experiment knobs added on 2026-06-22. Sections below that mention `gt4short*`,
 `--gcs-gt4-short-*`, `--gcs-extra-exist`, `--gcs-short-exist-*`, or
 `tools/diagnose_tusimple_count_confusion.py` are legacy post-`50999d6af`
 experiment records only. They are not commands for the current code state
@@ -391,6 +392,63 @@ Do not promote this ablation. It slightly improves final-test total
 final-test ACC while raising FP/FN. The official-val best decode uses
 `max_det=6` even though training args record `gcs_eval_max_det=8`; keep that as
 a comparability caveat and do not retune from test.
+
+## Duplicate Margin 0.05 Near-Miss and Reporting Test
+
+The 2026-06-22 `dupmargin005` official test was requested after its 363-image
+official-val sweep completed. It is a reporting-only near-miss, not a promoted
+selected candidate:
+
+```text
+run: gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_count03_under5_03
+train args: epochs=160, batch=32, workers=8, amp=true, gcs_count=0.3, gcs_count_under5=0.3, gcs_duplicate_margin=0.05
+sweep: runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_count03_under5_03_official_val_sweep
+best: conf=0.05, point_valid_thr=0.45, nms_dist_px=0.0, max_det=6, min_points=6
+official-val363: ACC=0.970272, FP=0.024564, FN=0.016070, official_score=0.969459, count_acc=0.953168
+```
+
+One-shot official test command, using only the official-val selected decode:
+
+```bash
+python tools/eval_tusimple_official.py \
+  --archive-root archive/TUSimple \
+  --split test \
+  --weights runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_count03_under5_03/weights/best.pt \
+  --imgsz 544 960 \
+  --device 0 \
+  --conf 0.05 \
+  --point-valid-thr 0.45 \
+  --nms-dist-px 0.0 \
+  --max-det 6 \
+  --min-points 6 \
+  --half \
+  --save-dir runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_count03_under5_03_official_test_best_from_val \
+  --save-records
+```
+
+Result:
+
+```text
+summary: runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_count03_under5_03_official_test_best_from_val/tusimple_official_summary.json
+images=2782
+ACC=0.965702
+FP=0.029493
+FN=0.027348
+official_score=0.964565
+count_acc=0.865924
+count_acc_2=0.200000
+count_acc_3=0.971839
+count_acc_4=0.547009
+count_acc_5=0.810193
+pred_lanes_hist: 2=3, 3=1837, 4=371, 5=557, 6=14
+gt_lanes_hist: 2=5, 3=1740, 4=468, 5=569
+count_confusion: 2->2=1, 2->3=3, 2->4=1, 3->2=2, 3->3=1691, 3->4=41, 3->5=6, 4->3=118, 4->4=256, 4->5=90, 4->6=4, 5->3=25, 5->4=73, 5->5=461, 5->6=10
+```
+
+Do not promote this run from final-test ACC. It beats the older
+`count03_under5_03` official-val ACC but misses the stronger `gt4short15`
+official-val gate `0.970851`. Final test is reporting-only and must not be
+used for threshold, checkpoint, postprocess, or loss selection.
 
 The previous 2026-06-20 final-test-reported candidate was:
 

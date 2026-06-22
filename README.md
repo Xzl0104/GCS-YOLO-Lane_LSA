@@ -2,7 +2,7 @@
 
 This is the current GCS-YOLO-Lane mainline branch. It imports the historical `5-25-3.zip` algorithm and adapts only the TuSimple fixed-y contract.
 
-Active source/config is rolled back to commit `50999d6af` (`Document 5-25-3 K56 as mainline`). Results and mechanisms from later commits are retained below as legacy experiment conclusions only; they do not describe currently available CLI flags, loss items, diagnostic scripts, or selected candidates.
+Active source/config is based on rollback commit `50999d6af` (`Document 5-25-3 K56 as mainline`) plus the default-disabled `duplicate_margin_loss` experiment knob added on 2026-06-22. Results and mechanisms from other later commits are retained below as legacy experiment conclusions only; they do not describe currently available CLI flags, loss items, diagnostic scripts, or selected candidates.
 
 ## Contract
 
@@ -77,11 +77,31 @@ FP, and FN were worse. Its final-test run used the official-val selected
 `max_det=6`, while the train args recorded `gcs_eval_max_det=8`; keep that as a
 comparability caveat, not a reason to tune test.
 
+The 2026-06-22 `dupmargin005` run is a valid near-miss for the current
+default-disabled `duplicate_margin_loss` experiment, not a promoted selected
+candidate:
+
+```text
+run: gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_count03_under5_03
+weights: runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_count03_under5_03/weights/best.pt
+official-val sweep: runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_count03_under5_03_official_val_sweep
+official-val decode: conf=0.05, point_valid_thr=0.45, nms_dist_px=0.0, max_det=6, min_points=6
+official-val363: ACC=0.970272, FP=0.024564, FN=0.016070, count_acc=0.953168
+final test: ACC=0.965702, FP=0.029493, FN=0.027348, count_acc=0.865924
+```
+
+It beats the older `count03_under5_03` official-val ACC and gives the strongest
+reporting-only final-test ACC recorded through 2026-06-22, but it does not beat the stronger
+`gt4short15` official-val gate `0.970851`. Final test is not a selection
+surface, so do not promote it or tune thresholds from its test report.
+
 These decodes were selected on official-val only in their historical experiment
 contexts. None is a current active-code contract after the rollback, and neither
-the `gt4short15` nor `count03_under5_00` final-test report beat the previous
-final-test ACC `0.965459`; do not use final test for threshold, checkpoint, or
-postprocess tuning.
+the `gt4short15` nor `count03_under5_00` final-test report beat the older
+`count03_under5_03` final-test ACC `0.965459`. The later `dupmargin005`
+reporting-only final-test ACC does beat it, but official-val still controls
+selection; do not use final test for threshold, checkpoint, or postprocess
+tuning.
 
 Current bottleneck evidence is documented in `docs/agent-context/known-bottlenecks.md`. The train/val diagnostics localize the main count weakness to `GT4` scenes with short visible side lanes, not to a simple decode-threshold issue. The relevant remote diagnostic artifacts are:
 

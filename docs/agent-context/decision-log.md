@@ -1087,7 +1087,7 @@ extraexist0025:
 
 Interpretation:
 
-- Supported fact: no recent rejected experiment beats the previous
+- Supported fact: within that reporting-only batch, no rejected experiment beat the previous
   `count03_under5_03` final-test ACC `0.965459`.
 - Supported fact: `gt4short15` still has the best official-val ACC, but its
   test ACC `0.965369` is below the previous final-test report.
@@ -1263,6 +1263,251 @@ python tools/train_gcs.py --help
 python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml --imgsz 544 960 --batch 1 --device cpu
 direct duplicate_margin_loss tensor behavior check
 best-GT ownership synthetic check for adjacent GT lanes
+```
+
+Mainline or experiment:
+
+Branch-local experimental option. Defaults preserve baseline behavior and do
+not import later Count/Quality/Survival/near-miss/official-best machinery.
+
+## 2026-06-22: Review Spurious Margin Loss Implementation
+
+Decision:
+
+Keep the current `spurious_margin_loss` implementation for the first
+GT3/GT4-only spurious-extra experiment. The implementation review found no
+blocking bug in the gating, pair selection, default behavior, or train/val loss
+logging alignment.
+
+Checked behavior:
+
+```text
+default-disabled gain:
+  gcs_spurious_margin = 0.0 returns zero and preserves baseline behavior
+
+GT-count gate:
+  default gcs_spurious_gt_counts = [3, 4]
+  GT3 synthetic sample triggers
+  GT5 synthetic sample returns zero
+
+q- gate:
+  only unmatched queries can be selected
+  far-spurious gate is best_ape > 50px OR best_visible_iou < 0.2
+  near-GT duplicate-like exclusion is best_ape <= 50px AND best_visible_iou >= 0.4
+
+ranking direction:
+  softplus(logit(q-) - logit(q+) + margin)
+```
+
+Validation evidence:
+
+```text
+python -m py_compile ultralytics/utils/gcs_loss.py tools/train_gcs.py ultralytics/models/yolo/gcs_lane/train.py ultralytics/models/yolo/gcs_lane/val.py ultralytics/cfg/__init__.py
+python tools/train_gcs.py --help
+python -c "from ultralytics.cfg import DEFAULT_CFG_DICT, check_cfg; check_cfg(DEFAULT_CFG_DICT.copy())"
+python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml --imgsz 544 960 --batch 1 --device cpu
+direct tensor checks for GT3 trigger, GT5 gate, default-disabled zero, near-GT duplicate exclusion, and GCSLoss.forward loss-vector length
+```
+
+Risk to watch:
+
+The current `far_spurious` definition intentionally follows the requested OR
+rule: `best_ape > 50px` OR `best_visible_iou < 0.2`. If official-val FN or GT5
+`5->4` worsens in the next run, inspect whether queries with acceptable
+geometry but poor point-valid overlap are being treated as spurious. Do not
+change this from final-test evidence; diagnose it on train/val and official-val
+only.
+
+Mainline or experiment:
+
+Implementation-review note for a default-disabled branch-local experiment
+knob. It does not promote a candidate or change the active protocol.
+
+## 2026-06-22: Report dupmargin005 Final Test and Reject Official-Val Promotion
+
+Decision:
+
+Do not promote
+`gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_count03_under5_03` as the current
+selected candidate. It is valid official-val evidence and a useful near-miss,
+but it does not beat the strongest official-val gate from `gt4short15`.
+
+Official-val evidence:
+
+```text
+run = gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_count03_under5_03
+args = epochs=160, batch=32, workers=8, amp=true, gcs_count=0.3, gcs_count_under5=0.3, gcs_duplicate_margin=0.05
+sweep = runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_count03_under5_03_official_val_sweep
+images = 363
+best = conf=0.05, point_valid_thr=0.45, nms_dist_px=0.0, max_det=6, min_points=6
+official_acc = 0.970272
+official_FP = 0.024564
+official_FN = 0.016070
+official_score = 0.969459
+count_acc = 0.953168
+count_acc_3 = 0.950673
+count_acc_4 = 0.939394
+count_acc_5 = 0.972973
+count_confusion = 3->3=212, 3->4=11, 4->3=1, 4->4=62, 4->5=3, 5->4=2, 5->5=72
+```
+
+The sweep summary selected the row above. There was an `official_acc` tie with
+a lower-confidence row, but the selected row had better `official_score` and
+better count accuracy.
+
+Official-test reporting evidence:
+
+```text
+summary = runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_count03_under5_03_official_test_best_from_val/tusimple_official_summary.json
+decode = conf=0.05, point_valid_thr=0.45, nms_dist_px=0.0, max_det=6, min_points=6
+images = 2782
+official_acc = 0.965702
+official_FP = 0.029493
+official_FN = 0.027348
+official_score = 0.964565
+count_acc = 0.865924
+count_acc_2 = 0.200000
+count_acc_3 = 0.971839
+count_acc_4 = 0.547009
+count_acc_5 = 0.810193
+pred_lanes_hist = 2=3, 3=1837, 4=371, 5=557, 6=14
+gt_lanes_hist = 2=5, 3=1740, 4=468, 5=569
+count_confusion = 2->2=1, 2->3=3, 2->4=1, 3->2=2, 3->3=1691, 3->4=41, 3->5=6, 4->3=118, 4->4=256, 4->5=90, 4->6=4, 5->3=25, 5->4=73, 5->5=461, 5->6=10
+```
+
+Comparison:
+
+```text
+official-val ACC:
+  count03_under5_03 = 0.969976
+  gt4short15        = 0.970851
+  dupmargin005      = 0.970272
+  delta dupmargin005 - count03_under5_03 = +0.000296
+  delta dupmargin005 - gt4short15        = -0.000579
+
+official-test reporting:
+  count03_under5_03: ACC=0.965459, FP=0.029439, FN=0.026270, official_score=0.964345, count_acc=0.872753
+  gt4short15:        ACC=0.965369, FP=0.033309, FN=0.029236, official_score=0.964118, count_acc=0.864486
+  count03_under5_00: ACC=0.965118, FP=0.031908, FN=0.029745, official_score=0.963885, count_acc=0.875270
+  dupmargin005:      ACC=0.965702, FP=0.029493, FN=0.027348, official_score=0.964565, count_acc=0.865924
+```
+
+Interpretation:
+
+- Supported fact: `dupmargin005` gives the strongest reporting-only final-test
+  ACC among the runs recorded through 2026-06-22, but test is not a selection
+  surface.
+- Supported fact: the run clears the older `count03_under5_03` official-val ACC
+  but misses the `gt4short15` official-val gate by `0.000579`, so it is not a
+  promotion under the branch protocol.
+- Supported fact: relative to `gt4short15`, the test report improves ACC, FP,
+  FN, GT4 count accuracy, and total count accuracy.
+- Supported fact: relative to `count03_under5_03`, the test report improves ACC
+  and official score only slightly, while FN rises and total count accuracy
+  falls. The largest count regression is GT5 (`0.831283 -> 0.810193`) with more
+  `5->4` errors (`52 -> 73`).
+- Supported caveat: the official-test decode uses `max_det=6` while the
+  training args record `gcs_eval_max_det=8`; this is valid because `max_det=6`
+  came from official-val selection, not from test tuning.
+
+Rejected actions:
+
+- Do not promote `dupmargin005` from its final-test ACC.
+- Do not tune `conf`, `point_valid_thr`, NMS, `max_det`, `min_points`,
+  checkpoint choice, or loss weights from this final-test report.
+- Do not claim the duplicate/count problem is solved; count behavior remains
+  mixed, especially on GT5.
+
+Recommended next action:
+
+Keep final test closed. If more work is needed, run train/val-only failure
+traces for the `dupmargin005` official-val selected decode
+`conf=0.05`, `point_valid_thr=0.45`, `nms_dist_px=0.0`, `max_det=6`,
+`min_points=6`, then compare failure buckets against `count03_under5_03` and
+`gt4short15`. Only propose a follow-up loss or sampler change if the train/val
+evidence identifies a specific duplicate-margin failure mode.
+
+Mainline or experiment:
+
+Rejected near-miss experimental candidate. The final-test report is
+reporting-only evidence requested by the user and does not alter the selected
+candidate or branch protocol.
+
+## 2026-06-22: Add Default-Disabled Spurious Margin Loss
+
+Decision:
+
+Add a default-disabled `spurious_margin_loss` experiment knob that ranks far
+unmatched spurious queries below reliable matched queries only in selected
+GT-count images.
+
+Implementation:
+
+```text
+ultralytics/utils/gcs_loss.py
+  spurious_margin_loss log item
+  gcs_spurious_margin = 0.0 default-disabled gain
+  pairwise softplus(logit(q-) - logit(q+) + margin) ranking loss
+  enabled only for gcs_spurious_gt_counts, default [3, 4]
+  reliable q+: matched, GT visible points >= 2, APE <= 20px, visible IoU >= 0.4
+  spurious q-: unmatched, far from all GT by APE/visible-IoU gate, and not near-GT duplicate-like
+
+tools/train_gcs.py
+ultralytics/cfg/default.yaml
+ultralytics/cfg/__init__.py
+  CLI/default/config typing for gcs_spurious_* parameters
+
+ultralytics/models/yolo/gcs_lane/train.py
+ultralytics/models/yolo/gcs_lane/val.py
+  train/val loss item alignment
+```
+
+Why:
+
+The `dupmargin005` follow-up target is not all unmatched queries and not
+duplicate-like near-GT queries. The specific train-side hypothesis is that
+high-score far spurious extras in GT3/GT4 images should be ranked below reliable
+matched lanes without directly forcing all unmatched query logits toward zero.
+
+Default behavior:
+
+The feature is disabled by default with `gcs_spurious_margin=0.0`, so baseline
+training behavior is unchanged unless the experiment flag is explicitly set. It
+does not change model outputs, decode, postprocess, official metrics, K56
+fixed-y anchors, or the `--imgsz 544 960` contract. It does not apply to GT5 by
+default.
+
+Recommended first experiment:
+
+```text
+--gcs-spurious-margin 0.03
+--gcs-spurious-margin-logit 1.0
+--gcs-spurious-gt-counts 3,4
+--gcs-spurious-pos-ape-px 20.0
+--gcs-spurious-pos-min-visible-iou 0.4
+--gcs-spurious-neg-min-ape-px 50.0
+--gcs-spurious-neg-max-visible-iou 0.2
+--gcs-spurious-duplicate-ape-px 50.0
+--gcs-spurious-duplicate-visible-iou 0.4
+--gcs-spurious-max-pairs-per-image 4
+```
+
+Promotion gate:
+
+Use official-val only. A candidate must mainly reduce the train/val
+`spurious_extra` counts for GT3 `3->4` and GT4 `4->5` without worsening GT5
+`5->4` geometry/min-points buckets, and must reach at least the current
+official-val gate `ACC >= 0.970851` before any final-test reporting.
+
+Validation evidence:
+
+```text
+python -m py_compile ultralytics/utils/gcs_loss.py ultralytics/cfg/__init__.py tools/train_gcs.py ultralytics/models/yolo/gcs_lane/train.py ultralytics/models/yolo/gcs_lane/val.py
+python tools/train_gcs.py --help
+python -c "from ultralytics.cfg import DEFAULT_CFG_DICT, check_cfg; check_cfg(DEFAULT_CFG_DICT.copy())"
+python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml --imgsz 544 960 --batch 1 --device cpu
+direct spurious_margin_loss tensor behavior checks for GT3 trigger, default-disabled zero, GT5 gate, and duplicate-like exclusion
+direct GCSLoss.forward loss-vector alignment check
 ```
 
 Mainline or experiment:

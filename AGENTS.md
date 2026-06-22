@@ -105,7 +105,7 @@ The K56 labels must be regenerated from original TuSimple JSON and images, not r
 
 Historical q12-k56 experiment notes and compatibility paths must stay as old records. They do not override the active 5-25-3 K56 mainline contract.
 
-The active source code is rolled back to commit `50999d6af` (`Document 5-25-3 K56 as mainline`). Later experiment commits and their documentation are legacy conclusions only unless a future task explicitly re-enables those mechanisms.
+The active source code is based on rollback commit `50999d6af` (`Document 5-25-3 K56 as mainline`) plus the default-disabled `duplicate_margin_loss` and `spurious_margin_loss` experiment knobs added on 2026-06-22. Other later experiment commits and their documentation are legacy conclusions only unless a future task explicitly re-enables those mechanisms.
 
 ## Branch Scope
 
@@ -140,6 +140,7 @@ edge_loss
 count_loss
 count_under5_loss
 duplicate_margin_loss
+spurious_margin_loss
 ```
 
 ## Agent Coordination Rules

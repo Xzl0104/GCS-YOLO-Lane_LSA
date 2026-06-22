@@ -25,6 +25,7 @@ class GCSLoss(nn.Module):
         "count_loss",
         "count_under5_loss",
         "duplicate_margin_loss",
+        "spurious_margin_loss",
     )
 
     def __init__(
@@ -49,6 +50,16 @@ class GCSLoss(nn.Module):
         duplicate_neg_ape_px: float | None = None,
         duplicate_ape_gap_px: float | None = None,
         duplicate_max_pairs_per_gt: int | None = None,
+        spurious_margin_gain: float | None = None,
+        spurious_margin_logit: float | None = None,
+        spurious_gt_counts=None,
+        spurious_pos_ape_px: float | None = None,
+        spurious_pos_min_visible_iou: float | None = None,
+        spurious_neg_min_ape_px: float | None = None,
+        spurious_neg_max_visible_iou: float | None = None,
+        spurious_duplicate_ape_px: float | None = None,
+        spurious_duplicate_visible_iou: float | None = None,
+        spurious_max_pairs_per_image: int | None = None,
         count_under5_min_lanes: int | None = None,
         curve_alpha: float | None = None,
         curve_weight_max: float | None = None,
@@ -139,6 +150,57 @@ class GCSLoss(nn.Module):
             if duplicate_max_pairs_per_gt is not None
             else self._arg(args, "gcs_duplicate_max_pairs_per_gt", 2)
         )
+        self.spurious_margin_gain = float(
+            spurious_margin_gain
+            if spurious_margin_gain is not None
+            else self._arg(args, "gcs_spurious_margin", 0.0)
+        )
+        self.spurious_margin_logit = float(
+            spurious_margin_logit
+            if spurious_margin_logit is not None
+            else self._arg(args, "gcs_spurious_margin_logit", 1.0)
+        )
+        self.spurious_gt_counts = self._parse_int_set(
+            spurious_gt_counts
+            if spurious_gt_counts is not None
+            else self._arg(args, "gcs_spurious_gt_counts", (3, 4)),
+            default=(3, 4),
+        )
+        self.spurious_pos_ape_px = float(
+            spurious_pos_ape_px
+            if spurious_pos_ape_px is not None
+            else self._arg(args, "gcs_spurious_pos_ape_px", 20.0)
+        )
+        self.spurious_pos_min_visible_iou = float(
+            spurious_pos_min_visible_iou
+            if spurious_pos_min_visible_iou is not None
+            else self._arg(args, "gcs_spurious_pos_min_visible_iou", 0.4)
+        )
+        self.spurious_neg_min_ape_px = float(
+            spurious_neg_min_ape_px
+            if spurious_neg_min_ape_px is not None
+            else self._arg(args, "gcs_spurious_neg_min_ape_px", 50.0)
+        )
+        self.spurious_neg_max_visible_iou = float(
+            spurious_neg_max_visible_iou
+            if spurious_neg_max_visible_iou is not None
+            else self._arg(args, "gcs_spurious_neg_max_visible_iou", 0.2)
+        )
+        self.spurious_duplicate_ape_px = float(
+            spurious_duplicate_ape_px
+            if spurious_duplicate_ape_px is not None
+            else self._arg(args, "gcs_spurious_duplicate_ape_px", 50.0)
+        )
+        self.spurious_duplicate_visible_iou = float(
+            spurious_duplicate_visible_iou
+            if spurious_duplicate_visible_iou is not None
+            else self._arg(args, "gcs_spurious_duplicate_visible_iou", 0.4)
+        )
+        self.spurious_max_pairs_per_image = int(
+            spurious_max_pairs_per_image
+            if spurious_max_pairs_per_image is not None
+            else self._arg(args, "gcs_spurious_max_pairs_per_image", 4)
+        )
         if self.duplicate_margin_gain < 0.0:
             raise ValueError(f"gcs_duplicate_margin must be >= 0, got {self.duplicate_margin_gain}.")
         if self.duplicate_margin_logit < 0.0:
@@ -165,6 +227,39 @@ class GCSLoss(nn.Module):
         if self.duplicate_max_pairs_per_gt < 1:
             raise ValueError(
                 f"gcs_duplicate_max_pairs_per_gt must be >= 1, got {self.duplicate_max_pairs_per_gt}."
+            )
+        if self.spurious_margin_gain < 0.0:
+            raise ValueError(f"gcs_spurious_margin must be >= 0, got {self.spurious_margin_gain}.")
+        if self.spurious_margin_logit < 0.0:
+            raise ValueError(f"gcs_spurious_margin_logit must be >= 0, got {self.spurious_margin_logit}.")
+        if not self.spurious_gt_counts or min(self.spurious_gt_counts) < 1:
+            raise ValueError(f"gcs_spurious_gt_counts must contain positive lane counts, got {self.spurious_gt_counts}.")
+        if self.spurious_pos_ape_px < 0.0:
+            raise ValueError(f"gcs_spurious_pos_ape_px must be >= 0, got {self.spurious_pos_ape_px}.")
+        if not (0.0 <= self.spurious_pos_min_visible_iou <= 1.0):
+            raise ValueError(
+                "gcs_spurious_pos_min_visible_iou must be in [0, 1], "
+                f"got {self.spurious_pos_min_visible_iou}."
+            )
+        if self.spurious_neg_min_ape_px <= 0.0:
+            raise ValueError(f"gcs_spurious_neg_min_ape_px must be > 0, got {self.spurious_neg_min_ape_px}.")
+        if not (0.0 <= self.spurious_neg_max_visible_iou <= 1.0):
+            raise ValueError(
+                "gcs_spurious_neg_max_visible_iou must be in [0, 1], "
+                f"got {self.spurious_neg_max_visible_iou}."
+            )
+        if self.spurious_duplicate_ape_px < 0.0:
+            raise ValueError(
+                f"gcs_spurious_duplicate_ape_px must be >= 0, got {self.spurious_duplicate_ape_px}."
+            )
+        if not (0.0 <= self.spurious_duplicate_visible_iou <= 1.0):
+            raise ValueError(
+                "gcs_spurious_duplicate_visible_iou must be in [0, 1], "
+                f"got {self.spurious_duplicate_visible_iou}."
+            )
+        if self.spurious_max_pairs_per_image < 1:
+            raise ValueError(
+                f"gcs_spurious_max_pairs_per_image must be >= 1, got {self.spurious_max_pairs_per_image}."
             )
         self.count_under5_min_lanes = int(
             count_under5_min_lanes
@@ -269,6 +364,22 @@ class GCSLoss(nn.Module):
         if isinstance(args, dict):
             return args.get(name, default)
         return getattr(args, name, default)
+
+    @staticmethod
+    def _parse_int_set(value, default) -> frozenset[int]:
+        """Parse a lane-count selector from a scalar, sequence, or comma-separated string."""
+        if value is None or value == "":
+            value = default
+        if isinstance(value, str):
+            text = value.strip()
+            for ch in "[](){}":
+                text = text.replace(ch, " ")
+            values = [int(x) for x in text.replace(",", " ").split()]
+        elif isinstance(value, (list, tuple, set, frozenset)):
+            values = [int(x) for x in value]
+        else:
+            values = [int(value)]
+        return frozenset(values)
 
     @staticmethod
     def _point_scale(image_size) -> tuple[float, float]:
@@ -672,6 +783,121 @@ class GCSLoss(nn.Module):
 
         return torch.stack(losses).mean() if losses else self._zero_like(pred_points)
 
+    def spurious_margin_loss(
+        self,
+        pred_logits: torch.Tensor,
+        pred_points: torch.Tensor,
+        pred_valid_logits: torch.Tensor | None,
+        batch: dict,
+        gt_points: list[torch.Tensor],
+        gt_valid: list[torch.Tensor],
+        indices: list[tuple[torch.Tensor, torch.Tensor]],
+    ) -> torch.Tensor:
+        """Rank far unmatched spurious queries below reliable matched queries in selected GT-count images."""
+        if self.spurious_margin_gain <= 0.0 or pred_valid_logits is None:
+            return self._zero_like(pred_points)
+
+        num_lanes = batch.get("num_lanes")
+        if num_lanes is not None:
+            num_lanes = torch.as_tensor(num_lanes, device=pred_logits.device).reshape(-1)
+            if num_lanes.numel() != pred_logits.shape[0]:
+                raise ValueError(
+                    f"batch['num_lanes'] must have one value per image, got {num_lanes.numel()} "
+                    f"vs B={pred_logits.shape[0]}."
+                )
+
+        losses = []
+        device, dtype = pred_points.device, pred_points.dtype
+        scale = self._pixel_scale_for(pred_points)
+        gt_counts = self.spurious_gt_counts
+        max_pairs = int(self.spurious_max_pairs_per_image)
+        margin_logit = float(self.spurious_margin_logit)
+
+        for b, (src_idx, tgt_idx) in enumerate(indices):
+            if src_idx.numel() == 0:
+                continue
+
+            if num_lanes is not None:
+                image_lane_count = int(num_lanes[b].item())
+            else:
+                valid_b = gt_valid[b].detach().to(device=device)
+                image_lane_count = int((valid_b.float().sum(dim=1) >= 2).sum().item())
+            if image_lane_count not in gt_counts:
+                continue
+
+            points_b = pred_points[b].detach()
+            logits_b = pred_logits[b]
+            valid_prob_b = pred_valid_logits[b].detach().sigmoid().to(device=device, dtype=dtype)
+            gt_points_b = gt_points[b].to(device=device, dtype=dtype)
+            gt_valid_b = gt_valid[b].to(device=device, dtype=dtype)
+            if gt_points_b.numel() == 0:
+                continue
+
+            valid_counts_all = gt_valid_b.sum(dim=1)
+            valid_gt_mask = valid_counts_all >= 2
+            if not valid_gt_mask.any():
+                continue
+
+            all_diff_px = (points_b[:, None] - gt_points_b[None]) * scale
+            all_point_error = torch.norm(all_diff_px, dim=-1)
+            all_ape = (all_point_error * gt_valid_b[None]).sum(dim=2) / valid_counts_all[None].clamp_min(1.0)
+            all_ape = all_ape.masked_fill(~valid_gt_mask[None], float("inf"))
+
+            intersection = (valid_prob_b[:, None] * gt_valid_b[None]).sum(dim=2)
+            union = valid_prob_b.sum(dim=1, keepdim=True) + valid_counts_all[None] - intersection
+            all_visible_iou = intersection / union.clamp_min(1e-6)
+            all_visible_iou = all_visible_iou.masked_fill(~valid_gt_mask[None], 0.0)
+
+            best_ape = all_ape.min(dim=1).values
+            best_visible_iou = all_visible_iou.max(dim=1).values
+
+            matched_mask = torch.zeros(pred_logits.shape[1], dtype=torch.bool, device=device)
+            matched_mask[src_idx] = True
+            unmatched_mask = ~matched_mask
+            if not unmatched_mask.any():
+                continue
+
+            reliable_pos = []
+            for q_pos, gt_j in zip(src_idx.tolist(), tgt_idx.tolist()):
+                if not bool(valid_gt_mask[gt_j].item()):
+                    continue
+                pos_ape = all_ape[q_pos, gt_j]
+                pos_visible_iou = all_visible_iou[q_pos, gt_j]
+                if (
+                    pos_ape <= float(self.spurious_pos_ape_px)
+                    and pos_visible_iou >= float(self.spurious_pos_min_visible_iou)
+                ):
+                    reliable_pos.append(q_pos)
+            if not reliable_pos:
+                continue
+            reliable_pos = torch.as_tensor(reliable_pos, device=device, dtype=torch.long)
+
+            far_spurious = (best_ape > float(self.spurious_neg_min_ape_px)) | (
+                best_visible_iou < float(self.spurious_neg_max_visible_iou)
+            )
+            duplicate_like = (best_ape <= float(self.spurious_duplicate_ape_px)) & (
+                best_visible_iou >= float(self.spurious_duplicate_visible_iou)
+            )
+            neg_mask = unmatched_mask & far_spurious & ~duplicate_like
+            candidates = torch.nonzero(neg_mask, as_tuple=False).flatten()
+            if candidates.numel() == 0:
+                continue
+            if candidates.numel() > max_pairs:
+                order = torch.argsort(logits_b.detach()[candidates], descending=True)[:max_pairs]
+                candidates = candidates[order]
+
+            pos_grid = reliable_pos[:, None].expand(-1, candidates.numel()).reshape(-1)
+            neg_grid = candidates[None, :].expand(reliable_pos.numel(), -1).reshape(-1)
+            if neg_grid.numel() > max_pairs:
+                pair_scores = logits_b.detach()[neg_grid] - logits_b.detach()[pos_grid]
+                order = torch.argsort(pair_scores, descending=True)[:max_pairs]
+                pos_grid = pos_grid[order]
+                neg_grid = neg_grid[order]
+            for q_pos, q_neg in zip(pos_grid, neg_grid):
+                losses.append(F.softplus(logits_b[q_neg] - logits_b[q_pos] + margin_logit))
+
+        return torch.stack(losses).mean() if losses else self._zero_like(pred_points)
+
     @staticmethod
     def _foreground_pos_weight(target: torch.Tensor, max_weight: float) -> torch.Tensor:
         """Return a capped foreground weight for sparse binary auxiliary targets."""
@@ -773,6 +999,9 @@ class GCSLoss(nn.Module):
         duplicate_margin_loss = self.duplicate_margin_loss(
             pred_logits, pred_points, pred_valid_logits, batch, gt_points, gt_valid, indices
         )
+        spurious_margin_loss = self.spurious_margin_loss(
+            pred_logits, pred_points, pred_valid_logits, batch, gt_points, gt_valid, indices
+        )
 
         mask_loss = self._zero_like(pred_points)
         if "aux_mask_logits" in preds and "semantic_mask" in batch:
@@ -795,6 +1024,7 @@ class GCSLoss(nn.Module):
             + self.count_gain * count_loss
             + self.count_under5_gain * count_under5_loss
             + self.duplicate_margin_gain * duplicate_margin_loss
+            + self.spurious_margin_gain * spurious_margin_loss
         )
         loss_items = torch.stack(
             (
@@ -808,6 +1038,7 @@ class GCSLoss(nn.Module):
                 count_loss.detach(),
                 count_under5_loss.detach(),
                 duplicate_margin_loss.detach(),
+                spurious_margin_loss.detach(),
             )
         )
         return total, loss_items

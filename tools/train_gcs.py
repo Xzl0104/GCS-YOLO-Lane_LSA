@@ -213,6 +213,65 @@ def parse_args() -> argparse.Namespace:
         default=2,
         help="Maximum high-logit q- pairs kept per matched GT lane.",
     )
+    parser.add_argument(
+        "--gcs-spurious-margin",
+        type=float,
+        default=0.0,
+        help="Pairwise far-unmatched spurious query margin loss gain. 0 disables.",
+    )
+    parser.add_argument(
+        "--gcs-spurious-margin-logit",
+        type=float,
+        default=1.0,
+        help="Required logit margin between reliable matched q+ and far spurious q-.",
+    )
+    parser.add_argument(
+        "--gcs-spurious-gt-counts",
+        default="3,4",
+        help="Comma-separated GT lane counts that enable spurious margin loss, e.g. '3,4'.",
+    )
+    parser.add_argument(
+        "--gcs-spurious-pos-ape-px",
+        type=float,
+        default=20.0,
+        help="Maximum APE in pixels for matched q+ to be treated as reliable.",
+    )
+    parser.add_argument(
+        "--gcs-spurious-pos-min-visible-iou",
+        type=float,
+        default=0.4,
+        help="Minimum soft visible IoU for matched q+ to be treated as reliable.",
+    )
+    parser.add_argument(
+        "--gcs-spurious-neg-min-ape-px",
+        type=float,
+        default=50.0,
+        help="q- is treated as far/spurious when its best GT APE is above this threshold.",
+    )
+    parser.add_argument(
+        "--gcs-spurious-neg-max-visible-iou",
+        type=float,
+        default=0.2,
+        help="q- is treated as far/spurious when its best GT visible IoU is below this threshold.",
+    )
+    parser.add_argument(
+        "--gcs-spurious-duplicate-ape-px",
+        type=float,
+        default=50.0,
+        help="Exclude near-GT duplicate-like q- at or below this best-GT APE.",
+    )
+    parser.add_argument(
+        "--gcs-spurious-duplicate-visible-iou",
+        type=float,
+        default=0.4,
+        help="Exclude near-GT duplicate-like q- at or above this best-GT visible IoU.",
+    )
+    parser.add_argument(
+        "--gcs-spurious-max-pairs-per-image",
+        type=int,
+        default=4,
+        help="Maximum high-risk spurious ranking pairs kept per image.",
+    )
     parser.add_argument("--gcs-exist-pos-weight", type=float, default=1.0)
     parser.add_argument("--gcs-exist-focal-gamma", type=float, default=0.0, help="Optional focal gamma for existence BCE. 0 disables focal weighting.")
     parser.add_argument(
@@ -393,6 +452,16 @@ def main() -> None:
         "gcs_duplicate_neg_ape_px": args.gcs_duplicate_neg_ape_px,
         "gcs_duplicate_ape_gap_px": args.gcs_duplicate_ape_gap_px,
         "gcs_duplicate_max_pairs_per_gt": args.gcs_duplicate_max_pairs_per_gt,
+        "gcs_spurious_margin": args.gcs_spurious_margin,
+        "gcs_spurious_margin_logit": args.gcs_spurious_margin_logit,
+        "gcs_spurious_gt_counts": args.gcs_spurious_gt_counts,
+        "gcs_spurious_pos_ape_px": args.gcs_spurious_pos_ape_px,
+        "gcs_spurious_pos_min_visible_iou": args.gcs_spurious_pos_min_visible_iou,
+        "gcs_spurious_neg_min_ape_px": args.gcs_spurious_neg_min_ape_px,
+        "gcs_spurious_neg_max_visible_iou": args.gcs_spurious_neg_max_visible_iou,
+        "gcs_spurious_duplicate_ape_px": args.gcs_spurious_duplicate_ape_px,
+        "gcs_spurious_duplicate_visible_iou": args.gcs_spurious_duplicate_visible_iou,
+        "gcs_spurious_max_pairs_per_image": args.gcs_spurious_max_pairs_per_image,
         "gcs_exist_pos_weight": args.gcs_exist_pos_weight,
         "gcs_exist_focal_gamma": args.gcs_exist_focal_gamma,
         "gcs_exist_focal_alpha": args.gcs_exist_focal_alpha,

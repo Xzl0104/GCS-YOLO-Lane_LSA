@@ -8,8 +8,9 @@ The current mainline imports the historical `5-25-3.zip` algorithm and changes o
 
 Do not read mainline Count Head, Count Boundary, Quality Head, Survival Head, near-miss, or official-best bottlenecks as active branch behavior. Those mechanisms are not part of this 5-25-3 branch.
 
-Active source/config is rolled back to commit `50999d6af` (`Document 5-25-3
-K56 as mainline`). All bottleneck notes below that depend on
+Active source/config is based on rollback commit `50999d6af` (`Document 5-25-3
+K56 as mainline`) plus the default-disabled `duplicate_margin_loss` and
+`spurious_margin_loss` experiment knobs added on 2026-06-22. Bottleneck notes below that depend on
 `tools/diagnose_tusimple_count_confusion.py`, `--gcs-gt4-short-*`,
 `extra_exist_loss`, or `--gcs-short-exist-*` are legacy post-`50999d6af`
 experiment conclusions only. They do not describe currently available code,
@@ -53,8 +54,9 @@ previous count03_under5_03 count_acc = 0.969697, count_acc_4 = 0.909091
 gt4short15 count_acc = 0.939394, count_acc_4 = 0.848485
 ```
 
-The 2026-06-20 `gcs_yolo_lane_s_tusimple_fixed_y_visible_iou_count03_under5_03`
-candidate remains the stronger final-test report:
+Before the later `dupmargin005` report, the 2026-06-20
+`gcs_yolo_lane_s_tusimple_fixed_y_visible_iou_count03_under5_03` candidate was
+the stronger final-test report:
 
 ```text
 official-val363 ACC = 0.969976
@@ -413,7 +415,7 @@ extraexist0025              0.961330           0.044764  0.034508  0.838605
 
 Integrated conclusion:
 
-- Supported fact: none of the recent rejected experiments beats the existing
+- Supported fact: within that reporting-only batch, none of the rejected experiments beat the existing
   `count03_under5_03` final-test report `ACC=0.965459`.
 - Supported fact: `gt4short15` remained the official-val selected candidate in the legacy experiment line, but
   its final-test ACC `0.965369` is still below the previous report.
@@ -480,3 +482,70 @@ Integrated conclusion:
 - Decision: do not promote `count03_under5_00`; do not tune thresholds,
   checkpoint choice, `max_det`, `min_points`, NMS, or loss weights from the
   final-test breakdown.
+
+## 2026-06-22 dupmargin005 Duplicate-Margin Near-Miss
+
+The completed `gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_count03_under5_03`
+run enabled the current default-disabled duplicate-margin experiment:
+
+```text
+gcs_duplicate_margin = 0.05
+gcs_duplicate_margin_logit = 1.0
+gcs_duplicate_gt_count = 4
+gcs_duplicate_short_visible_max = 20
+gcs_duplicate_min_overlap = 2
+gcs_duplicate_min_visible_iou = 0.4
+gcs_duplicate_pos_ape_px = 20.0
+gcs_duplicate_neg_ape_px = 120.0
+gcs_duplicate_ape_gap_px = 5.0
+gcs_duplicate_max_pairs_per_gt = 2
+```
+
+Its 363-image official-val sweep selected:
+
+```text
+sweep = runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_count03_under5_03_official_val_sweep
+best = conf=0.05, point_valid_thr=0.45, nms_dist_px=0.0, max_det=6, min_points=6
+official-val ACC = 0.970272
+official-val FP = 0.024564
+official-val FN = 0.016070
+official-val official_score = 0.969459
+official-val count_acc = 0.953168
+official-val count_acc_3/4/5 = 0.950673 / 0.939394 / 0.972973
+```
+
+The user-requested one-shot official test used that official-val selected
+decode and is reporting-only:
+
+```text
+summary = runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_count03_under5_03_official_test_best_from_val/tusimple_official_summary.json
+images = 2782
+official_test ACC = 0.965702
+FP = 0.029493
+FN = 0.027348
+official_score = 0.964565
+count_acc = 0.865924
+count_acc_2/3/4/5 = 0.200000 / 0.971839 / 0.547009 / 0.810193
+```
+
+Integrated conclusion:
+
+- Supported fact: `dupmargin005` beats the older `count03_under5_03`
+  official-val ACC (`0.970272 > 0.969976`) and gives the strongest
+  reporting-only final-test ACC recorded in this branch notes through
+  2026-06-22.
+- Supported fact: it still misses the stronger `gt4short15` official-val gate
+  (`0.970272 < 0.970851`), so final test cannot promote it.
+- Supported fact: compared with `gt4short15`, it improves final-test ACC, FP,
+  FN, total count accuracy, and GT4 count accuracy.
+- Supported fact: compared with `count03_under5_03`, it improves final-test ACC
+  by only `+0.000243` while increasing FN and reducing total count accuracy.
+  GT5 count accuracy drops from `0.831283` to `0.810193`, with more `5->4`
+  errors.
+- Decision: keep it as a rejected near-miss. The duplicate-margin idea is
+  useful, but this setting has not solved count stability and is not the
+  selected candidate under official-val protocol.
+- Smallest safe next action: if continuing this line, run train/val-only
+  failure traces for the selected decode `conf=0.05`, `point_valid_thr=0.45`,
+  `nms_dist_px=0.0`, `max_det=6`, `min_points=6` and compare failure buckets
+  against `count03_under5_03` and `gt4short15`. Do not tune from final test.
