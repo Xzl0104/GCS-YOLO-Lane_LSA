@@ -549,3 +549,69 @@ Integrated conclusion:
   failure traces for the selected decode `conf=0.05`, `point_valid_thr=0.45`,
   `nms_dist_px=0.0`, `max_det=6`, `min_points=6` and compare failure buckets
   against `count03_under5_03` and `gt4short15`. Do not tune from final test.
+
+## 2026-06-23 spurmargin003 Spurious-Margin Rejection
+
+The completed `gcs_yolo_lane_s_tusimple_fixed_y_spurmargin003_count03_under5_03`
+run enabled the current default-disabled spurious-margin experiment:
+
+```text
+gcs_spurious_margin = 0.03
+gcs_spurious_margin_logit = 1.0
+gcs_spurious_gt_counts = 3,4
+gcs_spurious_pos_ape_px = 20.0
+gcs_spurious_pos_min_visible_iou = 0.4
+gcs_spurious_neg_min_ape_px = 50.0
+gcs_spurious_neg_max_visible_iou = 0.2
+gcs_spurious_duplicate_ape_px = 50.0
+gcs_spurious_duplicate_visible_iou = 0.4
+gcs_spurious_max_pairs_per_image = 4
+```
+
+Its 363-image official-val sweep selected:
+
+```text
+sweep = runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_spurmargin003_count03_under5_03_official_val_sweep
+best = conf=0.02, point_valid_thr=0.5, nms_dist_px=18.0, max_det=6, min_points=5
+official-val ACC = 0.969316
+official-val FP = 0.023095
+official-val FN = 0.014922
+official-val official_score = 0.968556
+official-val count_acc = 0.958678
+official-val count_acc_3/4/5 = 0.973094 / 0.878788 / 0.986486
+count_confusion = 3->3=217, 3->4=6, 4->3=1, 4->4=58, 4->5=7, 5->4=1, 5->5=73
+```
+
+The user-requested one-shot official test used that official-val selected
+decode and is reporting-only:
+
+```text
+summary = runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_spurmargin003_count03_under5_03_official_test_best_from_val/tusimple_official_summary.json
+images = 2782
+official_test ACC = 0.964522
+FP = 0.033591
+FN = 0.028636
+official_score = 0.963277
+count_acc = 0.869878
+count_acc_2/3/4/5 = 0.200000 / 0.964368 / 0.527778 / 0.868190
+```
+
+Integrated conclusion:
+
+- Supported fact: `spurmargin003` misses the official-val ACC of all relevant
+  comparators: `count03_under5_03` (`0.969976`), `dupmargin005` (`0.970272`),
+  and `gt4short15` (`0.970851`).
+- Supported fact: its reporting-only final-test ACC `0.964522` is also below
+  `count03_under5_03` (`0.965459`), `gt4short15` (`0.965369`), and
+  `dupmargin005` (`0.965702`).
+- Supported fact: the spurious margin did improve GT5 count accuracy relative
+  to `dupmargin005` on final test (`0.810193 -> 0.868190`), but this is not
+  promotable because official-val ACC and final-test ACC both regress.
+- Supported fact: GT4 remains unstable. Official-val `count_acc_4=0.878788`
+  is below `dupmargin005` (`0.939394`), and final-test `count_acc_4=0.527778`
+  is below `dupmargin005` (`0.547009`) and roughly in the old failure range.
+- Caveat: the selected official-val decode uses `max_det=6`, while train args
+  record `gcs_eval_max_det=8`. This is valid reporting from selected
+  official-val decode, not a reason to tune final test.
+- Decision: reject `spurmargin003`; do not continue by sweeping
+  `gcs_spurious_margin` gains or retuning NMS/thresholds from test.

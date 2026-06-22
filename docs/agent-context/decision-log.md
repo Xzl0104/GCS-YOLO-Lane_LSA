@@ -1270,6 +1270,115 @@ Mainline or experiment:
 Branch-local experimental option. Defaults preserve baseline behavior and do
 not import later Count/Quality/Survival/near-miss/official-best machinery.
 
+## 2026-06-23: Reject spurmargin003 as an Official-Val Promotion
+
+Decision:
+
+Do not promote
+`gcs_yolo_lane_s_tusimple_fixed_y_spurmargin003_count03_under5_03`. Treat its
+official test result as reporting-only evidence from the official-val selected
+decode, not as a selection surface.
+
+Official-val evidence:
+
+```text
+run = gcs_yolo_lane_s_tusimple_fixed_y_spurmargin003_count03_under5_03
+args = epochs=160, batch=32, workers=4, amp=false, gcs_count=0.3, gcs_count_under5=0.3, gcs_spurious_margin=0.03
+sweep = runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_spurmargin003_count03_under5_03_official_val_sweep
+images = 363
+best = conf=0.02, point_valid_thr=0.5, nms_dist_px=18.0, max_det=6, min_points=5
+official_acc = 0.969316
+official_FP = 0.023095
+official_FN = 0.014922
+official_score = 0.968556
+count_acc = 0.958678
+count_acc_3 = 0.973094
+count_acc_4 = 0.878788
+count_acc_5 = 0.986486
+count_confusion = 3->3=217, 3->4=6, 4->3=1, 4->4=58, 4->5=7, 5->4=1, 5->5=73
+```
+
+Official-test reporting evidence:
+
+```text
+summary = runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_spurmargin003_count03_under5_03_official_test_best_from_val/tusimple_official_summary.json
+decode = conf=0.02, point_valid_thr=0.5, nms_dist_px=18.0, max_det=6, min_points=5
+images = 2782
+official_acc = 0.964522
+official_FP = 0.033591
+official_FN = 0.028636
+official_score = 0.963277
+count_acc = 0.869878
+count_acc_2 = 0.200000
+count_acc_3 = 0.964368
+count_acc_4 = 0.527778
+count_acc_5 = 0.868190
+pred_lanes_hist = 2=4, 3=1820, 4=346, 5=598, 6=14
+gt_lanes_hist = 2=5, 3=1740, 4=468, 5=569
+count_confusion = 2->2=1, 2->3=4, 3->2=3, 3->3=1678, 3->4=53, 3->5=5, 3->6=1, 4->3=118, 4->4=247, 4->5=99, 4->6=4, 5->3=20, 5->4=46, 5->5=494, 5->6=9
+```
+
+Comparison:
+
+```text
+official-val ACC:
+  count03_under5_03 = 0.969976
+  dupmargin005      = 0.970272
+  gt4short15        = 0.970851
+  spurmargin003     = 0.969316
+
+official-test reporting:
+  count03_under5_03: ACC=0.965459, FP=0.029439, FN=0.026270, official_score=0.964345, count_acc=0.872753
+  gt4short15:        ACC=0.965369, FP=0.033309, FN=0.029236, official_score=0.964118, count_acc=0.864486
+  dupmargin005:      ACC=0.965702, FP=0.029493, FN=0.027348, official_score=0.964565, count_acc=0.865924
+  spurmargin003:     ACC=0.964522, FP=0.033591, FN=0.028636, official_score=0.963277, count_acc=0.869878
+```
+
+Interpretation:
+
+- Supported fact: `spurmargin003` is not a near miss against the current
+  promotion gate. It is below `gt4short15` by `0.001535` official-val ACC and
+  below `dupmargin005` by `0.000956`.
+- Supported fact: it is also below the older `count03_under5_03`
+  official-val ACC by `0.000660`, so it does not even clear the previous
+  baseline gate.
+- Supported fact: the reporting-only final-test result is lower than all three
+  relevant comparators on ACC and official score. Test therefore offers no
+  protocol-valid reason to keep this run alive.
+- Supported fact: the only favorable sign is GT5 test count accuracy
+  (`0.868190`), which is higher than `dupmargin005` and the previous
+  `count03_under5_03` report. This does not offset the official-val ACC
+  regression and the weaker GT4 count behavior.
+- Supported fact: the selected official-val confidence is low (`conf=0.02`),
+  which is a score-calibration warning for this loss setting.
+- Supported caveat: the official-test decode uses `max_det=6` while train args
+  record `gcs_eval_max_det=8`; this is valid because `max_det=6` came from
+  official-val selection, not final-test tuning.
+
+Rejected actions:
+
+- Do not promote `spurmargin003`.
+- Do not tune final-test thresholds, `max_det`, `min_points`, NMS, checkpoint
+  choice, or loss weights from this test report.
+- Do not continue by sweeping `gcs_spurious_margin` gains unless a separate
+  train/val diagnostic identifies a narrower failure mode. This run does not
+  justify a blind gain sweep.
+
+Recommended next action:
+
+Keep final test closed. Return to train/val diagnostics if continuing this
+line, with emphasis on why the intended GT3/GT4 spurious suppression did not
+transfer to official-val ACC and why GT4 remains weak despite better GT5 count
+shape. Specifically compare `4->3`/`4->5`, `spurious_extra`,
+`duplicate_like_extra`, `low_score_short_gt`, and `geometry_miss_short_gt`
+against `dupmargin005` and `count03_under5_03`. Selection must remain
+official-val only.
+
+Mainline or experiment:
+
+Rejected experimental candidate and reporting-only final-test evidence. It
+does not change the active branch protocol.
+
 ## 2026-06-22: Review Spurious Margin Loss Implementation
 
 Decision:

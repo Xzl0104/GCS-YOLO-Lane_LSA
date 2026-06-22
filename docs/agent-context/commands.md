@@ -450,6 +450,67 @@ Do not promote this run from final-test ACC. It beats the older
 official-val gate `0.970851`. Final test is reporting-only and must not be
 used for threshold, checkpoint, postprocess, or loss selection.
 
+## Spurious Margin 0.03 Rejection and Reporting Test
+
+The 2026-06-23 `spurmargin003` official test was requested after its 363-image
+official-val sweep completed. It is a reporting-only rejected follow-up, not a
+promoted selected candidate:
+
+```text
+run: gcs_yolo_lane_s_tusimple_fixed_y_spurmargin003_count03_under5_03
+train args: epochs=160, batch=32, workers=4, no_amp=true, gcs_count=0.3, gcs_count_under5=0.3, gcs_spurious_margin=0.03
+sweep: runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_spurmargin003_count03_under5_03_official_val_sweep
+best: conf=0.02, point_valid_thr=0.5, nms_dist_px=18.0, max_det=6, min_points=5
+official-val363: ACC=0.969316, FP=0.023095, FN=0.014922, official_score=0.968556, count_acc=0.958678
+count_acc_3=0.973094, count_acc_4=0.878788, count_acc_5=0.986486
+```
+
+One-shot official test command, using only the official-val selected decode:
+
+```bash
+python tools/eval_tusimple_official.py \
+  --archive-root archive/TUSimple \
+  --split test \
+  --weights runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_spurmargin003_count03_under5_03/weights/best.pt \
+  --imgsz 544 960 \
+  --device 0 \
+  --conf 0.02 \
+  --point-valid-thr 0.5 \
+  --nms-dist-px 18.0 \
+  --max-det 6 \
+  --min-points 5 \
+  --half \
+  --save-dir runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_spurmargin003_count03_under5_03_official_test_best_from_val \
+  --save-records
+```
+
+Result:
+
+```text
+summary: runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_spurmargin003_count03_under5_03_official_test_best_from_val/tusimple_official_summary.json
+images=2782
+ACC=0.964522
+FP=0.033591
+FN=0.028636
+official_score=0.963277
+count_acc=0.869878
+count_acc_2=0.200000
+count_acc_3=0.964368
+count_acc_4=0.527778
+count_acc_5=0.868190
+pred_lanes_hist: 2=4, 3=1820, 4=346, 5=598, 6=14
+gt_lanes_hist: 2=5, 3=1740, 4=468, 5=569
+count_confusion: 2->2=1, 2->3=4, 3->2=3, 3->3=1678, 3->4=53, 3->5=5, 3->6=1, 4->3=118, 4->4=247, 4->5=99, 4->6=4, 5->3=20, 5->4=46, 5->5=494, 5->6=9
+```
+
+Do not promote this run. It misses the official-val ACC of
+`count03_under5_03` (`0.969976`), `dupmargin005` (`0.970272`), and
+`gt4short15` (`0.970851`). Its reporting-only test ACC also trails those three
+comparators, so there is no protocol-valid promotion path. The official-test
+decode uses `max_det=6` while the train args record `gcs_eval_max_det=8`; this
+comes from official-val selection and is a comparability caveat, not a reason
+to retune on test.
+
 The previous 2026-06-20 final-test-reported candidate was:
 
 ```text
