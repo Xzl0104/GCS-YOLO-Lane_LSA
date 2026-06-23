@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+
+.tmp/
+tmp/
+output/
+paper/
+
+.pytest_cache/
+pytest_tmp*/
+pytest-cache-files-*/
+
+datasets/
+runs/
+archive/

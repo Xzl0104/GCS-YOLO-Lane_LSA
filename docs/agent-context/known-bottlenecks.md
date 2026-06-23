@@ -9,8 +9,10 @@ The current mainline imports the historical `5-25-3.zip` algorithm and changes o
 Do not read mainline Count Head, Count Boundary, Quality Head, Survival Head, near-miss, or official-best bottlenecks as active branch behavior. Those mechanisms are not part of this 5-25-3 branch.
 
 Active source/config is based on rollback commit `50999d6af` (`Document 5-25-3
-K56 as mainline`) plus the default-disabled `duplicate_margin_loss` and
-`spurious_margin_loss` experiment knobs added on 2026-06-22. Bottleneck notes below that depend on
+K56 as mainline`) plus the default-disabled `duplicate_margin_loss`,
+`spurious_margin_loss`, `lane_balanced_point_loss`,
+`short_valid_recall_loss`, `far_spurious_survival_loss`, and
+`gt5_rank_consistency_loss` experiment knobs. Bottleneck notes below that depend on
 `tools/diagnose_tusimple_count_confusion.py`, `--gcs-gt4-short-*`,
 `extra_exist_loss`, or `--gcs-short-exist-*` are legacy post-`50999d6af`
 experiment conclusions only. They do not describe currently available code,
@@ -615,3 +617,210 @@ Integrated conclusion:
   official-val decode, not a reason to tune final test.
 - Decision: reject `spurmargin003`; do not continue by sweeping
   `gcs_spurious_margin` gains or retuning NMS/thresholds from test.
+
+## 2026-06-23 shortpos Positive Short-Lane Loss Rejection
+
+The completed `gcs_yolo_lane_s_tusimple_fixed_y_shortpos_count03_under5_03`
+run enabled the current default-disabled positive short-lane losses:
+
+```text
+gcs_lane_balanced_point = 3.0
+gcs_short_valid_recall = 0.5
+gcs_short_valid_max_visible = 20
+gcs_short_valid_min_visible = 4
+gcs_short_valid_max_ape_px = 40.0
+gcs_short_valid_min_visible_iou = 0.3
+gcs_duplicate_margin = 0.0
+gcs_spurious_margin = 0.0
+```
+
+Its 363-image official-val sweep selected:
+
+```text
+sweep = runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_shortpos_count03_under5_03_official_val_sweep
+best = conf=0.005, point_valid_thr=0.5, nms_dist_px=0.0, max_det=6, min_points=5
+official-val ACC = 0.968144
+official-val FP = 0.027319
+official-val FN = 0.017218
+official-val official_score = 0.967253
+official-val count_acc = 0.947658
+official-val count_acc_3/4/5 = 0.959641 / 0.878788 / 0.972973
+count_confusion = 3->3=214, 3->4=9, 4->3=1, 4->4=58, 4->5=7, 5->4=1, 5->5=72, 5->6=1
+```
+
+The user-requested one-shot official test used that official-val selected
+decode and is reporting-only:
+
+```text
+summary = runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_shortpos_count03_under5_03_official_test_best_from_val/tusimple_official_summary.json
+images = 2782
+official_test ACC = 0.963067
+FP = 0.038330
+FN = 0.030763
+official_score = 0.961685
+count_acc = 0.861251
+count_acc_2/3/4/5 = 0.400000 / 0.957471 / 0.547009 / 0.829525
+pred_lanes_hist = 2=4, 3=1801, 4=362, 5=574, 6=41
+gt_lanes_hist = 2=5, 3=1740, 4=468, 5=569
+count_confusion = 2->2=2, 2->3=2, 2->4=1, 3->2=2, 3->3=1666, 3->4=63, 3->5=7, 3->6=2, 4->3=109, 4->4=256, 4->5=95, 4->6=8, 5->3=24, 5->4=42, 5->5=472, 5->6=31
+```
+
+Integrated conclusion:
+
+- Supported fact: `shortpos` misses the official-val ACC of `count03_under5_03`
+  (`0.969976`), `dupmargin005` (`0.970272`), `gt4short15` (`0.970851`),
+  `spurmargin003` (`0.969316`), and `count03_under5_00` (`0.968578`).
+- Supported fact: its reporting-only final-test ACC `0.963067` is also below
+  all 2026-06-20 to 2026-06-23 comparators recorded in this branch notes.
+- Supported fact: the selected official-val confidence is `0.005`, which is a
+  strong score-calibration warning. The positive geometry/visibility terms did
+  not translate into stable lane-existence confidence.
+- Supported fact: final-test FP and FN both worsen versus `count03_under5_03`.
+  This is not a clean recall/precision tradeoff; it is a broad degradation.
+- Supported fact: count behavior remains unstable. GT4 count accuracy only
+  ties `dupmargin005` on final test (`0.547009`), while GT3 count accuracy
+  drops and GT5 produces many `5->6` extras (`31` cases).
+- Caveat: the official-test decode uses `max_det=6`, while train args record
+  `gcs_eval_max_det=8`. This is valid reporting from selected official-val
+  decode, not a reason to retune test.
+- Decision: reject `shortpos`; do not continue this exact loss setting or tune
+  `conf`, `point_valid_thr`, `max_det`, `min_points`, NMS, or gains from the
+  final-test report.
+
+Pre-trace requested check, now completed below:
+
+The `shortpos` selected decode was compared against `count03_under5_03` and
+`dupmargin005` on failure buckets for `low_score`, `low_score_short_gt`,
+`geometry_miss_short_gt`, `spurious_extra`, `duplicate_like_extra`, and
+GT-count-specific confusion. The completed evidence says the bottleneck is not
+solved by adding positive short-lane point/valid losses on top of the existing
+objective.
+
+Completed train/val-only follow-up:
+
+```text
+summary = runs/gcs_lane/shortpos_failure_trace_train_val_compare/summary.json
+splits = train + val only
+```
+
+The follow-up confirms the rejection. Across train+val, `shortpos` lowers the
+short-lane miss-like buckets but shifts the failure mass into extra-query
+overcount:
+
+```text
+shortpos vs count03_under5_03:
+  count_acc -0.018753, failure_images +68
+  geometry_miss_short_gt -1, low_score_short_gt -12, min_points_visibility_short_gt -2
+  spurious_extra +52, duplicate_like_extra +26, duplicate_like_extra_short_gt +33
+  confusion deltas: 3->4 +30, 4->5 +33, 4->6 +13, 5->6 +4
+
+shortpos vs dupmargin005:
+  count_acc -0.016547, failure_images +60
+  geometry_miss_short_gt -3, low_score_short_gt -4, min_points_visibility_short_gt -6
+  spurious_extra +30, duplicate_like_extra +18, duplicate_like_extra_short_gt +33
+  confusion deltas: 3->4 +22, 4->5 +38, 4->6 +4, 5->6 +4
+```
+
+Updated bottleneck:
+
+The remaining blocker is not just short-lane point geometry or point-valid
+recall. `shortpos` made short GT lanes easier to keep, but did not teach the
+model to rank true matched lanes above surviving extras. The current bottleneck
+is query existence/ranking calibration under short-lane retention pressure,
+especially spurious and duplicate-like extras causing `3->4`, `4->5`, and
+`4->6` overcount.
+
+## 2026-06-23 farspur001 + gt5rank001 Rejection
+
+The completed
+`gcs_yolo_lane_s_tusimple_fixed_y_farspur001_gt5rank001_count03_under5_03`
+run enabled two default-disabled score/ranking calibration terms on top of the
+`count03_under5_03` baseline:
+
+```text
+gcs_far_spurious_survival = 0.01
+gcs_far_spurious_gt_counts = 3,4
+gcs_far_spurious_score_thr = 0.03
+gcs_far_spurious_min_score = 0.03
+gcs_far_spurious_min_ape_px = 50.0
+gcs_far_spurious_max_visible_iou = 0.2
+gcs_far_spurious_point_valid_thr = 0.5
+gcs_far_spurious_min_visible_run = 5
+gcs_far_spurious_max_neg_per_image = 1
+gcs_far_spurious_loss_type = relu
+gcs_gt5_rank_consistency = 0.01
+gcs_gt5_rank_margin_logit = 0.5
+gcs_gt5_rank_min_qminus_score = 0.02
+gcs_gt5_rank_max_pairs_per_image = 1
+```
+
+Its 363-image official-val sweep selected:
+
+```text
+sweep = runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_farspur001_gt5rank001_count03_under5_03_official_val_sweep
+best = conf=0.005, point_valid_thr=0.5, nms_dist_px=18.0, max_det=8, min_points=4
+official-val ACC = 0.965673
+official-val FP = 0.033747
+official-val FN = 0.022727
+official-val official_score = 0.964544
+official-val count_acc = 0.917355
+official-val count_acc_3/4/5 = 0.964126 / 0.757576 / 0.918919
+count_confusion = 3->3=215, 3->4=7, 3->5=1, 4->3=3, 4->4=50, 4->5=13, 5->3=1, 5->4=1, 5->5=68, 5->6=4
+```
+
+The sweep surface has no postprocess rescue point:
+
+```text
+best official_acc row = 0.965673, FP=0.035675, FN=0.022727, count_acc=0.909091
+best official_score row = 0.965609, FP=0.028466, FN=0.022727, count_acc=0.944904
+best count_acc row = 0.965490, FP=0.025207, FN=0.023416, count_acc=0.958678
+minimum-FN row = 0.964452, FP=0.034114, FN=0.021120, count_acc=0.917355
+minimum-FP row = 0.961070, FP=0.019697, FN=0.030303, count_acc=0.922865
+```
+
+Comparison against relevant official-val gates:
+
+```text
+gt4short15        ACC = 0.970851
+dupmargin005      ACC = 0.970272
+count03_under5_03 ACC = 0.969976
+spurmargin003     ACC = 0.969316
+count03_under5_00 ACC = 0.968578
+shortpos          ACC = 0.968144
+farspur001_gt5rank001 ACC = 0.965673
+```
+
+Integrated conclusion:
+
+- Supported fact: this is a broad official-val regression, not a small
+  postprocess miss. ACC falls by `0.004303` versus `count03_under5_03` and by
+  `0.005178` versus `gt4short15`.
+- Supported fact: the best selected confidence is `0.005`, which is a severe
+  score-calibration warning. Raising confidence reduces FP but pushes FN even
+  farther above every relevant comparator.
+- Supported fact: FP and FN both worsen. This is not a clean precision/recall
+  exchange and should not be rescued by NMS, `max_det`, `min_points`, or final
+  test threshold tuning.
+- Supported fact: GT4 count accuracy collapses to `0.757576` on the selected
+  row. The run does not solve the known `GT4` short-side-lane count bottleneck.
+- Likely cause: the two new losses fight the existing query calibration rather
+  than fixing it. `far_spurious_survival_loss` applies an absolute q- logit
+  ceiling for selected GT3/GT4 unmatched decode-risk queries, while
+  `gt5_rank_consistency_loss` ranks the weakest GT5 matched q+ above top
+  unmatched q- without a matched-lane geometry/visible-IoU quality gate. The
+  combination can depress useful query scores and also raise weak matched GT5
+  queries, producing unstable ranking instead of cleaner separation.
+- Decision: reject `farspur001_gt5rank001`; do not run final test and do not
+  continue by sweeping larger or smaller combined gains.
+
+Next safe action:
+
+Fix or replace the train/val query-trace diagnostic before launching another
+formal training run. The remote
+`tools/diagnose_gt4_short_failure_queries.py` currently imports missing legacy
+`tools.diagnose_tusimple_count_confusion`, so its output is not available for
+this run. Once fixed, run train/val-only traces for `GT4` and `GT5` using the
+official-val selected decode and compare against `count03_under5_03` and
+`dupmargin005`. Only after that should an ablation be considered, and it should
+separate `far_spurious_survival` from `gt5_rank_consistency` instead of
+combining them again.

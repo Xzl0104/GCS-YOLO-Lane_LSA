@@ -28,6 +28,8 @@ class GCSLoss(nn.Module):
         "count_under5_loss",
         "duplicate_margin_loss",
         "spurious_margin_loss",
+        "far_spurious_survival_loss",
+        "gt5_rank_consistency_loss",
     )
 
     def __init__(
@@ -68,6 +70,20 @@ class GCSLoss(nn.Module):
         spurious_duplicate_ape_px: float | None = None,
         spurious_duplicate_visible_iou: float | None = None,
         spurious_max_pairs_per_image: int | None = None,
+        far_spurious_survival_gain: float | None = None,
+        far_spurious_gt_counts=None,
+        far_spurious_score_thr: float | None = None,
+        far_spurious_min_score: float | None = None,
+        far_spurious_min_ape_px: float | None = None,
+        far_spurious_max_visible_iou: float | None = None,
+        far_spurious_point_valid_thr: float | None = None,
+        far_spurious_min_visible_run: int | None = None,
+        far_spurious_max_neg_per_image: int | None = None,
+        far_spurious_loss_type: str | None = None,
+        gt5_rank_consistency_gain: float | None = None,
+        gt5_rank_margin_logit: float | None = None,
+        gt5_rank_min_qminus_score: float | None = None,
+        gt5_rank_max_pairs_per_image: int | None = None,
         count_under5_min_lanes: int | None = None,
         curve_alpha: float | None = None,
         curve_weight_max: float | None = None,
@@ -239,6 +255,77 @@ class GCSLoss(nn.Module):
             if spurious_max_pairs_per_image is not None
             else self._arg(args, "gcs_spurious_max_pairs_per_image", 4)
         )
+        self.far_spurious_survival_gain = float(
+            far_spurious_survival_gain
+            if far_spurious_survival_gain is not None
+            else self._arg(args, "gcs_far_spurious_survival", 0.0)
+        )
+        self.far_spurious_gt_counts = self._parse_int_set(
+            far_spurious_gt_counts
+            if far_spurious_gt_counts is not None
+            else self._arg(args, "gcs_far_spurious_gt_counts", (3, 4)),
+            default=(3, 4),
+        )
+        self.far_spurious_score_thr = float(
+            far_spurious_score_thr
+            if far_spurious_score_thr is not None
+            else self._arg(args, "gcs_far_spurious_score_thr", 0.03)
+        )
+        self.far_spurious_min_score = float(
+            far_spurious_min_score
+            if far_spurious_min_score is not None
+            else self._arg(args, "gcs_far_spurious_min_score", 0.03)
+        )
+        self.far_spurious_min_ape_px = float(
+            far_spurious_min_ape_px
+            if far_spurious_min_ape_px is not None
+            else self._arg(args, "gcs_far_spurious_min_ape_px", 50.0)
+        )
+        self.far_spurious_max_visible_iou = float(
+            far_spurious_max_visible_iou
+            if far_spurious_max_visible_iou is not None
+            else self._arg(args, "gcs_far_spurious_max_visible_iou", 0.2)
+        )
+        self.far_spurious_point_valid_thr = float(
+            far_spurious_point_valid_thr
+            if far_spurious_point_valid_thr is not None
+            else self._arg(args, "gcs_far_spurious_point_valid_thr", 0.5)
+        )
+        self.far_spurious_min_visible_run = int(
+            far_spurious_min_visible_run
+            if far_spurious_min_visible_run is not None
+            else self._arg(args, "gcs_far_spurious_min_visible_run", 5)
+        )
+        self.far_spurious_max_neg_per_image = int(
+            far_spurious_max_neg_per_image
+            if far_spurious_max_neg_per_image is not None
+            else self._arg(args, "gcs_far_spurious_max_neg_per_image", 1)
+        )
+        self.far_spurious_loss_type = str(
+            far_spurious_loss_type
+            if far_spurious_loss_type is not None
+            else self._arg(args, "gcs_far_spurious_loss_type", "relu")
+        ).lower()
+        self.gt5_rank_consistency_gain = float(
+            gt5_rank_consistency_gain
+            if gt5_rank_consistency_gain is not None
+            else self._arg(args, "gcs_gt5_rank_consistency", 0.0)
+        )
+        self.gt5_rank_margin_logit = float(
+            gt5_rank_margin_logit
+            if gt5_rank_margin_logit is not None
+            else self._arg(args, "gcs_gt5_rank_margin_logit", 0.5)
+        )
+        self.gt5_rank_min_qminus_score = float(
+            gt5_rank_min_qminus_score
+            if gt5_rank_min_qminus_score is not None
+            else self._arg(args, "gcs_gt5_rank_min_qminus_score", 0.02)
+        )
+        self.gt5_rank_max_pairs_per_image = int(
+            gt5_rank_max_pairs_per_image
+            if gt5_rank_max_pairs_per_image is not None
+            else self._arg(args, "gcs_gt5_rank_max_pairs_per_image", 1)
+        )
         if self.duplicate_margin_gain < 0.0:
             raise ValueError(f"gcs_duplicate_margin must be >= 0, got {self.duplicate_margin_gain}.")
         if self.duplicate_margin_logit < 0.0:
@@ -298,6 +385,62 @@ class GCSLoss(nn.Module):
         if self.spurious_max_pairs_per_image < 1:
             raise ValueError(
                 f"gcs_spurious_max_pairs_per_image must be >= 1, got {self.spurious_max_pairs_per_image}."
+            )
+        if self.far_spurious_survival_gain < 0.0:
+            raise ValueError(
+                f"gcs_far_spurious_survival must be >= 0, got {self.far_spurious_survival_gain}."
+            )
+        if not self.far_spurious_gt_counts or min(self.far_spurious_gt_counts) < 1:
+            raise ValueError(
+                "gcs_far_spurious_gt_counts must contain positive lane counts, "
+                f"got {self.far_spurious_gt_counts}."
+            )
+        if not (0.0 < self.far_spurious_score_thr < 1.0):
+            raise ValueError(
+                f"gcs_far_spurious_score_thr must be in (0, 1), got {self.far_spurious_score_thr}."
+            )
+        if not (0.0 <= self.far_spurious_min_score < 1.0):
+            raise ValueError(
+                f"gcs_far_spurious_min_score must be in [0, 1), got {self.far_spurious_min_score}."
+            )
+        if self.far_spurious_min_ape_px <= 0.0:
+            raise ValueError(f"gcs_far_spurious_min_ape_px must be > 0, got {self.far_spurious_min_ape_px}.")
+        if not (0.0 <= self.far_spurious_max_visible_iou <= 1.0):
+            raise ValueError(
+                "gcs_far_spurious_max_visible_iou must be in [0, 1], "
+                f"got {self.far_spurious_max_visible_iou}."
+            )
+        if not (0.0 <= self.far_spurious_point_valid_thr <= 1.0):
+            raise ValueError(
+                "gcs_far_spurious_point_valid_thr must be in [0, 1], "
+                f"got {self.far_spurious_point_valid_thr}."
+            )
+        if self.far_spurious_min_visible_run < 1:
+            raise ValueError(
+                f"gcs_far_spurious_min_visible_run must be >= 1, got {self.far_spurious_min_visible_run}."
+            )
+        if self.far_spurious_max_neg_per_image < 1:
+            raise ValueError(
+                f"gcs_far_spurious_max_neg_per_image must be >= 1, got {self.far_spurious_max_neg_per_image}."
+            )
+        if self.far_spurious_loss_type not in {"relu", "softplus"}:
+            raise ValueError(
+                "gcs_far_spurious_loss_type must be either 'relu' or 'softplus', "
+                f"got {self.far_spurious_loss_type!r}."
+            )
+        if self.gt5_rank_consistency_gain < 0.0:
+            raise ValueError(
+                f"gcs_gt5_rank_consistency must be >= 0, got {self.gt5_rank_consistency_gain}."
+            )
+        if self.gt5_rank_margin_logit < 0.0:
+            raise ValueError(f"gcs_gt5_rank_margin_logit must be >= 0, got {self.gt5_rank_margin_logit}.")
+        if not (0.0 <= self.gt5_rank_min_qminus_score < 1.0):
+            raise ValueError(
+                f"gcs_gt5_rank_min_qminus_score must be in [0, 1), got {self.gt5_rank_min_qminus_score}."
+            )
+        if self.gt5_rank_max_pairs_per_image < 1:
+            raise ValueError(
+                f"gcs_gt5_rank_max_pairs_per_image must be >= 1, got {self.gt5_rank_max_pairs_per_image}."
             )
         if self.lane_balanced_point_gain < 0.0:
             raise ValueError(f"gcs_lane_balanced_point must be >= 0, got {self.lane_balanced_point_gain}.")
@@ -1039,6 +1182,167 @@ class GCSLoss(nn.Module):
         return torch.stack(losses).mean() if losses else self._zero_like(pred_points)
 
     @staticmethod
+    def _longest_true_run(mask: torch.Tensor) -> torch.Tensor:
+        """Return the longest contiguous true run for each row in a B x K mask."""
+        current = torch.zeros(mask.shape[0], device=mask.device, dtype=torch.long)
+        best = torch.zeros_like(current)
+        for k in range(mask.shape[1]):
+            current = torch.where(mask[:, k], current + 1, torch.zeros_like(current))
+            best = torch.maximum(best, current)
+        return best
+
+    def far_spurious_survival_loss(
+        self,
+        pred_logits: torch.Tensor,
+        pred_points: torch.Tensor,
+        pred_valid_logits: torch.Tensor | None,
+        batch: dict,
+        gt_points: list[torch.Tensor],
+        gt_valid: list[torch.Tensor],
+        indices: list[tuple[torch.Tensor, torch.Tensor]],
+    ) -> torch.Tensor:
+        """Suppress decode-risk far-spurious unmatched queries in GT3/GT4 images only."""
+        if self.far_spurious_survival_gain <= 0.0 or pred_valid_logits is None:
+            return self._zero_like(pred_points)
+
+        num_lanes = batch.get("num_lanes")
+        if num_lanes is not None:
+            num_lanes = torch.as_tensor(num_lanes, device=pred_logits.device).reshape(-1)
+            if num_lanes.numel() != pred_logits.shape[0]:
+                raise ValueError(
+                    f"batch['num_lanes'] must have one value per image, got {num_lanes.numel()} "
+                    f"vs B={pred_logits.shape[0]}."
+                )
+
+        losses = []
+        device, dtype = pred_points.device, pred_points.dtype
+        scale = self._pixel_scale_for(pred_points)
+        gt_counts = self.far_spurious_gt_counts
+        max_neg = int(self.far_spurious_max_neg_per_image)
+        score_thr = float(self.far_spurious_score_thr)
+        target_logit = pred_logits.new_tensor(score_thr).clamp(1e-6, 1.0 - 1e-6).logit()
+
+        for b, (src_idx, _) in enumerate(indices):
+            if num_lanes is not None:
+                image_lane_count = int(num_lanes[b].item())
+            else:
+                valid_b = gt_valid[b].detach().to(device=device)
+                image_lane_count = int((valid_b.float().sum(dim=1) >= 2).sum().item())
+            if image_lane_count not in gt_counts:
+                continue
+
+            points_b = pred_points[b].detach()
+            logits_b = pred_logits[b]
+            valid_prob_b = pred_valid_logits[b].detach().sigmoid().to(device=device, dtype=dtype)
+            gt_points_b = gt_points[b].to(device=device, dtype=dtype)
+            gt_valid_b = gt_valid[b].to(device=device, dtype=dtype)
+            if gt_points_b.numel() == 0:
+                continue
+
+            valid_counts_all = gt_valid_b.sum(dim=1)
+            valid_gt_mask = valid_counts_all >= 2
+            if not valid_gt_mask.any():
+                continue
+
+            all_diff_px = (points_b[:, None] - gt_points_b[None]) * scale
+            all_point_error = torch.norm(all_diff_px, dim=-1)
+            all_ape = (all_point_error * gt_valid_b[None]).sum(dim=2) / valid_counts_all[None].clamp_min(1.0)
+            all_ape = all_ape.masked_fill(~valid_gt_mask[None], float("inf"))
+
+            intersection = (valid_prob_b[:, None] * gt_valid_b[None]).sum(dim=2)
+            union = valid_prob_b.sum(dim=1, keepdim=True) + valid_counts_all[None] - intersection
+            all_visible_iou = intersection / union.clamp_min(1e-6)
+            all_visible_iou = all_visible_iou.masked_fill(~valid_gt_mask[None], 0.0)
+
+            best_ape = all_ape.min(dim=1).values
+            best_visible_iou = all_visible_iou.max(dim=1).values
+
+            matched_mask = torch.zeros(pred_logits.shape[1], dtype=torch.bool, device=device)
+            matched_mask[src_idx] = True
+            unmatched_mask = ~matched_mask
+            if not unmatched_mask.any():
+                continue
+
+            visible_run = self._longest_true_run(valid_prob_b >= float(self.far_spurious_point_valid_thr))
+            far_spurious = (best_ape > float(self.far_spurious_min_ape_px)) | (
+                best_visible_iou < float(self.far_spurious_max_visible_iou)
+            )
+            decode_risk = (logits_b.detach().sigmoid() > float(self.far_spurious_min_score)) & (
+                visible_run >= int(self.far_spurious_min_visible_run)
+            )
+            neg_mask = unmatched_mask & far_spurious & decode_risk
+            candidates = torch.nonzero(neg_mask, as_tuple=False).flatten()
+            if candidates.numel() == 0:
+                continue
+            if candidates.numel() > max_neg:
+                order = torch.argsort(logits_b.detach()[candidates], descending=True)[:max_neg]
+                candidates = candidates[order]
+
+            if self.far_spurious_loss_type == "softplus":
+                losses.extend(F.softplus(logits_b[q_neg] - target_logit) for q_neg in candidates)
+            else:
+                losses.extend(F.relu(logits_b[q_neg] - target_logit) for q_neg in candidates)
+
+        return torch.stack(losses).mean() if losses else self._zero_like(pred_points)
+
+    def gt5_rank_consistency_loss(
+        self,
+        pred_logits: torch.Tensor,
+        pred_points: torch.Tensor,
+        batch: dict,
+        gt_valid: list[torch.Tensor],
+        indices: list[tuple[torch.Tensor, torch.Tensor]],
+    ) -> torch.Tensor:
+        """Keep all five matched GT5 queries ranked above high-risk unmatched queries."""
+        if self.gt5_rank_consistency_gain <= 0.0:
+            return self._zero_like(pred_points)
+
+        num_lanes = batch.get("num_lanes")
+        if num_lanes is not None:
+            num_lanes = torch.as_tensor(num_lanes, device=pred_logits.device).reshape(-1)
+            if num_lanes.numel() != pred_logits.shape[0]:
+                raise ValueError(
+                    f"batch['num_lanes'] must have one value per image, got {num_lanes.numel()} "
+                    f"vs B={pred_logits.shape[0]}."
+                )
+
+        losses = []
+        device = pred_logits.device
+        max_pairs = int(self.gt5_rank_max_pairs_per_image)
+        min_qminus_score = float(self.gt5_rank_min_qminus_score)
+        margin_logit = float(self.gt5_rank_margin_logit)
+
+        for b, (src_idx, _) in enumerate(indices):
+            if num_lanes is not None:
+                image_lane_count = int(num_lanes[b].item())
+            else:
+                valid_b = gt_valid[b].detach().to(device=device)
+                image_lane_count = int((valid_b.float().sum(dim=1) >= 2).sum().item())
+            if image_lane_count != 5 or src_idx.numel() < 5:
+                continue
+
+            logits_b = pred_logits[b]
+            matched_mask = torch.zeros(pred_logits.shape[1], dtype=torch.bool, device=device)
+            matched_mask[src_idx] = True
+            unmatched_mask = ~matched_mask
+            if not unmatched_mask.any():
+                continue
+
+            matched_logits = logits_b[src_idx]
+            weakest_pos = matched_logits[torch.argmin(matched_logits.detach())]
+            candidates = torch.nonzero(unmatched_mask, as_tuple=False).flatten()
+            score_mask = logits_b.detach()[candidates].sigmoid() >= min_qminus_score
+            candidates = candidates[score_mask]
+            if candidates.numel() == 0:
+                continue
+            order = torch.argsort(logits_b.detach()[candidates], descending=True)[:max_pairs]
+            candidates = candidates[order]
+            for q_neg in candidates:
+                losses.append(F.softplus(logits_b[q_neg] - weakest_pos + margin_logit))
+
+        return torch.stack(losses).mean() if losses else self._zero_like(pred_points)
+
+    @staticmethod
     def _foreground_pos_weight(target: torch.Tensor, max_weight: float) -> torch.Tensor:
         """Return a capped foreground weight for sparse binary auxiliary targets."""
         target = target.float()
@@ -1146,6 +1450,10 @@ class GCSLoss(nn.Module):
         spurious_margin_loss = self.spurious_margin_loss(
             pred_logits, pred_points, pred_valid_logits, batch, gt_points, gt_valid, indices
         )
+        far_spurious_survival_loss = self.far_spurious_survival_loss(
+            pred_logits, pred_points, pred_valid_logits, batch, gt_points, gt_valid, indices
+        )
+        gt5_rank_consistency_loss = self.gt5_rank_consistency_loss(pred_logits, pred_points, batch, gt_valid, indices)
 
         mask_loss = self._zero_like(pred_points)
         if "aux_mask_logits" in preds and "semantic_mask" in batch:
@@ -1171,6 +1479,8 @@ class GCSLoss(nn.Module):
             + self.count_under5_gain * count_under5_loss
             + self.duplicate_margin_gain * duplicate_margin_loss
             + self.spurious_margin_gain * spurious_margin_loss
+            + self.far_spurious_survival_gain * far_spurious_survival_loss
+            + self.gt5_rank_consistency_gain * gt5_rank_consistency_loss
         )
         loss_items = torch.stack(
             (
@@ -1187,6 +1497,8 @@ class GCSLoss(nn.Module):
                 count_under5_loss.detach(),
                 duplicate_margin_loss.detach(),
                 spurious_margin_loss.detach(),
+                far_spurious_survival_loss.detach(),
+                gt5_rank_consistency_loss.detach(),
             )
         )
         return total, loss_items

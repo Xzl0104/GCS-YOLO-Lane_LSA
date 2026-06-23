@@ -148,6 +148,20 @@ gcs_spurious_neg_max_visible_iou: 0.2 # (float) q- is spurious if its best GT vi
 gcs_spurious_duplicate_ape_px: 50.0 # (float) near-GT duplicate exclusion APE threshold
 gcs_spurious_duplicate_visible_iou: 0.4 # (float) near-GT duplicate exclusion visible-IoU threshold
 gcs_spurious_max_pairs_per_image: 4 # (int) maximum high-risk spurious ranking pairs kept per image
+gcs_far_spurious_survival: 0.0 # (float) absolute-logit loss for decode-risk far-spurious unmatched q- in selected GT-count images; 0 disables
+gcs_far_spurious_gt_counts: [3, 4] # (list[int]) GT lane counts that enable far-spurious survival loss
+gcs_far_spurious_score_thr: 0.03 # (float) target score threshold for far-spurious q- suppression
+gcs_far_spurious_min_score: 0.03 # (float) minimum q- score required before applying far-spurious survival loss
+gcs_far_spurious_min_ape_px: 50.0 # (float) q- is far-spurious if best-GT APE is above this or visible IoU is low
+gcs_far_spurious_max_visible_iou: 0.2 # (float) q- is far-spurious if best-GT visible IoU is below this or APE is high
+gcs_far_spurious_point_valid_thr: 0.5 # (float) point-valid threshold used for the decode-risk visible-run gate
+gcs_far_spurious_min_visible_run: 5 # (int) minimum contiguous predicted visible anchors for q- decode survival risk
+gcs_far_spurious_max_neg_per_image: 1 # (int) maximum highest-logit far-spurious q- penalties per image
+gcs_far_spurious_loss_type: relu # (str) relu or softplus absolute-logit penalty for far-spurious survival loss
+gcs_gt5_rank_consistency: 0.0 # (float) GT5-only weakest matched q+ vs top unmatched q- rank consistency loss gain; 0 disables
+gcs_gt5_rank_margin_logit: 0.5 # (float) required logit margin between GT5 weakest q+ and top q-
+gcs_gt5_rank_min_qminus_score: 0.02 # (float) minimum top q- score required before applying GT5 rank loss
+gcs_gt5_rank_max_pairs_per_image: 1 # (int) maximum high-logit unmatched q- pairs per GT5 image
 gcs_exist_pos_weight: 1.0 # (float) positive query weight for GCS lane existence BCE
 gcs_exist_focal_gamma: 0.0 # (float) optional focal gamma for GCS existence BCE; 0 disables focal weighting
 gcs_exist_focal_alpha: -1.0 # (float) optional focal alpha for GCS existence BCE; set 0..1 to enable alpha weighting

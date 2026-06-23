@@ -27,8 +27,10 @@ The q12-k56-named model/data files are compatibility paths for old experiment re
 The 5-25-3 branch does not include later mainline `--gcs-official-best`, Count/Quality/Survival, near-miss, or training-time official-best machinery. It does include branch-local TuSimple official eval/sweep helpers: `tools/eval_tusimple_official.py` and `tools/sweep_tusimple_official.py`.
 
 Active source/config is based on rollback commit `50999d6af` (`Document 5-25-3
-K56 as mainline`) plus the default-disabled `duplicate_margin_loss` and
-`spurious_margin_loss` experiment knobs added on 2026-06-22. Sections below that mention `gt4short*`,
+K56 as mainline`) plus the default-disabled `duplicate_margin_loss`,
+`spurious_margin_loss`, `lane_balanced_point_loss`,
+`short_valid_recall_loss`, `far_spurious_survival_loss`, and
+`gt5_rank_consistency_loss` experiment knobs. Sections below that mention `gt4short*`,
 `--gcs-gt4-short-*`, `--gcs-extra-exist`, `--gcs-short-exist-*`, or
 `tools/diagnose_tusimple_count_confusion.py` are legacy post-`50999d6af`
 experiment records only. They are not commands for the current code state
@@ -152,6 +154,77 @@ APE / matched geometry metrics should not regress
 After training, run train/val failure traces and check that
 `geometry_miss_short_gt` and `min_points_visibility_short_gt` decrease without
 new `5->4` growth or score-threshold-only `4->5` behavior.
+
+Completed result:
+
+```text
+run: gcs_yolo_lane_s_tusimple_fixed_y_shortpos_count03_under5_03
+sweep: runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_shortpos_count03_under5_03_official_val_sweep
+best: conf=0.005, point_valid_thr=0.5, nms_dist_px=0.0, max_det=6, min_points=5
+official-val363: ACC=0.968144, FP=0.027319, FN=0.017218, official_score=0.967253, count_acc=0.947658
+count_acc_3=0.959641, count_acc_4=0.878788, count_acc_5=0.972973
+```
+
+One-shot official test used only the official-val selected decode:
+
+```bash
+python tools/eval_tusimple_official.py \
+  --archive-root archive/TUSimple \
+  --split test \
+  --weights runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_shortpos_count03_under5_03/weights/best.pt \
+  --imgsz 544 960 \
+  --device 0 \
+  --conf 0.005 \
+  --point-valid-thr 0.5 \
+  --nms-dist-px 0.0 \
+  --max-det 6 \
+  --min-points 5 \
+  --half \
+  --save-dir runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_shortpos_count03_under5_03_official_test_best_from_val \
+  --save-records
+```
+
+Result:
+
+```text
+summary: runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_shortpos_count03_under5_03_official_test_best_from_val/tusimple_official_summary.json
+images=2782
+ACC=0.963067
+FP=0.038330
+FN=0.030763
+official_score=0.961685
+count_acc=0.861251
+count_acc_2=0.400000
+count_acc_3=0.957471
+count_acc_4=0.547009
+count_acc_5=0.829525
+pred_lanes_hist: 2=4, 3=1801, 4=362, 5=574, 6=41
+gt_lanes_hist: 2=5, 3=1740, 4=468, 5=569
+count_confusion: 2->2=2, 2->3=2, 2->4=1, 3->2=2, 3->3=1666, 3->4=63, 3->5=7, 3->6=2, 4->3=109, 4->4=256, 4->5=95, 4->6=8, 5->3=24, 5->4=42, 5->5=472, 5->6=31
+```
+
+Do not promote this run. It missed the official-val ACC gate before test
+reporting and the reporting-only test result is below `count03_under5_03`,
+`gt4short15`, `dupmargin005`, `spurmargin003`, and `count03_under5_00`. The
+selected `conf=0.005` points to poor score calibration, while FP and FN both
+increase. Do not tune thresholds or loss weights from this test report.
+
+The required train/val-only failure trace was completed without using final
+test for selection:
+
+```text
+summary: runs/gcs_lane/shortpos_failure_trace_train_val_compare/summary.json
+splits: train + val
+```
+
+Key result: `shortpos` does reduce `low_score_short_gt` and
+`min_points_visibility_short_gt` to zero across train+val, but it is a bad
+tradeoff. Compared with `count03_under5_03`, it adds `+68` failure images,
+`+52` `spurious_extra`, `+26` `duplicate_like_extra`, and `+33`
+`duplicate_like_extra_short_gt`; compared with `dupmargin005`, it adds `+60`
+failure images, `+30` `spurious_extra`, `+18` `duplicate_like_extra`, and
+`+33` `duplicate_like_extra_short_gt`. Do not continue this exact positive
+short-lane loss setting.
 
 ## Legacy Post-50999 Official-Val Selection
 

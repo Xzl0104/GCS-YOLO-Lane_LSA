@@ -63,10 +63,12 @@ Historical q12-k56 experiment docs are old records. Preserve them, but do not le
 Active source/config is based on rollback commit `50999d6af` (`Document 5-25-3
 K56 as mainline`) plus default-disabled experiment knobs for
 `duplicate_margin_loss`, `spurious_margin_loss`, `lane_balanced_point_loss`, and
-`short_valid_recall_loss`. Later mechanisms such as GT4 short-lane sampling,
-`extra_exist_loss`, short matched existence floor, and count-confusion
-diagnostic tooling are preserved only as legacy experiment conclusions in the
-docs. They are not active CLI, loss, or tool contracts in this code state.
+`short_valid_recall_loss`, plus the later default-disabled
+`far_spurious_survival_loss` and `gt5_rank_consistency_loss` experiment knobs.
+Later mechanisms such as GT4 short-lane sampling, `extra_exist_loss`, short
+matched existence floor, and count-confusion diagnostic tooling are preserved
+only as legacy experiment conclusions in the docs. They are not active CLI,
+loss, or tool contracts in this code state.
 
 ## Label Contract
 
@@ -134,12 +136,15 @@ count_loss
 count_under5_loss
 duplicate_margin_loss
 spurious_margin_loss
+far_spurious_survival_loss
+gt5_rank_consistency_loss
 ```
 
-`duplicate_margin_loss`, `spurious_margin_loss`, `lane_balanced_point_loss`, and
-`short_valid_recall_loss` are default-disabled experimental log items. With
-the default gains they contribute `0` to the training objective; enabling any
-of them is an explicit experiment contract change.
+`duplicate_margin_loss`, `spurious_margin_loss`, `lane_balanced_point_loss`,
+`short_valid_recall_loss`, `far_spurious_survival_loss`, and
+`gt5_rank_consistency_loss` are default-disabled experimental log items. With
+the default gains they contribute `0` to the training objective; enabling any of
+them is an explicit experiment contract change.
 
 ## Decode And Evaluation Contract
 

@@ -11,12 +11,14 @@ K56 as mainline`).
 
 Scope:
 
-The active code baseline is the 5-25-3 K56 mainline contract at `50999d6af`.
-All later commits and notes, including reusable count diagnostics, GT4 short-lane
-sampling, `extra_exist_loss`, short matched existence floor, and reporting-only
-test batches, are retained below as legacy experiment conclusions only. They do
-not describe currently available CLI flags, loss items, scripts, or active
-selected candidates unless a future task explicitly restores those mechanisms.
+The active code baseline is the 5-25-3 K56 mainline contract at `50999d6af`
+plus later default-disabled experiment knobs that are explicitly documented in
+`docs/agent-context/current-contracts.md`. Other later commits and notes,
+including reusable count diagnostics, GT4 short-lane sampling,
+`extra_exist_loss`, short matched existence floor, and reporting-only test
+batches, are retained below as legacy experiment conclusions only. They do not
+describe currently available CLI flags, loss items, scripts, or active selected
+candidates unless a future task explicitly restores those mechanisms.
 
 Why:
 
@@ -1270,6 +1272,108 @@ Mainline or experiment:
 Branch-local experimental option. Defaults preserve baseline behavior and do
 not import later Count/Quality/Survival/near-miss/official-best machinery.
 
+## 2026-06-23: Reject farspur001 + gt5rank001 Combined Ranking Run
+
+Decision:
+
+Do not promote
+`gcs_yolo_lane_s_tusimple_fixed_y_farspur001_gt5rank001_count03_under5_03`.
+Do not run final test for this candidate. Treat the run as evidence that the
+current combined far-spurious survival plus GT5 rank-consistency setting damages
+query score/ranking calibration.
+
+Official-val evidence:
+
+```text
+run = gcs_yolo_lane_s_tusimple_fixed_y_farspur001_gt5rank001_count03_under5_03
+args = epochs=160, batch=32, workers=8, amp=true, gcs_count=0.3, gcs_count_under5=0.3, gcs_far_spurious_survival=0.01, gcs_gt5_rank_consistency=0.01
+sweep = runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_farspur001_gt5rank001_count03_under5_03_official_val_sweep
+images = 363
+best = conf=0.005, point_valid_thr=0.5, nms_dist_px=18.0, max_det=8, min_points=4
+official_acc = 0.965673
+official_FP = 0.033747
+official_FN = 0.022727
+official_score = 0.964544
+count_acc = 0.917355
+count_acc_3 = 0.964126
+count_acc_4 = 0.757576
+count_acc_5 = 0.918919
+count_confusion = 3->3=215, 3->4=7, 3->5=1, 4->3=3, 4->4=50, 4->5=13, 5->3=1, 5->4=1, 5->5=68, 5->6=4
+```
+
+Sweep checks:
+
+```text
+best official_acc row = 0.965673, FP=0.035675, FN=0.022727, count_acc=0.909091
+best official_score row = 0.965609, FP=0.028466, FN=0.022727, count_acc=0.944904
+best count_acc row = 0.965490, FP=0.025207, FN=0.023416, count_acc=0.958678
+minimum-FN row = 0.964452, FP=0.034114, FN=0.021120, count_acc=0.917355
+minimum-FP row = 0.961070, FP=0.019697, FN=0.030303, count_acc=0.922865
+```
+
+Comparison:
+
+```text
+official-val ACC:
+  gt4short15        = 0.970851
+  dupmargin005      = 0.970272
+  count03_under5_03 = 0.969976
+  spurmargin003     = 0.969316
+  count03_under5_00 = 0.968578
+  shortpos          = 0.968144
+  farspur001_gt5rank001 = 0.965673
+```
+
+Interpretation:
+
+- Supported fact: the candidate is worse than every relevant official-val
+  comparator by a large margin. It misses `count03_under5_03` by `0.004303`
+  ACC and `gt4short15` by `0.005178`.
+- Supported fact: the best selected confidence is `0.005`, matching the
+  score-calibration warning pattern seen in other rejected runs. No row in the
+  1800-row sweep provides an acceptable FP/FN tradeoff.
+- Supported fact: both FP and FN are bad. The minimum-FN row still has
+  `FN=0.021120`, far above `count03_under5_03` (`0.014463`) and `gt4short15`
+  (`0.011708`). The minimum-FP row pushes FN to `0.030303`.
+- Supported fact: GT4 count accuracy drops to `0.757576` on the selected row,
+  so the known short/ambiguous GT4 count bottleneck is worse, not better.
+- Likely cause: `far_spurious_survival_loss` is an absolute unmatched-q logit
+  suppression term for selected GT3/GT4 images, while
+  `gt5_rank_consistency_loss` ranks the weakest matched GT5 q+ above high-score
+  unmatched q- without requiring that weakest q+ to pass geometry or visible-IoU
+  quality. The combined pressure can suppress useful alternate queries and
+  hard-rank weak GT5 matches, causing global score/ranking instability.
+
+Rejected actions:
+
+- Do not promote the run.
+- Do not run final test.
+- Do not tune final-test thresholds, NMS, `max_det`, `min_points`, checkpoint
+  choice, or combined loss gains.
+- Do not continue by blindly sweeping `gcs_far_spurious_survival` and
+  `gcs_gt5_rank_consistency` together.
+
+Recommended next action:
+
+First fix the train/val query-trace diagnostic. The remote
+`tools/diagnose_gt4_short_failure_queries.py` currently fails because it imports
+missing legacy `tools.diagnose_tusimple_count_confusion`. After the diagnostic
+is usable, run train/val-only traces for `GT4` and `GT5` with the selected
+decode and compare against `count03_under5_03` and `dupmargin005`. If another
+experiment is still justified, ablate one mechanism at a time:
+
+```text
+far_spurious_survival=0.01, gt5_rank_consistency=0.0
+far_spurious_survival=0.0, gt5_rank_consistency=0.01 with geometry/visible-IoU q+ quality gates
+```
+
+Selection must remain on the 363-image official-val surface.
+
+Mainline or experiment:
+
+Rejected experimental candidate. It does not change the selected checkpoint,
+decode policy, final-test status, or branch contract.
+
 ## 2026-06-23: Add Default-Disabled Positive Short-Lane Point/Visibility Losses
 
 Decision:
@@ -1347,6 +1451,187 @@ Mainline or experiment:
 
 Branch-local experimental option. Defaults preserve baseline behavior and do
 not import later Count/Quality/Survival/near-miss/official-best machinery.
+
+## 2026-06-23: Reject shortpos Positive Short-Lane Loss Run
+
+Decision:
+
+Do not promote
+`gcs_yolo_lane_s_tusimple_fixed_y_shortpos_count03_under5_03`. Treat its
+official test result as reporting-only evidence from the official-val selected
+decode, not as a selection surface.
+
+Official-val evidence:
+
+```text
+run = gcs_yolo_lane_s_tusimple_fixed_y_shortpos_count03_under5_03
+args = epochs=160, batch=32, workers=4, no_amp=true, gcs_count=0.3, gcs_count_under5=0.3, gcs_lane_balanced_point=3.0, gcs_short_valid_recall=0.5
+sweep = runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_shortpos_count03_under5_03_official_val_sweep
+images = 363
+best = conf=0.005, point_valid_thr=0.5, nms_dist_px=0.0, max_det=6, min_points=5
+official_acc = 0.968144
+official_FP = 0.027319
+official_FN = 0.017218
+official_score = 0.967253
+count_acc = 0.947658
+count_acc_3 = 0.959641
+count_acc_4 = 0.878788
+count_acc_5 = 0.972973
+count_confusion = 3->3=214, 3->4=9, 4->3=1, 4->4=58, 4->5=7, 5->4=1, 5->5=72, 5->6=1
+```
+
+Official-test reporting evidence:
+
+```text
+summary = runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_shortpos_count03_under5_03_official_test_best_from_val/tusimple_official_summary.json
+decode = conf=0.005, point_valid_thr=0.5, nms_dist_px=0.0, max_det=6, min_points=5
+images = 2782
+official_acc = 0.963067
+official_FP = 0.038330
+official_FN = 0.030763
+official_score = 0.961685
+count_acc = 0.861251
+count_acc_2 = 0.400000
+count_acc_3 = 0.957471
+count_acc_4 = 0.547009
+count_acc_5 = 0.829525
+pred_lanes_hist = 2=4, 3=1801, 4=362, 5=574, 6=41
+gt_lanes_hist = 2=5, 3=1740, 4=468, 5=569
+count_confusion = 2->2=2, 2->3=2, 2->4=1, 3->2=2, 3->3=1666, 3->4=63, 3->5=7, 3->6=2, 4->3=109, 4->4=256, 4->5=95, 4->6=8, 5->3=24, 5->4=42, 5->5=472, 5->6=31
+```
+
+Comparison:
+
+```text
+official-val ACC:
+  gt4short15        = 0.970851
+  dupmargin005      = 0.970272
+  count03_under5_03 = 0.969976
+  spurmargin003     = 0.969316
+  count03_under5_00 = 0.968578
+  shortpos          = 0.968144
+
+official-test reporting:
+  dupmargin005:      ACC=0.965702, FP=0.029493, FN=0.027348, official_score=0.964565, count_acc=0.865924
+  count03_under5_03: ACC=0.965459, FP=0.029439, FN=0.026270, official_score=0.964345, count_acc=0.872753
+  gt4short15:        ACC=0.965369, FP=0.033309, FN=0.029236, official_score=0.964118, count_acc=0.864486
+  count03_under5_00: ACC=0.965118, FP=0.031908, FN=0.029745, official_score=0.963885, count_acc=0.875270
+  spurmargin003:     ACC=0.964522, FP=0.033591, FN=0.028636, official_score=0.963277, count_acc=0.869878
+  shortpos:          ACC=0.963067, FP=0.038330, FN=0.030763, official_score=0.961685, count_acc=0.861251
+```
+
+Interpretation:
+
+- Supported fact: `shortpos` failed before final-test reporting because its
+  official-val ACC is below every relevant comparator and below the first-pass
+  gate `ACC >= 0.970272`.
+- Supported fact: the one-shot final-test report confirms broad degradation:
+  ACC, FP, FN, official score, and total count accuracy are all worse than the
+  older `count03_under5_03` report.
+- Supported fact: the selected official-val confidence is `0.005`, which means
+  the positive short-lane losses did not preserve usable query score
+  calibration. This resembles score-collapse symptoms from earlier suppression
+  experiments, even though the mechanism is positive-only.
+- Supported fact: final-test count errors are mixed rather than targeted:
+  GT3 has more overcount (`3->4=63`), GT4 still has both undercount and
+  overcount (`4->3=109`, `4->5=95`, `4->6=8`), and GT5 has many extra-six
+  cases (`5->6=31`).
+- Caveat: the official-test decode uses `max_det=6` while the train args record
+  `gcs_eval_max_det=8`; this is valid because `max_det=6` came from
+  official-val selection, not from final-test tuning.
+
+Rejected actions:
+
+- Do not promote `shortpos`.
+- Do not tune final-test thresholds, `max_det`, `min_points`, NMS, checkpoint
+  choice, or loss gains from this test report.
+- Do not continue this exact `lane_balanced_point=3.0` plus
+  `short_valid_recall=0.5` setting. It did not solve the short-lane bottleneck
+  and damaged score/count stability.
+
+Pre-trace next action, now completed below:
+
+Keep final test closed. The requested train/val-only failure trace for the
+`shortpos` official-val selected decode was completed and compared directly
+against `count03_under5_03` and `dupmargin005`; see the follow-up decision
+below. It shows the regression comes from extra-query ranking/calibration more
+than from the targeted short-lane retention buckets.
+
+Mainline or experiment:
+
+Rejected experimental candidate and reporting-only final-test evidence. It
+does not change the active branch protocol.
+
+## 2026-06-23: Complete shortpos Train/Val Failure Trace
+
+Decision:
+
+Use the train/val-only failure trace to reject the exact `shortpos` loss setting
+as a useful follow-up. It reduces several short-lane miss-like buckets, but the
+errors move into extra-query count failures and overall count accuracy drops.
+
+Diagnostic evidence:
+
+```text
+summary = runs/gcs_lane/shortpos_failure_trace_train_val_compare/summary.json
+splits = train + val only
+dataset = datasets/tusimple_fixed_y_k56_960x544
+
+count03_under5_03 decode = conf=0.05, point_valid_thr=0.5, nms_dist_px=50.0, max_det=8, min_points=5
+dupmargin005 decode      = conf=0.05, point_valid_thr=0.45, nms_dist_px=0.0, max_det=6, min_points=6
+shortpos decode          = conf=0.005, point_valid_thr=0.5, nms_dist_px=0.0, max_det=6, min_points=5
+```
+
+All train+val comparison:
+
+```text
+count03_under5_03: count_acc=0.961390, failure_images=140
+  missing: geometry_miss_short_gt=16, low_score_short_gt=12, min_points_visibility_short_gt=2
+  extra:   spurious_extra=60, duplicate_like_extra=11, duplicate_like_extra_short_gt=52
+  confusion: 3->4=25, 4->3=28, 4->5=75, 4->6=1, 5->4=9, 5->6=0
+
+dupmargin005: count_acc=0.959184, failure_images=148
+  missing: geometry_miss_short_gt=18, low_score_short_gt=4, min_points_visibility_short_gt=6
+  extra:   spurious_extra=82, duplicate_like_extra=19, duplicate_like_extra_short_gt=52
+  confusion: 3->4=33, 4->3=18, 4->5=70, 4->6=10, 5->4=13, 5->6=0
+
+shortpos: count_acc=0.942637, failure_images=208
+  missing: geometry_miss_short_gt=15, low_score_short_gt=0, min_points_visibility_short_gt=0
+  extra:   spurious_extra=112, duplicate_like_extra=37, duplicate_like_extra_short_gt=85
+  confusion: 3->4=55, 4->3=15, 4->5=108, 4->6=14, 5->4=4, 5->6=4
+```
+
+Integrated conclusion:
+
+- Supported fact: `shortpos` did improve the targeted short-lane retention
+  symptoms: `low_score_short_gt` and `min_points_visibility_short_gt` drop to
+  zero, and `geometry_miss_short_gt` is slightly lower than both comparators.
+- Supported fact: the improvement is not usable because count failures increase
+  sharply. Versus `count03_under5_03`, `shortpos` adds `+68` failure images,
+  `+52` `spurious_extra`, `+26` `duplicate_like_extra`, and `+33`
+  `duplicate_like_extra_short_gt`.
+- Supported fact: the transfer is mainly overcount: `3->4` grows by `+30`,
+  `4->5` by `+33`, and `4->6` by `+13` versus `count03_under5_03`. Versus
+  `dupmargin005`, `4->5` grows by `+38`.
+- Hypothesis: the positive matched-lane geometry/valid terms make short lanes
+  easier to retain but do not calibrate query existence or rank extras below
+  true lanes. The selected `conf=0.005` is consistent with this score/ranking
+  failure.
+- Decision: do not continue this exact `gcs_lane_balanced_point=3.0` plus
+  `gcs_short_valid_recall=0.5` line, and do not rescue it with test thresholds,
+  NMS, `max_det`, or `min_points`.
+
+Smallest safe next action:
+
+Return to train-side score/ranking calibration only after isolating which
+surviving extras are far spurious versus near-duplicate and whether the issue is
+global logit calibration or assignment/ranking. Do not add another positive
+short-lane retention loss on top of `shortpos`.
+
+Mainline or experiment:
+
+Diagnostic-only result for a rejected experimental candidate. It does not
+promote a checkpoint, change decode, or reopen final test.
 
 ## 2026-06-23: Reject spurmargin003 as an Official-Val Promotion
 

@@ -2,7 +2,7 @@
 
 This is the current GCS-YOLO-Lane mainline branch. It imports the historical `5-25-3.zip` algorithm and adapts only the TuSimple fixed-y contract.
 
-Active source/config is based on rollback commit `50999d6af` (`Document 5-25-3 K56 as mainline`) plus the default-disabled `duplicate_margin_loss` and `spurious_margin_loss` experiment knobs added on 2026-06-22. Results and mechanisms from other later commits are retained below as legacy experiment conclusions only; they do not describe currently available CLI flags, loss items, diagnostic scripts, or selected candidates.
+Active source/config is based on rollback commit `50999d6af` (`Document 5-25-3 K56 as mainline`) plus default-disabled experiment knobs for `duplicate_margin_loss`, `spurious_margin_loss`, `lane_balanced_point_loss`, `short_valid_recall_loss`, `far_spurious_survival_loss`, and `gt5_rank_consistency_loss`. Results and mechanisms from other later commits are retained below as legacy experiment conclusions only; they do not describe currently available CLI flags, loss items, diagnostic scripts, or selected candidates.
 
 ## Contract
 
@@ -111,14 +111,63 @@ It did not beat `count03_under5_03`, `dupmargin005`, or `gt4short15` on
 official-val ACC. Its reporting-only final-test ACC is also below those three
 comparators, so it is not a promotion candidate.
 
+The 2026-06-23 `shortpos` run is a rejected follow-up for the current
+default-disabled positive short-lane point/visibility losses:
+
+```text
+run: gcs_yolo_lane_s_tusimple_fixed_y_shortpos_count03_under5_03
+weights: runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_shortpos_count03_under5_03/weights/best.pt
+official-val sweep: runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_shortpos_count03_under5_03_official_val_sweep
+official-val decode: conf=0.005, point_valid_thr=0.5, nms_dist_px=0.0, max_det=6, min_points=5
+official-val363: ACC=0.968144, FP=0.027319, FN=0.017218, count_acc=0.947658
+final test: ACC=0.963067, FP=0.038330, FN=0.030763, count_acc=0.861251
+```
+
+It missed the official-val gate before final-test reporting and then produced
+the weakest reporting-only final-test ACC among the 2026-06-20 to 2026-06-23
+candidate reports. The selected confidence `0.005` is a score-calibration
+warning, and the test confusion shows both extra-lane and missed-lane damage
+rather than a clean short-lane recall gain.
+
+The follow-up train/val-only failure trace confirms the mechanism-level
+failure:
+
+```text
+trace summary: runs/gcs_lane/shortpos_failure_trace_train_val_compare/summary.json
+shortpos vs count03_under5_03: count_acc -0.018753, failure_images +68, spurious_extra +52, duplicate_like_extra +26, duplicate_like_extra_short_gt +33
+shortpos vs dupmargin005:      count_acc -0.016547, failure_images +60, spurious_extra +30, duplicate_like_extra +18, duplicate_like_extra_short_gt +33
+```
+
+`shortpos` reduced `low_score_short_gt` and
+`min_points_visibility_short_gt`, but shifted the failure mass into spurious and
+duplicate-like overcount. Do not continue this exact positive short-lane loss
+setting.
+
+The 2026-06-23 `farspur001_gt5rank001` run is a rejected combined
+score/ranking calibration experiment:
+
+```text
+run: gcs_yolo_lane_s_tusimple_fixed_y_farspur001_gt5rank001_count03_under5_03
+official-val sweep: runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_farspur001_gt5rank001_count03_under5_03_official_val_sweep
+official-val decode: conf=0.005, point_valid_thr=0.5, nms_dist_px=18.0, max_det=8, min_points=4
+official-val363: ACC=0.965673, FP=0.033747, FN=0.022727, count_acc=0.917355
+```
+
+No row in the 1800-row sweep provides a usable FP/FN tradeoff. The selected
+confidence `0.005` is a severe score-calibration warning, and GT4 count accuracy
+falls to `0.757576`. Do not run final test for this candidate and do not
+continue by sweeping `gcs_far_spurious_survival` and
+`gcs_gt5_rank_consistency` together. Fix the train/val query-trace diagnostic
+first, then ablate one mechanism at a time if further evidence justifies it.
+
 These decodes were selected on official-val only in their historical experiment
 contexts. None is a current active-code contract after the rollback, and neither
 the `gt4short15` nor `count03_under5_00` final-test report beat the older
 `count03_under5_03` final-test ACC `0.965459`. The later `dupmargin005`
 reporting-only final-test ACC does beat it, but official-val still controls
 selection; do not use final test for threshold, checkpoint, postprocess, or
-loss tuning. The later `spurmargin003` run does not improve either official-val
-or reporting-only final-test ACC.
+loss tuning. The later `spurmargin003`, `shortpos`, and
+`farspur001_gt5rank001` runs do not improve official-val ACC.
 
 Current bottleneck evidence is documented in `docs/agent-context/known-bottlenecks.md`. The train/val diagnostics localize the main count weakness to `GT4` scenes with short visible side lanes, not to a simple decode-threshold issue. The relevant remote diagnostic artifacts are:
 
@@ -127,6 +176,7 @@ runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_visible_iou_count03_under5_03_cou
 runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03_count_confusion_train_val_by_visibility/summary.json
 runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03_failure_trace_train_val/failure_trace_summary.json
 runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03_official_val363_nms_only_conf015_maxdet6_minp4_half/tusimple_official_sweep_summary.json
+runs/gcs_lane/shortpos_failure_trace_train_val_compare/summary.json
 ```
 
 The 2026-06-21 `gt4short15` diagnostics split the count failures into concrete

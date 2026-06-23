@@ -308,6 +308,89 @@ def parse_args() -> argparse.Namespace:
         default=4,
         help="Maximum high-risk spurious ranking pairs kept per image.",
     )
+    parser.add_argument(
+        "--gcs-far-spurious-survival",
+        type=float,
+        default=0.0,
+        help="Absolute-logit loss gain for decode-risk far-spurious unmatched q-. 0 disables.",
+    )
+    parser.add_argument(
+        "--gcs-far-spurious-gt-counts",
+        default="3,4",
+        help="Comma-separated GT lane counts that enable far-spurious survival loss, e.g. '3,4'.",
+    )
+    parser.add_argument(
+        "--gcs-far-spurious-score-thr",
+        type=float,
+        default=0.03,
+        help="Target score threshold for far-spurious q- suppression.",
+    )
+    parser.add_argument(
+        "--gcs-far-spurious-min-score",
+        type=float,
+        default=0.03,
+        help="Minimum q- score required before applying far-spurious survival loss.",
+    )
+    parser.add_argument(
+        "--gcs-far-spurious-min-ape-px",
+        type=float,
+        default=50.0,
+        help="q- is treated as far-spurious if best-GT APE is above this or visible IoU is low.",
+    )
+    parser.add_argument(
+        "--gcs-far-spurious-max-visible-iou",
+        type=float,
+        default=0.2,
+        help="q- is treated as far-spurious if best-GT visible IoU is below this or APE is high.",
+    )
+    parser.add_argument(
+        "--gcs-far-spurious-point-valid-thr",
+        type=float,
+        default=0.5,
+        help="Point-valid threshold used for the decode-risk visible-run gate.",
+    )
+    parser.add_argument(
+        "--gcs-far-spurious-min-visible-run",
+        type=int,
+        default=5,
+        help="Minimum contiguous predicted visible anchors for q- decode survival risk.",
+    )
+    parser.add_argument(
+        "--gcs-far-spurious-max-neg-per-image",
+        type=int,
+        default=1,
+        help="Maximum highest-logit far-spurious q- penalties per image.",
+    )
+    parser.add_argument(
+        "--gcs-far-spurious-loss-type",
+        default="relu",
+        choices=("relu", "softplus"),
+        help="Absolute-logit penalty form for far-spurious survival loss.",
+    )
+    parser.add_argument(
+        "--gcs-gt5-rank-consistency",
+        type=float,
+        default=0.0,
+        help="GT5-only weakest matched q+ vs top unmatched q- rank consistency loss gain. 0 disables.",
+    )
+    parser.add_argument(
+        "--gcs-gt5-rank-margin-logit",
+        type=float,
+        default=0.5,
+        help="Required logit margin between GT5 weakest q+ and top q-.",
+    )
+    parser.add_argument(
+        "--gcs-gt5-rank-min-qminus-score",
+        type=float,
+        default=0.02,
+        help="Minimum top q- score required before applying GT5 rank loss.",
+    )
+    parser.add_argument(
+        "--gcs-gt5-rank-max-pairs-per-image",
+        type=int,
+        default=1,
+        help="Maximum high-logit unmatched q- pairs per GT5 image.",
+    )
     parser.add_argument("--gcs-exist-pos-weight", type=float, default=1.0)
     parser.add_argument("--gcs-exist-focal-gamma", type=float, default=0.0, help="Optional focal gamma for existence BCE. 0 disables focal weighting.")
     parser.add_argument(
@@ -504,6 +587,20 @@ def main() -> None:
         "gcs_spurious_duplicate_ape_px": args.gcs_spurious_duplicate_ape_px,
         "gcs_spurious_duplicate_visible_iou": args.gcs_spurious_duplicate_visible_iou,
         "gcs_spurious_max_pairs_per_image": args.gcs_spurious_max_pairs_per_image,
+        "gcs_far_spurious_survival": args.gcs_far_spurious_survival,
+        "gcs_far_spurious_gt_counts": args.gcs_far_spurious_gt_counts,
+        "gcs_far_spurious_score_thr": args.gcs_far_spurious_score_thr,
+        "gcs_far_spurious_min_score": args.gcs_far_spurious_min_score,
+        "gcs_far_spurious_min_ape_px": args.gcs_far_spurious_min_ape_px,
+        "gcs_far_spurious_max_visible_iou": args.gcs_far_spurious_max_visible_iou,
+        "gcs_far_spurious_point_valid_thr": args.gcs_far_spurious_point_valid_thr,
+        "gcs_far_spurious_min_visible_run": args.gcs_far_spurious_min_visible_run,
+        "gcs_far_spurious_max_neg_per_image": args.gcs_far_spurious_max_neg_per_image,
+        "gcs_far_spurious_loss_type": args.gcs_far_spurious_loss_type,
+        "gcs_gt5_rank_consistency": args.gcs_gt5_rank_consistency,
+        "gcs_gt5_rank_margin_logit": args.gcs_gt5_rank_margin_logit,
+        "gcs_gt5_rank_min_qminus_score": args.gcs_gt5_rank_min_qminus_score,
+        "gcs_gt5_rank_max_pairs_per_image": args.gcs_gt5_rank_max_pairs_per_image,
         "gcs_exist_pos_weight": args.gcs_exist_pos_weight,
         "gcs_exist_focal_gamma": args.gcs_exist_focal_gamma,
         "gcs_exist_focal_alpha": args.gcs_exist_focal_alpha,
