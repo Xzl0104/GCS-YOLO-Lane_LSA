@@ -62,9 +62,9 @@ Historical q12-k56 experiment docs are old records. Preserve them, but do not le
 
 Active source/config is based on rollback commit `50999d6af` (`Document 5-25-3
 K56 as mainline`) plus default-disabled experiment knobs for
-`duplicate_margin_loss`, `spurious_margin_loss`, `lane_balanced_point_loss`, and
-`short_valid_recall_loss`, plus the later default-disabled
-`far_spurious_survival_loss` and `gt5_rank_consistency_loss` experiment knobs.
+`duplicate_margin_loss`, `spurious_margin_loss`, `lane_balanced_point_loss`,
+`short_valid_recall_loss`, `far_spurious_survival_loss`,
+`gt5_rank_consistency_loss`, and `gt3_extra_survival_loss` experiment knobs.
 Later mechanisms such as GT4 short-lane sampling, `extra_exist_loss`, short
 matched existence floor, and count-confusion diagnostic tooling are preserved
 only as legacy experiment conclusions in the docs. They are not active CLI,

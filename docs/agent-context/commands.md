@@ -590,6 +590,115 @@ Do not promote this run from final-test ACC. It beats the older
 official-val gate `0.970851`. Final test is reporting-only and must not be
 used for threshold, checkpoint, postprocess, or loss selection.
 
+## GT3 Extra-Survival 0.03 Rejection and Reporting Test
+
+The 2026-06-24 `dupmargin005_gt3extra003` run enabled the default-disabled GT3
+extra-survival loss on top of `dupmargin005`:
+
+```text
+run: gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt3extra003_count03_under5_03
+train args: epochs=160, batch=32, workers=8, amp=true, gcs_count=0.3, gcs_count_under5=0.3, gcs_duplicate_margin=0.05, gcs_gt3_extra_survival=0.03, gcs_gt3_extra_margin_logit=0.05, gcs_gt3_extra_topk=1
+training log: results.csv includes non-zero train/gt3_extra_survival_loss and val/gt3_extra_survival_loss
+sweep: runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt3extra003_count03_under5_03_official_val_sweep
+best/tied selected decode: conf=0.05, point_valid_thr=0.5, nms_dist_px=0.0, max_det=8, min_points=6
+official-val363: ACC=0.969665, FP=0.020615, FN=0.014004, official_score=0.968973, count_acc=0.961433
+count_acc_3=0.968610, count_acc_4=0.909091, count_acc_5=0.986486
+count_confusion: 3->3=216, 3->4=7, 4->3=2, 4->4=60, 4->5=4, 5->4=1, 5->5=73
+```
+
+Official-val sweep command:
+
+```bash
+python tools/sweep_tusimple_official.py \
+  --archive-root archive/TUSimple \
+  --split val \
+  --gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
+  --weights runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt3extra003_count03_under5_03/weights/best.pt \
+  --imgsz 544 960 \
+  --device 0 \
+  --half \
+  --confs 0.005 0.01 0.02 0.03 0.05 0.08 0.1 0.15 0.2 0.25 \
+  --point-valid-thrs 0.3 0.35 0.4 0.45 0.5 \
+  --nms-dist-pxs 0 18 30 50 \
+  --max-dets 5 6 8 \
+  --min-points 4 5 6 \
+  --save-dir runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt3extra003_count03_under5_03_official_val_sweep
+```
+
+The sweep summary's first `best` row is `conf=0.005`, but the selected
+`conf=0.05` row has the same official ACC, FP, FN, official score, count
+accuracy, and count confusion. The selected `conf=0.05` decode is therefore
+official-val evidence, not final-test tuning.
+
+Failure-mode compare:
+
+```bash
+python tools/compare_tusimple_failure_modes.py \
+  --gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
+  --pred count03=runs/gcs_lane/failure_compare/dupmargin005_compare/count03_val/tusimple_predictions.json \
+  --pred gt4short15=runs/gcs_lane/failure_compare/dupmargin005_compare/gt4short15_val/tusimple_predictions.json \
+  --pred dupmargin005=runs/gcs_lane/failure_compare/dupmargin005_compare/dupmargin005_val/tusimple_predictions.json \
+  --pred gt3extra003=runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt3extra003_count03_under5_03_official_val_selected_decode/tusimple_predictions.json \
+  --out-dir runs/gcs_lane/failure_compare/dupmargin005_gt3extra003_compare \
+  --baseline-run count03 \
+  --dupmargin-run gt3extra003 \
+  --gt4short-run gt4short15
+```
+
+Key failure-mode result:
+
+```text
+summary: runs/gcs_lane/failure_compare/dupmargin005_gt3extra003_compare/summary.json
+count-failure-only:
+  count03      failure_images=11, 3->4=4,  4->5=5, 5->4=1, duplicate_like_extra=0, spurious_extra=15, missed_short_gt=5
+  dupmargin005 failure_images=17, 3->4=11, 4->5=3, 5->4=2, duplicate_like_extra=0, spurious_extra=18, missed_short_gt=5
+  gt3extra003  failure_images=14, 3->4=7,  4->5=4, 5->4=1, duplicate_like_extra=0, spurious_extra=16, missed_short_gt=5
+all-image missed_short_gt: count03=33, dupmargin005=28, gt3extra003=36
+```
+
+One-shot official test command, using only the official-val selected decode:
+
+```bash
+python tools/eval_tusimple_official.py \
+  --archive-root archive/TUSimple \
+  --split test \
+  --weights runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt3extra003_count03_under5_03/weights/best.pt \
+  --imgsz 544 960 \
+  --device 0 \
+  --conf 0.05 \
+  --point-valid-thr 0.5 \
+  --nms-dist-px 0.0 \
+  --max-det 8 \
+  --min-points 6 \
+  --half \
+  --save-dir runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt3extra003_count03_under5_03_official_val_selected_decode_test \
+  --save-records
+```
+
+Result:
+
+```text
+summary: runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt3extra003_count03_under5_03_official_val_selected_decode_test/tusimple_official_summary.json
+images=2782
+ACC=0.965077
+FP=0.030494
+FN=0.027528
+official_score=0.963917
+count_acc=0.875988
+count_acc_2=0.200000
+count_acc_3=0.976437
+count_acc_4=0.538462
+count_acc_5=0.852373
+count_confusion includes 3->4=34, 4->5=93, 5->4=46
+```
+
+Do not promote this run. It reduces `dupmargin005` GT3 `3->4` from `11` to
+`7` and recovers GT5 `5->4` from `2` to `1`, but it misses the official-val
+ACC of `count03_under5_03`, `dupmargin005`, and `gt4short15`; it also hurts
+GT4 relative to `dupmargin005` (`count_acc_4=0.939394 -> 0.909091`,
+`4->5=3 -> 4`) and raises all-image `missed_short_gt` to `36`. The official-test
+result is reporting-only and must not be used for tuning.
+
 ## Spurious Margin 0.03 Rejection and Reporting Test
 
 The 2026-06-23 `spurmargin003` official test was requested after its 363-image

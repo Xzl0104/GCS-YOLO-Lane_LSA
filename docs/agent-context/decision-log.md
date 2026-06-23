@@ -1,4 +1,4 @@
-# Decision Log
+﻿# Decision Log
 
 This file records decisions for branch `codex/5-25-3-k56`.
 
@@ -1371,13 +1371,148 @@ python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yam
 direct synthetic GT3 forward/backward check: loss_names_len=16, gt3_extra_unweighted=0.45, total=0.0135 with gain 0.03, progress_has_gt3_ext=True
 ```
 
-Formal training and official-val metrics remain pending until the remote
-experiment completes.
+Formal training and official-val metrics completed; see the follow-up rejection
+decision below.
 
 Mainline or experiment:
 
 Branch-local experimental option. Defaults preserve baseline behavior and do
 not import later Count/Quality/Survival/near-miss/official-best machinery.
+
+## 2026-06-24: Reject dupmargin005_gt3extra003 as an Official-Val Promotion
+
+Decision:
+
+Do not promote
+`gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt3extra003_count03_under5_03`.
+The GT3-only extra-survival loss improved the intended `3->4` failure relative
+to `dupmargin005`, but it missed all relevant official-val ACC gates and hurt
+GT4 count shape relative to its parent run.
+
+Training evidence:
+
+```text
+run = gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt3extra003_count03_under5_03
+args = epochs=160, batch=32, workers=8, amp=true, gcs_imgsz=544 960, gcs_duplicate_margin=0.05, gcs_gt3_extra_survival=0.03, gcs_gt3_extra_margin_logit=0.05, gcs_gt3_extra_topk=1
+results.csv includes train/gt3_extra_survival_loss and val/gt3_extra_survival_loss; final rows are non-zero, so the loss participated in training and validation logging.
+```
+
+Official-val evidence:
+
+```text
+sweep = runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt3extra003_count03_under5_03_official_val_sweep
+selected decode = conf=0.05, point_valid_thr=0.5, nms_dist_px=0.0, max_det=8, min_points=6
+split = val
+gt_json = runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json
+images = 363
+official_acc = 0.969665
+official_FP = 0.020615
+official_FN = 0.014004
+official_score = 0.968973
+count_acc = 0.961433
+count_acc_3 = 0.968610
+count_acc_4 = 0.909091
+count_acc_5 = 0.986486
+count_confusion = 3->3=216, 3->4=7, 4->3=2, 4->4=60, 4->5=4, 5->4=1, 5->5=73
+```
+
+The sweep summary's first `best` row uses `conf=0.005`, but the selected
+`conf=0.05` row ties it on official ACC, FP, FN, official score, count
+accuracy, and count confusion. The `conf=0.05` selected decode is therefore
+official-val evidence, not final-test tuning.
+
+Failure-mode evidence:
+
+```text
+summary = runs/gcs_lane/failure_compare/dupmargin005_gt3extra003_compare/summary.json
+script = tools/compare_tusimple_failure_modes.py
+surface = 363-image official-val subset
+```
+
+Count-failure-only buckets:
+
+```text
+count03:      failure_images=11, confusion={3->4:4, 4->3:1, 4->5:5, 5->4:1}, duplicate_like_extra=0, spurious_extra=15, missed_short_gt=5, missed_gt=3
+gt4short15:   failure_images=22, confusion={3->4:8, 4->3:1, 4->5:8, 4->6:1, 5->4:3, 5->6:1}, duplicate_like_extra=1, spurious_extra=24, missed_short_gt=8, missed_gt=2
+dupmargin005: failure_images=17, confusion={3->4:11, 4->3:1, 4->5:3, 5->4:2}, duplicate_like_extra=0, spurious_extra=18, missed_short_gt=5, missed_gt=2
+gt3extra003:  failure_images=14, confusion={3->4:7, 4->3:2, 4->5:4, 5->4:1}, duplicate_like_extra=0, spurious_extra=16, missed_short_gt=5, missed_gt=3
+```
+
+All-image strict buckets:
+
+```text
+spurious_extra:       count03=44, gt4short15=45, dupmargin005=44, gt3extra003=50
+duplicate_like_extra: count03=0,  gt4short15=1,  dupmargin005=0,  gt3extra003=0
+missed_short_gt:      count03=33, gt4short15=27, dupmargin005=28, gt3extra003=36
+```
+
+Reporting-only final-test evidence:
+
+```text
+summary = runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt3extra003_count03_under5_03_official_val_selected_decode_test/tusimple_official_summary.json
+split = test
+decode = conf=0.05, point_valid_thr=0.5, nms_dist_px=0.0, max_det=8, min_points=6
+images = 2782
+official_acc = 0.965077
+official_FP = 0.030494
+official_FN = 0.027528
+official_score = 0.963917
+count_acc = 0.875988
+count_acc_3 = 0.976437
+count_acc_4 = 0.538462
+count_acc_5 = 0.852373
+count_confusion includes 3->4=34, 4->5=93, 5->4=46
+```
+
+Comparison:
+
+```text
+official-val ACC:
+  gt4short15        = 0.970851
+  dupmargin005      = 0.970272
+  count03_under5_03 = 0.969976
+  gt3extra003       = 0.969665
+
+official-val count shape:
+  GT3 3->4: dupmargin005 11 -> gt3extra003 7
+  GT4 4->5: dupmargin005 3  -> gt3extra003 4
+  GT5 5->4: dupmargin005 2  -> gt3extra003 1
+```
+
+Interpretation:
+
+- Supported fact: the target GT3 surplus query penalty helped, but not enough.
+  `3->4` falls below `dupmargin005` and `gt4short15`, yet remains above
+  `count03`.
+- Supported fact: GT5 official-val count shape is not harmed and recovers to
+  the `count03` `5->4=1` level.
+- Supported fact: GT4 shape is worse than `dupmargin005`: `count_acc_4`
+  `0.939394 -> 0.909091`, and `4->5` `3 -> 4`.
+- Supported fact: all-image `missed_short_gt` worsens to `36`, so this is not
+  a clean GT3-only fix.
+- Supported fact: official-val ACC is below every relevant comparator, so the
+  run is not promotable under the branch protocol.
+
+Rejected actions:
+
+- Do not promote from the reporting-only test result.
+- Do not tune `conf`, `point_valid_thr`, NMS, `max_det`, `min_points`,
+  checkpoint choice, or loss gain from final test.
+- Do not continue with a blind larger `gcs_gt3_extra_survival` gain.
+
+Recommended next action:
+
+Keep final test closed for tuning. If the line is revisited, use train/val or
+official-val diagnostics to check whether the non-detached
+`min_matched_logit` side of the hinge is raising weak matched GT3 lanes and
+increasing `missed_short_gt`. A smaller gain or
+`min_matched_logit.detach()` is a possible official-val ablation only after
+that diagnostic.
+
+Mainline or experiment:
+
+Rejected experimental candidate and reporting-only final-test evidence. It
+does not change the active branch protocol.
 
 ## 2026-06-23: Reject farspur001 + gt5rank001 Combined Ranking Run
 

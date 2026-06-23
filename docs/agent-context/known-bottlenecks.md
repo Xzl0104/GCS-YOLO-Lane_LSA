@@ -1,4 +1,4 @@
-# Known Bottlenecks
+﻿# Known Bottlenecks
 
 This file applies to branch `codex/5-25-3-k56`.
 
@@ -962,3 +962,108 @@ Risks to monitor on official-val:
   query score calibration and should not be promoted.
 - If GT3 `3->4` does not drop, the surplus query may be surviving through
   point-valid/min-points interactions rather than pure existence-logit ranking.
+
+## 2026-06-24 dupmargin005_gt3extra003 Rejection
+
+The completed
+`gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt3extra003_count03_under5_03`
+run enabled the narrow GT3 extra-survival loss on top of `dupmargin005`:
+
+```text
+gcs_duplicate_margin = 0.05
+gcs_gt3_extra_survival = 0.03
+gcs_gt3_extra_margin_logit = 0.05
+gcs_gt3_extra_topk = 1
+train log item = gt3_extra_survival_loss
+```
+
+Its official-val sweep is valid 363-image selection evidence:
+
+```text
+sweep = runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt3extra003_count03_under5_03_official_val_sweep
+split = val
+gt_json = runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json
+best/tied decode = conf=0.05, point_valid_thr=0.5, nms_dist_px=0.0, max_det=8, min_points=6
+official-val ACC = 0.969665
+official-val FP = 0.020615
+official-val FN = 0.014004
+official-val official_score = 0.968973
+official-val count_acc = 0.961433
+official-val count_acc_3/4/5 = 0.968610 / 0.909091 / 0.986486
+count_confusion = 3->3=216, 3->4=7, 4->3=2, 4->4=60, 4->5=4, 5->4=1, 5->5=73
+```
+
+The sweep file's first `best` row uses `conf=0.005`, but the selected
+`conf=0.05` row has the same official ACC, FP, FN, official score, count
+accuracy, and count confusion. The `conf=0.05` selected decode is therefore
+still official-val evidence, not a final-test-derived choice.
+
+Failure-mode compare was run after the two requested result directories were
+reviewed, using the same strict official-val matcher as the earlier
+`dupmargin005` comparison:
+
+```text
+summary = runs/gcs_lane/failure_compare/dupmargin005_gt3extra003_compare/summary.json
+predictions = count03, gt4short15, dupmargin005, gt3extra003 official-val selected decodes
+match gate = overlap >= 3 official h-samples and mean absolute x error <= 20px
+```
+
+Count-failure-only buckets:
+
+```text
+count03:      failure_images=11, confusion={3->4:4, 4->3:1, 4->5:5, 5->4:1}, duplicate_like_extra=0, spurious_extra=15, missed_short_gt=5, missed_gt=3
+gt4short15:   failure_images=22, confusion={3->4:8, 4->3:1, 4->5:8, 4->6:1, 5->4:3, 5->6:1}, duplicate_like_extra=1, spurious_extra=24, missed_short_gt=8, missed_gt=2
+dupmargin005: failure_images=17, confusion={3->4:11, 4->3:1, 4->5:3, 5->4:2}, duplicate_like_extra=0, spurious_extra=18, missed_short_gt=5, missed_gt=2
+gt3extra003:  failure_images=14, confusion={3->4:7, 4->3:2, 4->5:4, 5->4:1}, duplicate_like_extra=0, spurious_extra=16, missed_short_gt=5, missed_gt=3
+```
+
+All-image strict buckets:
+
+```text
+spurious_extra:       count03=44, gt4short15=45, dupmargin005=44, gt3extra003=50
+duplicate_like_extra: count03=0,  gt4short15=1,  dupmargin005=0,  gt3extra003=0
+missed_short_gt:      count03=33, gt4short15=27, dupmargin005=28, gt3extra003=36
+```
+
+The selected-decode final test is reporting-only and cannot promote the run:
+
+```text
+summary = runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt3extra003_count03_under5_03_official_val_selected_decode_test/tusimple_official_summary.json
+split = test
+decode = conf=0.05, point_valid_thr=0.5, nms_dist_px=0.0, max_det=8, min_points=6
+official_test ACC = 0.965077
+FP = 0.030494
+FN = 0.027528
+official_score = 0.963917
+count_acc = 0.875988
+count_acc_3/4/5 = 0.976437 / 0.538462 / 0.852373
+count_confusion includes 3->4=34, 4->5=93, 5->4=46
+```
+
+Integrated conclusion:
+
+- Supported fact: the loss hit part of its direct target. GT3 `3->4` improves
+  versus `dupmargin005` (`11 -> 7`) and is also lower than `gt4short15` (`8`).
+- Supported fact: it does not restore the `count03` GT3 shape. GT3 `3->4`
+  remains worse than `count03` (`7 > 4`), and all-image `missed_short_gt`
+  worsens versus both `dupmargin005` (`28 -> 36`) and `count03` (`33 -> 36`).
+- Supported fact: GT5 is not harmed on official-val. `5->4` improves from
+  `dupmargin005`'s `2` to `1`, matching `count03`, and `count_acc_5` returns
+  to `0.986486`.
+- Supported fact: GT4 is harmed relative to the parent. `count_acc_4` drops
+  from `dupmargin005`'s `0.939394` to `0.909091`, and `4->5` increases
+  `3 -> 4`.
+- Supported fact: the primary promotion metric fails. Official-val ACC
+  `0.969665` is below `count03_under5_03` (`0.969976`), `dupmargin005`
+  (`0.970272`), and `gt4short15` (`0.970851` / rerun `0.970837`).
+- Decision: reject `dupmargin005_gt3extra003` as a promotion. Do not tune
+  final-test thresholds, `max_det`, `min_points`, NMS, checkpoint choice, or
+  loss gains from the reporting-only test.
+
+Smallest safe next action:
+
+Do not continue with a blind larger GT3-extra gain. If this line is revisited,
+first inspect whether the `missed_short_gt` increase comes from raising the
+weakest GT3 matched logit side of the hinge. A smaller gain or
+`min_matched_logit.detach()` is only a train/val or official-val ablation, not
+a final-test-driven change.

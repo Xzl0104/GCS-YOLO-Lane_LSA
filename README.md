@@ -2,7 +2,7 @@
 
 This is the current GCS-YOLO-Lane mainline branch. It imports the historical `5-25-3.zip` algorithm and adapts only the TuSimple fixed-y contract.
 
-Active source/config is based on rollback commit `50999d6af` (`Document 5-25-3 K56 as mainline`) plus default-disabled experiment knobs for `duplicate_margin_loss`, `spurious_margin_loss`, `lane_balanced_point_loss`, `short_valid_recall_loss`, `far_spurious_survival_loss`, and `gt5_rank_consistency_loss`. Results and mechanisms from other later commits are retained below as legacy experiment conclusions only; they do not describe currently available CLI flags, loss items, diagnostic scripts, or selected candidates.
+Active source/config is based on rollback commit `50999d6af` (`Document 5-25-3 K56 as mainline`) plus default-disabled experiment knobs for `duplicate_margin_loss`, `spurious_margin_loss`, `lane_balanced_point_loss`, `short_valid_recall_loss`, `far_spurious_survival_loss`, `gt5_rank_consistency_loss`, and `gt3_extra_survival_loss`. Results and mechanisms from other later commits are retained below as legacy experiment conclusions only; they do not describe currently available CLI flags, loss items, diagnostic scripts, or selected candidates.
 
 ## Contract
 
