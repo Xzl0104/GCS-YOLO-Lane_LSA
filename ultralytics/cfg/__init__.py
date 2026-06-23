@@ -186,6 +186,8 @@ CFG_FLOAT_KEYS = frozenset(
         "gcs_exist",
         "gcs_point",
         "gcs_lane_balanced_point",
+        "gcs_gt4_lane_balanced_point",
+        "gcs_gt4_lane_balanced_max_mult",
         "gcs_point_valid",
         "gcs_short_valid_recall",
         "gcs_smooth",
@@ -234,6 +236,7 @@ CFG_FLOAT_KEYS = frozenset(
         "gcs_eval_max_x_dist",
         "gcs_eval_nms_dist_px",
         "gcs_lane_count_balance_power",
+        "gcs_gt4_sample_gain",
     }
 )
 CFG_FRACTION_KEYS = frozenset(
@@ -307,6 +310,7 @@ CFG_INT_KEYS = frozenset(
         "gcs_far_spurious_max_neg_per_image",
         "gcs_gt5_rank_max_pairs_per_image",
         "gcs_gt3_extra_topk",
+        "gcs_gt4_lane_balanced_topk",
     }
 )
 CFG_BOOL_KEYS = frozenset(

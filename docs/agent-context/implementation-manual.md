@@ -13,7 +13,8 @@ Active source/config is based on rollback commit `50999d6af` plus
 default-disabled `duplicate_margin_loss`, `spurious_margin_loss`,
 `lane_balanced_point_loss`, `short_valid_recall_loss`,
 `far_spurious_survival_loss`, `gt5_rank_consistency_loss`, and
-`gt3_extra_survival_loss` experiment knobs.
+`gt3_extra_survival_loss`, `gt4_lane_balanced_point_loss`, and train-only
+`gcs_gt4_sample_gain` experiment knobs.
 Other post-`50999d6af` experiment knobs such as `gcs_gt4_short_boost`,
 `gcs_extra_exist`, and `gcs_short_exist_floor` are legacy records only and are
 not available in the current code unless a future task explicitly restores them.
@@ -42,6 +43,8 @@ tools/convert_tusimple_to_gcs.py
 tools/train_gcs.py
 tools/eval_tusimple_official.py
 tools/sweep_tusimple_official.py
+tools/diagnose_gt4_missing_lane_raw_queries.py
+tools/build_gt4_hard_val_split.py
 tools/check_model.py
 ultralytics/nn/modules/gcs_lane.py
 ```

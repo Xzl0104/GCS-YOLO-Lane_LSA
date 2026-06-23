@@ -30,7 +30,9 @@ Active source/config is based on rollback commit `50999d6af` (`Document 5-25-3
 K56 as mainline`) plus the default-disabled `duplicate_margin_loss`,
 `spurious_margin_loss`, `lane_balanced_point_loss`,
 `short_valid_recall_loss`, `far_spurious_survival_loss`, and
-`gt5_rank_consistency_loss` experiment knobs. Sections below that mention `gt4short*`,
+`gt5_rank_consistency_loss`, `gt3_extra_survival_loss`, and
+`gt4_lane_balanced_point_loss` experiment knobs, plus train-only
+`gcs_gt4_sample_gain`. Sections below that mention `gt4short*`,
 `--gcs-gt4-short-*`, `--gcs-extra-exist`, `--gcs-short-exist-*`, or
 `tools/diagnose_tusimple_count_confusion.py` are legacy post-`50999d6af`
 experiment records only. They are not commands for the current code state

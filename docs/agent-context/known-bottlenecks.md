@@ -1,4 +1,4 @@
-﻿# Known Bottlenecks
+# Known Bottlenecks
 
 This file applies to branch `codex/5-25-3-k56`.
 
@@ -12,7 +12,9 @@ Active source/config is based on rollback commit `50999d6af` (`Document 5-25-3
 K56 as mainline`) plus the default-disabled `duplicate_margin_loss`,
 `spurious_margin_loss`, `lane_balanced_point_loss`,
 `short_valid_recall_loss`, `far_spurious_survival_loss`, and
-`gt5_rank_consistency_loss` experiment knobs. Bottleneck notes below that depend on
+`gt5_rank_consistency_loss`, `gt3_extra_survival_loss`, and
+`gt4_lane_balanced_point_loss` experiment knobs, plus train-only
+`gcs_gt4_sample_gain`. Bottleneck notes below that depend on
 `tools/diagnose_tusimple_count_confusion.py`, `--gcs-gt4-short-*`,
 `extra_exist_loss`, or `--gcs-short-exist-*` are legacy post-`50999d6af`
 experiment conclusions only. They do not describe currently available code,
@@ -962,6 +964,231 @@ Risks to monitor on official-val:
   query score calibration and should not be promoted.
 - If GT3 `3->4` does not drop, the surplus query may be surviving through
   point-valid/min-points interactions rather than pure existence-logit ranking.
+
+## 2026-06-24 Official-Test GT4 Count-Shape Collapse
+
+The latest reporting-only official-test result exposed a sharper bottleneck
+than the official-val sweep suggested. The fixed candidate pool is:
+
+```text
+conf = 0.005
+point_valid_thr = 0.5
+nms_dist_px = 0.0
+max_det = 8
+min_points = 6
+```
+
+Reporting-only official-test evidence:
+
+```text
+images = 2782
+official_acc = 0.965077
+count_acc = 0.875988
+count_acc_3 = 0.976437
+count_acc_4 = 0.538462
+count_acc_5 = 0.852373
+GT4 confusion: 4->3=118, 4->4=252, 4->5=93, 4->6=4
+```
+
+The corresponding official-val selected row under the same candidate pool is
+well behaved by comparison:
+
+```text
+official_acc = 0.969665
+count_acc = 0.961433
+count_acc_3 = 0.968610
+count_acc_4 = 0.909091
+count_acc_5 = 0.986486
+GT4 confusion: 4->3=2, 4->4=60, 4->5=4
+```
+
+Integrated conclusion:
+
+- Supported fact: the dominant final-test weakness is `GT4` count shape, not a
+  single global threshold miss and not a GT3-only `3->4` failure.
+- Supported fact: final-test `GT4` fails in both directions at once
+  (`4->3=118` and `4->5=93`). Raising a global threshold may reduce `4->5`
+  overcount but will likely worsen `4->3`; lowering it has the opposite risk.
+- Supported fact: the val/test gap is large: official-val `GT4`
+  `count_acc=0.909091`, while reporting-only official-test `GT4`
+  `count_acc=0.538462`.
+- Decision: stop blind threshold sweeps for this bottleneck. The next step is
+  diagnostic first: count-oracle topK, then count-head guided topK only if a
+  real count head exists and official-val does not regress.
+
+New diagnostic tooling is available in `tools/eval_tusimple_official.py`:
+
+```text
+--oracle-count-topk
+--dump-count-head-stats
+--count-guided-topk
+--count-guided-min-prob
+--count-guided-allowed-counts
+```
+
+`--oracle-count-topk` is diagnostic-only and uses GT lane count after normal
+decode candidate generation; it must never be used for formal submission or
+test selection. The active 5-25-3 K56 output contract has no independent count
+head logits, so `--dump-count-head-stats` reports `supported=false` unless a
+future checkpoint/model output includes one of the recognized count-logit keys.
+
+Priority order:
+
+```text
+1. Run normal decode vs oracle-count topK on official-val first.
+2. If a count head exists and is stronger than decoded lane count on GT4, test
+   count-head guided topK on official-val.
+3. Use official-test only as reporting-only evidence for an already selected
+   official-val candidate/diagnostic.
+4. If oracle-count topK does not materially improve GT4, stop count-guided
+   decode and move to GT4 candidate quality/ranking work, such as weak-positive
+   retention or extra-ranking loss.
+```
+
+Completed diagnostic evidence:
+
+```text
+official-val artifact:
+runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt3extra003_count03_under5_03_count_oracle_official_val/summary.json
+
+normal:
+  official_acc=0.969665, FP=0.020615, FN=0.014004, count_acc=0.961433
+  count_acc_4=0.909091
+  GT4: 4->3=2, 4->4=60, 4->5=4, 4->6=0
+oracle_count_topk:
+  official_acc=0.969550, FP=0.013958, FN=0.014004, count_acc=0.991736
+  count_acc_4=0.969697
+  GT4: 4->3=2, 4->4=64, 4->5=0, 4->6=0
+
+reporting-only official-test artifact:
+runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt3extra003_count03_under5_03_count_oracle_official_test_reporting_only/summary.json
+
+normal:
+  official_acc=0.965254, FP=0.030649, FN=0.026959, count_acc=0.875629
+  count_acc_4=0.542735
+  GT4: 4->3=116, 4->4=254, 4->5=94, 4->6=4
+oracle_count_topk:
+  official_acc=0.964709, FP=0.020681, FN=0.028726, count_acc=0.932423
+  count_acc_4=0.752137
+  GT4: 4->3=116, 4->4=352, 4->5=0, 4->6=0
+```
+
+Updated conclusion:
+
+- Oracle-count topK confirms that the `4->5`/`4->6` overcount side is a final
+  keep-count problem: those errors drop to zero on GT4.
+- Oracle-count topK does not move the `4->3` undercount side at all on
+  reporting-only official-test (`116 -> 116`). Therefore the severe GT4 test
+  collapse is not primarily solved by count-guided final topK alone.
+- The active model has no independent count head; count-head stats report
+  `supported=false`, and count-guided topK falls back to normal decode.
+- Next priority is GT4 candidate quality/ranking for the missing fourth lane.
+  Count-guided decode should not be the next mainline candidate unless a future
+  model adds a real count head and official-val evidence shows it fixes GT4
+  without a material ACC/FN regression.
+
+## 2026-06-24 GT4 4->3 Missing-Lane Raw-Query Diagnostic
+
+The follow-up diagnostic is now `tools/diagnose_gt4_missing_lane_raw_queries.py`.
+It uses the same normal decode candidate pool:
+
+```text
+conf = 0.005
+point_valid_thr = 0.5
+nms_dist_px = 0.0
+max_det = 8
+min_points = 6
+match gate = overlap >= 3 official h-samples and mean_abs_x_error <= 20px
+```
+
+The script dumps all raw `Q=12` queries for each selected image to
+`raw_queries.csv`, then writes `per_missing_lane.csv`,
+`per_image_summary.csv`, `summary.json`, and visualizations for the first
+selected images. It stages each missing GT lane through raw geometry,
+point-valid, min-points, confidence, and final decode. It does not change
+training, model structure, decoder defaults, official metrics, or selection
+rules.
+
+Reporting-only official-test result:
+
+```text
+artifact = runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt3extra003_count03_under5_03_gt4_missing_raw_queries_official_test_reporting_only/summary.json
+records = 2782
+GT4 4->3 images = 116
+missing GT lanes = 129
+drop_reason = geometry_bad 95, low_point_valid 33, low_score 1
+stage recall on missing lanes:
+  raw_match = 34/129 = 0.263566
+  after_point_valid = 1/129 = 0.007752
+  after_min_points = 1/129 = 0.007752
+  after_conf = 0/129 = 0.0
+  final_decode = 0/129 = 0.0
+missing visible buckets:
+  <=5: 12, 6..10: 64, 11..20: 44, 21..30: 3, >40: 6
+missing side/order:
+  left_inner 52, right_inner 41, right_outer 34, left_outer 2
+```
+
+Official-val comparison on the same 363-image official-val subset:
+
+```text
+artifact = runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt3extra003_count03_under5_03_gt4_missing_raw_queries_official_val/summary.json
+records = 363
+GT4 4->3 images = 2
+missing GT lanes = 3
+drop_reason = geometry_bad 2, low_point_valid 1
+stage recall on missing lanes:
+  raw_match = 1/3 = 0.333333
+  after_point_valid = 0/3 = 0.0
+  after_min_points = 0/3 = 0.0
+  after_conf = 0/3 = 0.0
+  final_decode = 0/3 = 0.0
+```
+
+Integrated conclusion:
+
+- The official-test `GT4 4->3` count is confirmed at `116` under the fixed
+  candidate pool. Because strict final matching finds multiple unmatched GT
+  lanes in some `4->3` images, the per-lane missing total is `129`.
+- The val/test gap is mostly frequency, not a different drop taxonomy. Both
+  surfaces are dominated by `geometry_bad` followed by `low_point_valid`.
+- The missing fourth lane usually does not have an acceptable raw query under
+  the strict `20px` official-h-sample gate. When raw geometry exists, the next
+  failure is usually point-valid; almost none reach the score/ranking stage.
+- `low_score` is only `1/129`, so a weak-positive survival/ranking loss is not
+  the main next step for this bottleneck.
+- The next mainline should move from count-guided topK and GT3-extra hinge work
+  to `GT4` missing-lane candidate recall: first inspect whether a GT4
+  lane-balanced point objective or GT4-focused sampling improves raw geometry.
+  If a narrowed train/val trace shows raw geometry already exists but
+  point-valid collapses, then consider a GT4 weak-lane valid recall loss.
+
+Implementation update:
+
+The next default-disabled experiment knobs are now focused on GT4 missing-lane
+candidate recall, not count-guided topK or GT3 extra-query ranking:
+
+```text
+loss item = gt4_lane_balanced_point_loss
+gain arg = --gcs-gt4-lane-balanced-point, default 0.0
+top-k arg = --gcs-gt4-lane-balanced-topk, default 1
+max multiplier arg = --gcs-gt4-lane-balanced-max-mult, default 2.0
+optional sampler arg = --gcs-gt4-sample-gain, default 1.0
+```
+
+The loss applies only to `gt_lane_count == 4` samples with all four GT lanes
+matched by the existing Hungarian assignment. It finds the matched GT lane with
+the largest point regression loss, upweights that weak lane, and normalizes
+per-image lane weights back to mean `1.0`. It does not change existence
+targets, query ranking, model structure, decoder, evaluation, Q/K, or fixed-y
+labels.
+
+`tools/build_gt4_hard_val_split.py` can build an internal GT4-hard validation
+list from train labels by running
+`tools/diagnose_gt4_missing_lane_raw_queries.py` on GT4 train samples with the
+fixed candidate pool. The generated hard-val list is diagnostic-only and must
+not be fed back into training. Promotion still uses official-val, with final
+test reserved for reporting-only evidence after selection.
 
 ## 2026-06-24 dupmargin005_gt3extra003 Rejection
 

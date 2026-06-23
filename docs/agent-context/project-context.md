@@ -15,6 +15,8 @@ The model is expected to output lane instances as ordered 2D point sequences, no
 - Custom GCS eval: `tools/eval_gcs.py`
 - TuSimple official eval: `tools/eval_tusimple_official.py`
 - TuSimple official sweep: `tools/sweep_tusimple_official.py`
+- GT4 missing-lane diagnostic: `tools/diagnose_gt4_missing_lane_raw_queries.py`
+- GT4-hard train-derived validation list builder: `tools/build_gt4_hard_val_split.py`
 - Model shape check: `tools/check_model.py`
 
 ## Current Branch Direction

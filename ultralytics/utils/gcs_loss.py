@@ -18,6 +18,7 @@ class GCSLoss(nn.Module):
         "exist_loss",
         "point_loss",
         "lane_balanced_point_loss",
+        "gt4_lane_balanced_point_loss",
         "point_valid_loss",
         "short_valid_recall_loss",
         "smooth_loss",
@@ -40,6 +41,9 @@ class GCSLoss(nn.Module):
         lambda_point: float | None = None,
         lambda_point_valid: float | None = None,
         lane_balanced_point_gain: float | None = None,
+        gt4_lane_balanced_point_gain: float | None = None,
+        gt4_lane_balanced_topk: int | None = None,
+        gt4_lane_balanced_max_mult: float | None = None,
         short_valid_recall_gain: float | None = None,
         short_valid_max_visible: int | None = None,
         short_valid_min_visible: int | None = None,
@@ -122,6 +126,21 @@ class GCSLoss(nn.Module):
             lane_balanced_point_gain
             if lane_balanced_point_gain is not None
             else self._arg(args, "gcs_lane_balanced_point", 0.0)
+        )
+        self.gt4_lane_balanced_point_gain = float(
+            gt4_lane_balanced_point_gain
+            if gt4_lane_balanced_point_gain is not None
+            else self._arg(args, "gcs_gt4_lane_balanced_point", 0.0)
+        )
+        self.gt4_lane_balanced_topk = int(
+            gt4_lane_balanced_topk
+            if gt4_lane_balanced_topk is not None
+            else self._arg(args, "gcs_gt4_lane_balanced_topk", 1)
+        )
+        self.gt4_lane_balanced_max_mult = float(
+            gt4_lane_balanced_max_mult
+            if gt4_lane_balanced_max_mult is not None
+            else self._arg(args, "gcs_gt4_lane_balanced_max_mult", 2.0)
         )
         self.short_valid_recall_gain = float(
             short_valid_recall_gain
@@ -469,6 +488,16 @@ class GCSLoss(nn.Module):
             raise ValueError(f"gcs_gt3_extra_topk must be >= 1, got {self.gt3_extra_topk}.")
         if self.lane_balanced_point_gain < 0.0:
             raise ValueError(f"gcs_lane_balanced_point must be >= 0, got {self.lane_balanced_point_gain}.")
+        if self.gt4_lane_balanced_point_gain < 0.0:
+            raise ValueError(
+                f"gcs_gt4_lane_balanced_point must be >= 0, got {self.gt4_lane_balanced_point_gain}."
+            )
+        if self.gt4_lane_balanced_topk < 1:
+            raise ValueError(f"gcs_gt4_lane_balanced_topk must be >= 1, got {self.gt4_lane_balanced_topk}.")
+        if self.gt4_lane_balanced_max_mult < 1.0:
+            raise ValueError(
+                f"gcs_gt4_lane_balanced_max_mult must be >= 1.0, got {self.gt4_lane_balanced_max_mult}."
+            )
         if self.short_valid_recall_gain < 0.0:
             raise ValueError(f"gcs_short_valid_recall must be >= 0, got {self.short_valid_recall_gain}.")
         if self.short_valid_min_visible < 1:
@@ -805,6 +834,54 @@ class GCSLoss(nn.Module):
             losses.append(lane_loss[has_visible])
 
         return torch.cat(losses).mean() if losses else self._zero_like(pred_points)
+
+    def gt4_lane_balanced_point_loss(
+        self,
+        pred_points: torch.Tensor,
+        batch: dict,
+        gt_points: list[torch.Tensor],
+        gt_valid: list[torch.Tensor],
+        indices: list[tuple[torch.Tensor, torch.Tensor]],
+    ) -> torch.Tensor:
+        """Reweight the weakest matched point lane inside GT4 images without changing average lane weight."""
+        if self.gt4_lane_balanced_point_gain <= 0.0:
+            return self._zero_like(pred_points)
+
+        dummy_logits = pred_points.new_zeros((pred_points.shape[0], pred_points.shape[1]))
+        target_counts = self.target_lane_count(dummy_logits, batch, gt_valid).detach()
+        losses = []
+        device, dtype = pred_points.device, pred_points.dtype
+        scale = self._scale_for(pred_points)
+        topk_cfg = int(self.gt4_lane_balanced_topk)
+        max_mult = float(self.gt4_lane_balanced_max_mult)
+        for b, (src_idx, tgt_idx) in enumerate(indices):
+            if int(round(float(target_counts[b].item()))) != 4:
+                continue
+            if src_idx.numel() < 4:
+                continue
+
+            pred = pred_points[b, src_idx]
+            target = gt_points[b].to(device=device, dtype=dtype)[tgt_idx]
+            valid = gt_valid[b].to(device=device, dtype=dtype)[tgt_idx]
+            visible = valid.sum(dim=1)
+            has_visible = visible > 0.0
+            if int(has_visible.sum().item()) < 4:
+                continue
+
+            loss = ((pred - target).abs() * scale).sum(dim=-1) * valid
+            lane_loss = loss.sum(dim=1) / visible.clamp_min(1.0)
+            lane_loss = lane_loss[has_visible]
+            topk = min(topk_cfg, int(lane_loss.numel()))
+            weak_idx = torch.topk(lane_loss.detach(), k=topk, largest=True).indices
+            lane_weights = torch.ones_like(lane_loss)
+            lane_weights[weak_idx] = max_mult
+            lane_weights = lane_weights / lane_weights.mean().clamp_min(1e-6)
+
+            baseline = lane_loss.mean()
+            weighted = (lane_loss * lane_weights).mean()
+            losses.append(weighted - baseline)
+
+        return torch.stack(losses).mean() if losses else self._zero_like(pred_points)
 
     def point_valid_loss(
         self,
@@ -1501,6 +1578,9 @@ class GCSLoss(nn.Module):
         exist_loss = self.exist_loss(pred_logits, pred_points, pred_valid_logits, gt_points, gt_valid, indices)
         point_loss = self.point_loss(pred_points, gt_points, gt_valid, indices)
         lane_balanced_point_loss = self.lane_balanced_point_loss(pred_points, gt_points, gt_valid, indices)
+        gt4_lane_balanced_point_loss = self.gt4_lane_balanced_point_loss(
+            pred_points, batch, gt_points, gt_valid, indices
+        )
         point_valid_loss = self.point_valid_loss(pred_valid_logits, pred_points, gt_valid, indices)
         short_valid_recall_loss = self.short_valid_recall_loss(
             pred_valid_logits, pred_points, gt_points, gt_valid, indices
@@ -1534,6 +1614,7 @@ class GCSLoss(nn.Module):
             self.exist_gain * exist_loss
             + self.point_gain * point_loss
             + self.lane_balanced_point_gain * lane_balanced_point_loss
+            + self.gt4_lane_balanced_point_gain * gt4_lane_balanced_point_loss
             + self.point_valid_gain * point_valid_loss
             + self.short_valid_recall_gain * short_valid_recall_loss
             + self.smooth_gain * smooth_loss
@@ -1553,6 +1634,7 @@ class GCSLoss(nn.Module):
                 exist_loss.detach(),
                 point_loss.detach(),
                 lane_balanced_point_loss.detach(),
+                gt4_lane_balanced_point_loss.detach(),
                 point_valid_loss.detach(),
                 short_valid_recall_loss.detach(),
                 smooth_loss.detach(),

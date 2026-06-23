@@ -35,6 +35,7 @@ class GCSLaneTrainer(BaseTrainer):
         "exist_loss",
         "point_loss",
         "lane_balanced_point_loss",
+        "gt4_lane_balanced_point_loss",
         "point_valid_loss",
         "short_valid_recall_loss",
         "smooth_loss",
@@ -54,6 +55,7 @@ class GCSLaneTrainer(BaseTrainer):
         "exist",
         "point",
         "lane_bal",
+        "gt4_pt",
         "pt_valid",
         "short_rec",
         "smooth",
@@ -222,16 +224,32 @@ class GCSLaneTrainer(BaseTrainer):
                 return int((data["lane_valid"].sum(axis=1) >= 2).sum())
             return int(data["lanes"].shape[0])
 
-    def _lane_count_sampler(self, dataset: GCSLaneDataset) -> WeightedRandomSampler:
-        """Build a replacement sampler that balances samples by GT lane count."""
+    def _lane_count_sampler(self, dataset: GCSLaneDataset, balance_lane_counts: bool = True) -> WeightedRandomSampler:
+        """Build a replacement sampler that balances GT lane counts and can upweight GT4 samples."""
         counts = [self._label_lane_count(Path(p)) for p in dataset.label_files]
         hist = Counter(counts)
-        power = float(getattr(self.args, "gcs_lane_count_balance_power", 1.0))
+        power = float(getattr(self.args, "gcs_lane_count_balance_power", 1.0)) if balance_lane_counts else 0.0
         min_group = max(int(getattr(self.args, "gcs_lane_count_min_group", 50) or 0), 1)
-        weights = torch.as_tensor([1.0 / (float(max(hist[c], min_group)) ** power) for c in counts], dtype=torch.double)
+        gt4_gain = float(getattr(self.args, "gcs_gt4_sample_gain", 1.0) or 1.0)
+        if gt4_gain < 1.0 or gt4_gain > 2.0:
+            raise ValueError(f"gcs_gt4_sample_gain must be in [1.0, 2.0], got {gt4_gain}.")
+        weights = torch.as_tensor(
+            [
+                (1.0 / (float(max(hist[c], min_group)) ** power)) * (gt4_gain if int(c) == 4 else 1.0)
+                for c in counts
+            ],
+            dtype=torch.double,
+        )
+        total_weight = float(weights.sum().item())
+        effective_hist = {}
+        for lane_count in sorted(hist):
+            mask = torch.as_tensor([int(c) == int(lane_count) for c in counts], dtype=torch.bool)
+            expected = float(weights[mask].sum().item()) / max(total_weight, 1e-12) * float(len(weights))
+            effective_hist[int(lane_count)] = round(expected, 3)
         LOGGER.info(
-            "GCS lane-count balanced sampling enabled: "
-            f"hist={dict(sorted(hist.items()))}, power={power:g}, min_group={min_group}, "
+            "GCS lane-count sampler enabled: "
+            f"hist={dict(sorted(hist.items()))}, train_gt_count_hist_effective={effective_hist}, "
+            f"balance={bool(balance_lane_counts)}, power={power:g}, min_group={min_group}, gt4_gain={gt4_gain:g}, "
             f"samples_per_epoch={len(weights)}"
         )
         return WeightedRandomSampler(weights=weights, num_samples=len(weights), replacement=True)
@@ -245,11 +263,18 @@ class GCSLaneTrainer(BaseTrainer):
             dataset = self.build_dataset(dataset_path, mode, batch_size)
         sampler = None
         shuffle = mode == "train"
-        if mode == "train" and bool(getattr(self.args, "gcs_lane_count_balanced", False)):
+        gt4_sample_gain = float(getattr(self.args, "gcs_gt4_sample_gain", 1.0) or 1.0)
+        if mode == "train" and (gt4_sample_gain < 1.0 or gt4_sample_gain > 2.0):
+            raise ValueError(f"gcs_gt4_sample_gain must be in [1.0, 2.0], got {gt4_sample_gain}.")
+        use_sampler = bool(getattr(self.args, "gcs_lane_count_balanced", False)) or gt4_sample_gain != 1.0
+        if mode == "train" and use_sampler:
             if rank != -1:
-                LOGGER.warning("GCS lane-count balanced sampling is only enabled for single-process training.")
+                LOGGER.warning("GCS lane-count/GT4 sampling is only enabled for single-process training.")
             else:
-                sampler = self._lane_count_sampler(dataset)
+                sampler = self._lane_count_sampler(
+                    dataset,
+                    balance_lane_counts=bool(getattr(self.args, "gcs_lane_count_balanced", False)),
+                )
                 shuffle = False
         return build_dataloader(
             dataset,

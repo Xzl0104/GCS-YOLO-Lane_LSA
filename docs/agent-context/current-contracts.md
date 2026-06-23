@@ -64,7 +64,9 @@ Active source/config is based on rollback commit `50999d6af` (`Document 5-25-3
 K56 as mainline`) plus default-disabled experiment knobs for
 `duplicate_margin_loss`, `spurious_margin_loss`, `lane_balanced_point_loss`,
 `short_valid_recall_loss`, `far_spurious_survival_loss`,
-`gt5_rank_consistency_loss`, and `gt3_extra_survival_loss` experiment knobs.
+`gt5_rank_consistency_loss`, `gt3_extra_survival_loss`, and
+`gt4_lane_balanced_point_loss` experiment knobs, plus the train-only
+`gcs_gt4_sample_gain` sampler knob.
 Later mechanisms such as GT4 short-lane sampling, `extra_exist_loss`, short
 matched existence floor, and count-confusion diagnostic tooling are preserved
 only as legacy experiment conclusions in the docs. They are not active CLI,
@@ -126,6 +128,7 @@ Default logged loss items on this branch:
 exist_loss
 point_loss
 lane_balanced_point_loss
+gt4_lane_balanced_point_loss
 point_valid_loss
 short_valid_recall_loss
 smooth_loss
@@ -143,10 +146,10 @@ gt3_extra_survival_loss
 
 `duplicate_margin_loss`, `spurious_margin_loss`, `lane_balanced_point_loss`,
 `short_valid_recall_loss`, `far_spurious_survival_loss`, and
-`gt5_rank_consistency_loss`, and `gt3_extra_survival_loss` are default-disabled
-experimental log items. With the default gains they contribute `0` to the
-training objective; enabling any of them is an explicit experiment contract
-change.
+`gt5_rank_consistency_loss`, `gt3_extra_survival_loss`, and
+`gt4_lane_balanced_point_loss` are default-disabled experimental log items.
+With the default gains they contribute `0` to the training objective; enabling
+any of them is an explicit experiment contract change.
 
 ## Decode And Evaluation Contract
 
@@ -155,7 +158,10 @@ Decode must use real query predictions only, must not use GT during inference, a
 This branch includes `tools/eval_tusimple_official.py`,
 `tools/sweep_tusimple_official.py`, `gcs_tools/tusimple_official_eval.py`,
 and the self-contained train/val query-trace helper
-`tools/diagnose_gt4_short_failure_queries.py`. It does not include
+`tools/diagnose_gt4_short_failure_queries.py`, plus diagnostic-only
+`tools/diagnose_gt4_missing_lane_raw_queries.py` and
+`tools/build_gt4_hard_val_split.py` for internal GT4-hard validation lists. It
+does not include
 `tools/diagnose_tusimple_count_confusion.py`, `tools/diagnose_gcs_gt5.py`,
 training-time `official_best` checkpoint preservation, or later mainline
 Count/Quality/Boundary diagnostics unless a future task explicitly ports them.

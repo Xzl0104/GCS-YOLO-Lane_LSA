@@ -136,6 +136,24 @@ def parse_args() -> argparse.Namespace:
         default=0.0,
         help="Extra lane-balanced matched point loss gain. 0 disables.",
     )
+    parser.add_argument(
+        "--gcs-gt4-lane-balanced-point",
+        type=float,
+        default=0.0,
+        help="GT4-only weak matched-lane point reweighting gain. 0 disables.",
+    )
+    parser.add_argument(
+        "--gcs-gt4-lane-balanced-topk",
+        type=int,
+        default=1,
+        help="Number of highest point-loss matched GT4 lanes to upweight.",
+    )
+    parser.add_argument(
+        "--gcs-gt4-lane-balanced-max-mult",
+        type=float,
+        default=2.0,
+        help="Maximum weak-lane multiplier before per-image mean normalization.",
+    )
     parser.add_argument("--gcs-point-valid", type=float, default=1.0)
     parser.add_argument(
         "--gcs-short-valid-recall",
@@ -502,6 +520,12 @@ def parse_args() -> argparse.Namespace:
         default=50,
         help="Minimum group size used when balancing lane counts, preventing tiny groups from dominating an epoch.",
     )
+    parser.add_argument(
+        "--gcs-gt4-sample-gain",
+        type=float,
+        default=1.0,
+        help="Train-only sampler gain for GT4 images after lane-count balancing. 1 disables; keep first-pass <= 2.",
+    )
     parser.add_argument("--no-val", action="store_true")
     parser.add_argument(
         "--resume",
@@ -572,6 +596,9 @@ def main() -> None:
         "gcs_exist": args.gcs_exist,
         "gcs_point": args.gcs_point,
         "gcs_lane_balanced_point": args.gcs_lane_balanced_point,
+        "gcs_gt4_lane_balanced_point": args.gcs_gt4_lane_balanced_point,
+        "gcs_gt4_lane_balanced_topk": args.gcs_gt4_lane_balanced_topk,
+        "gcs_gt4_lane_balanced_max_mult": args.gcs_gt4_lane_balanced_max_mult,
         "gcs_point_valid": args.gcs_point_valid,
         "gcs_short_valid_recall": args.gcs_short_valid_recall,
         "gcs_short_valid_max_visible": args.gcs_short_valid_max_visible,
@@ -652,6 +679,7 @@ def main() -> None:
         "gcs_lane_count_balanced": args.gcs_lane_count_balanced,
         "gcs_lane_count_balance_power": args.gcs_lane_count_balance_power,
         "gcs_lane_count_min_group": args.gcs_lane_count_min_group,
+        "gcs_gt4_sample_gain": args.gcs_gt4_sample_gain,
     }
 
     print(f"GCS input shape: {shape_str(gcs_imgsz)} (W x H), stored as H,W={gcs_imgsz}")

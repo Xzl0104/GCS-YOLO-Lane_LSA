@@ -115,6 +115,9 @@ gcs_imgsz: # (list[int], optional) real GCS input shape as [height, width], e.g.
 gcs_exist: 2.0 # (float) GCS lane existence loss gain
 gcs_point: 15.0 # (float) GCS normalized point L1 loss gain
 gcs_lane_balanced_point: 0.0 # (float) extra lane-balanced matched point loss gain; 0 disables
+gcs_gt4_lane_balanced_point: 0.0 # (float) GT4-only weak matched-lane point reweighting gain; 0 disables
+gcs_gt4_lane_balanced_topk: 1 # (int) number of highest point-loss matched GT4 lanes to upweight
+gcs_gt4_lane_balanced_max_mult: 2.0 # (float) maximum weak-lane multiplier before per-image mean normalization
 gcs_point_valid: 1.0 # (float) GCS per-point visibility BCE loss gain for fixed-y lane anchors
 gcs_short_valid_recall: 0.0 # (float) positive-only point-valid recall loss gain for matched short lanes; 0 disables
 gcs_short_valid_max_visible: 20 # (int) maximum visible anchors for short-valid recall loss
@@ -197,6 +200,7 @@ gcs_eval_max_det: 8 # (int) maximum decoded lane queries kept for GCS validation
 gcs_lane_count_balanced: True # (bool) sample GCS training images with inverse-frequency lane-count weights
 gcs_lane_count_balance_power: 1.0 # (float) lane-count sampler exponent; 1.0 gives equal lane-count groups
 gcs_lane_count_min_group: 50 # (int) minimum group size used to smooth lane-count sampler weights
+gcs_gt4_sample_gain: 1.0 # (float) optional train-only extra sampler gain for GT4 images; 1 disables
 nbs: 64 # (int) nominal batch size used for loss normalization
 hsv_h: 0.015 # (float) HSV hue augmentation fraction
 hsv_s: 0.7 # (float) HSV saturation augmentation fraction

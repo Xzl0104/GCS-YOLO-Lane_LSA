@@ -24,6 +24,7 @@ LOSS_NAMES = (
     "exist_loss",
     "point_loss",
     "lane_balanced_point_loss",
+    "gt4_lane_balanced_point_loss",
     "point_valid_loss",
     "short_valid_recall_loss",
     "smooth_loss",
@@ -42,6 +43,7 @@ LOSS_GAIN_ARGS = (
     "gcs_exist",
     "gcs_point",
     "gcs_lane_balanced_point",
+    "gcs_gt4_lane_balanced_point",
     "gcs_point_valid",
     "gcs_short_valid_recall",
     "gcs_smooth",
@@ -56,7 +58,25 @@ LOSS_GAIN_ARGS = (
     "gcs_gt5_rank_consistency",
     "gcs_gt3_extra_survival",
 )
-DEFAULT_LOSS_GAINS = (2.0, 15.0, 0.0, 1.0, 0.0, 0.05, 0.1, 0.2, 0.2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+DEFAULT_LOSS_GAINS = (
+    2.0,
+    15.0,
+    0.0,
+    0.0,
+    1.0,
+    0.0,
+    0.05,
+    0.1,
+    0.2,
+    0.2,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+)
 METRIC_NAMES = (
     "precision",
     "recall",
