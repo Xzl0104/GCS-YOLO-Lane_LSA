@@ -30,6 +30,7 @@ class GCSLoss(nn.Module):
         "spurious_margin_loss",
         "far_spurious_survival_loss",
         "gt5_rank_consistency_loss",
+        "gt3_extra_survival_loss",
     )
 
     def __init__(
@@ -84,6 +85,9 @@ class GCSLoss(nn.Module):
         gt5_rank_margin_logit: float | None = None,
         gt5_rank_min_qminus_score: float | None = None,
         gt5_rank_max_pairs_per_image: int | None = None,
+        gt3_extra_survival_gain: float | None = None,
+        gt3_extra_margin_logit: float | None = None,
+        gt3_extra_topk: int | None = None,
         count_under5_min_lanes: int | None = None,
         curve_alpha: float | None = None,
         curve_weight_max: float | None = None,
@@ -326,6 +330,21 @@ class GCSLoss(nn.Module):
             if gt5_rank_max_pairs_per_image is not None
             else self._arg(args, "gcs_gt5_rank_max_pairs_per_image", 1)
         )
+        self.gt3_extra_survival_gain = float(
+            gt3_extra_survival_gain
+            if gt3_extra_survival_gain is not None
+            else self._arg(args, "gcs_gt3_extra_survival", 0.0)
+        )
+        self.gt3_extra_margin_logit = float(
+            gt3_extra_margin_logit
+            if gt3_extra_margin_logit is not None
+            else self._arg(args, "gcs_gt3_extra_margin_logit", 0.05)
+        )
+        self.gt3_extra_topk = int(
+            gt3_extra_topk
+            if gt3_extra_topk is not None
+            else self._arg(args, "gcs_gt3_extra_topk", 1)
+        )
         if self.duplicate_margin_gain < 0.0:
             raise ValueError(f"gcs_duplicate_margin must be >= 0, got {self.duplicate_margin_gain}.")
         if self.duplicate_margin_logit < 0.0:
@@ -442,6 +461,12 @@ class GCSLoss(nn.Module):
             raise ValueError(
                 f"gcs_gt5_rank_max_pairs_per_image must be >= 1, got {self.gt5_rank_max_pairs_per_image}."
             )
+        if self.gt3_extra_survival_gain < 0.0:
+            raise ValueError(f"gcs_gt3_extra_survival must be >= 0, got {self.gt3_extra_survival_gain}.")
+        if self.gt3_extra_margin_logit < 0.0:
+            raise ValueError(f"gcs_gt3_extra_margin_logit must be >= 0, got {self.gt3_extra_margin_logit}.")
+        if self.gt3_extra_topk < 1:
+            raise ValueError(f"gcs_gt3_extra_topk must be >= 1, got {self.gt3_extra_topk}.")
         if self.lane_balanced_point_gain < 0.0:
             raise ValueError(f"gcs_lane_balanced_point must be >= 0, got {self.lane_balanced_point_gain}.")
         if self.short_valid_recall_gain < 0.0:
@@ -1342,6 +1367,45 @@ class GCSLoss(nn.Module):
 
         return torch.stack(losses).mean() if losses else self._zero_like(pred_points)
 
+    def gt3_extra_survival_loss(
+        self,
+        pred_logits: torch.Tensor,
+        batch: dict,
+        gt_valid: list[torch.Tensor],
+        indices: list[tuple[torch.Tensor, torch.Tensor]],
+    ) -> torch.Tensor:
+        """Rank the top unmatched GT3 query below the weakest matched query."""
+        if self.gt3_extra_survival_gain <= 0.0:
+            return pred_logits.sum() * 0.0
+
+        target_counts = self.target_lane_count(pred_logits, batch, gt_valid).detach()
+        losses = []
+        device = pred_logits.device
+        num_queries = pred_logits.shape[1]
+        margin_logit = float(self.gt3_extra_margin_logit)
+        topk = int(self.gt3_extra_topk)
+
+        for b, (src_idx, _) in enumerate(indices):
+            if int(target_counts[b].item()) != 3 or src_idx.numel() < 3:
+                continue
+
+            matched_mask = torch.zeros(num_queries, dtype=torch.bool, device=device)
+            matched_mask[src_idx.to(device=device)] = True
+            if not matched_mask.any() or matched_mask.all():
+                continue
+
+            pos_scores = pred_logits[b, matched_mask]
+            neg_scores = pred_logits[b, ~matched_mask]
+            if pos_scores.numel() == 0 or neg_scores.numel() == 0:
+                continue
+
+            min_pos_score = pos_scores.min()
+            k = min(topk, neg_scores.numel())
+            top_extra_scores = neg_scores.topk(k).values
+            losses.append(F.relu(top_extra_scores - min_pos_score + margin_logit).mean())
+
+        return torch.stack(losses).mean() if losses else pred_logits.sum() * 0.0
+
     @staticmethod
     def _foreground_pos_weight(target: torch.Tensor, max_weight: float) -> torch.Tensor:
         """Return a capped foreground weight for sparse binary auxiliary targets."""
@@ -1454,6 +1518,7 @@ class GCSLoss(nn.Module):
             pred_logits, pred_points, pred_valid_logits, batch, gt_points, gt_valid, indices
         )
         gt5_rank_consistency_loss = self.gt5_rank_consistency_loss(pred_logits, pred_points, batch, gt_valid, indices)
+        gt3_extra_survival_loss = self.gt3_extra_survival_loss(pred_logits, batch, gt_valid, indices)
 
         mask_loss = self._zero_like(pred_points)
         if "aux_mask_logits" in preds and "semantic_mask" in batch:
@@ -1481,6 +1546,7 @@ class GCSLoss(nn.Module):
             + self.spurious_margin_gain * spurious_margin_loss
             + self.far_spurious_survival_gain * far_spurious_survival_loss
             + self.gt5_rank_consistency_gain * gt5_rank_consistency_loss
+            + self.gt3_extra_survival_gain * gt3_extra_survival_loss
         )
         loss_items = torch.stack(
             (
@@ -1499,6 +1565,7 @@ class GCSLoss(nn.Module):
                 spurious_margin_loss.detach(),
                 far_spurious_survival_loss.detach(),
                 gt5_rank_consistency_loss.detach(),
+                gt3_extra_survival_loss.detach(),
             )
         )
         return total, loss_items

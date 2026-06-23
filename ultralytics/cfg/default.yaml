@@ -162,6 +162,9 @@ gcs_gt5_rank_consistency: 0.0 # (float) GT5-only weakest matched q+ vs top unmat
 gcs_gt5_rank_margin_logit: 0.5 # (float) required logit margin between GT5 weakest q+ and top q-
 gcs_gt5_rank_min_qminus_score: 0.02 # (float) minimum top q- score required before applying GT5 rank loss
 gcs_gt5_rank_max_pairs_per_image: 1 # (int) maximum high-logit unmatched q- pairs per GT5 image
+gcs_gt3_extra_survival: 0.0 # (float) GT3-only top unmatched q- vs weakest matched q+ hinge loss gain; 0 disables
+gcs_gt3_extra_margin_logit: 0.05 # (float) required logit margin between GT3 weakest q+ and top extra q-
+gcs_gt3_extra_topk: 1 # (int) number of highest-logit unmatched GT3 queries to rank below weakest q+
 gcs_exist_pos_weight: 1.0 # (float) positive query weight for GCS lane existence BCE
 gcs_exist_focal_gamma: 0.0 # (float) optional focal gamma for GCS existence BCE; 0 disables focal weighting
 gcs_exist_focal_alpha: -1.0 # (float) optional focal alpha for GCS existence BCE; set 0..1 to enable alpha weighting

@@ -709,6 +709,100 @@ python tools/diagnose_tusimple_count_confusion.py \
 
 This diagnostic is for train/val bottleneck localization only. Do not use final test for count-policy, threshold, checkpoint, or postprocess selection.
 
+## Train/Val Query-Trace Diagnostic
+
+Use the self-contained query-trace helper when comparing matched q+ and
+unmatched q- behavior on fixed-y train/val. It does not depend on legacy
+`tools/diagnose_tusimple_count_confusion.py`.
+
+For `count03_under5_03`:
+
+```bash
+python tools/diagnose_gt4_short_failure_queries.py \
+  --weights runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_visible_iou_count03_under5_03/weights/best.pt \
+  --dataset-root datasets/tusimple_fixed_y_k56_960x544 \
+  --splits train val \
+  --imgsz 544 960 \
+  --conf 0.05 \
+  --point-valid-thr 0.5 \
+  --nms-dist-px 50.0 \
+  --max-det 8 \
+  --min-points 5 \
+  --gt-counts 4 5 \
+  --short-visible-max 0 \
+  --trace-scope candidates \
+  --device 0 \
+  --half \
+  --save-dir runs/gcs_lane/query_trace_count03_under5_03_gt4_gt5_train_val
+```
+
+For `dupmargin005`:
+
+```bash
+python tools/diagnose_gt4_short_failure_queries.py \
+  --weights runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_count03_under5_03/weights/best.pt \
+  --dataset-root datasets/tusimple_fixed_y_k56_960x544 \
+  --splits train val \
+  --imgsz 544 960 \
+  --conf 0.05 \
+  --point-valid-thr 0.45 \
+  --nms-dist-px 0.0 \
+  --max-det 6 \
+  --min-points 6 \
+  --gt-counts 4 5 \
+  --short-visible-max 0 \
+  --trace-scope candidates \
+  --device 0 \
+  --half \
+  --save-dir runs/gcs_lane/query_trace_dupmargin005_gt4_gt5_train_val
+```
+
+For `gt4short15`:
+
+```bash
+python tools/diagnose_gt4_short_failure_queries.py \
+  --weights runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03/weights/best.pt \
+  --dataset-root datasets/tusimple_fixed_y_k56_960x544 \
+  --splits train val \
+  --imgsz 544 960 \
+  --conf 0.15 \
+  --point-valid-thr 0.5 \
+  --nms-dist-px 0.0 \
+  --max-det 6 \
+  --min-points 4 \
+  --gt-counts 4 5 \
+  --short-visible-max 0 \
+  --trace-scope candidates \
+  --device 0 \
+  --half \
+  --save-dir runs/gcs_lane/query_trace_gt4short15_gt4_gt5_train_val
+```
+
+For `farspur001_gt5rank001`:
+
+```bash
+python tools/diagnose_gt4_short_failure_queries.py \
+  --weights runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_farspur001_gt5rank001_count03_under5_03/weights/best.pt \
+  --dataset-root datasets/tusimple_fixed_y_k56_960x544 \
+  --splits train val \
+  --imgsz 544 960 \
+  --conf 0.005 \
+  --point-valid-thr 0.5 \
+  --nms-dist-px 18.0 \
+  --max-det 8 \
+  --min-points 4 \
+  --gt-counts 4 5 \
+  --short-visible-max 0 \
+  --trace-scope candidates \
+  --device 0 \
+  --half \
+  --save-dir runs/gcs_lane/query_trace_farspur001_gt5rank001_gt4_gt5_train_val
+```
+
+Use `--short-visible-max 20 --trace-scope failures` for the narrower legacy
+short-lane failure trace. The main outputs are `summary.json`,
+`role_summary.csv`, `images.csv`, and `query_trace.csv`.
+
 ## Legacy GT4 Short-Lane Weighted Training
 
 The GT4 short-lane sampler boost was an explicit post-`50999d6af`

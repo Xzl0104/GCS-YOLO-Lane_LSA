@@ -391,6 +391,24 @@ def parse_args() -> argparse.Namespace:
         default=1,
         help="Maximum high-logit unmatched q- pairs per GT5 image.",
     )
+    parser.add_argument(
+        "--gcs-gt3-extra-survival",
+        type=float,
+        default=0.0,
+        help="GT3-only top unmatched q- vs weakest matched q+ hinge loss gain. 0 disables.",
+    )
+    parser.add_argument(
+        "--gcs-gt3-extra-margin-logit",
+        type=float,
+        default=0.05,
+        help="Required logit margin between GT3 weakest q+ and top extra q-.",
+    )
+    parser.add_argument(
+        "--gcs-gt3-extra-topk",
+        type=int,
+        default=1,
+        help="Number of highest-logit unmatched GT3 queries to rank below weakest q+.",
+    )
     parser.add_argument("--gcs-exist-pos-weight", type=float, default=1.0)
     parser.add_argument("--gcs-exist-focal-gamma", type=float, default=0.0, help="Optional focal gamma for existence BCE. 0 disables focal weighting.")
     parser.add_argument(
@@ -601,6 +619,9 @@ def main() -> None:
         "gcs_gt5_rank_margin_logit": args.gcs_gt5_rank_margin_logit,
         "gcs_gt5_rank_min_qminus_score": args.gcs_gt5_rank_min_qminus_score,
         "gcs_gt5_rank_max_pairs_per_image": args.gcs_gt5_rank_max_pairs_per_image,
+        "gcs_gt3_extra_survival": args.gcs_gt3_extra_survival,
+        "gcs_gt3_extra_margin_logit": args.gcs_gt3_extra_margin_logit,
+        "gcs_gt3_extra_topk": args.gcs_gt3_extra_topk,
         "gcs_exist_pos_weight": args.gcs_exist_pos_weight,
         "gcs_exist_focal_gamma": args.gcs_exist_focal_gamma,
         "gcs_exist_focal_alpha": args.gcs_exist_focal_alpha,

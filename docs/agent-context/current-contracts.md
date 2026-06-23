@@ -138,16 +138,25 @@ duplicate_margin_loss
 spurious_margin_loss
 far_spurious_survival_loss
 gt5_rank_consistency_loss
+gt3_extra_survival_loss
 ```
 
 `duplicate_margin_loss`, `spurious_margin_loss`, `lane_balanced_point_loss`,
 `short_valid_recall_loss`, `far_spurious_survival_loss`, and
-`gt5_rank_consistency_loss` are default-disabled experimental log items. With
-the default gains they contribute `0` to the training objective; enabling any of
-them is an explicit experiment contract change.
+`gt5_rank_consistency_loss`, and `gt3_extra_survival_loss` are default-disabled
+experimental log items. With the default gains they contribute `0` to the
+training objective; enabling any of them is an explicit experiment contract
+change.
 
 ## Decode And Evaluation Contract
 
 Decode must use real query predictions only, must not use GT during inference, and must not fabricate lanes. Final output should be sorted from left to right by bottom visible x.
 
-This branch includes `tools/eval_tusimple_official.py`, `tools/sweep_tusimple_official.py`, and `gcs_tools/tusimple_official_eval.py`. It does not include `tools/diagnose_tusimple_count_confusion.py`, `tools/diagnose_gcs_gt5.py`, training-time `official_best` checkpoint preservation, or later mainline Count/Quality/Boundary diagnostics unless a future task explicitly ports them. Use official-val for selection and test only once for final evaluation.
+This branch includes `tools/eval_tusimple_official.py`,
+`tools/sweep_tusimple_official.py`, `gcs_tools/tusimple_official_eval.py`,
+and the self-contained train/val query-trace helper
+`tools/diagnose_gt4_short_failure_queries.py`. It does not include
+`tools/diagnose_tusimple_count_confusion.py`, `tools/diagnose_gcs_gt5.py`,
+training-time `official_best` checkpoint preservation, or later mainline
+Count/Quality/Boundary diagnostics unless a future task explicitly ports them.
+Use official-val for selection and test only once for final evaluation.

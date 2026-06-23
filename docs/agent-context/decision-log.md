@@ -1272,6 +1272,113 @@ Mainline or experiment:
 Branch-local experimental option. Defaults preserve baseline behavior and do
 not import later Count/Quality/Survival/near-miss/official-best machinery.
 
+## 2026-06-24: Add Default-Disabled GT3 Extra-Survival Loss
+
+Decision:
+
+Add a default-disabled `gt3_extra_survival_loss` experiment knob as the
+smallest branch-safe follow-up to `dupmargin005`.
+
+Implementation:
+
+```text
+ultralytics/utils/gcs_loss.py
+  gt3_extra_survival_loss log item
+  gcs_gt3_extra_survival = 0.0 default-disabled gain
+  gcs_gt3_extra_margin_logit = 0.05
+  gcs_gt3_extra_topk = 1
+  applies only when target_lane_count(...) == 3
+  reuses current Hungarian indices
+  ranks top unmatched q- below weakest matched q+ in raw logit space
+
+tools/train_gcs.py
+ultralytics/cfg/default.yaml
+ultralytics/cfg/__init__.py
+  CLI/default/config typing for gcs_gt3_extra_* parameters
+
+ultralytics/models/yolo/gcs_lane/train.py
+ultralytics/models/yolo/gcs_lane/val.py
+  train/val loss item alignment and progress short name gt3_ext
+```
+
+Why:
+
+The 363-image official-val failure-mode compare showed that `dupmargin005`
+is a useful near-miss but its main count regression is GT3 surplus/spurious
+overcount, not duplicate-like extras or short-GT misses:
+
+```text
+count-failure duplicate_like_extra: count03=0, dupmargin005=0, gt4short15=1
+GT4 count_acc: count03=0.909091 -> dupmargin005=0.939394
+GT4 4->5: 5 -> 3
+GT3 3->4: 4 -> 11
+GT5 5->4: 1 -> 2
+total missed_short_gt: 33 -> 28
+count-failure-only missed_short_gt: 5 -> 5
+```
+
+The loss directly targets the high-score fourth unmatched query in GT3 images:
+
+```text
+relu(top_unmatched_logit - min_matched_logit + gcs_gt3_extra_margin_logit)
+```
+
+It does not use sigmoid, does not detach `min_matched_logit` in the first
+version, and does not apply to `gt_count <= 3`, GT4, or GT5.
+
+Default behavior:
+
+The feature is disabled by default with `gcs_gt3_extra_survival=0.0`, so baseline
+training behavior is unchanged unless the experiment flag is explicitly set.
+It does not change model outputs, decoder, postprocess, official metrics, K56
+fixed-y anchors, or the `--imgsz 544 960` contract.
+
+Recommended first experiment:
+
+```text
+run name = gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt3extra003_count03_under5_03
+--gcs-duplicate-margin 0.05
+--gcs-gt3-extra-survival 0.03
+--gcs-gt3-extra-margin-logit 0.05
+--gcs-gt3-extra-topk 1
+```
+
+Promotion gate:
+
+Use official-val only, with the `dupmargin005` selected decode
+`conf=0.05`, `point_valid_thr=0.45`, `nms_dist_px=0.0`, `max_det=6`,
+`min_points=6`. The run should clearly reduce GT3 `3->4` below `11`, keep GT4
+`4->5` near `3`, keep `count_acc_4` near `0.939394`, avoid increasing GT5
+`5->4` beyond `2`, and not raise `missed_short_gt`.
+
+Risks:
+
+Because the first version does not detach `min_matched_logit`, it can both
+lower the extra q- and raise the weakest matched q+. If GT5 undercount or score
+calibration worsens, the next conservative ablation is smaller gain or
+`min_matched_logit.detach()`. Do not choose that from final test; diagnose on
+train/val and official-val only.
+
+Validation status:
+
+Local code validation completed:
+
+```text
+python -m py_compile ultralytics/utils/gcs_loss.py tools/train_gcs.py ultralytics/models/yolo/gcs_lane/train.py ultralytics/models/yolo/gcs_lane/val.py ultralytics/cfg/__init__.py
+python tools/train_gcs.py --help
+python -c "from ultralytics.cfg import DEFAULT_CFG_DICT, check_cfg; check_cfg(DEFAULT_CFG_DICT.copy())"
+python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml --imgsz 544 960 --batch 1 --device cpu
+direct synthetic GT3 forward/backward check: loss_names_len=16, gt3_extra_unweighted=0.45, total=0.0135 with gain 0.03, progress_has_gt3_ext=True
+```
+
+Formal training and official-val metrics remain pending until the remote
+experiment completes.
+
+Mainline or experiment:
+
+Branch-local experimental option. Defaults preserve baseline behavior and do
+not import later Count/Quality/Survival/near-miss/official-best machinery.
+
 ## 2026-06-23: Reject farspur001 + gt5rank001 Combined Ranking Run
 
 Decision:
@@ -1355,12 +1462,13 @@ Rejected actions:
 
 Recommended next action:
 
-First fix the train/val query-trace diagnostic. The remote
-`tools/diagnose_gt4_short_failure_queries.py` currently fails because it imports
-missing legacy `tools.diagnose_tusimple_count_confusion`. After the diagnostic
-is usable, run train/val-only traces for `GT4` and `GT5` with the selected
-decode and compare against `count03_under5_03` and `dupmargin005`. If another
-experiment is still justified, ablate one mechanism at a time:
+The train/val query-trace diagnostic is now self-contained in
+`tools/diagnose_gt4_short_failure_queries.py` and no longer imports missing
+legacy `tools.diagnose_tusimple_count_confusion`. Run train/val-only traces for
+`GT4` and `GT5` with each run's official-val selected decode and compare
+`matched_qpos` versus `unmatched_qminus` distributions against
+`count03_under5_03`, `dupmargin005`, and `gt4short15`. If another experiment is
+still justified, ablate one mechanism at a time:
 
 ```text
 far_spurious_survival=0.01, gt5_rank_consistency=0.0

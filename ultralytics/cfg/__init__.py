@@ -208,6 +208,8 @@ CFG_FLOAT_KEYS = frozenset(
         "gcs_far_spurious_min_ape_px",
         "gcs_gt5_rank_consistency",
         "gcs_gt5_rank_margin_logit",
+        "gcs_gt3_extra_survival",
+        "gcs_gt3_extra_margin_logit",
         "gcs_short_valid_max_ape_px",
         "gcs_exist_pos_weight",
         "gcs_exist_focal_gamma",
@@ -304,6 +306,7 @@ CFG_INT_KEYS = frozenset(
         "gcs_far_spurious_min_visible_run",
         "gcs_far_spurious_max_neg_per_image",
         "gcs_gt5_rank_max_pairs_per_image",
+        "gcs_gt3_extra_topk",
     }
 )
 CFG_BOOL_KEYS = frozenset(

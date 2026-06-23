@@ -815,12 +815,150 @@ Integrated conclusion:
 
 Next safe action:
 
-Fix or replace the train/val query-trace diagnostic before launching another
-formal training run. The remote
-`tools/diagnose_gt4_short_failure_queries.py` currently imports missing legacy
-`tools.diagnose_tusimple_count_confusion`, so its output is not available for
-this run. Once fixed, run train/val-only traces for `GT4` and `GT5` using the
-official-val selected decode and compare against `count03_under5_03` and
-`dupmargin005`. Only after that should an ablation be considered, and it should
-separate `far_spurious_survival` from `gt5_rank_consistency` instead of
-combining them again.
+The train/val query-trace diagnostic has been replaced by the self-contained
+`tools/diagnose_gt4_short_failure_queries.py`, so it no longer imports missing
+legacy `tools.diagnose_tusimple_count_confusion`. Run train/val-only traces for
+`GT4` and `GT5` using each run's official-val selected decode and compare
+`matched_qpos` versus `unmatched_qminus` score/APE/visible-IoU distributions
+against `count03_under5_03`, `dupmargin005`, and `gt4short15`. Only after that
+should an ablation be considered, and it should separate
+`far_spurious_survival` from `gt5_rank_consistency` instead of combining them
+again.
+
+## 2026-06-24 dupmargin005 Official-Val Failure-Mode Compare
+
+The requested comparison used only the 363-image TuSimple official-val subset.
+No model was trained and final test stayed closed.
+
+Artifacts:
+
+```text
+script = tools/compare_tusimple_failure_modes.py
+summary = runs/gcs_lane/failure_compare/dupmargin005_compare/summary.json
+per-image CSV = runs/gcs_lane/failure_compare/dupmargin005_compare/per_image_failures.csv
+GT json = runs/gcs_lane/failure_compare/dupmargin005_compare/gt/tusimple_official_val_363_folder_aware_seed20260602.json
+```
+
+The three prediction files were regenerated with `tools/eval_tusimple_official.py`
+using the official-val selected decodes:
+
+```text
+count03:      conf=0.05, point_valid_thr=0.5,  nms_dist_px=50.0, max_det=8, min_points=5
+gt4short15:   conf=0.15, point_valid_thr=0.5,  nms_dist_px=0.0,  max_det=6, min_points=4
+dupmargin005: conf=0.05, point_valid_thr=0.45, nms_dist_px=0.0,  max_det=6, min_points=6
+```
+
+Rerun official-val metrics:
+
+```text
+count03:      ACC=0.969976, FP=0.019559, FN=0.014463, count_acc=0.969697, count_acc_4=0.909091, count_acc_5=0.986486
+gt4short15:   ACC=0.970837, FP=0.022084, FN=0.011708, count_acc=0.939394, count_acc_4=0.848485, count_acc_5=0.945946
+dupmargin005: ACC=0.970246, FP=0.024564, FN=0.016070, count_acc=0.953168, count_acc_4=0.939394, count_acc_5=0.972973
+```
+
+The comparison script uses one-to-one lane matching with overlap `>=3` common
+visible h-samples and mean absolute x error `<=20px`. Unmatched predictions
+near any GT lane or already matched prediction under the same gate are
+`duplicate_like_extra`; the rest are `spurious_extra`. Unmatched GT lanes with
+`<=20` visible samples are `missed_short_gt`.
+
+Count-failure-only buckets:
+
+```text
+count03:      failure_images=11, confusion={3->4:4, 4->3:1, 4->5:5, 5->4:1}, duplicate_like_extra=0, spurious_extra=15, missed_short_gt=5, missed_gt=3
+gt4short15:   failure_images=22, confusion={3->4:8, 4->3:1, 4->5:8, 4->6:1, 5->4:3, 5->6:1}, duplicate_like_extra=1, spurious_extra=24, missed_short_gt=8, missed_gt=2
+dupmargin005: failure_images=17, confusion={3->4:11, 4->3:1, 4->5:3, 5->4:2}, duplicate_like_extra=0, spurious_extra=18, missed_short_gt=5, missed_gt=2
+```
+
+Cross-run image sets:
+
+```text
+dupmargin_fixed_images = 4
+  all are GT4 images where count03 was wrong and dupmargin005 count is correct
+
+dupmargin_regressed_images = 10
+  GT3=7, GT4=2, GT5=1
+  dupmargin005 failure modes on these images: spurious_extra=10, duplicate_like_extra=0, missed_short_gt=3, missed_gt=1
+
+gt4short15_correct_dupmargin_wrong_images = 10
+  same GT-count shape as the dupmargin regression set: GT3=7, GT4=2, GT5=1
+```
+
+Integrated conclusion:
+
+- Supported fact: this diagnostic does not show `dupmargin005` mainly reducing
+  `duplicate_like_extra`. Under the strict official-lane comparison gate,
+  duplicate-like extras are essentially absent (`0` for `count03`, `0` for
+  `dupmargin005`, `1` for `gt4short15` on count-failure images).
+- Supported fact: `dupmargin005` helps the GT4 count shape. It improves
+  `count_acc_4` from `0.909091` to `0.939394` versus `count03` and from
+  `0.848485` to `0.939394` versus `gt4short15`, mainly by reducing `4->5`
+  overcount.
+- Supported fact: it is not primarily a short-GT-lane casualty versus
+  `count03`. Total `missed_short_gt` is lower (`33 -> 28`), and
+  count-failure-only `missed_short_gt` stays flat (`5 -> 5`).
+- Supported fact: the main regressions are extra `GT3` overcount and a small
+  GT5 undercount increase. `3->4` grows from `4` to `11`, and `5->4` grows
+  from `1` to `2` versus `count03`.
+- Explanation for not beating `gt4short15`: `dupmargin005` has better count
+  shape but worse official-val FN and ACC. The 10 images where `gt4short15` is
+  count-correct and `dupmargin005` is not are mostly `GT3` spurious-extra
+  overcounts, with one `GT5` `5->4` undercount.
+
+Next safe action:
+
+Do not tune thresholds or postprocess on final test. If continuing this line,
+use train/val or official-val query traces to isolate why `dupmargin005`
+creates more `GT3` extras while still slightly weakening `GT5` retention, then
+consider a narrower score/ranking change only if it targets that specific
+pattern without reopening final test.
+
+## 2026-06-24 GT3 Extra-Survival Follow-Up
+
+The smallest follow-up to `dupmargin005` is a default-disabled GT3-only query
+ranking loss, not another duplicate-like suppression pass and not a positive
+short-lane boost.
+
+Implemented bottleneck target:
+
+```text
+loss item = gt3_extra_survival_loss
+gain arg = --gcs-gt3-extra-survival, default 0.0
+margin arg = --gcs-gt3-extra-margin-logit, default 0.05
+top-k arg = --gcs-gt3-extra-topk, default 1
+```
+
+Rationale:
+
+- Supported fact from the strict official-val failure compare:
+  `dupmargin005` did not mainly reduce `duplicate_like_extra`; count-failure
+  duplicate-like extras were `0` for both `count03` and `dupmargin005`.
+- Supported fact: `dupmargin005` improved GT4 count shape, especially `4->5`
+  overcount (`5 -> 3`) and `count_acc_4` (`0.909091 -> 0.939394` versus
+  `count03`).
+- Supported fact: the main regression was GT3 surplus/spurious overcount:
+  `3->4` increased from `4` to `11`.
+- Supported fact: `missed_short_gt` did not explain the regression; total
+  `missed_short_gt` decreased from `33` to `28`, and count-failure-only
+  `missed_short_gt` stayed at `5`.
+
+The new loss therefore acts only when the internal GT lane-count target is
+exactly `3`. It reuses the current training Hungarian `indices`, takes the
+matched query logits as positives, takes unmatched query logits as negatives,
+and applies a logit-space hinge:
+
+```text
+relu(top_unmatched_logit - min_matched_logit + margin)
+```
+
+Only the top `gcs_gt3_extra_topk` unmatched queries are penalized, with first
+experiment settings `gain=0.03`, `margin=0.05`, and `topk=1`.
+
+Risks to monitor on official-val:
+
+- If GT5 `5->4` grows above `dupmargin005`'s `2`, try a smaller gain or a
+  conservative variant with `min_matched_logit.detach()`.
+- If GT4 `4->5` returns toward `count03`'s `5`, the loss is over-correcting
+  query score calibration and should not be promoted.
+- If GT3 `3->4` does not drop, the surplus query may be surviving through
+  point-valid/min-points interactions rather than pure existence-logit ranking.

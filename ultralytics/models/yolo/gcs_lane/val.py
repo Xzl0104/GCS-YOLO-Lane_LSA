@@ -36,6 +36,7 @@ LOSS_NAMES = (
     "spurious_margin_loss",
     "far_spurious_survival_loss",
     "gt5_rank_consistency_loss",
+    "gt3_extra_survival_loss",
 )
 LOSS_GAIN_ARGS = (
     "gcs_exist",
@@ -53,8 +54,9 @@ LOSS_GAIN_ARGS = (
     "gcs_spurious_margin",
     "gcs_far_spurious_survival",
     "gcs_gt5_rank_consistency",
+    "gcs_gt3_extra_survival",
 )
-DEFAULT_LOSS_GAINS = (2.0, 15.0, 0.0, 1.0, 0.0, 0.05, 0.1, 0.2, 0.2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+DEFAULT_LOSS_GAINS = (2.0, 15.0, 0.0, 1.0, 0.0, 0.05, 0.1, 0.2, 0.2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 METRIC_NAMES = (
     "precision",
     "recall",
