@@ -131,10 +131,31 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gcs-exist", type=float, default=2.0)
     parser.add_argument("--gcs-point", type=float, default=15.0)
     parser.add_argument(
+        "--gcs-lane-balanced-point-loss",
+        "--gcs_lane_balanced_point_loss",
+        nargs="?",
+        const=True,
+        default=False,
+        type=str2bool,
+        help="Replace the base matched x point loss with lane-balanced reduction. Default off.",
+    )
+    parser.add_argument(
         "--gcs-lane-balanced-point",
         type=float,
         default=0.0,
         help="Extra lane-balanced matched point loss gain. 0 disables.",
+    )
+    parser.add_argument(
+        "--gcs-gt4-short-lane-weight",
+        type=float,
+        default=1.0,
+        help="Lane-balanced point-loss multiplier for GT4 short lanes when --gcs-lane-balanced-point-loss is enabled.",
+    )
+    parser.add_argument(
+        "--gcs-gt4-short-lane-max-points",
+        type=int,
+        default=20,
+        help="Maximum GT-visible anchors for GT4 short-lane point-loss weighting.",
     )
     parser.add_argument(
         "--gcs-gt4-lane-balanced-point",
@@ -481,6 +502,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gcs-match-min-overlap", type=int, default=2, help="Minimum valid GT points for training Hungarian matching.")
     parser.add_argument("--gcs-match-max-x-dist", type=float, default=0.0, help="Optional training matcher mean x-distance gate in pixels. 0 disables.")
     parser.add_argument("--gcs-match-gate-px", type=float, default=160.0, help="Training matcher APE gate in pixels. 0 disables.")
+    parser.add_argument(
+        "--gcs-gt4-short-match-endpoint",
+        type=float,
+        default=0.0,
+        help="Extra normalized-x endpoint cost gain for short GT lanes in GT4 images during Hungarian matching. 0 disables.",
+    )
+    parser.add_argument(
+        "--gcs-gt4-short-match-max-points",
+        type=int,
+        default=20,
+        help="Maximum GT-visible anchors for the GT4 short-lane endpoint matcher cost.",
+    )
     parser.add_argument("--gcs-eval-conf", type=float, default=0.2)
     parser.add_argument("--gcs-eval-ape-thr", type=float, default=20.0)
     parser.add_argument("--gcs-eval-match-gate-px", type=float, default=None, help="Strict validation APE gate in pixels. Defaults to --gcs-eval-ape-thr.")
@@ -595,7 +628,10 @@ def main() -> None:
         "val_gcs_labels": args.val_gcs_labels,
         "gcs_exist": args.gcs_exist,
         "gcs_point": args.gcs_point,
+        "gcs_lane_balanced_point_loss": args.gcs_lane_balanced_point_loss,
         "gcs_lane_balanced_point": args.gcs_lane_balanced_point,
+        "gcs_gt4_short_lane_weight": args.gcs_gt4_short_lane_weight,
+        "gcs_gt4_short_lane_max_points": args.gcs_gt4_short_lane_max_points,
         "gcs_gt4_lane_balanced_point": args.gcs_gt4_lane_balanced_point,
         "gcs_gt4_lane_balanced_topk": args.gcs_gt4_lane_balanced_topk,
         "gcs_gt4_lane_balanced_max_mult": args.gcs_gt4_lane_balanced_max_mult,
@@ -668,6 +704,8 @@ def main() -> None:
         "gcs_match_min_overlap": args.gcs_match_min_overlap,
         "gcs_match_max_x_dist": args.gcs_match_max_x_dist,
         "gcs_match_gate_px": args.gcs_match_gate_px,
+        "gcs_gt4_short_match_endpoint": args.gcs_gt4_short_match_endpoint,
+        "gcs_gt4_short_match_max_points": args.gcs_gt4_short_match_max_points,
         "gcs_eval_conf": args.gcs_eval_conf,
         "gcs_eval_ape_thr": args.gcs_eval_ape_thr,
         "gcs_eval_match_gate_px": args.gcs_eval_match_gate_px,

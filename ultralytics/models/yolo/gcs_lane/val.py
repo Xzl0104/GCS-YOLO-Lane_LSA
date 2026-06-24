@@ -38,6 +38,9 @@ LOSS_NAMES = (
     "far_spurious_survival_loss",
     "gt5_rank_consistency_loss",
     "gt3_extra_survival_loss",
+    "gt4_short_lane_loss",
+    "gt4_short_lane_valid_points_mean",
+    "gt4_short_lane_count",
 )
 LOSS_GAIN_ARGS = (
     "gcs_exist",
@@ -57,6 +60,9 @@ LOSS_GAIN_ARGS = (
     "gcs_far_spurious_survival",
     "gcs_gt5_rank_consistency",
     "gcs_gt3_extra_survival",
+    "gcs_gt4_short_lane_log_gain",
+    "gcs_gt4_short_lane_valid_points_log_gain",
+    "gcs_gt4_short_lane_count_log_gain",
 )
 DEFAULT_LOSS_GAINS = (
     2.0,
@@ -69,6 +75,9 @@ DEFAULT_LOSS_GAINS = (
     0.1,
     0.2,
     0.2,
+    0.0,
+    0.0,
+    0.0,
     0.0,
     0.0,
     0.0,

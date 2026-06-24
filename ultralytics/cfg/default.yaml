@@ -114,7 +114,10 @@ val_gcs_labels: # (str, optional) explicit GCS-YOLO-Lane val labels_gcs director
 gcs_imgsz: # (list[int], optional) real GCS input shape as [height, width], e.g. [544, 960]
 gcs_exist: 2.0 # (float) GCS lane existence loss gain
 gcs_point: 15.0 # (float) GCS normalized point L1 loss gain
+gcs_lane_balanced_point_loss: False # (bool) replace base x point loss with per-lane balanced reduction
 gcs_lane_balanced_point: 0.0 # (float) extra lane-balanced matched point loss gain; 0 disables
+gcs_gt4_short_lane_weight: 1.0 # (float) multiplier for GT4 short lanes in lane-balanced base point loss
+gcs_gt4_short_lane_max_points: 20 # (int) maximum GT-visible anchors for GT4 short-lane point weighting
 gcs_gt4_lane_balanced_point: 0.0 # (float) GT4-only weak matched-lane point reweighting gain; 0 disables
 gcs_gt4_lane_balanced_topk: 1 # (int) number of highest point-loss matched GT4 lanes to upweight
 gcs_gt4_lane_balanced_max_mult: 2.0 # (float) maximum weak-lane multiplier before per-image mean normalization
@@ -189,6 +192,8 @@ gcs_cost_exist: 0.1 # (float) Hungarian matching existence-confidence cost gain
 gcs_match_min_overlap: 2 # (int) minimum valid GT points required for training Hungarian matching
 gcs_match_max_x_dist: 0.0 # (float) optional training matcher mean x-distance gate in pixels; 0 disables
 gcs_match_gate_px: 160.0 # (float) training matcher APE gate in pixels; 0 disables
+gcs_gt4_short_match_endpoint: 0.0 # (float) extra normalized-x endpoint cost gain for short GT lanes in GT4 images; 0 disables
+gcs_gt4_short_match_max_points: 20 # (int) maximum GT-visible anchors for GT4 short-lane endpoint matcher cost
 gcs_eval_conf: 0.2 # (float) GCS validation lane existence threshold for Precision/Recall/F1; quality-aware exist is calibrated lower
 gcs_eval_ape_thr: 20.0 # (float) GCS validation APE threshold in pixels for TP matching
 gcs_eval_match_gate_px: # (float, optional) strict validation APE gate; null defaults to gcs_eval_ape_thr

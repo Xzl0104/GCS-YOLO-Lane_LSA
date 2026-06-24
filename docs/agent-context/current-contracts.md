@@ -66,7 +66,13 @@ K56 as mainline`) plus default-disabled experiment knobs for
 `short_valid_recall_loss`, `far_spurious_survival_loss`,
 `gt5_rank_consistency_loss`, `gt3_extra_survival_loss`, and
 `gt4_lane_balanced_point_loss` experiment knobs, plus the train-only
-`gcs_gt4_sample_gain` sampler knob.
+`gcs_gt4_sample_gain` sampler knob. It also includes default-off GT4
+short-lane candidate-recall knobs for replacing the base x point-loss
+reduction with lane-balanced reduction and for adding GT4-short endpoint
+matching cost:
+`gcs_lane_balanced_point_loss`, `gcs_gt4_short_lane_weight`,
+`gcs_gt4_short_lane_max_points`, `gcs_gt4_short_match_endpoint`, and
+`gcs_gt4_short_match_max_points`.
 Later mechanisms such as GT4 short-lane sampling, `extra_exist_loss`, short
 matched existence floor, and count-confusion diagnostic tooling are preserved
 only as legacy experiment conclusions in the docs. They are not active CLI,
@@ -142,6 +148,9 @@ spurious_margin_loss
 far_spurious_survival_loss
 gt5_rank_consistency_loss
 gt3_extra_survival_loss
+gt4_short_lane_loss
+gt4_short_lane_valid_points_mean
+gt4_short_lane_count
 ```
 
 `duplicate_margin_loss`, `spurious_margin_loss`, `lane_balanced_point_loss`,
@@ -150,6 +159,18 @@ gt3_extra_survival_loss
 `gt4_lane_balanced_point_loss` are default-disabled experimental log items.
 With the default gains they contribute `0` to the training objective; enabling
 any of them is an explicit experiment contract change.
+
+`gcs_lane_balanced_point_loss` is a boolean switch, default `false`. When it is
+`true`, the base `point_loss` uses x-only per-lane reduction instead of the
+legacy valid-point pooled reduction. In GT4 images, lanes with visible points
+`<= gcs_gt4_short_lane_max_points` are multiplied by
+`gcs_gt4_short_lane_weight`. The three `gt4_short_lane_*` fields are diagnostic
+training/validation log items and do not add independent objective terms.
+
+`gcs_gt4_short_match_endpoint` is default `0.0`; with the default value the
+Hungarian matcher is unchanged. When enabled, it adds normalized-x endpoint
+cost only for GT4 GT lanes whose visible-point count is
+`<= gcs_gt4_short_match_max_points`.
 
 ## Decode And Evaluation Contract
 

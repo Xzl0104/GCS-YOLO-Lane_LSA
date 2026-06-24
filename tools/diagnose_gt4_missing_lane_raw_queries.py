@@ -745,6 +745,7 @@ def run_diagnostic(args: argparse.Namespace) -> dict:
     stage_min_points = sum(int(row["survives_min_points"]) for row in missing_rows)
     stage_conf = sum(int(row["survives_conf"]) for row in missing_rows)
     stage_final = sum(int(row["survives_final_decode"]) for row in missing_rows)
+    drop_reason_hist = Counter(row["drop_reason"] for row in missing_rows)
 
     visible_values = [int(row["gt_visible_points"]) for row in missing_rows]
     score_values = [row["best_query_score"] for row in missing_rows]
@@ -775,7 +776,16 @@ def run_diagnostic(args: argparse.Namespace) -> dict:
         "total_gt4_4to3_images": int(selected_images) if count_pair == (4, 3) else None,
         "selected_images": int(selected_images),
         "total_missing_gt_lanes": int(total_missing),
-        "drop_reason_histogram": {str(k): int(v) for k, v in sorted(Counter(row["drop_reason"] for row in missing_rows).items())},
+        "drop_reason_histogram": {str(k): int(v) for k, v in sorted(drop_reason_hist.items())},
+        "gt4_diagnostics": {
+            "gt4_missing_lanes": int(total_missing),
+            "geometry_bad": int(drop_reason_hist.get("geometry_bad", 0)),
+            "low_point_valid": int(drop_reason_hist.get("low_point_valid", 0)),
+            "low_score": int(drop_reason_hist.get("low_score", 0)),
+            "raw_match_recall": rate(raw_match_count, total_missing),
+            "raw_match_count": int(raw_match_count),
+            "denominator_missing_gt_lanes": int(total_missing),
+        },
         "missing_lane_visible_point_histogram": histogram_int(visible_values),
         "missing_lane_visible_point_bucket_histogram": {str(k): int(v) for k, v in sorted(Counter(bucket_visible(x) for x in visible_values).items())},
         "missing_lane_side_histogram": {str(k): int(v) for k, v in sorted(Counter(side_values).items())},

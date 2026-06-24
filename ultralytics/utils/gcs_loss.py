@@ -32,6 +32,9 @@ class GCSLoss(nn.Module):
         "far_spurious_survival_loss",
         "gt5_rank_consistency_loss",
         "gt3_extra_survival_loss",
+        "gt4_short_lane_loss",
+        "gt4_short_lane_valid_points_mean",
+        "gt4_short_lane_count",
     )
 
     def __init__(
@@ -40,7 +43,10 @@ class GCSLoss(nn.Module):
         lambda_exist: float | None = None,
         lambda_point: float | None = None,
         lambda_point_valid: float | None = None,
+        use_lane_balanced_point_loss: bool | None = None,
         lane_balanced_point_gain: float | None = None,
+        gt4_short_lane_weight: float | None = None,
+        gt4_short_lane_max_points: int | None = None,
         gt4_lane_balanced_point_gain: float | None = None,
         gt4_lane_balanced_topk: int | None = None,
         gt4_lane_balanced_max_mult: float | None = None,
@@ -111,6 +117,8 @@ class GCSLoss(nn.Module):
         match_min_overlap: int | None = None,
         match_max_x_dist: float | None = None,
         match_gate_px: float | None = None,
+        gt4_short_match_endpoint: float | None = None,
+        gt4_short_match_max_points: int | None = None,
         image_size=None,
     ):
         """Initialize GCS-YOLO-Lane loss weights and Hungarian matcher."""
@@ -122,10 +130,25 @@ class GCSLoss(nn.Module):
         self.point_valid_gain = float(
             lambda_point_valid if lambda_point_valid is not None else self._arg(args, "gcs_point_valid", 1.0)
         )
+        self.use_lane_balanced_point_loss = self._to_bool(
+            use_lane_balanced_point_loss
+            if use_lane_balanced_point_loss is not None
+            else self._arg(args, "gcs_lane_balanced_point_loss", False)
+        )
         self.lane_balanced_point_gain = float(
             lane_balanced_point_gain
             if lane_balanced_point_gain is not None
             else self._arg(args, "gcs_lane_balanced_point", 0.0)
+        )
+        self.gt4_short_lane_weight = float(
+            gt4_short_lane_weight
+            if gt4_short_lane_weight is not None
+            else self._arg(args, "gcs_gt4_short_lane_weight", 1.0)
+        )
+        self.gt4_short_lane_max_points = int(
+            gt4_short_lane_max_points
+            if gt4_short_lane_max_points is not None
+            else self._arg(args, "gcs_gt4_short_lane_max_points", 20)
         )
         self.gt4_lane_balanced_point_gain = float(
             gt4_lane_balanced_point_gain
@@ -488,6 +511,12 @@ class GCSLoss(nn.Module):
             raise ValueError(f"gcs_gt3_extra_topk must be >= 1, got {self.gt3_extra_topk}.")
         if self.lane_balanced_point_gain < 0.0:
             raise ValueError(f"gcs_lane_balanced_point must be >= 0, got {self.lane_balanced_point_gain}.")
+        if self.gt4_short_lane_weight < 0.0:
+            raise ValueError(f"gcs_gt4_short_lane_weight must be >= 0, got {self.gt4_short_lane_weight}.")
+        if self.gt4_short_lane_max_points < 1:
+            raise ValueError(
+                f"gcs_gt4_short_lane_max_points must be >= 1, got {self.gt4_short_lane_max_points}."
+            )
         if self.gt4_lane_balanced_point_gain < 0.0:
             raise ValueError(
                 f"gcs_gt4_lane_balanced_point must be >= 0, got {self.gt4_lane_balanced_point_gain}."
@@ -609,6 +638,16 @@ class GCSLoss(nn.Module):
             min_overlap=int(match_min_overlap if match_min_overlap is not None else self._arg(args, "gcs_match_min_overlap", 2)),
             max_x_dist=float(match_max_x_dist if match_max_x_dist is not None else self._arg(args, "gcs_match_max_x_dist", 0.0)),
             match_gate_px=float(match_gate_px if match_gate_px is not None else self._arg(args, "gcs_match_gate_px", 160.0)),
+            gt4_short_match_endpoint=float(
+                gt4_short_match_endpoint
+                if gt4_short_match_endpoint is not None
+                else self._arg(args, "gcs_gt4_short_match_endpoint", 0.0)
+            ),
+            gt4_short_match_max_points=int(
+                gt4_short_match_max_points
+                if gt4_short_match_max_points is not None
+                else self._arg(args, "gcs_gt4_short_match_max_points", 20)
+            ),
         )
 
     @staticmethod
@@ -617,6 +656,20 @@ class GCSLoss(nn.Module):
         if isinstance(args, dict):
             return args.get(name, default)
         return getattr(args, name, default)
+
+    @staticmethod
+    def _to_bool(value) -> bool:
+        """Parse config booleans that may arrive as strings from YAML/CLI layers."""
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            text = value.strip().lower()
+            if text in {"true", "1", "yes", "y", "on"}:
+                return True
+            if text in {"false", "0", "no", "n", "off", ""}:
+                return False
+            raise ValueError(f"Expected a boolean-like value, got {value!r}.")
+        return bool(value)
 
     @staticmethod
     def _parse_int_set(value, default) -> frozenset[int]:
@@ -780,7 +833,7 @@ class GCSLoss(nn.Module):
             loss = loss * focal_weight
         return loss.mean()
 
-    def point_loss(
+    def _legacy_point_loss(
         self,
         pred_points: torch.Tensor,
         gt_points: list[torch.Tensor],
@@ -803,6 +856,87 @@ class GCSLoss(nn.Module):
             losses.append(loss.sum() / valid.sum().clamp_min(1.0))
 
         return torch.stack(losses).mean() if losses else self._zero_like(pred_points)
+
+    def _lane_balanced_x_loss(
+        self,
+        pred_points: torch.Tensor,
+        gt_points: list[torch.Tensor],
+        gt_valid: list[torch.Tensor],
+        indices: list[tuple[torch.Tensor, torch.Tensor]],
+        target_counts: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        """Return x-only lane-balanced matched point loss and GT4 short-lane diagnostics."""
+        losses = []
+        short_losses = []
+        short_valid_counts = []
+        device, dtype = pred_points.device, pred_points.dtype
+        max_points = float(self.gt4_short_lane_max_points)
+        short_weight = float(self.gt4_short_lane_weight)
+        for b, (src_idx, tgt_idx) in enumerate(indices):
+            if src_idx.numel() == 0:
+                continue
+            pred_x = pred_points[b, src_idx, :, 0]
+            target_x = gt_points[b].to(device=device, dtype=dtype)[tgt_idx, :, 0]
+            valid = gt_valid[b].to(device=device, dtype=dtype)[tgt_idx]
+            visible = valid.sum(dim=1)
+            has_visible = visible > 0.0
+            if not has_visible.any():
+                continue
+
+            lane_loss = ((pred_x - target_x).abs() * valid).sum(dim=1) / visible.clamp_min(1.0)
+            lane_weight = torch.ones_like(lane_loss)
+            gt_count = None
+            if target_counts is not None:
+                gt_count = int(round(float(target_counts[b].detach().item())))
+            elif gt_valid[b].numel():
+                gt_count = int((gt_valid[b].detach().to(device=device).float().sum(dim=1) >= 2).sum().item())
+
+            short_mask = has_visible & (visible <= max_points)
+            if gt_count == 4 and short_mask.any():
+                lane_weight = torch.where(short_mask, lane_weight.new_full((), short_weight), lane_weight)
+                short_losses.append((lane_loss[short_mask] * short_weight).detach())
+                short_valid_counts.append(visible[short_mask].detach())
+
+            losses.append((lane_loss * lane_weight)[has_visible])
+
+        zero = self._zero_like(pred_points)
+        loss = torch.cat(losses).mean() if losses else zero
+        if short_losses:
+            short_loss = torch.cat(short_losses).mean()
+            valid_mean = torch.cat(short_valid_counts).to(dtype=dtype).mean()
+            short_count = pred_points.new_tensor(float(sum(x.numel() for x in short_losses)))
+        else:
+            short_loss = zero.detach()
+            valid_mean = zero.detach()
+            short_count = zero.detach()
+        stats = {
+            "gt4_short_lane_loss": short_loss.to(device=device, dtype=dtype),
+            "gt4_short_lane_valid_points_mean": valid_mean.to(device=device, dtype=dtype),
+            "gt4_short_lane_count": short_count.to(device=device, dtype=dtype),
+        }
+        return loss, stats
+
+    def point_loss(
+        self,
+        pred_points: torch.Tensor,
+        gt_points: list[torch.Tensor],
+        gt_valid: list[torch.Tensor],
+        indices: list[tuple[torch.Tensor, torch.Tensor]],
+        target_counts: torch.Tensor | None = None,
+        return_stats: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        """Matched point loss, optionally using x-only lane-balanced reduction."""
+        if not self.use_lane_balanced_point_loss:
+            loss = self._legacy_point_loss(pred_points, gt_points, gt_valid, indices)
+            zero = self._zero_like(pred_points).detach()
+            stats = {
+                "gt4_short_lane_loss": zero,
+                "gt4_short_lane_valid_points_mean": zero,
+                "gt4_short_lane_count": zero,
+            }
+        else:
+            loss, stats = self._lane_balanced_x_loss(pred_points, gt_points, gt_valid, indices, target_counts)
+        return (loss, stats) if return_stats else loss
 
     def lane_balanced_point_loss(
         self,
@@ -1575,8 +1709,11 @@ class GCSLoss(nn.Module):
         gt_points, gt_valid = self._targets_from_batch(batch)
 
         indices = self.matcher(pred_points, pred_logits, gt_points, gt_valid)
+        target_counts = self.target_lane_count(pred_logits, batch, gt_valid).detach()
         exist_loss = self.exist_loss(pred_logits, pred_points, pred_valid_logits, gt_points, gt_valid, indices)
-        point_loss = self.point_loss(pred_points, gt_points, gt_valid, indices)
+        point_loss, point_stats = self.point_loss(
+            pred_points, gt_points, gt_valid, indices, target_counts=target_counts, return_stats=True
+        )
         lane_balanced_point_loss = self.lane_balanced_point_loss(pred_points, gt_points, gt_valid, indices)
         gt4_lane_balanced_point_loss = self.gt4_lane_balanced_point_loss(
             pred_points, batch, gt_points, gt_valid, indices
@@ -1599,6 +1736,9 @@ class GCSLoss(nn.Module):
         )
         gt5_rank_consistency_loss = self.gt5_rank_consistency_loss(pred_logits, pred_points, batch, gt_valid, indices)
         gt3_extra_survival_loss = self.gt3_extra_survival_loss(pred_logits, batch, gt_valid, indices)
+        gt4_short_lane_loss = point_stats["gt4_short_lane_loss"]
+        gt4_short_lane_valid_points_mean = point_stats["gt4_short_lane_valid_points_mean"]
+        gt4_short_lane_count = point_stats["gt4_short_lane_count"]
 
         mask_loss = self._zero_like(pred_points)
         if "aux_mask_logits" in preds and "semantic_mask" in batch:
@@ -1648,6 +1788,9 @@ class GCSLoss(nn.Module):
                 far_spurious_survival_loss.detach(),
                 gt5_rank_consistency_loss.detach(),
                 gt3_extra_survival_loss.detach(),
+                gt4_short_lane_loss.detach(),
+                gt4_short_lane_valid_points_mean.detach(),
+                gt4_short_lane_count.detach(),
             )
         )
         return total, loss_items
