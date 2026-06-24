@@ -191,6 +191,11 @@ CFG_FLOAT_KEYS = frozenset(
         "gcs_gt4_lane_balanced_max_mult",
         "gcs_point_valid",
         "gcs_short_valid_recall",
+        "gcs_gt4_short_valid_lane_weight",
+        "gcs_gt4_short_valid_pos_weight",
+        "gcs_unmatched_valid_neg_weight",
+        "gcs_gt4_short_valid_recall_weight",
+        "gcs_gt4_short_valid_count_floor_weight",
         "gcs_smooth",
         "gcs_curve",
         "gcs_mask",
@@ -281,6 +286,7 @@ CFG_FRACTION_KEYS = frozenset(
         "gcs_far_spurious_point_valid_thr",
         "gcs_gt5_rank_min_qminus_score",
         "gcs_short_valid_min_visible_iou",
+        "gcs_gt4_short_valid_count_floor_ratio",
     }
 )
 CFG_INT_KEYS = frozenset(
@@ -304,6 +310,8 @@ CFG_INT_KEYS = frozenset(
         "gcs_lane_count_min_group",
         "gcs_short_valid_max_visible",
         "gcs_short_valid_min_visible",
+        "gcs_gt4_short_valid_max_points",
+        "gcs_gt4_short_valid_count_floor_min",
         "gcs_count_under5_min_lanes",
         "gcs_duplicate_gt_count",
         "gcs_duplicate_short_visible_max",
@@ -329,6 +337,9 @@ CFG_BOOL_KEYS = frozenset(
         "overlap_mask",
         "val",
         "gcs_lane_balanced_point_loss",
+        "gcs_lane_balanced_valid_loss",
+        "gcs_gt4_short_valid_recall",
+        "gcs_gt4_short_valid_count_floor",
         "save_json",
         "half",
         "dnn",

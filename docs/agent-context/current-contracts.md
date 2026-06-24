@@ -72,7 +72,15 @@ reduction with lane-balanced reduction and for adding GT4-short endpoint
 matching cost:
 `gcs_lane_balanced_point_loss`, `gcs_gt4_short_lane_weight`,
 `gcs_gt4_short_lane_max_points`, `gcs_gt4_short_match_endpoint`, and
-`gcs_gt4_short_match_max_points`.
+`gcs_gt4_short_match_max_points`. It further includes default-off GT4
+short-lane valid repair knobs:
+`gcs_lane_balanced_valid_loss`, `gcs_gt4_short_valid_lane_weight`,
+`gcs_gt4_short_valid_pos_weight`, `gcs_unmatched_valid_neg_weight`,
+`gcs_gt4_short_valid_recall`, `gcs_gt4_short_valid_recall_weight`,
+`gcs_gt4_short_valid_max_points`,
+`gcs_gt4_short_valid_count_floor`, `gcs_gt4_short_valid_count_floor_weight`,
+`gcs_gt4_short_valid_count_floor_ratio`, and
+`gcs_gt4_short_valid_count_floor_min`.
 Later mechanisms such as GT4 short-lane sampling, `extra_exist_loss`, short
 matched existence floor, and count-confusion diagnostic tooling are preserved
 only as legacy experiment conclusions in the docs. They are not active CLI,
@@ -138,6 +146,15 @@ gt4_short_lane_loss
 gt4_lane_balanced_point_loss
 point_valid_loss
 short_valid_recall_loss
+gt4_short_valid_recall_loss
+gt4_short_valid_count_floor_loss
+valid_lb_gt4_short_count
+valid_lb_gt4_short_gt_points_mean
+valid_lb_gt4_short_pred_prob_mean
+valid_lb_gt4_short_pred_sum_mean
+unmatched_valid_neg_loss
+unmatched_valid_query_count
+unmatched_valid_prob_mean
 smooth_loss
 curve_loss
 mask_loss
@@ -151,12 +168,17 @@ gt5_rank_consistency_loss
 gt3_extra_survival_loss
 gt4_short_lane_valid_points_mean
 gt4_short_lane_count
+gt4_short_valid_lane_count
+gt4_short_gt_valid_points_mean
+gt4_short_pred_valid_prob_mean
+gt4_short_pred_valid_sum_mean
 ```
 
 `duplicate_margin_loss`, `spurious_margin_loss`, `lane_balanced_point_loss`,
 `short_valid_recall_loss`, `far_spurious_survival_loss`, and
 `gt5_rank_consistency_loss`, `gt3_extra_survival_loss`, and
-`gt4_lane_balanced_point_loss` are default-disabled experimental log items.
+`gt4_lane_balanced_point_loss`, `gt4_short_valid_recall_loss`, and
+`gt4_short_valid_count_floor_loss` are default-disabled experimental log items.
 With the default gains they contribute `0` to the training objective; enabling
 any of them is an explicit experiment contract change.
 
@@ -174,6 +196,38 @@ reports `gt4_short_lane_loss`; `gt4_lbp` reports the separate
 `gt4lbp_off`; when `gcs_short_valid_recall=0.0`, it marks the short valid
 recall column as `short_off`. Those disabled columns are expected to be
 zero and do not contribute to `total_loss`.
+
+`gcs_lane_balanced_valid_loss` is a boolean switch, default `false`. When it is
+`true`, the base `point_valid_loss` replaces the legacy global point-valid BCE
+reduction with a matched-lane reduction: BCE is computed with
+`reduction="none"`, each matched lane is averaged over all `K` anchors so
+invalid anchors stay supervised, and then lanes are averaged. Matched lanes
+from images whose true GT lane count is `4` and whose GT-visible count is
+`<= gcs_gt4_short_valid_max_points` receive
+`gcs_gt4_short_valid_lane_weight`; `gcs_gt4_short_valid_pos_weight` is an
+optional positive-anchor multiplier inside this replacement loss. The
+replacement also retains the legacy unmatched-query negative supervision:
+queries not selected by the Hungarian matcher receive zero-target point-valid
+BCE as `softplus(valid_logit)`, reduced by averaging over K anchors per query
+and then over unmatched queries, with
+`gcs_unmatched_valid_neg_weight=0.5` by default. The matched lane-balanced loss
+and unmatched negative loss are combined inside `point_valid_loss` as
+`(matched + weight * unmatched) / (1 + weight)`. This switch does not change
+model structure, matching output shape, decoder, NMS, sampler, official
+metrics, or test-selection rules. The `valid_lb_*` and `unmatched_valid_*`
+loss items are diagnostic log fields for this replacement path.
+
+`gcs_gt4_short_valid_recall` is a boolean switch, default `false`. When
+enabled, it adds a positive-only `softplus(-valid_logit)` loss on GT-valid
+points of Hungarian-matched lanes whose current image has true GT lane count
+`4` and whose GT visible-point count is between `2` and
+`gcs_gt4_short_valid_max_points` inclusive. `gcs_gt4_short_valid_count_floor`
+is a separate default-off follow-up that applies a light hinge when the
+predicted valid probability sum over the GT-valid region falls below
+`min(valid_points, max(gcs_gt4_short_valid_count_floor_min,
+gcs_gt4_short_valid_count_floor_ratio * valid_points))`. Neither option
+changes model structure, matching output shape, decoder, NMS, sampler,
+official metrics, or test-selection rules.
 
 `gcs_gt4_short_match_endpoint` is default `0.0`; with the default value the
 Hungarian matcher is unchanged. When enabled, it adds normalized-x endpoint

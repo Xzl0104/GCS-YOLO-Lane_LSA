@@ -23,6 +23,15 @@ class GCSLoss(nn.Module):
         "gt4_lane_balanced_point_loss",
         "point_valid_loss",
         "short_valid_recall_loss",
+        "gt4_short_valid_recall_loss",
+        "gt4_short_valid_count_floor_loss",
+        "valid_lb_gt4_short_count",
+        "valid_lb_gt4_short_gt_points_mean",
+        "valid_lb_gt4_short_pred_prob_mean",
+        "valid_lb_gt4_short_pred_sum_mean",
+        "unmatched_valid_neg_loss",
+        "unmatched_valid_query_count",
+        "unmatched_valid_prob_mean",
         "smooth_loss",
         "curve_loss",
         "mask_loss",
@@ -36,6 +45,10 @@ class GCSLoss(nn.Module):
         "gt3_extra_survival_loss",
         "gt4_short_lane_valid_points_mean",
         "gt4_short_lane_count",
+        "gt4_short_valid_lane_count",
+        "gt4_short_gt_valid_points_mean",
+        "gt4_short_pred_valid_prob_mean",
+        "gt4_short_pred_valid_sum_mean",
     )
 
     def __init__(
@@ -56,6 +69,17 @@ class GCSLoss(nn.Module):
         short_valid_min_visible: int | None = None,
         short_valid_max_ape_px: float | None = None,
         short_valid_min_visible_iou: float | None = None,
+        use_lane_balanced_valid_loss: bool | None = None,
+        gt4_short_valid_lane_weight: float | None = None,
+        gt4_short_valid_pos_weight: float | None = None,
+        unmatched_valid_neg_weight: float | None = None,
+        gt4_short_valid_recall: bool | None = None,
+        gt4_short_valid_recall_weight: float | None = None,
+        gt4_short_valid_max_points: int | None = None,
+        gt4_short_valid_count_floor: bool | None = None,
+        gt4_short_valid_count_floor_weight: float | None = None,
+        gt4_short_valid_count_floor_ratio: float | None = None,
+        gt4_short_valid_count_floor_min: int | None = None,
         lambda_smooth: float | None = None,
         lambda_curve: float | None = None,
         lambda_mask: float | None = None,
@@ -190,6 +214,61 @@ class GCSLoss(nn.Module):
             short_valid_min_visible_iou
             if short_valid_min_visible_iou is not None
             else self._arg(args, "gcs_short_valid_min_visible_iou", 0.3)
+        )
+        self.use_lane_balanced_valid_loss = self._to_bool(
+            use_lane_balanced_valid_loss
+            if use_lane_balanced_valid_loss is not None
+            else self._arg(args, "gcs_lane_balanced_valid_loss", False)
+        )
+        self.gt4_short_valid_lane_weight = float(
+            gt4_short_valid_lane_weight
+            if gt4_short_valid_lane_weight is not None
+            else self._arg(args, "gcs_gt4_short_valid_lane_weight", 1.5)
+        )
+        self.gt4_short_valid_pos_weight = float(
+            gt4_short_valid_pos_weight
+            if gt4_short_valid_pos_weight is not None
+            else self._arg(args, "gcs_gt4_short_valid_pos_weight", 1.0)
+        )
+        self.unmatched_valid_neg_weight = float(
+            unmatched_valid_neg_weight
+            if unmatched_valid_neg_weight is not None
+            else self._arg(args, "gcs_unmatched_valid_neg_weight", 0.5)
+        )
+        self.gt4_short_valid_recall_enabled = self._to_bool(
+            gt4_short_valid_recall
+            if gt4_short_valid_recall is not None
+            else self._arg(args, "gcs_gt4_short_valid_recall", False)
+        )
+        self.gt4_short_valid_recall_weight = float(
+            gt4_short_valid_recall_weight
+            if gt4_short_valid_recall_weight is not None
+            else self._arg(args, "gcs_gt4_short_valid_recall_weight", 0.2)
+        )
+        self.gt4_short_valid_max_points = int(
+            gt4_short_valid_max_points
+            if gt4_short_valid_max_points is not None
+            else self._arg(args, "gcs_gt4_short_valid_max_points", 20)
+        )
+        self.gt4_short_valid_count_floor_enabled = self._to_bool(
+            gt4_short_valid_count_floor
+            if gt4_short_valid_count_floor is not None
+            else self._arg(args, "gcs_gt4_short_valid_count_floor", False)
+        )
+        self.gt4_short_valid_count_floor_weight = float(
+            gt4_short_valid_count_floor_weight
+            if gt4_short_valid_count_floor_weight is not None
+            else self._arg(args, "gcs_gt4_short_valid_count_floor_weight", 0.05)
+        )
+        self.gt4_short_valid_count_floor_ratio = float(
+            gt4_short_valid_count_floor_ratio
+            if gt4_short_valid_count_floor_ratio is not None
+            else self._arg(args, "gcs_gt4_short_valid_count_floor_ratio", 0.6)
+        )
+        self.gt4_short_valid_count_floor_min = int(
+            gt4_short_valid_count_floor_min
+            if gt4_short_valid_count_floor_min is not None
+            else self._arg(args, "gcs_gt4_short_valid_count_floor_min", 3)
         )
         self.smooth_gain = float(lambda_smooth if lambda_smooth is not None else self._arg(args, "gcs_smooth", 0.05))
         self.curve_gain = float(lambda_curve if lambda_curve is not None else self._arg(args, "gcs_curve", 0.1))
@@ -544,6 +623,46 @@ class GCSLoss(nn.Module):
                 "gcs_short_valid_min_visible_iou must be in [0, 1], "
                 f"got {self.short_valid_min_visible_iou}."
             )
+        if self.gt4_short_valid_lane_weight < 0.0:
+            raise ValueError(
+                "gcs_gt4_short_valid_lane_weight must be >= 0, "
+                f"got {self.gt4_short_valid_lane_weight}."
+            )
+        if self.gt4_short_valid_pos_weight < 0.0:
+            raise ValueError(
+                "gcs_gt4_short_valid_pos_weight must be >= 0, "
+                f"got {self.gt4_short_valid_pos_weight}."
+            )
+        if self.unmatched_valid_neg_weight < 0.0:
+            raise ValueError(
+                "gcs_unmatched_valid_neg_weight must be >= 0, "
+                f"got {self.unmatched_valid_neg_weight}."
+            )
+        if self.gt4_short_valid_recall_weight < 0.0:
+            raise ValueError(
+                "gcs_gt4_short_valid_recall_weight must be >= 0, "
+                f"got {self.gt4_short_valid_recall_weight}."
+            )
+        if self.gt4_short_valid_max_points < 1:
+            raise ValueError(
+                "gcs_gt4_short_valid_max_points must be >= 1, "
+                f"got {self.gt4_short_valid_max_points}."
+            )
+        if self.gt4_short_valid_count_floor_weight < 0.0:
+            raise ValueError(
+                "gcs_gt4_short_valid_count_floor_weight must be >= 0, "
+                f"got {self.gt4_short_valid_count_floor_weight}."
+            )
+        if not (0.0 <= self.gt4_short_valid_count_floor_ratio <= 1.0):
+            raise ValueError(
+                "gcs_gt4_short_valid_count_floor_ratio must be in [0, 1], "
+                f"got {self.gt4_short_valid_count_floor_ratio}."
+            )
+        if self.gt4_short_valid_count_floor_min < 1:
+            raise ValueError(
+                "gcs_gt4_short_valid_count_floor_min must be >= 1, "
+                f"got {self.gt4_short_valid_count_floor_min}."
+            )
         self.count_under5_min_lanes = int(
             count_under5_min_lanes
             if count_under5_min_lanes is not None
@@ -664,6 +783,14 @@ class GCSLoss(nn.Module):
             f"gt4_short_lane_max_points={self.gt4_short_lane_max_points}, "
             f"gt4_lane_balanced_point_gain={self.gt4_lane_balanced_point_gain}, "
             f"short_valid_recall_gain={self.short_valid_recall_gain}, "
+            f"lane_balanced_valid_loss={self.use_lane_balanced_valid_loss}, "
+            f"gt4_short_valid_lane_weight={self.gt4_short_valid_lane_weight}, "
+            f"gt4_short_valid_pos_weight={self.gt4_short_valid_pos_weight}, "
+            f"unmatched_valid_neg_weight={self.unmatched_valid_neg_weight}, "
+            f"gt4_short_valid_recall={self.gt4_short_valid_recall_enabled}, "
+            f"gt4_short_valid_recall_weight={self.gt4_short_valid_recall_weight}, "
+            f"gt4_short_valid_count_floor={self.gt4_short_valid_count_floor_enabled}, "
+            f"gt4_short_valid_count_floor_weight={self.gt4_short_valid_count_floor_weight}, "
             f"gt4_short_match_endpoint={self.matcher.gt4_short_match_endpoint}, "
             f"gt4_short_match_max_points={self.matcher.gt4_short_match_max_points}"
         )
@@ -741,7 +868,16 @@ class GCSLoss(nn.Module):
         gt4_short_point_loss_value: torch.Tensor,
         gt4_lane_balanced_point_loss_value: torch.Tensor,
         short_valid_recall_loss_value: torch.Tensor,
+        gt4_short_valid_recall_loss_value: torch.Tensor,
+        gt4_short_valid_count_floor_loss_value: torch.Tensor,
         gt4_short_lane_count: torch.Tensor,
+        gt4_short_valid_lane_count: torch.Tensor,
+        gt4_short_pred_valid_prob_mean: torch.Tensor,
+        valid_lb_gt4_short_count: torch.Tensor,
+        valid_lb_gt4_short_pred_prob_mean: torch.Tensor,
+        unmatched_valid_neg_loss: torch.Tensor,
+        unmatched_valid_query_count: torch.Tensor,
+        unmatched_valid_prob_mean: torch.Tensor,
         total_loss: torch.Tensor,
         device: torch.device,
     ) -> None:
@@ -761,6 +897,18 @@ class GCSLoss(nn.Module):
             f"loss_gt4_pt={float(gt4_short_point_loss_value.detach().cpu().item()):.6g}, "
             f"loss_gt4_lbp={float(gt4_lane_balanced_point_loss_value.detach().cpu().item()):.6g}, "
             f"loss_short_rec={float(short_valid_recall_loss_value.detach().cpu().item()):.6g}, "
+            f"loss_gt4_vrec={float(gt4_short_valid_recall_loss_value.detach().cpu().item()):.6g}, "
+            f"loss_gt4_vfloor={float(gt4_short_valid_count_floor_loss_value.detach().cpu().item()):.6g}, "
+            f"num_gt4_short_valid_lanes={int(round(float(gt4_short_valid_lane_count.detach().cpu().item())))}, "
+            f"gt4_short_pred_valid_prob_mean={float(gt4_short_pred_valid_prob_mean.detach().cpu().item()):.6g}, "
+            f"lane_balanced_valid_loss_enabled={self.use_lane_balanced_valid_loss}, "
+            f"valid_lb_gt4_short_count={int(round(float(valid_lb_gt4_short_count.detach().cpu().item())))}, "
+            f"valid_lb_gt4_short_pred_prob_mean="
+            f"{float(valid_lb_gt4_short_pred_prob_mean.detach().cpu().item()):.6g}, "
+            f"unmatched_valid_neg_loss={float(unmatched_valid_neg_loss.detach().cpu().item()):.6g}, "
+            f"unmatched_valid_query_count="
+            f"{int(round(float(unmatched_valid_query_count.detach().cpu().item())))}, "
+            f"unmatched_valid_prob_mean={float(unmatched_valid_prob_mean.detach().cpu().item()):.6g}, "
             f"total_loss={float(total_loss.detach().cpu().item()):.6g}, "
             f"total_includes_gt4_lbp={self.gt4_lane_balanced_point_gain > 0.0}, "
             f"total_gt4_lbp_contrib="
@@ -768,6 +916,12 @@ class GCSLoss(nn.Module):
             f"total_includes_short_rec={self.short_valid_recall_gain > 0.0}, "
             f"total_short_rec_contrib="
             f"{float((self.short_valid_recall_gain * short_valid_recall_loss_value).detach().cpu().item()):.6g}, "
+            f"total_includes_gt4_vrec={self.gt4_short_valid_recall_enabled}, "
+            f"total_gt4_vrec_contrib="
+            f"{float((self.gt4_short_valid_recall_weight * gt4_short_valid_recall_loss_value).detach().cpu().item()):.6g}, "
+            f"total_includes_gt4_vfloor={self.gt4_short_valid_count_floor_enabled}, "
+            f"total_gt4_vfloor_contrib="
+            f"{float((self.gt4_short_valid_count_floor_weight * gt4_short_valid_count_floor_loss_value).detach().cpu().item()):.6g}, "
             f"endpoint_cost_enabled_count={endpoint_count}"
         )
 
@@ -1123,6 +1277,112 @@ class GCSLoss(nn.Module):
         pos_weight = (neg / pos).clamp(min=1.0, max=float(self.point_valid_pos_weight_max)).to(pred_valid_logits)
         return F.binary_cross_entropy_with_logits(pred_valid_logits, target, pos_weight=pos_weight)
 
+    @staticmethod
+    def _empty_lane_balanced_valid_stats(ref: torch.Tensor) -> dict[str, torch.Tensor]:
+        """Return zero-valued lane-balanced valid diagnostics on the reference device."""
+        zero = (ref.sum() * 0.0).detach()
+        return {
+            "valid_lb_gt4_short_count": zero,
+            "valid_lb_gt4_short_gt_points_mean": zero,
+            "valid_lb_gt4_short_pred_prob_mean": zero,
+            "valid_lb_gt4_short_pred_sum_mean": zero,
+        }
+
+    def lane_balanced_valid_loss(
+        self,
+        pred_valid_logits: torch.Tensor,
+        gt_valid: torch.Tensor,
+        gt_lane_count: torch.Tensor,
+        short_max_points: int = 20,
+        short_lane_weight: float = 1.5,
+        pos_weight: float = 1.0,
+        eps: float = 1e-6,
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        """Lane-balanced BCE for matched point-valid logits, preserving invalid-point supervision."""
+        stats = self._empty_lane_balanced_valid_stats(pred_valid_logits)
+        if pred_valid_logits.numel() == 0:
+            return pred_valid_logits.sum() * 0.0, stats
+
+        device = pred_valid_logits.device
+        dtype = pred_valid_logits.dtype
+        target = gt_valid.to(device=device, dtype=dtype)
+        gt_valid_bool = target > 0.5
+        gt_lane_count = gt_lane_count.to(device=device, dtype=torch.long)
+        valid_counts = gt_valid_bool.sum(dim=1)
+
+        bce = F.binary_cross_entropy_with_logits(pred_valid_logits, target, reduction="none")
+        if float(pos_weight) != 1.0:
+            point_weight = torch.ones_like(bce)
+            point_weight = torch.where(gt_valid_bool, point_weight * float(pos_weight), point_weight)
+            bce = bce * point_weight
+
+        lane_loss = bce.mean(dim=1)
+        is_gt4_short = (gt_lane_count == 4) & (valid_counts <= int(short_max_points))
+        lane_weight = torch.ones_like(lane_loss)
+        if float(short_lane_weight) != 1.0:
+            lane_weight = torch.where(
+                is_gt4_short,
+                lane_weight.new_full((), float(short_lane_weight)),
+                lane_weight,
+            )
+        loss = (lane_loss * lane_weight).sum() / lane_weight.sum().clamp_min(float(eps))
+
+        with torch.no_grad():
+            if is_gt4_short.any():
+                short_logits = pred_valid_logits[is_gt4_short]
+                short_target = target[is_gt4_short]
+                short_valid_counts = valid_counts[is_gt4_short].to(dtype=dtype)
+                short_prob = short_logits.sigmoid()
+                short_pred_sum = (short_prob * short_target).sum(dim=1)
+                short_pred_prob_mean = (short_prob * short_target).sum() / short_target.sum().clamp_min(1.0)
+                stats = {
+                    "valid_lb_gt4_short_count": pred_valid_logits.new_tensor(float(is_gt4_short.sum().item())),
+                    "valid_lb_gt4_short_gt_points_mean": short_valid_counts.detach().mean(),
+                    "valid_lb_gt4_short_pred_prob_mean": short_pred_prob_mean.detach(),
+                    "valid_lb_gt4_short_pred_sum_mean": short_pred_sum.detach().mean(),
+                }
+        return loss, stats
+
+    @staticmethod
+    def _empty_unmatched_valid_stats(ref: torch.Tensor) -> dict[str, torch.Tensor]:
+        """Return zero-valued unmatched valid-negative diagnostics on the reference device."""
+        zero = (ref.sum() * 0.0).detach()
+        return {
+            "unmatched_valid_neg_loss": zero,
+            "unmatched_valid_query_count": zero,
+            "unmatched_valid_prob_mean": zero,
+        }
+
+    def unmatched_valid_negative_loss(
+        self,
+        pred_valid_logits: torch.Tensor,
+        matched_query_mask: torch.Tensor,
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        """Zero-target BCE for unmatched query valid logits, reduced per query then over queries."""
+        stats = self._empty_unmatched_valid_stats(pred_valid_logits)
+        if pred_valid_logits.numel() == 0 or matched_query_mask.numel() == 0:
+            return pred_valid_logits.sum() * 0.0, stats
+        if matched_query_mask.shape != pred_valid_logits.shape[:2]:
+            raise ValueError(
+                "matched_query_mask must have shape [B, Q] matching pred_valid_logits, "
+                f"got {tuple(matched_query_mask.shape)} vs {tuple(pred_valid_logits.shape[:2])}."
+            )
+
+        unmatched_mask = ~matched_query_mask.to(device=pred_valid_logits.device, dtype=torch.bool)
+        if not unmatched_mask.any():
+            return pred_valid_logits.sum() * 0.0, stats
+
+        unmatched_logits = pred_valid_logits[unmatched_mask]
+        query_loss = F.softplus(unmatched_logits).mean(dim=1)
+        loss = query_loss.mean()
+        with torch.no_grad():
+            stats = {
+                "unmatched_valid_neg_loss": loss.detach(),
+                "unmatched_valid_query_count": pred_valid_logits.new_tensor(float(unmatched_mask.sum().item())),
+                "unmatched_valid_prob_mean": unmatched_logits.sigmoid().mean().detach(),
+            }
+        return loss, stats
+
     def short_valid_recall_loss(
         self,
         pred_valid_logits: torch.Tensor | None,
@@ -1175,6 +1435,147 @@ class GCSLoss(nn.Module):
             losses.append(lane_loss)
 
         return torch.cat(losses).mean() if losses else self._zero_like(pred_points)
+
+    @staticmethod
+    def _empty_gt4_short_valid_stats(ref: torch.Tensor) -> dict[str, torch.Tensor]:
+        """Return zero-valued GT4 short valid diagnostics on the reference device."""
+        zero = (ref.sum() * 0.0).detach()
+        return {
+            "gt4_short_valid_lane_count": zero,
+            "gt4_short_gt_valid_points_mean": zero,
+            "gt4_short_pred_valid_prob_mean": zero,
+            "gt4_short_pred_valid_sum_mean": zero,
+        }
+
+    def _matched_valid_inputs(
+        self,
+        pred_valid_logits: torch.Tensor,
+        gt_valid: list[torch.Tensor],
+        indices: list[tuple[torch.Tensor, torch.Tensor]],
+        target_counts: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Collect matched valid tensors and the [B, Q] matched-query mask."""
+        logits_list = []
+        valid_list = []
+        count_list = []
+        device = pred_valid_logits.device
+        matched_query_mask = torch.zeros(pred_valid_logits.shape[:2], dtype=torch.bool, device=device)
+        for b, (src_idx, tgt_idx) in enumerate(indices):
+            if src_idx.numel() == 0:
+                continue
+            src_idx_device = src_idx.to(device=device, dtype=torch.long)
+            tgt_idx_device = tgt_idx.to(device=device, dtype=torch.long)
+            matched_query_mask[b, src_idx_device] = True
+            logits_b = pred_valid_logits[b, src_idx_device]
+            valid_b = gt_valid[b].to(device=device, dtype=torch.bool)[tgt_idx_device]
+            lane_count_b = target_counts[b].round().to(device=device, dtype=torch.long).expand(src_idx.numel())
+            logits_list.append(logits_b)
+            valid_list.append(valid_b)
+            count_list.append(lane_count_b)
+
+        k = pred_valid_logits.shape[-1]
+        if not logits_list:
+            return (
+                pred_valid_logits.new_zeros((0, k)),
+                torch.zeros((0, k), dtype=torch.bool, device=device),
+                torch.zeros((0,), dtype=torch.long, device=device),
+                matched_query_mask,
+            )
+        return (
+            torch.cat(logits_list, dim=0),
+            torch.cat(valid_list, dim=0),
+            torch.cat(count_list, dim=0),
+            matched_query_mask,
+        )
+
+    def _select_gt4_short_valid_lanes(
+        self,
+        pred_valid_logits: torch.Tensor,
+        gt_valid: torch.Tensor,
+        gt_lane_count: torch.Tensor,
+        short_max_points: int,
+        min_valid_points: int = 2,
+    ) -> tuple[tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None, dict[str, torch.Tensor]]:
+        """Select matched GT4 short lanes and compute shared diagnostics."""
+        stats = self._empty_gt4_short_valid_stats(pred_valid_logits)
+        if pred_valid_logits.numel() == 0:
+            return None, stats
+
+        device = pred_valid_logits.device
+        dtype = pred_valid_logits.dtype
+        gt_valid_bool = gt_valid.to(device=device, dtype=torch.bool)
+        gt_lane_count = gt_lane_count.to(device=device, dtype=torch.long)
+        valid_counts_int = gt_valid_bool.sum(dim=1)
+        short_mask = (
+            (gt_lane_count == 4)
+            & (valid_counts_int <= int(short_max_points))
+            & (valid_counts_int >= int(min_valid_points))
+        )
+        if not short_mask.any():
+            return None, stats
+
+        logits = pred_valid_logits[short_mask]
+        target = gt_valid_bool[short_mask].to(dtype=dtype)
+        pos_counts = target.sum(dim=1).clamp_min(1.0)
+        with torch.no_grad():
+            prob = logits.sigmoid()
+            pred_valid_sum = (prob * target).sum(dim=1)
+            pred_valid_prob_mean = (prob * target).sum() / target.sum().clamp_min(1.0)
+            stats = {
+                "gt4_short_valid_lane_count": pred_valid_logits.new_tensor(float(short_mask.sum().item())),
+                "gt4_short_gt_valid_points_mean": pos_counts.detach().mean(),
+                "gt4_short_pred_valid_prob_mean": pred_valid_prob_mean.detach(),
+                "gt4_short_pred_valid_sum_mean": pred_valid_sum.detach().mean(),
+            }
+        return (logits, target, pos_counts), stats
+
+    def gt4_short_valid_recall_loss(
+        self,
+        pred_valid_logits: torch.Tensor,
+        gt_valid: torch.Tensor,
+        gt_lane_count: torch.Tensor,
+        short_max_points: int = 20,
+        min_valid_points: int = 2,
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        """Positive-only valid-logit BCE on matched GT4 short lanes."""
+        selection, stats = self._select_gt4_short_valid_lanes(
+            pred_valid_logits, gt_valid, gt_lane_count, short_max_points, min_valid_points
+        )
+        if selection is None:
+            return pred_valid_logits.sum() * 0.0, stats
+
+        logits, target, pos_counts = selection
+        pos_loss = F.softplus(-logits) * target
+        lane_loss = pos_loss.sum(dim=1) / pos_counts
+        return lane_loss.mean(), stats
+
+    def gt4_short_valid_count_floor_loss(
+        self,
+        pred_valid_logits: torch.Tensor,
+        gt_valid: torch.Tensor,
+        gt_lane_count: torch.Tensor,
+        short_max_points: int = 20,
+        floor_ratio: float = 0.6,
+        floor_min: int = 3,
+        min_valid_points: int = 2,
+        eps: float = 1e-6,
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        """Hinge loss requiring enough predicted valid probability mass on GT valid points."""
+        selection, stats = self._select_gt4_short_valid_lanes(
+            pred_valid_logits, gt_valid, gt_lane_count, short_max_points, min_valid_points
+        )
+        if selection is None:
+            return pred_valid_logits.sum() * 0.0, stats
+
+        logits, target, pos_counts = selection
+        pred_valid_sum = (logits.sigmoid() * target).sum(dim=1)
+        floor = torch.maximum(
+            pos_counts * float(floor_ratio),
+            pos_counts.new_full((), float(floor_min)),
+        )
+        floor = torch.minimum(floor, pos_counts)
+        lane_loss = F.relu(floor - pred_valid_sum) / floor.clamp_min(eps)
+        return lane_loss.mean(), stats
 
     def smooth_loss(
         self,
@@ -1805,10 +2206,70 @@ class GCSLoss(nn.Module):
         gt4_lane_balanced_point_loss = self.gt4_lane_balanced_point_loss(
             pred_points, batch, gt_points, gt_valid, indices
         )
-        point_valid_loss = self.point_valid_loss(pred_valid_logits, pred_points, gt_valid, indices)
+        matched_pred_valid_logits = matched_gt_valid = matched_gt_lane_count = matched_query_mask = None
+        valid_lb_stats = self._empty_lane_balanced_valid_stats(pred_points)
+        unmatched_valid_stats = self._empty_unmatched_valid_stats(pred_points)
+        if pred_valid_logits is not None and (
+            self.use_lane_balanced_valid_loss
+            or self.gt4_short_valid_recall_enabled
+            or self.gt4_short_valid_count_floor_enabled
+        ):
+            (
+                matched_pred_valid_logits,
+                matched_gt_valid,
+                matched_gt_lane_count,
+                matched_query_mask,
+            ) = self._matched_valid_inputs(pred_valid_logits, gt_valid, indices, target_counts)
+        if self.use_lane_balanced_valid_loss:
+            if pred_valid_logits is None:
+                point_valid_loss = self._zero_like(pred_points)
+            else:
+                matched_valid_loss, valid_lb_stats = self.lane_balanced_valid_loss(
+                    matched_pred_valid_logits,
+                    matched_gt_valid,
+                    matched_gt_lane_count,
+                    short_max_points=self.gt4_short_valid_max_points,
+                    short_lane_weight=self.gt4_short_valid_lane_weight,
+                    pos_weight=self.gt4_short_valid_pos_weight,
+                )
+                unmatched_valid_loss, unmatched_valid_stats = self.unmatched_valid_negative_loss(
+                    pred_valid_logits, matched_query_mask
+                )
+                unmatched_weight = float(self.unmatched_valid_neg_weight)
+                point_valid_loss = (matched_valid_loss + unmatched_weight * unmatched_valid_loss) / (
+                    1.0 + unmatched_weight
+                )
+        else:
+            point_valid_loss = self.point_valid_loss(pred_valid_logits, pred_points, gt_valid, indices)
         short_valid_recall_loss = self.short_valid_recall_loss(
             pred_valid_logits, pred_points, gt_points, gt_valid, indices
         )
+        gt4_short_valid_recall_loss = self._zero_like(pred_points)
+        gt4_short_valid_count_floor_loss = self._zero_like(pred_points)
+        gt4_short_valid_stats = self._empty_gt4_short_valid_stats(pred_points)
+        if matched_pred_valid_logits is not None and (
+            self.gt4_short_valid_recall_enabled or self.gt4_short_valid_count_floor_enabled
+        ):
+            if self.gt4_short_valid_recall_enabled:
+                gt4_short_valid_recall_loss, gt4_short_valid_stats = self.gt4_short_valid_recall_loss(
+                    matched_pred_valid_logits,
+                    matched_gt_valid,
+                    matched_gt_lane_count,
+                    short_max_points=self.gt4_short_valid_max_points,
+                    min_valid_points=2,
+                )
+            if self.gt4_short_valid_count_floor_enabled:
+                gt4_short_valid_count_floor_loss, floor_stats = self.gt4_short_valid_count_floor_loss(
+                    matched_pred_valid_logits,
+                    matched_gt_valid,
+                    matched_gt_lane_count,
+                    short_max_points=self.gt4_short_valid_max_points,
+                    floor_ratio=self.gt4_short_valid_count_floor_ratio,
+                    floor_min=self.gt4_short_valid_count_floor_min,
+                    min_valid_points=2,
+                )
+                if not self.gt4_short_valid_recall_enabled:
+                    gt4_short_valid_stats = floor_stats
         smooth_loss = self.smooth_loss(pred_points, gt_valid, indices)
         curve_loss = self.curve_loss(pred_points, gt_points, gt_valid, indices)
         count_loss, count_under5_loss = self.count_losses(pred_logits, batch, gt_valid)
@@ -1826,6 +2287,17 @@ class GCSLoss(nn.Module):
         gt4_short_lane_loss = point_stats["gt4_short_lane_loss"]
         gt4_short_lane_valid_points_mean = point_stats["gt4_short_lane_valid_points_mean"]
         gt4_short_lane_count = point_stats["gt4_short_lane_count"]
+        gt4_short_valid_lane_count = gt4_short_valid_stats["gt4_short_valid_lane_count"]
+        gt4_short_gt_valid_points_mean = gt4_short_valid_stats["gt4_short_gt_valid_points_mean"]
+        gt4_short_pred_valid_prob_mean = gt4_short_valid_stats["gt4_short_pred_valid_prob_mean"]
+        gt4_short_pred_valid_sum_mean = gt4_short_valid_stats["gt4_short_pred_valid_sum_mean"]
+        valid_lb_gt4_short_count = valid_lb_stats["valid_lb_gt4_short_count"]
+        valid_lb_gt4_short_gt_points_mean = valid_lb_stats["valid_lb_gt4_short_gt_points_mean"]
+        valid_lb_gt4_short_pred_prob_mean = valid_lb_stats["valid_lb_gt4_short_pred_prob_mean"]
+        valid_lb_gt4_short_pred_sum_mean = valid_lb_stats["valid_lb_gt4_short_pred_sum_mean"]
+        unmatched_valid_neg_loss = unmatched_valid_stats["unmatched_valid_neg_loss"]
+        unmatched_valid_query_count = unmatched_valid_stats["unmatched_valid_query_count"]
+        unmatched_valid_prob_mean = unmatched_valid_stats["unmatched_valid_prob_mean"]
 
         mask_loss = self._zero_like(pred_points)
         if "aux_mask_logits" in preds and "semantic_mask" in batch:
@@ -1844,6 +2316,8 @@ class GCSLoss(nn.Module):
             + self.gt4_lane_balanced_point_gain * gt4_lane_balanced_point_loss
             + self.point_valid_gain * point_valid_loss
             + self.short_valid_recall_gain * short_valid_recall_loss
+            + self.gt4_short_valid_recall_weight * gt4_short_valid_recall_loss
+            + self.gt4_short_valid_count_floor_weight * gt4_short_valid_count_floor_loss
             + self.smooth_gain * smooth_loss
             + self.curve_gain * curve_loss
             + self.mask_gain * mask_loss
@@ -1864,7 +2338,16 @@ class GCSLoss(nn.Module):
             gt4_short_point_loss_value=gt4_short_lane_loss,
             gt4_lane_balanced_point_loss_value=gt4_lane_balanced_point_loss,
             short_valid_recall_loss_value=short_valid_recall_loss,
+            gt4_short_valid_recall_loss_value=gt4_short_valid_recall_loss,
+            gt4_short_valid_count_floor_loss_value=gt4_short_valid_count_floor_loss,
             gt4_short_lane_count=gt4_short_lane_count,
+            gt4_short_valid_lane_count=gt4_short_valid_lane_count,
+            gt4_short_pred_valid_prob_mean=gt4_short_pred_valid_prob_mean,
+            valid_lb_gt4_short_count=valid_lb_gt4_short_count,
+            valid_lb_gt4_short_pred_prob_mean=valid_lb_gt4_short_pred_prob_mean,
+            unmatched_valid_neg_loss=unmatched_valid_neg_loss,
+            unmatched_valid_query_count=unmatched_valid_query_count,
+            unmatched_valid_prob_mean=unmatched_valid_prob_mean,
             total_loss=total,
             device=pred_points.device,
         )
@@ -1877,6 +2360,15 @@ class GCSLoss(nn.Module):
                 gt4_lane_balanced_point_loss.detach(),
                 point_valid_loss.detach(),
                 short_valid_recall_loss.detach(),
+                gt4_short_valid_recall_loss.detach(),
+                gt4_short_valid_count_floor_loss.detach(),
+                valid_lb_gt4_short_count.detach(),
+                valid_lb_gt4_short_gt_points_mean.detach(),
+                valid_lb_gt4_short_pred_prob_mean.detach(),
+                valid_lb_gt4_short_pred_sum_mean.detach(),
+                unmatched_valid_neg_loss.detach(),
+                unmatched_valid_query_count.detach(),
+                unmatched_valid_prob_mean.detach(),
                 smooth_loss.detach(),
                 curve_loss.detach(),
                 mask_loss.detach(),
@@ -1890,6 +2382,10 @@ class GCSLoss(nn.Module):
                 gt3_extra_survival_loss.detach(),
                 gt4_short_lane_valid_points_mean.detach(),
                 gt4_short_lane_count.detach(),
+                gt4_short_valid_lane_count.detach(),
+                gt4_short_gt_valid_points_mean.detach(),
+                gt4_short_pred_valid_prob_mean.detach(),
+                gt4_short_pred_valid_sum_mean.detach(),
             )
         )
         return total, loss_items

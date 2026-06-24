@@ -158,6 +158,294 @@ def test_lane_balanced_point_loss_keeps_short_lane_from_valid_point_dilution():
     assert torch.isclose(stats["gt4_short_lane_loss"], torch.tensor(0.20), atol=1e-6)
 
 
+def test_gt4_short_valid_recall_only_targets_gt4_short_lanes():
+    k = 24
+    logits = torch.zeros(4, k)
+    logits[1:] = -100.0
+    valid = torch.zeros(4, k, dtype=torch.bool)
+    valid[0, :3] = True
+    valid[1, :3] = True
+    valid[2, :21] = True
+    valid[3, :1] = True
+    gt_lane_count = torch.tensor([4, 3, 4, 4])
+    loss_fn = GCSLoss(model={"gcs_imgsz": [544, 960]})
+
+    loss, stats = loss_fn.gt4_short_valid_recall_loss(
+        logits,
+        valid,
+        gt_lane_count,
+        short_max_points=20,
+        min_valid_points=2,
+    )
+
+    assert torch.isclose(loss, torch.log(torch.tensor(2.0)), atol=1e-6)
+    assert torch.isclose(stats["gt4_short_valid_lane_count"], torch.tensor(1.0))
+    assert torch.isclose(stats["gt4_short_gt_valid_points_mean"], torch.tensor(3.0))
+    assert torch.isclose(stats["gt4_short_pred_valid_prob_mean"], torch.tensor(0.5))
+    assert torch.isclose(stats["gt4_short_pred_valid_sum_mean"], torch.tensor(1.5))
+
+
+def test_lane_balanced_valid_loss_hits_and_weights_gt4_short_lanes():
+    k = 24
+    valid = torch.zeros(3, k, dtype=torch.bool)
+    valid[0, :4] = True
+    valid[1, :22] = True
+    valid[2, :4] = True
+    gt_lane_count = torch.tensor([4, 4, 3])
+
+    logits = torch.full((3, k), -5.0)
+    logits[1, :22] = 5.0
+    logits[2, :4] = 5.0
+    loss_fn = GCSLoss(model={"gcs_imgsz": [544, 960]})
+
+    unweighted, _ = loss_fn.lane_balanced_valid_loss(
+        logits,
+        valid,
+        gt_lane_count,
+        short_max_points=20,
+        short_lane_weight=1.0,
+        pos_weight=1.0,
+    )
+    weighted, stats = loss_fn.lane_balanced_valid_loss(
+        logits,
+        valid,
+        gt_lane_count,
+        short_max_points=20,
+        short_lane_weight=2.0,
+        pos_weight=1.0,
+    )
+
+    assert weighted > unweighted
+    assert torch.isclose(stats["valid_lb_gt4_short_count"], torch.tensor(1.0))
+    assert torch.isclose(stats["valid_lb_gt4_short_gt_points_mean"], torch.tensor(4.0))
+    assert stats["valid_lb_gt4_short_pred_prob_mean"] < 0.01
+    assert stats["valid_lb_gt4_short_pred_sum_mean"] < 0.05
+
+
+def test_lane_balanced_valid_loss_empty_input_is_zero():
+    loss_fn = GCSLoss(model={"gcs_imgsz": [544, 960]})
+
+    loss, stats = loss_fn.lane_balanced_valid_loss(
+        torch.zeros(0, 56),
+        torch.zeros(0, 56, dtype=torch.bool),
+        torch.zeros(0, dtype=torch.long),
+    )
+
+    assert torch.isclose(loss, torch.tensor(0.0))
+    assert torch.isclose(stats["valid_lb_gt4_short_count"], torch.tensor(0.0))
+    assert torch.isclose(stats["valid_lb_gt4_short_pred_sum_mean"], torch.tensor(0.0))
+
+
+def test_unmatched_valid_negative_loss_penalizes_high_logits_in_forward():
+    k = 24
+    gt = _fixed_y_points(2, k)
+    gt[:, :, 0] = torch.tensor([0.2, 0.8]).view(2, 1)
+    pred = _fixed_y_points(4, k)
+    pred[:2] = gt
+    pred[2:, :, 0] = torch.tensor([0.4, 0.6]).view(2, 1)
+    valid = torch.zeros(2, k)
+    valid[:, :8] = 1.0
+    pred_valid_logits = torch.zeros(1, 4, k)
+    pred_valid_logits[:, 2:] = 10.0
+    preds = {
+        "pred_points": pred.unsqueeze(0),
+        "pred_logits": torch.ones(1, 4),
+        "pred_valid_logits": pred_valid_logits,
+    }
+    batch = {
+        "lanes": [gt],
+        "lane_valid": [valid],
+        "num_lanes": torch.tensor([2]),
+    }
+    loss_fn = GCSLoss(
+        model={
+            "gcs_imgsz": [544, 960],
+            "gcs_lane_balanced_valid_loss": True,
+            "gcs_unmatched_valid_neg_weight": 0.5,
+            "gcs_exist": 0.0,
+            "gcs_point": 0.0,
+            "gcs_point_valid": 1.0,
+            "gcs_short_valid_recall": 0.0,
+            "gcs_smooth": 0.0,
+            "gcs_curve": 0.0,
+            "gcs_mask": 0.0,
+            "gcs_edge": 0.0,
+            "gcs_count": 0.0,
+            "gcs_count_under5": 0.0,
+            "gcs_match_gate_px": 0.0,
+            "gcs_cost_curve": 0.0,
+            "gcs_cost_exist": 0.0,
+        }
+    )
+
+    total, items = loss_fn(preds, batch)
+    item_map = dict(zip(loss_fn.loss_names, items))
+
+    assert item_map["unmatched_valid_neg_loss"] > 9.0
+    assert torch.isclose(item_map["unmatched_valid_query_count"], torch.tensor(2.0))
+    assert item_map["unmatched_valid_prob_mean"] > 0.99
+    assert item_map["point_valid_loss"] > torch.log(torch.tensor(2.0))
+    assert torch.isclose(total, item_map["point_valid_loss"], atol=1e-6)
+
+
+def test_unmatched_valid_negative_loss_low_logits_is_small():
+    logits = torch.full((1, 3, 12), -10.0)
+    matched_query_mask = torch.tensor([[True, False, False]])
+    loss_fn = GCSLoss(model={"gcs_imgsz": [544, 960]})
+
+    loss, stats = loss_fn.unmatched_valid_negative_loss(logits, matched_query_mask)
+
+    assert loss < 1e-4
+    assert torch.isclose(stats["unmatched_valid_query_count"], torch.tensor(2.0))
+    assert stats["unmatched_valid_prob_mean"] < 1e-4
+
+
+def test_unmatched_valid_negative_loss_no_unmatched_is_zero():
+    logits = torch.full((1, 2, 12), 10.0)
+    matched_query_mask = torch.ones(1, 2, dtype=torch.bool)
+    loss_fn = GCSLoss(model={"gcs_imgsz": [544, 960]})
+
+    loss, stats = loss_fn.unmatched_valid_negative_loss(logits, matched_query_mask)
+
+    assert torch.isclose(loss, torch.tensor(0.0))
+    assert torch.isclose(stats["unmatched_valid_query_count"], torch.tensor(0.0))
+    assert torch.isclose(stats["unmatched_valid_prob_mean"], torch.tensor(0.0))
+
+
+def test_gt4_short_valid_count_floor_only_penalizes_below_floor():
+    k = 24
+    valid = torch.zeros(3, k, dtype=torch.bool)
+    valid[0, :5] = True
+    valid[1, :5] = True
+    valid[2, :21] = True
+    gt_lane_count = torch.tensor([4, 3, 4])
+    loss_fn = GCSLoss(model={"gcs_imgsz": [544, 960]})
+
+    high_logits = torch.full((3, k), -10.0)
+    high_logits[0, :5] = 10.0
+    high_loss, high_stats = loss_fn.gt4_short_valid_count_floor_loss(
+        high_logits,
+        valid,
+        gt_lane_count,
+        short_max_points=20,
+        floor_ratio=0.6,
+        floor_min=3,
+        min_valid_points=2,
+    )
+
+    low_logits = torch.full((3, k), -10.0)
+    low_loss, low_stats = loss_fn.gt4_short_valid_count_floor_loss(
+        low_logits,
+        valid,
+        gt_lane_count,
+        short_max_points=20,
+        floor_ratio=0.6,
+        floor_min=3,
+        min_valid_points=2,
+    )
+
+    assert high_loss < 1e-4
+    assert low_loss > 0.99
+    assert torch.isclose(high_stats["gt4_short_valid_lane_count"], torch.tensor(1.0))
+    assert torch.isclose(low_stats["gt4_short_valid_lane_count"], torch.tensor(1.0))
+    assert torch.isclose(low_stats["gt4_short_gt_valid_points_mean"], torch.tensor(5.0))
+
+
+def test_gt4_short_valid_forward_uses_true_gt_lane_count_not_matched_count():
+    k = 24
+    gt = _fixed_y_points(4, k)
+    gt[:, :, 0] = torch.tensor([0.05, 0.35, 0.65, 0.95]).view(4, 1)
+    pred = gt[:3].clone()
+    valid = torch.zeros(4, k)
+    valid[0, :3] = 1.0
+    valid[1:, :21] = 1.0
+    preds = {
+        "pred_points": pred.unsqueeze(0),
+        "pred_logits": torch.ones(1, 3),
+        "pred_valid_logits": torch.zeros(1, 3, k),
+    }
+    batch = {
+        "lanes": [gt],
+        "lane_valid": [valid],
+        "num_lanes": torch.tensor([4]),
+    }
+    loss_fn = GCSLoss(
+        model={
+            "gcs_imgsz": [544, 960],
+            "gcs_gt4_short_valid_recall": True,
+            "gcs_exist": 0.0,
+            "gcs_point": 0.0,
+            "gcs_point_valid": 0.0,
+            "gcs_short_valid_recall": 0.0,
+            "gcs_smooth": 0.0,
+            "gcs_curve": 0.0,
+            "gcs_mask": 0.0,
+            "gcs_edge": 0.0,
+            "gcs_count": 0.0,
+            "gcs_count_under5": 0.0,
+            "gcs_match_gate_px": 0.0,
+            "gcs_cost_curve": 0.0,
+            "gcs_cost_exist": 0.0,
+        }
+    )
+
+    total, items = loss_fn(preds, batch)
+    item_map = dict(zip(loss_fn.loss_names, items))
+
+    assert torch.isclose(item_map["gt4_short_valid_recall_loss"], torch.log(torch.tensor(2.0)), atol=1e-6)
+    assert torch.isclose(item_map["gt4_short_valid_lane_count"], torch.tensor(1.0))
+    assert torch.isclose(total, 0.2 * item_map["gt4_short_valid_recall_loss"], atol=1e-6)
+
+
+def test_lane_balanced_valid_forward_uses_true_gt_lane_count_not_matched_count():
+    k = 24
+    gt = _fixed_y_points(4, k)
+    gt[:, :, 0] = torch.tensor([0.05, 0.35, 0.65, 0.95]).view(4, 1)
+    pred = gt[:3].clone()
+    valid = torch.zeros(4, k)
+    valid[0, :3] = 1.0
+    valid[1:, :21] = 1.0
+    preds = {
+        "pred_points": pred.unsqueeze(0),
+        "pred_logits": torch.ones(1, 3),
+        "pred_valid_logits": torch.zeros(1, 3, k),
+    }
+    batch = {
+        "lanes": [gt],
+        "lane_valid": [valid],
+        "num_lanes": torch.tensor([4]),
+    }
+    loss_fn = GCSLoss(
+        model={
+            "gcs_imgsz": [544, 960],
+            "gcs_lane_balanced_valid_loss": True,
+            "gcs_gt4_short_valid_lane_weight": 1.5,
+            "gcs_unmatched_valid_neg_weight": 0.0,
+            "gcs_exist": 0.0,
+            "gcs_point": 0.0,
+            "gcs_point_valid": 1.0,
+            "gcs_short_valid_recall": 0.0,
+            "gcs_smooth": 0.0,
+            "gcs_curve": 0.0,
+            "gcs_mask": 0.0,
+            "gcs_edge": 0.0,
+            "gcs_count": 0.0,
+            "gcs_count_under5": 0.0,
+            "gcs_match_gate_px": 0.0,
+            "gcs_cost_curve": 0.0,
+            "gcs_cost_exist": 0.0,
+        }
+    )
+
+    total, items = loss_fn(preds, batch)
+    item_map = dict(zip(loss_fn.loss_names, items))
+
+    assert torch.isclose(item_map["valid_lb_gt4_short_count"], torch.tensor(1.0))
+    assert torch.isclose(item_map["valid_lb_gt4_short_gt_points_mean"], torch.tensor(3.0))
+    assert torch.isclose(item_map["point_valid_loss"], torch.log(torch.tensor(2.0)), atol=1e-6)
+    assert torch.isclose(total, item_map["point_valid_loss"], atol=1e-6)
+
+
 def test_gt4_short_endpoint_cost_only_applies_to_gt4_short_lanes():
     k = 6
     pred = _fixed_y_points(1, k)

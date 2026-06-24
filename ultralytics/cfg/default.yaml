@@ -127,6 +127,17 @@ gcs_short_valid_max_visible: 20 # (int) maximum visible anchors for short-valid 
 gcs_short_valid_min_visible: 4 # (int) minimum visible anchors for short-valid recall loss
 gcs_short_valid_max_ape_px: 40.0 # (float) maximum matched APE in pixels for short-valid recall loss
 gcs_short_valid_min_visible_iou: 0.3 # (float) minimum matched visible-IoU for short-valid recall loss
+gcs_lane_balanced_valid_loss: False # (bool) replace base point-valid BCE with matched per-lane balanced reduction
+gcs_gt4_short_valid_lane_weight: 1.5 # (float) lane-balanced valid-loss multiplier for matched GT4 short lanes
+gcs_gt4_short_valid_pos_weight: 1.0 # (float) optional positive-point multiplier inside lane-balanced valid BCE
+gcs_unmatched_valid_neg_weight: 0.5 # (float) unmatched-query zero-target valid BCE weight inside lane-balanced valid replacement
+gcs_gt4_short_valid_recall: False # (bool) enable positive-only valid recall loss for matched GT4 short lanes
+gcs_gt4_short_valid_recall_weight: 0.2 # (float) gain for GT4 short valid recall loss
+gcs_gt4_short_valid_max_points: 20 # (int) maximum GT-visible anchors for GT4 short valid repair
+gcs_gt4_short_valid_count_floor: False # (bool) enable GT4 short valid probability count floor loss
+gcs_gt4_short_valid_count_floor_weight: 0.05 # (float) gain for GT4 short valid count floor loss
+gcs_gt4_short_valid_count_floor_ratio: 0.6 # (float) target floor ratio of GT valid points
+gcs_gt4_short_valid_count_floor_min: 3 # (int) minimum target floor before clamping to GT valid points
 gcs_smooth: 0.05 # (float) GCS second-order smoothness loss gain
 gcs_curve: 0.1 # (float) GCS adaptive curvature-aware loss gain
 gcs_mask: 0.2 # (float) GCS auxiliary semantic mask loss gain

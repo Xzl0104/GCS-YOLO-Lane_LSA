@@ -177,6 +177,33 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--gcs-point-valid", type=float, default=1.0)
     parser.add_argument(
+        "--gcs-lane-balanced-valid-loss",
+        "--gcs_lane_balanced_valid_loss",
+        nargs="?",
+        const=True,
+        default=False,
+        type=str2bool,
+        help="Replace base point-valid BCE with matched per-lane balanced reduction. Default off.",
+    )
+    parser.add_argument(
+        "--gcs-gt4-short-valid-lane-weight",
+        type=float,
+        default=1.5,
+        help="Lane-balanced valid-loss multiplier for matched GT4 short lanes.",
+    )
+    parser.add_argument(
+        "--gcs-gt4-short-valid-pos-weight",
+        type=float,
+        default=1.0,
+        help="Optional positive-point multiplier inside lane-balanced valid BCE.",
+    )
+    parser.add_argument(
+        "--gcs-unmatched-valid-neg-weight",
+        type=float,
+        default=0.5,
+        help="Unmatched-query zero-target valid BCE weight inside lane-balanced valid replacement.",
+    )
+    parser.add_argument(
         "--gcs-short-valid-recall",
         type=float,
         default=0.0,
@@ -205,6 +232,52 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.3,
         help="Minimum matched visible-IoU for short-valid recall loss.",
+    )
+    parser.add_argument(
+        "--gcs-gt4-short-valid-recall",
+        nargs="?",
+        const=True,
+        default=False,
+        type=str2bool,
+        help="Enable positive-only valid recall loss for matched GT4 short lanes. Default off.",
+    )
+    parser.add_argument(
+        "--gcs-gt4-short-valid-recall-weight",
+        type=float,
+        default=0.2,
+        help="Gain for GT4 short valid recall loss.",
+    )
+    parser.add_argument(
+        "--gcs-gt4-short-valid-max-points",
+        type=int,
+        default=20,
+        help="Maximum GT-visible anchors for GT4 short valid repair.",
+    )
+    parser.add_argument(
+        "--gcs-gt4-short-valid-count-floor",
+        nargs="?",
+        const=True,
+        default=False,
+        type=str2bool,
+        help="Enable GT4 short valid probability count floor loss. Default off.",
+    )
+    parser.add_argument(
+        "--gcs-gt4-short-valid-count-floor-weight",
+        type=float,
+        default=0.05,
+        help="Gain for GT4 short valid count floor loss.",
+    )
+    parser.add_argument(
+        "--gcs-gt4-short-valid-count-floor-ratio",
+        type=float,
+        default=0.6,
+        help="Target floor ratio of GT valid points for GT4 short valid count floor.",
+    )
+    parser.add_argument(
+        "--gcs-gt4-short-valid-count-floor-min",
+        type=int,
+        default=3,
+        help="Minimum target floor before clamping to GT valid points.",
     )
     parser.add_argument("--gcs-smooth", type=float, default=0.05)
     parser.add_argument("--gcs-curve", type=float, default=0.1)
@@ -636,11 +709,22 @@ def main() -> None:
         "gcs_gt4_lane_balanced_topk": args.gcs_gt4_lane_balanced_topk,
         "gcs_gt4_lane_balanced_max_mult": args.gcs_gt4_lane_balanced_max_mult,
         "gcs_point_valid": args.gcs_point_valid,
+        "gcs_lane_balanced_valid_loss": args.gcs_lane_balanced_valid_loss,
+        "gcs_gt4_short_valid_lane_weight": args.gcs_gt4_short_valid_lane_weight,
+        "gcs_gt4_short_valid_pos_weight": args.gcs_gt4_short_valid_pos_weight,
+        "gcs_unmatched_valid_neg_weight": args.gcs_unmatched_valid_neg_weight,
         "gcs_short_valid_recall": args.gcs_short_valid_recall,
         "gcs_short_valid_max_visible": args.gcs_short_valid_max_visible,
         "gcs_short_valid_min_visible": args.gcs_short_valid_min_visible,
         "gcs_short_valid_max_ape_px": args.gcs_short_valid_max_ape_px,
         "gcs_short_valid_min_visible_iou": args.gcs_short_valid_min_visible_iou,
+        "gcs_gt4_short_valid_recall": args.gcs_gt4_short_valid_recall,
+        "gcs_gt4_short_valid_recall_weight": args.gcs_gt4_short_valid_recall_weight,
+        "gcs_gt4_short_valid_max_points": args.gcs_gt4_short_valid_max_points,
+        "gcs_gt4_short_valid_count_floor": args.gcs_gt4_short_valid_count_floor,
+        "gcs_gt4_short_valid_count_floor_weight": args.gcs_gt4_short_valid_count_floor_weight,
+        "gcs_gt4_short_valid_count_floor_ratio": args.gcs_gt4_short_valid_count_floor_ratio,
+        "gcs_gt4_short_valid_count_floor_min": args.gcs_gt4_short_valid_count_floor_min,
         "gcs_smooth": args.gcs_smooth,
         "gcs_curve": args.gcs_curve,
         "gcs_mask": args.gcs_mask,

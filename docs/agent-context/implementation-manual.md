@@ -18,7 +18,15 @@ default-disabled `duplicate_margin_loss`, `spurious_margin_loss`,
 short-lane candidate-recall knobs:
 `gcs_lane_balanced_point_loss`, `gcs_gt4_short_lane_weight`,
 `gcs_gt4_short_lane_max_points`, `gcs_gt4_short_match_endpoint`, and
-`gcs_gt4_short_match_max_points`.
+`gcs_gt4_short_match_max_points`. It further includes default-off GT4
+short-lane valid repair knobs:
+`gcs_lane_balanced_valid_loss`, `gcs_gt4_short_valid_lane_weight`,
+`gcs_gt4_short_valid_pos_weight`, `gcs_unmatched_valid_neg_weight`,
+`gcs_gt4_short_valid_recall`, `gcs_gt4_short_valid_recall_weight`,
+`gcs_gt4_short_valid_max_points`,
+`gcs_gt4_short_valid_count_floor`, `gcs_gt4_short_valid_count_floor_weight`,
+`gcs_gt4_short_valid_count_floor_ratio`, and
+`gcs_gt4_short_valid_count_floor_min`.
 Other post-`50999d6af` experiment knobs such as `gcs_gt4_short_boost`,
 `gcs_extra_exist`, and `gcs_short_exist_floor` are legacy records only and are
 not available in the current code unless a future task explicitly restores them.

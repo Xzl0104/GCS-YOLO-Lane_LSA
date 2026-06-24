@@ -39,6 +39,15 @@ class GCSLaneTrainer(BaseTrainer):
         "gt4_lane_balanced_point_loss",
         "point_valid_loss",
         "short_valid_recall_loss",
+        "gt4_short_valid_recall_loss",
+        "gt4_short_valid_count_floor_loss",
+        "valid_lb_gt4_short_count",
+        "valid_lb_gt4_short_gt_points_mean",
+        "valid_lb_gt4_short_pred_prob_mean",
+        "valid_lb_gt4_short_pred_sum_mean",
+        "unmatched_valid_neg_loss",
+        "unmatched_valid_query_count",
+        "unmatched_valid_prob_mean",
         "smooth_loss",
         "curve_loss",
         "mask_loss",
@@ -52,6 +61,10 @@ class GCSLaneTrainer(BaseTrainer):
         "gt3_extra_survival_loss",
         "gt4_short_lane_valid_points_mean",
         "gt4_short_lane_count",
+        "gt4_short_valid_lane_count",
+        "gt4_short_gt_valid_points_mean",
+        "gt4_short_pred_valid_prob_mean",
+        "gt4_short_pred_valid_sum_mean",
     )
     # Keep tqdm headers within BaseTrainer's 11-character progress columns.
     progress_loss_names = (
@@ -62,6 +75,15 @@ class GCSLaneTrainer(BaseTrainer):
         "gt4_lbp",
         "pt_valid",
         "short_rec",
+        "gt4_vrec",
+        "gt4_vfloor",
+        "vlb_gt4_n",
+        "vlb_gtpts",
+        "vlb_vprob",
+        "vlb_vsum",
+        "uvneg_loss",
+        "uvneg_n",
+        "uvneg_prob",
         "smooth",
         "curve",
         "mask",
@@ -75,6 +97,10 @@ class GCSLaneTrainer(BaseTrainer):
         "gt3_ext",
         "gt4_vmean",
         "gt4_n",
+        "gt4_vn",
+        "gt4_gtpts",
+        "gt4_vprob",
+        "gt4_vsum",
     )
     # YOLO11 backbone -> GCS-YOLO-Lane backbone. LSEM is inserted after old
     # layers 4 and 6, so all later backbone layers must be shifted explicitly.
@@ -524,6 +550,10 @@ class GCSLaneTrainer(BaseTrainer):
             names[names.index("gt4_lbp")] = "gt4lbp_off"
         if arg_float("gcs_short_valid_recall") <= 0.0 and "short_rec" in names:
             names[names.index("short_rec")] = "short_off"
+        if not bool(getattr(args, "gcs_gt4_short_valid_recall", False)) and "gt4_vrec" in names:
+            names[names.index("gt4_vrec")] = "gt4vrec_off"
+        if not bool(getattr(args, "gcs_gt4_short_valid_count_floor", False)) and "gt4_vfloor" in names:
+            names[names.index("gt4_vfloor")] = "gt4vf_off"
         return tuple(names)
 
     def progress_string(self):
