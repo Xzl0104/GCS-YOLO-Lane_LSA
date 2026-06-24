@@ -2,7 +2,7 @@
 
 This is the current GCS-YOLO-Lane mainline branch. It imports the historical `5-25-3.zip` algorithm and adapts only the TuSimple fixed-y contract.
 
-Active source/config is based on rollback commit `50999d6af` (`Document 5-25-3 K56 as mainline`) plus default-disabled experiment knobs for `duplicate_margin_loss`, `spurious_margin_loss`, `lane_balanced_point_loss`, `short_valid_recall_loss`, `far_spurious_survival_loss`, `gt5_rank_consistency_loss`, and `gt3_extra_survival_loss`. Results and mechanisms from other later commits are retained below as legacy experiment conclusions only; they do not describe currently available CLI flags, loss items, diagnostic scripts, or selected candidates.
+Active source/config is based on rollback commit `50999d6af` (`Document 5-25-3 K56 as mainline`) plus default-disabled experiment knobs for `duplicate_margin_loss`, `spurious_margin_loss`, `lane_balanced_point_loss`, `short_valid_recall_loss`, `far_spurious_survival_loss`, `gt5_rank_consistency_loss`, `gt3_extra_survival_loss`, and `gt4_lane_balanced_point_loss`, plus the train-only `gcs_gt4_sample_gain` sampler knob. Results and mechanisms from other later commits are retained below as legacy experiment conclusions only; they do not describe currently available CLI flags, loss items, diagnostic scripts, or selected candidates.
 
 ## Contract
 
@@ -24,6 +24,28 @@ The 56 fixed-y anchors are TuSimple official h-samples `710, 700, 690, ..., 160`
 Compatibility paths `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml` and `data/tusimple_gcs_fixed_y_k56_960x544.yaml` keep the same K56 contract for old run records. New training commands should use the mainline paths above.
 
 The 5-25-3 algorithm body is intentionally not upgraded to later mainline Count Head, Count Boundary, Quality Head, Survival Head, near-miss, or official-best checkpoint machinery.
+
+## Current Official-Val Candidate
+
+The 2026-06-25 `dupmargin005_gt4pt025` run is the current official-val
+selected candidate. It uses the branch-local default-disabled GT4
+lane-balanced point loss on top of `dupmargin005`:
+
+```text
+run: gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt4pt025
+weights: runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt4pt025/weights/best.pt
+official-val sweep: runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt4pt025_official_val_sweep
+official-val decode: conf=0.005, point_valid_thr=0.5, nms_dist_px=18.0, max_det=5, min_points=5
+official-val363: ACC=0.970975, FP=0.017264, FN=0.012167, official_score=0.970386, count_acc=0.966942
+count_acc_3/4/5=0.968610 / 0.954545 / 0.972973
+```
+
+It narrowly beats the previous `gt4short15` official-val ACC by `+0.000124`
+and materially improves GT4 count accuracy (`0.954545` vs `0.848485`). The
+larger `dupmargin005_gt4pt050` run is rejected on official-val
+(`ACC=0.964381`, `count_acc_4=0.803030`). The selected `gt4pt025` final test
+has not been used for tuning; it may only be run once with the frozen
+official-val decode above.
 
 ## Legacy Evaluated Candidates
 

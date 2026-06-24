@@ -2626,3 +2626,75 @@ Mainline or experiment:
 
 Branch-local default-disabled experiment and diagnostic tooling. No candidate
 is promoted by this implementation.
+
+## 2026-06-25: Select gt4pt025 on Official-Val
+
+Decision:
+
+Select `gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt4pt025` as the current
+official-val candidate. Reject
+`gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt4pt050` because the larger
+GT4 lane-balanced point gain degrades the primary metric and count shape.
+
+Evidence:
+
+```text
+selected run = gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt4pt025
+sweep = runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt4pt025_official_val_sweep/tusimple_official_sweep_summary.json
+decode = conf=0.005, point_valid_thr=0.5, nms_dist_px=18.0, max_det=5, min_points=5
+official-val ACC = 0.970975
+official-val FP = 0.017264
+official-val FN = 0.012167
+official-val official_score = 0.970386
+official-val count_acc = 0.966942
+official-val count_acc_3/4/5 = 0.968610 / 0.954545 / 0.972973
+```
+
+The selected run narrowly beats the previous `gt4short15` official-val ACC
+(`0.970975` vs `0.970851`) and materially improves GT4 count accuracy
+(`0.954545` vs `0.848485`). It also beats `dupmargin005` on official-val ACC,
+official score, FP/FN balance, and GT4 count accuracy.
+
+Fixed candidate-pool support:
+
+```text
+artifact = runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt4pt025_official_val_fixed_pool/summary.json
+fixed pool decode = conf=0.005, point_valid_thr=0.5, nms_dist_px=0.0, max_det=8, min_points=6
+official-val ACC = 0.970363
+official-val official_score = 0.969751
+official-val count_acc = 0.961433
+official-val count_acc_4 = 0.954545
+```
+
+Rejected run:
+
+```text
+run = gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt4pt050
+sweep = runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt4pt050_official_val_sweep/tusimple_official_sweep_summary.json
+best decode = conf=0.1, point_valid_thr=0.5, nms_dist_px=50.0, max_det=8, min_points=6
+official-val ACC = 0.964381
+official-val FP = 0.034389
+official-val FN = 0.021120
+official-val count_acc = 0.903581
+official-val count_acc_4 = 0.803030
+```
+
+Risk:
+
+The margin over `gt4short15` is small and the selected `conf=0.005` is a score
+calibration warning. The train-derived GT4-hard diagnostic for `gt4pt025`
+still has `final_decode_recall = 0/22`; missing lanes are dominated by
+`geometry_bad` and `low_point_valid`, so the GT4-hard candidate-recall
+bottleneck is not solved.
+
+Protocol:
+
+The next allowed action is a one-shot official-test report for `gt4pt025` using
+the frozen selected decode:
+
+```text
+conf=0.005, point_valid_thr=0.5, nms_dist_px=18.0, max_det=5, min_points=5
+```
+
+Do not use that final-test result for threshold, NMS, `max_det`, `min_points`,
+checkpoint, or loss-gain selection.

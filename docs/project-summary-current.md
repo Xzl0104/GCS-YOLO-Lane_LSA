@@ -279,6 +279,10 @@ count_loss
 count_under5_loss
 duplicate_margin_loss
 spurious_margin_loss
+far_spurious_survival_loss
+gt5_rank_consistency_loss
+gt3_extra_survival_loss
+gt4_lane_balanced_point_loss
 ```
 
 默认启用的基础 loss gain：
@@ -299,6 +303,13 @@ spurious_margin_loss
 - `gcs_count_under5 = 0.0`
 - `gcs_duplicate_margin = 0.0`
 - `gcs_spurious_margin = 0.0`
+- `gcs_far_spurious_survival = 0.0`
+- `gcs_gt5_rank_consistency = 0.0`
+- `gcs_gt3_extra_survival = 0.0`
+- `gcs_gt4_lane_balanced_point = 0.0`
+
+训练期默认不改变采样分布，GT4-focused sampler 只在显式设置
+`gcs_gt4_sample_gain > 1.0` 时生效；默认值为 `1.0`。
 
 各 loss 实现：
 
@@ -315,6 +326,10 @@ spurious_margin_loss
 - `count_under5_loss`: 对 GT lane 数大于等于 `gcs_count_under5_min_lanes=5` 的样本，惩罚 `target_count - pred_count` 的 undercount gap；代码默认 gain 为 0，正式实验可通过 CLI 显式启用。
 - `duplicate_margin_loss`: 对可靠 matched `q+` 与 duplicate-like unmatched `q-` 施加 pairwise logit margin；默认 gain 为 0。
 - `spurious_margin_loss`: 对可靠 matched `q+` 与 far-spurious unmatched `q-` 施加 pairwise logit margin；默认 gain 为 0。
+- `far_spurious_survival_loss`: 对远离 GT 的 unmatched query 施加 survival/ranking 类约束；默认 gain 为 0。
+- `gt5_rank_consistency_loss`: 针对 GT5 场景做 rank consistency 实验；默认 gain 为 0。
+- `gt3_extra_survival_loss`: 针对 GT3 extra-query 生存问题的窄实验项；默认 gain 为 0。
+- `gt4_lane_balanced_point_loss`: 仅对 GT lane count 为 4 且四条 GT 均已被 Hungarian matcher 匹配的样本生效，提升 matched lane 中点回归最弱 lane 的 point weight 并按图内均值归一；默认 gain 为 0。
 
 ## 解码与推理
 
@@ -389,7 +404,81 @@ python tools/eval_tusimple_official.py \
 
 ## official-val 最优结果
 
-当前项目记录中，按 official-val ACC 选择的最高结果为：
+截至 2026-06-25，按 official-val ACC 选择的当前最高候选为：
+
+- run：`gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt4pt025`
+- weights：`/root/GCS-YOLO-Lane_LSA_5-25-3-k56/runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt4pt025/weights/best.pt`
+- official-val sweep：`/root/GCS-YOLO-Lane_LSA_5-25-3-k56/runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt4pt025_official_val_sweep/tusimple_official_sweep_summary.json`
+- official-val split：363 images
+- selected decode：`conf=0.005, point_valid_thr=0.5, nms_dist_px=18.0, max_det=5, min_points=5`
+- 复现代码状态：该 run 使用当前分支已实现、默认关闭的 `gcs_gt4_lane_balanced_point` 实验项；默认算法配置仍不启用该 loss。
+
+official-val metrics：
+
+```text
+official_acc   = 0.970975
+official_FP    = 0.017264
+official_FN    = 0.012167
+official_score = 0.970386
+count_acc      = 0.966942
+count_acc_3    = 0.968610
+count_acc_4    = 0.954545
+count_acc_5    = 0.972973
+images         = 363
+```
+
+official-val lane count distribution：
+
+```text
+pred_lanes_hist = 3:217, 4:72, 5:74
+gt_lanes_hist   = 3:223, 4:66, 5:74
+count_confusion = 3->3:216, 3->4:7,
+                  4->3:1, 4->4:63, 4->5:2,
+                  5->4:2, 5->5:72
+```
+
+关键训练配置：
+
+```text
+gcs_duplicate_margin = 0.05
+gcs_gt4_lane_balanced_point = 0.25
+gcs_gt4_lane_balanced_topk = 1
+gcs_gt4_lane_balanced_max_mult = 2.0
+gcs_gt4_sample_gain = 1.0
+```
+
+official-test 尚未作为选择依据使用。允许的下一步只有一次按
+official-val selected decode 冻结执行的 reporting-only final test：
+
+```bash
+python tools/eval_tusimple_official.py \
+  --archive-root archive/TUSimple \
+  --split test \
+  --weights runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt4pt025/weights/best.pt \
+  --imgsz 544 960 \
+  --device 0 \
+  --conf 0.005 \
+  --point-valid-thr 0.5 \
+  --nms-dist-px 18.0 \
+  --max-det 5 \
+  --min-points 5 \
+  --half \
+  --save-dir runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt4pt025_official_test_best_from_val \
+  --save-records
+```
+
+`gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt4pt050` 已拒绝：
+
+```text
+official_acc   = 0.964381
+official_FP    = 0.034389
+official_FN    = 0.021120
+official_score = 0.963271
+count_acc      = 0.903581
+count_acc_4    = 0.803030
+```
+
+2026-06-25 之前记录中的上一轮 official-val 最优结果为：
 
 - run：`gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03`
 - weights：`/root/GCS-YOLO-Lane_LSA_5-25-3-k56/runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03/weights/best.pt`

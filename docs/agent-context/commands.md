@@ -143,7 +143,8 @@ python tools/train_gcs.py \
   --name gcs_yolo_lane_s_tusimple_fixed_y_shortpos_count03_under5_03
 ```
 
-Promotion must use official-val only. First-pass gates:
+Promotion must use official-val only. Historical first-pass gates used for this
+run family:
 
 ```text
 ACC >= 0.970272, preferably near or above 0.970851
@@ -152,6 +153,9 @@ GT5 count_acc should not fall far below 0.972973
 GT4 count_acc should not drop sharply
 APE / matched geometry metrics should not regress
 ```
+
+For future candidates after the 2026-06-25 GT4 lane-balanced point sweep, the
+current official-val ACC gate is `0.970975` from `gt4pt025`.
 
 After training, run train/val failure traces and check that
 `geometry_miss_short_gt` and `min_points_visibility_short_gt` decrease without
@@ -350,7 +354,7 @@ official-val ACC=0.961513, FP=0.049633, FN=0.029844, official_score=0.959923, co
 count_acc_3=0.928251, count_acc_4=0.772727, count_acc_5=0.864865
 ```
 
-At the current `gt4short15` decode (`conf=0.15`, `point_valid_thr=0.5`,
+At the then-current `gt4short15` decode (`conf=0.15`, `point_valid_thr=0.5`,
 `nms_dist_px=0.0`, `max_det=6`, `min_points=4`), the `extraexist0025` run gets
 only `ACC=0.961450`, `FP=0.045638`, `FN=0.029844`, `count_acc=0.909091`. Its
 best count row reaches only `count_acc=0.928375` with `ACC=0.961400`, still
@@ -472,10 +476,11 @@ python tools/train_gcs.py \
 ```
 
 The completed result was judged only on the same 363-image official-val
-surface. It failed the required gate `ACC >= 0.970851`, so final test remains
-closed. If this mechanism is revisited, run a train/val failure trace first to
-verify whether `low_score_short_gt` improved enough to justify a narrower
-variant; do not tune from final test.
+surface. It failed the then-current required gate `ACC >= 0.970851`, so final
+test remained closed. If this mechanism is revisited, compare against the
+current `gt4pt025` gate (`ACC >= 0.970975`), run a train/val failure trace first
+to verify whether `low_score_short_gt` improved enough to justify a narrower
+variant, and do not tune from final test.
 
 ## Legacy count_under5=0.0 Ablation and Reporting Test
 
@@ -591,6 +596,53 @@ Do not promote this run from final-test ACC. It beats the older
 `count03_under5_03` official-val ACC but misses the stronger `gt4short15`
 official-val gate `0.970851`. Final test is reporting-only and must not be
 used for threshold, checkpoint, postprocess, or loss selection.
+
+## GT4 Lane-Balanced Point 0.25 Selected Candidate
+
+The 2026-06-25 `dupmargin005_gt4pt025` official-val sweep is the current
+selection surface for this branch-local GT4 candidate-recall line:
+
+```text
+run: gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt4pt025
+sweep: runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt4pt025_official_val_sweep/tusimple_official_sweep_summary.json
+selected decode: conf=0.005, point_valid_thr=0.5, nms_dist_px=18.0, max_det=5, min_points=5
+official-val363: ACC=0.970975, FP=0.017264, FN=0.012167, official_score=0.970386, count_acc=0.966942
+count_acc_3=0.968610, count_acc_4=0.954545, count_acc_5=0.972973
+```
+
+It is selected over `gt4short15` (`ACC=0.970851`) and `dupmargin005`
+(`ACC=0.970272`). The companion `dupmargin005_gt4pt050` sweep is rejected:
+
+```text
+run: gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt4pt050
+sweep: runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt4pt050_official_val_sweep/tusimple_official_sweep_summary.json
+best decode: conf=0.1, point_valid_thr=0.5, nms_dist_px=50.0, max_det=8, min_points=6
+official-val363: ACC=0.964381, FP=0.034389, FN=0.021120, official_score=0.963271, count_acc=0.903581
+count_acc_4=0.803030
+```
+
+One-shot official test command for the selected `gt4pt025` run, using only the
+frozen official-val selected decode:
+
+```bash
+python tools/eval_tusimple_official.py \
+  --archive-root archive/TUSimple \
+  --split test \
+  --weights runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt4pt025/weights/best.pt \
+  --imgsz 544 960 \
+  --device 0 \
+  --conf 0.005 \
+  --point-valid-thr 0.5 \
+  --nms-dist-px 18.0 \
+  --max-det 5 \
+  --min-points 5 \
+  --half \
+  --save-dir runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt4pt025_official_test_best_from_val \
+  --save-records
+```
+
+Do not run final test for `gt4pt050`. Do not use the selected `gt4pt025`
+final-test result for threshold, checkpoint, postprocess, or loss-gain tuning.
 
 ## GT3 Extra-Survival 0.03 Rejection and Reporting Test
 
