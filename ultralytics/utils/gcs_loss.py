@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from ultralytics.utils import LOGGER, RANK
 from ultralytics.utils.gcs_matcher import GCSHungarianMatcher
 from ultralytics.utils.gcs_shape import assert_gcs_image_tensor, assert_gcs_shape, normalize_imgsz
 
@@ -18,6 +19,7 @@ class GCSLoss(nn.Module):
         "exist_loss",
         "point_loss",
         "lane_balanced_point_loss",
+        "gt4_short_lane_loss",
         "gt4_lane_balanced_point_loss",
         "point_valid_loss",
         "short_valid_recall_loss",
@@ -32,7 +34,6 @@ class GCSLoss(nn.Module):
         "far_spurious_survival_loss",
         "gt5_rank_consistency_loss",
         "gt3_extra_survival_loss",
-        "gt4_short_lane_loss",
         "gt4_short_lane_valid_points_mean",
         "gt4_short_lane_count",
     )
@@ -649,6 +650,23 @@ class GCSLoss(nn.Module):
                 else self._arg(args, "gcs_gt4_short_match_max_points", 20)
             ),
         )
+        self._debug_first_batch_printed = False
+        self._log_runtime_config()
+
+    def _log_runtime_config(self) -> None:
+        """Log the experiment-critical lane-balanced and GT4-short config once."""
+        if RANK not in {-1, 0}:
+            return
+        LOGGER.info(
+            "GCSLoss config: "
+            f"lane_balanced_point_loss={self.use_lane_balanced_point_loss}, "
+            f"gt4_short_lane_weight={self.gt4_short_lane_weight}, "
+            f"gt4_short_lane_max_points={self.gt4_short_lane_max_points}, "
+            f"gt4_lane_balanced_point_gain={self.gt4_lane_balanced_point_gain}, "
+            f"short_valid_recall_gain={self.short_valid_recall_gain}, "
+            f"gt4_short_match_endpoint={self.matcher.gt4_short_match_endpoint}, "
+            f"gt4_short_match_max_points={self.matcher.gt4_short_match_max_points}"
+        )
 
     @staticmethod
     def _arg(args, name: str, default):
@@ -686,6 +704,72 @@ class GCSLoss(nn.Module):
         else:
             values = [int(value)]
         return frozenset(values)
+
+    @staticmethod
+    def _matched_lane_count(indices: list[tuple[torch.Tensor, torch.Tensor]]) -> int:
+        """Return the number of Hungarian-matched lanes in the current batch."""
+        return int(sum(int(src_idx.numel()) for src_idx, _ in indices))
+
+    def _endpoint_cost_enabled_count(
+        self,
+        gt_valid: list[torch.Tensor],
+        target_counts: torch.Tensor,
+        device: torch.device,
+    ) -> int:
+        """Return how many GT4 short lanes receive the endpoint matcher term."""
+        if self.matcher.gt4_short_match_endpoint <= 0.0:
+            return 0
+        count = 0
+        max_points = float(self.matcher.gt4_short_match_max_points)
+        for b, valid in enumerate(gt_valid):
+            if valid.numel() == 0:
+                continue
+            gt_count = int(round(float(target_counts[b].detach().item())))
+            if gt_count != 4:
+                continue
+            visible = valid.to(device=device, dtype=torch.float32).sum(dim=1)
+            enabled = (visible >= 2.0) & (visible <= max_points)
+            count += int(enabled.sum().item())
+        return count
+
+    def _log_first_batch_debug(
+        self,
+        indices: list[tuple[torch.Tensor, torch.Tensor]],
+        gt_valid: list[torch.Tensor],
+        target_counts: torch.Tensor,
+        lane_balanced_point_loss_value: torch.Tensor,
+        gt4_short_point_loss_value: torch.Tensor,
+        gt4_lane_balanced_point_loss_value: torch.Tensor,
+        short_valid_recall_loss_value: torch.Tensor,
+        gt4_short_lane_count: torch.Tensor,
+        total_loss: torch.Tensor,
+        device: torch.device,
+    ) -> None:
+        """Log one first-batch debug line for GT4 short-lane experiment wiring."""
+        if self._debug_first_batch_printed:
+            return
+        self._debug_first_batch_printed = True
+        if RANK not in {-1, 0}:
+            return
+        endpoint_count = self._endpoint_cost_enabled_count(gt_valid, target_counts, device)
+        LOGGER.info(
+            "GCSLoss first-batch debug: "
+            f"lane_balanced_point_loss_enabled={self.use_lane_balanced_point_loss}, "
+            f"num_matched_lanes={self._matched_lane_count(indices)}, "
+            f"num_gt4_short_lanes={int(round(float(gt4_short_lane_count.detach().cpu().item())))}, "
+            f"loss_lane_bal={float(lane_balanced_point_loss_value.detach().cpu().item()):.6g}, "
+            f"loss_gt4_pt={float(gt4_short_point_loss_value.detach().cpu().item()):.6g}, "
+            f"loss_gt4_lbp={float(gt4_lane_balanced_point_loss_value.detach().cpu().item()):.6g}, "
+            f"loss_short_rec={float(short_valid_recall_loss_value.detach().cpu().item()):.6g}, "
+            f"total_loss={float(total_loss.detach().cpu().item()):.6g}, "
+            f"total_includes_gt4_lbp={self.gt4_lane_balanced_point_gain > 0.0}, "
+            f"total_gt4_lbp_contrib="
+            f"{float((self.gt4_lane_balanced_point_gain * gt4_lane_balanced_point_loss_value).detach().cpu().item()):.6g}, "
+            f"total_includes_short_rec={self.short_valid_recall_gain > 0.0}, "
+            f"total_short_rec_contrib="
+            f"{float((self.short_valid_recall_gain * short_valid_recall_loss_value).detach().cpu().item()):.6g}, "
+            f"endpoint_cost_enabled_count={endpoint_count}"
+        )
 
     @staticmethod
     def _point_scale(image_size) -> tuple[float, float]:
@@ -1714,7 +1798,10 @@ class GCSLoss(nn.Module):
         point_loss, point_stats = self.point_loss(
             pred_points, gt_points, gt_valid, indices, target_counts=target_counts, return_stats=True
         )
-        lane_balanced_point_loss = self.lane_balanced_point_loss(pred_points, gt_points, gt_valid, indices)
+        lane_balanced_point_extra_loss = self.lane_balanced_point_loss(pred_points, gt_points, gt_valid, indices)
+        lane_balanced_point_loss_log = (
+            point_loss if self.use_lane_balanced_point_loss else lane_balanced_point_extra_loss
+        )
         gt4_lane_balanced_point_loss = self.gt4_lane_balanced_point_loss(
             pred_points, batch, gt_points, gt_valid, indices
         )
@@ -1753,7 +1840,7 @@ class GCSLoss(nn.Module):
         total = (
             self.exist_gain * exist_loss
             + self.point_gain * point_loss
-            + self.lane_balanced_point_gain * lane_balanced_point_loss
+            + self.lane_balanced_point_gain * lane_balanced_point_extra_loss
             + self.gt4_lane_balanced_point_gain * gt4_lane_balanced_point_loss
             + self.point_valid_gain * point_valid_loss
             + self.short_valid_recall_gain * short_valid_recall_loss
@@ -1769,11 +1856,24 @@ class GCSLoss(nn.Module):
             + self.gt5_rank_consistency_gain * gt5_rank_consistency_loss
             + self.gt3_extra_survival_gain * gt3_extra_survival_loss
         )
+        self._log_first_batch_debug(
+            indices=indices,
+            gt_valid=gt_valid,
+            target_counts=target_counts,
+            lane_balanced_point_loss_value=lane_balanced_point_loss_log,
+            gt4_short_point_loss_value=gt4_short_lane_loss,
+            gt4_lane_balanced_point_loss_value=gt4_lane_balanced_point_loss,
+            short_valid_recall_loss_value=short_valid_recall_loss,
+            gt4_short_lane_count=gt4_short_lane_count,
+            total_loss=total,
+            device=pred_points.device,
+        )
         loss_items = torch.stack(
             (
                 exist_loss.detach(),
                 point_loss.detach(),
-                lane_balanced_point_loss.detach(),
+                lane_balanced_point_loss_log.detach(),
+                gt4_short_lane_loss.detach(),
                 gt4_lane_balanced_point_loss.detach(),
                 point_valid_loss.detach(),
                 short_valid_recall_loss.detach(),
@@ -1788,7 +1888,6 @@ class GCSLoss(nn.Module):
                 far_spurious_survival_loss.detach(),
                 gt5_rank_consistency_loss.detach(),
                 gt3_extra_survival_loss.detach(),
-                gt4_short_lane_loss.detach(),
                 gt4_short_lane_valid_points_mean.detach(),
                 gt4_short_lane_count.detach(),
             )

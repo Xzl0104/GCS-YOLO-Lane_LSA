@@ -134,6 +134,7 @@ Default logged loss items on this branch:
 exist_loss
 point_loss
 lane_balanced_point_loss
+gt4_short_lane_loss
 gt4_lane_balanced_point_loss
 point_valid_loss
 short_valid_recall_loss
@@ -148,7 +149,6 @@ spurious_margin_loss
 far_spurious_survival_loss
 gt5_rank_consistency_loss
 gt3_extra_survival_loss
-gt4_short_lane_loss
 gt4_short_lane_valid_points_mean
 gt4_short_lane_count
 ```
@@ -166,6 +166,14 @@ legacy valid-point pooled reduction. In GT4 images, lanes with visible points
 `<= gcs_gt4_short_lane_max_points` are multiplied by
 `gcs_gt4_short_lane_weight`. The three `gt4_short_lane_*` fields are diagnostic
 training/validation log items and do not add independent objective terms.
+In the training progress table, `lane_bal` reports the active lane-balanced
+base point-loss value when `gcs_lane_balanced_point_loss=true`; `gt4_pt`
+reports `gt4_short_lane_loss`; `gt4_lbp` reports the separate
+`gt4_lane_balanced_point_loss` experiment item. When
+`gcs_gt4_lane_balanced_point=0.0`, the progress header marks that column as
+`gt4lbp_off`; when `gcs_short_valid_recall=0.0`, it marks the short valid
+recall column as `short_off`. Those disabled columns are expected to be
+zero and do not contribute to `total_loss`.
 
 `gcs_gt4_short_match_endpoint` is default `0.0`; with the default value the
 Hungarian matcher is unchanged. When enabled, it adds normalized-x endpoint

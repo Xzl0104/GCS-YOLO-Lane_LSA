@@ -1368,3 +1368,51 @@ Decision: select `gt4pt025` as the current official-val candidate and reject
 report using the frozen official-val decode above. Do not tune final-test
 thresholds, NMS, `max_det`, `min_points`, checkpoint choice, or loss gain from
 that report.
+
+## 2026-06-25 GT4 Short-Lane Recall Endpoint Rejection
+
+The completed `gcs_yolo_lane_s_tusimple_fixed_y_gt4shortrecall_lbpt_endpoint`
+run enabled the default-off base lane-balanced point reduction and GT4-short
+endpoint matcher cost:
+
+```text
+gcs_lane_balanced_point_loss = true
+gcs_gt4_short_lane_weight = 1.5
+gcs_gt4_short_lane_max_points = 20
+gcs_gt4_short_match_endpoint = 1.0
+gcs_gt4_short_match_max_points = 20
+gcs_duplicate_margin = 0.0
+```
+
+Official-val result:
+
+```text
+sweep = runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4shortrecall_lbpt_endpoint_official_val_sweep/tusimple_official_sweep_summary.json
+best decode = conf=0.15, point_valid_thr=0.5, nms_dist_px=0.0, max_det=5, min_points=4
+official-val ACC = 0.970301
+official-val FP = 0.024288
+official-val FN = 0.013085
+official-val official_score = 0.969554
+official-val count_acc = 0.950413
+official-val count_acc_3/4/5 = 0.959641 / 0.878788 / 0.986486
+count_confusion = 3->3=214, 3->4=8, 3->5=1, 4->4=58, 4->5=8, 5->4=1, 5->5=73
+```
+
+Integrated conclusion:
+
+- Supported fact: this run is below the current `gt4pt025` official-val gate
+  (`ACC=0.970975`, `count_acc_4=0.954545`).
+- Supported fact: the selected decode removes `4->3` on official-val, but
+  worsens GT4 overcount (`4->5=8` versus `gt4pt025`'s `2`) and raises FP.
+- Supported fact: the fixed-pool official-val raw-query diagnostic still has
+  one missing GT4 lane, classified as `geometry_bad`, with best raw-query
+  mean absolute x error `30.265432px` against a `20px` gate.
+- Decision: reject `gt4shortrecall_lbpt_endpoint` as a promotion and do not
+  run final test for it.
+
+Smallest safe next action:
+
+Do not add score/count/rank losses for this failed run. If this line is
+revisited, isolate matcher/label/query candidate geometry around
+`clips/0601/1494453641541664519/20.jpg`, and compare against `gt4pt025` before
+launching another training change.

@@ -35,6 +35,7 @@ class GCSLaneTrainer(BaseTrainer):
         "exist_loss",
         "point_loss",
         "lane_balanced_point_loss",
+        "gt4_short_lane_loss",
         "gt4_lane_balanced_point_loss",
         "point_valid_loss",
         "short_valid_recall_loss",
@@ -49,7 +50,6 @@ class GCSLaneTrainer(BaseTrainer):
         "far_spurious_survival_loss",
         "gt5_rank_consistency_loss",
         "gt3_extra_survival_loss",
-        "gt4_short_lane_loss",
         "gt4_short_lane_valid_points_mean",
         "gt4_short_lane_count",
     )
@@ -59,6 +59,7 @@ class GCSLaneTrainer(BaseTrainer):
         "point",
         "lane_bal",
         "gt4_pt",
+        "gt4_lbp",
         "pt_valid",
         "short_rec",
         "smooth",
@@ -72,7 +73,6 @@ class GCSLaneTrainer(BaseTrainer):
         "far_surv",
         "gt5_rank",
         "gt3_ext",
-        "gt4_short",
         "gt4_vmean",
         "gt4_n",
     )
@@ -508,12 +508,31 @@ class GCSLaneTrainer(BaseTrainer):
             return keys
         return dict(zip(keys, [round(float(x), 5) for x in loss_items]))
 
+    def _progress_loss_names(self) -> tuple[str, ...]:
+        """Return short progress labels, marking default-off experiment columns explicitly."""
+        names = list(self.progress_loss_names)
+        args = getattr(self, "args", None)
+
+        def arg_float(name: str, default: float = 0.0) -> float:
+            value = getattr(args, name, default) if args is not None else default
+            try:
+                return float(default if value is None else value)
+            except (TypeError, ValueError):
+                return default
+
+        if arg_float("gcs_gt4_lane_balanced_point") <= 0.0 and "gt4_lbp" in names:
+            names[names.index("gt4_lbp")] = "gt4lbp_off"
+        if arg_float("gcs_short_valid_recall") <= 0.0 and "short_rec" in names:
+            names[names.index("short_rec")] = "short_off"
+        return tuple(names)
+
     def progress_string(self):
         """Return a progress header matching the GCS loss vector."""
-        return ("\n" + "%11s" * (4 + len(self.progress_loss_names))) % (
+        progress_loss_names = self._progress_loss_names()
+        return ("\n" + "%11s" * (4 + len(progress_loss_names))) % (
             "Epoch",
             "GPU_mem",
-            *self.progress_loss_names,
+            *progress_loss_names,
             "Lanes",
             "Size",
         )

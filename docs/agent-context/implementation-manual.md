@@ -14,7 +14,11 @@ default-disabled `duplicate_margin_loss`, `spurious_margin_loss`,
 `lane_balanced_point_loss`, `short_valid_recall_loss`,
 `far_spurious_survival_loss`, `gt5_rank_consistency_loss`, and
 `gt3_extra_survival_loss`, `gt4_lane_balanced_point_loss`, and train-only
-`gcs_gt4_sample_gain` experiment knobs.
+`gcs_gt4_sample_gain` experiment knobs. It also includes default-off GT4
+short-lane candidate-recall knobs:
+`gcs_lane_balanced_point_loss`, `gcs_gt4_short_lane_weight`,
+`gcs_gt4_short_lane_max_points`, `gcs_gt4_short_match_endpoint`, and
+`gcs_gt4_short_match_max_points`.
 Other post-`50999d6af` experiment knobs such as `gcs_gt4_short_boost`,
 `gcs_extra_exist`, and `gcs_short_exist_floor` are legacy records only and are
 not available in the current code unless a future task explicitly restores them.

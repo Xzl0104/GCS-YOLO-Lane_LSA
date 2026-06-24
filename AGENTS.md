@@ -105,7 +105,7 @@ The K56 labels must be regenerated from original TuSimple JSON and images, not r
 
 Historical q12-k56 experiment notes and compatibility paths must stay as old records. They do not override the active 5-25-3 K56 mainline contract.
 
-The active source code is based on rollback commit `50999d6af` (`Document 5-25-3 K56 as mainline`) plus default-disabled experiment knobs for `duplicate_margin_loss`, `spurious_margin_loss`, `lane_balanced_point_loss`, `short_valid_recall_loss`, `far_spurious_survival_loss`, `gt5_rank_consistency_loss`, `gt3_extra_survival_loss`, and `gt4_lane_balanced_point_loss`, plus the train-only `gcs_gt4_sample_gain` sampler knob. Other later experiment commits and their documentation are legacy conclusions only unless a future task explicitly re-enables those mechanisms.
+The active source code is based on rollback commit `50999d6af` (`Document 5-25-3 K56 as mainline`) plus default-disabled experiment knobs for `duplicate_margin_loss`, `spurious_margin_loss`, `lane_balanced_point_loss`, `short_valid_recall_loss`, `far_spurious_survival_loss`, `gt5_rank_consistency_loss`, `gt3_extra_survival_loss`, and `gt4_lane_balanced_point_loss`, plus the train-only `gcs_gt4_sample_gain` sampler knob. It also includes default-off GT4 short-lane candidate-recall knobs for replacing the base x point-loss reduction with lane-balanced reduction and for adding GT4-short endpoint matching cost: `gcs_lane_balanced_point_loss`, `gcs_gt4_short_lane_weight`, `gcs_gt4_short_lane_max_points`, `gcs_gt4_short_match_endpoint`, and `gcs_gt4_short_match_max_points`. Other later experiment commits and their documentation are legacy conclusions only unless a future task explicitly re-enables those mechanisms.
 The `gt3_extra_survival_loss` knob is a narrow follow-up to `dupmargin005`; it does not change the model structure, decoder, eval, or final-test selection rules unless explicitly enabled for training.
 
 ## Branch Scope
@@ -134,6 +134,7 @@ Default logged loss items on this branch:
 exist_loss
 point_loss
 lane_balanced_point_loss
+gt4_short_lane_loss
 gt4_lane_balanced_point_loss
 point_valid_loss
 short_valid_recall_loss
@@ -148,6 +149,8 @@ spurious_margin_loss
 far_spurious_survival_loss
 gt5_rank_consistency_loss
 gt3_extra_survival_loss
+gt4_short_lane_valid_points_mean
+gt4_short_lane_count
 ```
 
 ## Agent Coordination Rules

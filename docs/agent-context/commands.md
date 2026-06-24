@@ -32,8 +32,14 @@ K56 as mainline`) plus the default-disabled `duplicate_margin_loss`,
 `short_valid_recall_loss`, `far_spurious_survival_loss`, and
 `gt5_rank_consistency_loss`, `gt3_extra_survival_loss`, and
 `gt4_lane_balanced_point_loss` experiment knobs, plus train-only
-`gcs_gt4_sample_gain`. Sections below that mention `gt4short*`,
-`--gcs-gt4-short-*`, `--gcs-extra-exist`, `--gcs-short-exist-*`, or
+`gcs_gt4_sample_gain`. It also includes default-off GT4 short-lane
+candidate-recall knobs:
+`--gcs-lane-balanced-point-loss`, `--gcs-gt4-short-lane-weight`,
+`--gcs-gt4-short-lane-max-points`, `--gcs-gt4-short-match-endpoint`, and
+`--gcs-gt4-short-match-max-points`.
+Sections below that mention legacy GT4 short sampling flags such as
+`--gcs-gt4-short-boost` / `--gcs-gt4-short-min-visible-max`,
+`--gcs-extra-exist`, `--gcs-short-exist-*`, or
 `tools/diagnose_tusimple_count_confusion.py` are legacy post-`50999d6af`
 experiment records only. They are not commands for the current code state
 unless a future task explicitly restores those commits.
@@ -643,6 +649,136 @@ python tools/eval_tusimple_official.py \
 
 Do not run final test for `gt4pt050`. Do not use the selected `gt4pt025`
 final-test result for threshold, checkpoint, postprocess, or loss-gain tuning.
+
+## GT4 Short-Lane Recall Lane-Balanced Endpoint Rejection
+
+The 2026-06-25 `gt4shortrecall_lbpt_endpoint` experiment uses the active
+default-off GT4 short-lane candidate-recall knobs. It is rejected and must not
+replace the current `gt4pt025` official-val candidate:
+
+```text
+run: gcs_yolo_lane_s_tusimple_fixed_y_gt4shortrecall_lbpt_endpoint
+weights: runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4shortrecall_lbpt_endpoint/weights/best.pt
+sweep: runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4shortrecall_lbpt_endpoint_official_val_sweep/tusimple_official_sweep_summary.json
+best decode: conf=0.15, point_valid_thr=0.5, nms_dist_px=0.0, max_det=5, min_points=4
+official-val363: ACC=0.970301, FP=0.024288, FN=0.013085, official_score=0.969554, count_acc=0.950413
+count_acc_3=0.959641, count_acc_4=0.878788, count_acc_5=0.986486
+count_confusion: 3->3=214, 3->4=8, 3->5=1, 4->4=58, 4->5=8, 5->4=1, 5->5=73
+```
+
+Actual recorded training args include:
+
+```text
+gcs_lane_balanced_point_loss = true
+gcs_gt4_short_lane_weight = 1.5
+gcs_gt4_short_lane_max_points = 20
+gcs_gt4_short_match_endpoint = 1.0
+gcs_gt4_short_match_max_points = 20
+gcs_duplicate_margin = 0.0
+gcs_count = 0.3
+gcs_count_under5 = 0.3
+```
+
+Training command template:
+
+```bash
+python tools/train_gcs.py \
+  --dataset tusimple \
+  --model ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml \
+  --data data/tusimple_gcs_fixed_y_960x544.yaml \
+  --pretrained yolo11s-seg.pt \
+  --imgsz 544 960 \
+  --epochs 160 \
+  --batch 32 \
+  --workers 4 \
+  --device 0 \
+  --optimizer AdamW \
+  --lr0 5e-4 \
+  --lrf 0.05 \
+  --cos-lr \
+  --weight-decay 1e-4 \
+  --warmup-epochs 3.0 \
+  --warmup-bias-lr 0.0 \
+  --patience 40 \
+  --erasing 0.1 \
+  --scale 0.3 \
+  --gcs-exist 2.0 \
+  --gcs-point 15.0 \
+  --gcs-point-valid 1.0 \
+  --gcs-smooth 0.05 \
+  --gcs-curve 0.1 \
+  --gcs-mask 0.2 \
+  --gcs-edge 0.2 \
+  --gcs-count 0.3 \
+  --gcs-count-under5 0.3 \
+  --gcs-count-under5-min-lanes 5 \
+  --gcs-lane-count-balanced \
+  --gcs-lane-count-balance-power 1.0 \
+  --gcs-lane-count-min-group 50 \
+  --gcs-lane-balanced-point-loss \
+  --gcs-gt4-short-lane-weight 1.5 \
+  --gcs-gt4-short-lane-max-points 20 \
+  --gcs-gt4-short-match-endpoint 1.0 \
+  --gcs-gt4-short-match-max-points 20 \
+  --project runs/gcs_lane \
+  --name gcs_yolo_lane_s_tusimple_fixed_y_gt4shortrecall_lbpt_endpoint
+```
+
+Official-val sweep command:
+
+```bash
+python tools/sweep_tusimple_official.py \
+  --archive-root archive/TUSimple \
+  --split val \
+  --gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
+  --weights runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4shortrecall_lbpt_endpoint/weights/best.pt \
+  --imgsz 544 960 \
+  --device 0 \
+  --half \
+  --confs 0.005 0.01 0.02 0.03 0.05 0.08 0.1 0.15 0.2 0.25 \
+  --point-valid-thrs 0.3 0.35 0.4 0.45 0.5 \
+  --nms-dist-pxs 0 18 30 50 \
+  --max-dets 5 6 8 \
+  --min-points 4 5 6 \
+  --save-dir runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4shortrecall_lbpt_endpoint_official_val_sweep
+```
+
+Official-val raw-query diagnostic:
+
+```bash
+python tools/diagnose_gt4_missing_lane_raw_queries.py \
+  --weights runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4shortrecall_lbpt_endpoint/weights/best.pt \
+  --split val \
+  --archive-root archive/TUSimple \
+  --gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
+  --imgsz 544 960 \
+  --conf 0.005 \
+  --point-valid-thr 0.5 \
+  --nms-dist-px 0.0 \
+  --max-det 8 \
+  --min-points 6 \
+  --device 0 \
+  --half \
+  --save-dir runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4shortrecall_lbpt_endpoint_gt4_missing_raw_queries_official_val
+```
+
+Diagnostic result:
+
+```text
+selected_images = 1
+total_gt4_4to3_images = 1
+total_missing_gt_lanes = 1
+drop_reason = geometry_bad 1
+raw_match_recall = 0/1 = 0.0
+after_point_valid/min_points/conf/final_decode = 0/1
+missing lane = clips/0601/1494453641541664519/20.jpg, gt_lane_id=3, side=left_inner, visible_points=12
+best raw query = 10, mean_abs_x_error=30.265432, overlap_points=12, score=0.28886989
+```
+
+Decision: reject this run as a promotion. The selected decode removes
+official-val `4->3`, but it worsens GT4 `4->5` to `8`, raises FP, lowers ACC
+below the `gt4pt025` gate, and the fixed-pool diagnostic still identifies
+geometry-bad candidate recall. Do not run final test for this rejected run.
 
 ## GT3 Extra-Survival 0.03 Rejection and Reporting Test
 

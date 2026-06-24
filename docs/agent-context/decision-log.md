@@ -2698,3 +2698,79 @@ conf=0.005, point_valid_thr=0.5, nms_dist_px=18.0, max_det=5, min_points=5
 
 Do not use that final-test result for threshold, NMS, `max_det`, `min_points`,
 checkpoint, or loss-gain selection.
+
+## 2026-06-25: Reject gt4shortrecall_lbpt_endpoint
+
+Decision:
+
+Reject `gcs_yolo_lane_s_tusimple_fixed_y_gt4shortrecall_lbpt_endpoint` as a
+promotion candidate. Keep
+`gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt4pt025` as the current
+official-val selected candidate.
+
+Evidence:
+
+```text
+run = gcs_yolo_lane_s_tusimple_fixed_y_gt4shortrecall_lbpt_endpoint
+sweep = runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4shortrecall_lbpt_endpoint_official_val_sweep/tusimple_official_sweep_summary.json
+best decode = conf=0.15, point_valid_thr=0.5, nms_dist_px=0.0, max_det=5, min_points=4
+official-val ACC = 0.970301
+official-val FP = 0.024288
+official-val FN = 0.013085
+official-val official_score = 0.969554
+official-val count_acc = 0.950413
+official-val count_acc_3/4/5 = 0.959641 / 0.878788 / 0.986486
+count_confusion = 3->3=214, 3->4=8, 3->5=1, 4->4=58, 4->5=8, 5->4=1, 5->5=73
+```
+
+Comparison:
+
+The current `gt4pt025` gate remains stronger:
+
+```text
+gt4pt025 ACC = 0.970975
+gt4pt025 count_acc_4 = 0.954545
+gt4pt025 GT4 confusion includes 4->3=1, 4->4=63, 4->5=2
+```
+
+`gt4shortrecall_lbpt_endpoint` removes `4->3` from the selected official-val
+decode, but worsens GT4 overcount to `4->5=8`, raises FP, and lowers ACC by
+`0.000674` versus the gate.
+
+Diagnostic evidence:
+
+```text
+artifact = runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_gt4shortrecall_lbpt_endpoint_gt4_missing_raw_queries_official_val/summary.json
+selected_images = 1
+total_gt4_4to3_images = 1
+total_missing_gt_lanes = 1
+drop_reason = geometry_bad 1
+raw_match_recall = 0/1 = 0.0
+after_point_valid/min_points/conf/final_decode = 0/1
+```
+
+The missing lane is
+`clips/0601/1494453641541664519/20.jpg`, `gt_lane_id=3`,
+`left_inner`, with `12` visible points. The best raw query has overlap `12`,
+score `0.28886989`, but mean absolute x error `30.265432px`, so it fails the
+strict `20px` geometry gate.
+
+Why:
+
+The experiment is valid official-val evidence, but it does not beat the
+current official-val candidate and does not prove that GT4 missing-lane raw
+geometry is fixed. The remaining diagnostic failure is geometry quality, not
+score thresholding.
+
+Protocol:
+
+Do not run final test for this rejected run. Do not tune thresholds, NMS,
+`max_det`, `min_points`, checkpoint choice, or loss gains from final test.
+Do not continue by adding score/count/rank losses unless a separate diagnostic
+shows raw geometry and point-valid already survive.
+
+Recommended next action:
+
+Keep `gt4pt025` as the selected candidate. If continuing GT4 candidate recall
+work, first inspect matcher, label, and query geometry around the remaining
+official-val `0601` left-inner short lane and compare against `gt4pt025`.

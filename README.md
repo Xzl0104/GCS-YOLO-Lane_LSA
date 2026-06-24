@@ -2,7 +2,7 @@
 
 This is the current GCS-YOLO-Lane mainline branch. It imports the historical `5-25-3.zip` algorithm and adapts only the TuSimple fixed-y contract.
 
-Active source/config is based on rollback commit `50999d6af` (`Document 5-25-3 K56 as mainline`) plus default-disabled experiment knobs for `duplicate_margin_loss`, `spurious_margin_loss`, `lane_balanced_point_loss`, `short_valid_recall_loss`, `far_spurious_survival_loss`, `gt5_rank_consistency_loss`, `gt3_extra_survival_loss`, and `gt4_lane_balanced_point_loss`, plus the train-only `gcs_gt4_sample_gain` sampler knob. Results and mechanisms from other later commits are retained below as legacy experiment conclusions only; they do not describe currently available CLI flags, loss items, diagnostic scripts, or selected candidates.
+Active source/config is based on rollback commit `50999d6af` (`Document 5-25-3 K56 as mainline`) plus default-disabled experiment knobs for `duplicate_margin_loss`, `spurious_margin_loss`, `lane_balanced_point_loss`, `short_valid_recall_loss`, `far_spurious_survival_loss`, `gt5_rank_consistency_loss`, `gt3_extra_survival_loss`, and `gt4_lane_balanced_point_loss`, plus the train-only `gcs_gt4_sample_gain` sampler knob. It also includes default-off GT4 short-lane candidate-recall knobs for replacing the base point-loss reduction with lane-balanced reduction and adding GT4-short endpoint matching cost. Results and mechanisms from other later commits are retained below as legacy experiment conclusions only; they do not describe currently available CLI flags, loss items, diagnostic scripts, or selected candidates.
 
 ## Contract
 
@@ -46,6 +46,12 @@ larger `dupmargin005_gt4pt050` run is rejected on official-val
 (`ACC=0.964381`, `count_acc_4=0.803030`). The selected `gt4pt025` final test
 has not been used for tuning; it may only be run once with the frozen
 official-val decode above.
+
+The 2026-06-25 `gt4shortrecall_lbpt_endpoint` follow-up is rejected and does
+not replace `gt4pt025`: official-val `ACC=0.970301`, `FP=0.024288`,
+`FN=0.013085`, `count_acc_4=0.878788`. Its selected decode removes the
+official-val `4->3` case, but worsens GT4 `4->5` to `8` and remains below the
+`gt4pt025` gate.
 
 ## Legacy Evaluated Candidates
 
