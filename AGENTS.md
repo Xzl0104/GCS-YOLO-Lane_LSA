@@ -238,3 +238,13 @@ Formal training should run on the remote CUDA server, not on the local 8GB GPU, 
 Use official-val for threshold, checkpoint, and postprocess selection. Use test only once for final evaluation of a selected candidate.
 
 Do not tune on test, use GT during inference or decode, fabricate lanes, silently change official metrics, or claim improvement without official-val evidence.
+
+## Git Sync Rule
+
+When the user asks to sync changes to Git, complete both steps in order:
+
+1. Create a local `git commit` for the synced changes.
+2. Execute `git push` for the committed branch.
+
+Do not stop after a local commit when the request is to sync Git. If push fails,
+report the failure and the exact remote/branch state.
