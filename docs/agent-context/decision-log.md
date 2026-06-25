@@ -2631,8 +2631,8 @@ is promoted by this implementation.
 
 Decision:
 
-Select `gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt4pt025` as the current
-official-val candidate. Reject
+Select `gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt4pt025` as the
+official-val candidate at this point in the experiment chain. Reject
 `gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt4pt050` because the larger
 GT4 lane-balanced point gain degrades the primary metric and count shape.
 
@@ -2689,15 +2689,18 @@ bottleneck is not solved.
 
 Protocol:
 
-The next allowed action is a one-shot official-test report for `gt4pt025` using
-the frozen selected decode:
+Before the later `v2_validbranch_neg05-3` result, the next allowed action was a
+one-shot reporting-only official-test report for `gt4pt025` using the frozen
+selected decode:
 
 ```text
 conf=0.005, point_valid_thr=0.5, nms_dist_px=18.0, max_det=5, min_points=5
 ```
 
 Do not use that final-test result for threshold, NMS, `max_det`, `min_points`,
-checkpoint, or loss-gain selection.
+checkpoint, or loss-gain selection. After `v2_validbranch_neg05-3`, the
+immediate next action is the v2 extra-lane diagnostic and fine official-val
+sweep, not a `gt4pt025` final-test run.
 
 ## 2026-06-25: Reject gt4shortrecall_lbpt_endpoint
 
@@ -2705,7 +2708,7 @@ Decision:
 
 Reject `gcs_yolo_lane_s_tusimple_fixed_y_gt4shortrecall_lbpt_endpoint` as a
 promotion candidate. Keep
-`gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt4pt025` as the current
+`gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt4pt025` as the then-current
 official-val selected candidate.
 
 Evidence:
@@ -2725,7 +2728,7 @@ count_confusion = 3->3=214, 3->4=8, 3->5=1, 4->4=58, 4->5=8, 5->4=1, 5->5=73
 
 Comparison:
 
-The current `gt4pt025` gate remains stronger:
+The then-current `gt4pt025` gate remained stronger:
 
 ```text
 gt4pt025 ACC = 0.970975
@@ -2774,3 +2777,91 @@ Recommended next action:
 Keep `gt4pt025` as the selected candidate. If continuing GT4 candidate recall
 work, first inspect matcher, label, and query geometry around the remaining
 official-val `0601` left-inner short lane and compare against `gt4pt025`.
+
+## 2026-06-25: v2_validbranch_neg05-3 Extra-Lane Decision
+
+Decision:
+
+Classify `v2_validbranch_neg05-3` as valid official-val evidence that exceeds
+the previous `gt4pt025` gate, but do not treat it as a clean robustness
+promotion yet. Freeze the current weights and move to extra-lane diagnostics
+plus a fine decoder sweep on official-val. Keep final test closed.
+
+Strict ACC-best official-val row:
+
+```text
+run = v2_validbranch_neg05-3
+decode = conf=0.01, point_valid_thr=0.45, nms_dist_px=30, max_det=5, min_points=2/3
+official-val ACC = 0.971029
+previous gate = 0.970975
+margin = +0.000054
+```
+
+Risk-reduced near-tie row:
+
+```text
+decode = conf=0.015, point_valid_thr=0.45, nms_dist_px=60, max_det=5, min_points=2/3
+official-val ACC = 0.971016
+official-val FP = 0.022498
+official-val FN = 0.012167
+official-val official_score = 0.970323
+official-val count_acc_4 = 0.878788
+count_confusion extras = 3->4=8, 3->5=1, 4->5=7
+```
+
+The near-tie row is only `0.000013` below strict ACC best, with a better
+secondary risk profile in the supplied diagnostics. Do not describe it as the
+ACC-best row; it is the safer analysis contender.
+
+Supported bottleneck update:
+
+```text
+GT4: 4->3 = 1, 4->5 = 11 on the strict best family
+GT3: 3->4 = 9, 3->5 = 3 on the strict best family
+pred_lanes_hist has too many 5-lane predictions
+```
+
+This means the current residual error is extra-lane / over-count dominated,
+not GT4 `4->3` under-count dominated. Wider NMS is informative: the supplied
+extra-lane diagnostics report `duplicate_like/spurious=13/22` for `nms30`,
+versus `4/22` for `nms50` and `4/18` for `conf=0.015,nms60`. That supports a
+duplicate/near-duplicate component, while leaving true spurious extras as an
+open risk.
+
+Rejected next actions:
+
+- Do not continue increasing valid recall.
+- Do not enable a valid count floor.
+- Do not lower `point_valid_thr` below `0.45`.
+- Do not increase `max_det` above `5`.
+- Do not add Count/Quality/Survival/near-miss machinery.
+- Do not tune any threshold, NMS, checkpoint, or loss weight from final test.
+
+Smallest safe next action:
+
+Use the fixed current weights on the same 363-image official-val surface.
+First save image lists, visualizations, and per-extra-lane rows for
+`GT3->4`, `GT3->5`, `GT4->5`, and `GT5->4`. Each extra prediction row must
+include score, valid point count, nearest-GT distance, nearest-pred distance,
+and a duplicate-like versus spurious label. Then run the fine decoder sweep:
+
+```text
+conf: 0.008, 0.010, 0.012, 0.015, 0.020
+point_valid_thr: 0.43, 0.45, 0.47, 0.50
+nms_dist_px: 30, 36, 42, 50, 60
+max_det: 5
+min_points: 2, 3
+```
+
+Report `official_acc`, `official_score`, `FP`, `FN`, `count_acc_4`, `3->4`,
+`3->5`, and `4->5`. Use official ACC as the primary selector; when rows are
+within about `1e-5` to `2e-5`, prefer the row with higher official score,
+lower FP, better `count_acc_4`, and fewer `3->5` / `4->5` over-counts.
+
+Uncertainty:
+
+The ACC margin is tiny. `point_valid_thr=0.45` is already lower than
+`gt4pt025`, so additional valid recall pressure is likely to amplify extras.
+The top `conf=0.01,nms30` row does not yet have the same full extra-lane
+diagnostic detail as the supplied `conf=0.015,nms30/nms60` rows. GT5 `5->4`
+must be watched when choosing wider NMS.

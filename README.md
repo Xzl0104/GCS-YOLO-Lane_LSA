@@ -25,11 +25,36 @@ Compatibility paths `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml` an
 
 The 5-25-3 algorithm body is intentionally not upgraded to later mainline Count Head, Count Boundary, Quality Head, Survival Head, near-miss, or official-best checkpoint machinery.
 
+## Latest Official-Val Evidence
+
+The 2026-06-25 `v2_validbranch_neg05-3` result is the latest official-val ACC
+leader, but it is still in the extra-lane diagnostic phase and has not been
+sent to final test:
+
+```text
+strict ACC-best decode: conf=0.01, point_valid_thr=0.45, nms_dist_px=30, max_det=5, min_points=2/3
+official-val363 ACC=0.971029
+previous gate from gt4pt025=0.970975
+```
+
+A risk-reduced near-tie row uses
+`conf=0.015, point_valid_thr=0.45, nms_dist_px=60, max_det=5, min_points=2/3`
+with `official-val363 ACC=0.971016`, `FP=0.022498`, `FN=0.012167`,
+`official_score=0.970323`, and `count_acc_4=0.878788`.
+
+The remaining error shape is extra-lane / over-count dominated
+(`GT4 4->3=1` but `4->5=11`; `GT3 3->4=9`, `3->5=3`). The next action is
+official-val-only extra-lane diagnosis and a fixed-weight fine decoder sweep.
+Do not continue this line by increasing valid recall, enabling valid count
+floor, lowering `point_valid_thr`, increasing `max_det`, or using final test
+for threshold/postprocess selection.
+
 ## Current Official-Val Candidate
 
-The 2026-06-25 `dupmargin005_gt4pt025` run is the current official-val
-selected candidate. It uses the branch-local default-disabled GT4
-lane-balanced point loss on top of `dupmargin005`:
+The 2026-06-25 `dupmargin005_gt4pt025` run is the previous official-val
+selected candidate and now serves as the gate that `v2_validbranch_neg05-3`
+must beat cleanly. It uses the branch-local default-disabled GT4 lane-balanced
+point loss on top of `dupmargin005`:
 
 ```text
 run: gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt4pt025
@@ -43,9 +68,11 @@ count_acc_3/4/5=0.968610 / 0.954545 / 0.972973
 It narrowly beats the previous `gt4short15` official-val ACC by `+0.000124`
 and materially improves GT4 count accuracy (`0.954545` vs `0.848485`). The
 larger `dupmargin005_gt4pt050` run is rejected on official-val
-(`ACC=0.964381`, `count_acc_4=0.803030`). The selected `gt4pt025` final test
-has not been used for tuning; it may only be run once with the frozen
-official-val decode above.
+(`ACC=0.964381`, `count_acc_4=0.803030`). Before `v2_validbranch_neg05-3`,
+the selected `gt4pt025` final test could only be run once with the frozen
+official-val decode above. After the `v2_validbranch_neg05-3` result, the
+immediate next action is the v2 extra-lane diagnostic and fine official-val
+sweep, not a `gt4pt025` final-test run.
 
 The 2026-06-25 `gt4shortrecall_lbpt_endpoint` follow-up is rejected and does
 not replace `gt4pt025`: official-val `ACC=0.970301`, `FP=0.024288`,

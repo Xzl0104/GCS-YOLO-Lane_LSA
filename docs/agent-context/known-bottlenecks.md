@@ -1363,11 +1363,13 @@ after_conf_recall = 0/22 = 0.0
 final_decode_recall = 0/22 = 0.0
 ```
 
-Decision: select `gt4pt025` as the current official-val candidate and reject
-`gt4pt050`. The selected candidate may proceed to exactly one final-test
-report using the frozen official-val decode above. Do not tune final-test
-thresholds, NMS, `max_det`, `min_points`, checkpoint choice, or loss gain from
-that report.
+Decision at that point: select `gt4pt025` as the official-val candidate and
+reject `gt4pt050`. Before `v2_validbranch_neg05-3`, that selected candidate
+could proceed to exactly one reporting-only final-test run using the frozen
+official-val decode above. After `v2_validbranch_neg05-3`, the immediate next
+action is the v2 extra-lane diagnostic and fine official-val sweep. Do not tune
+final-test thresholds, NMS, `max_det`, `min_points`, checkpoint choice, or loss
+gain from any final-test report.
 
 ## 2026-06-25 GT4 Short-Lane Recall Endpoint Rejection
 
@@ -1400,7 +1402,7 @@ count_confusion = 3->3=214, 3->4=8, 3->5=1, 4->4=58, 4->5=8, 5->4=1, 5->5=73
 
 Integrated conclusion:
 
-- Supported fact: this run is below the current `gt4pt025` official-val gate
+- Supported fact: this run is below the previous `gt4pt025` official-val gate
   (`ACC=0.970975`, `count_acc_4=0.954545`).
 - Supported fact: the selected decode removes `4->3` on official-val, but
   worsens GT4 overcount (`4->5=8` versus `gt4pt025`'s `2`) and raises FP.
@@ -1416,3 +1418,86 @@ Do not add score/count/rank losses for this failed run. If this line is
 revisited, isolate matcher/label/query candidate geometry around
 `clips/0601/1494453641541664519/20.jpg`, and compare against `gt4pt025` before
 launching another training change.
+
+## 2026-06-25 v2_validbranch_neg05-3 Extra-Lane Bottleneck
+
+The `v2_validbranch_neg05-3` run moves the active official-val bottleneck away
+from GT4 missing-lane recall and toward extra-lane over-count. It exceeds the
+previous `gt4pt025` ACC gate, but the margin is narrow and the count-shape
+evidence is not robust enough to justify final-test evaluation yet.
+
+Strict ACC-best evidence:
+
+```text
+decode = conf=0.01, point_valid_thr=0.45, nms_dist_px=30, max_det=5, min_points=2/3
+official-val ACC = 0.971029
+previous gate = 0.970975
+```
+
+Current error shape:
+
+```text
+GT4: 4->3 = 1, 4->5 = 11
+GT3: 3->4 = 9, 3->5 = 3
+pred_lanes_hist: 5-lane predictions are overrepresented
+```
+
+This is no longer primarily the old GT4 `4->3` recall failure. The main risk
+is that extra decoded lanes survive into `GT3` and `GT4` images. Therefore the
+next work must not increase valid recall, must not lower `point_valid_thr`,
+must not enable valid count floor, and must not increase `max_det`.
+
+Wider NMS is the key current diagnostic signal. `nms_dist_px=50` is almost tied
+on official ACC at `0.971016`, only `0.000013` below strict best, while
+reducing FP and improving `official_score` and `count_acc_4`. The supplied
+extra-lane diagnostics also show fewer duplicate-like/spurious extra lanes
+under wider NMS:
+
+```text
+nms30 selected: duplicate_like/spurious = 13/22
+nms50:          duplicate_like/spurious = 4/22
+conf015_nms60: duplicate_like/spurious = 4/18
+```
+
+The cleanest supplied stability row is:
+
+```text
+decode = conf=0.015, point_valid_thr=0.45, nms_dist_px=60, max_det=5, min_points=2/3
+official-val ACC = 0.971016
+official-val FP = 0.022498
+official-val FN = 0.012167
+official-val official_score = 0.970323
+official-val count_acc_4 = 0.878788
+count extras = 3->4=8, 3->5=1, 4->5=7
+```
+
+Interpretation:
+
+- The strict ACC-best row is `nms=30`; do not relabel the wider-NMS row as
+  the primary-metric best.
+- The wider-NMS near tie is a serious risk-reduced contender because it cuts
+  extra-lane evidence with almost no ACC loss.
+- Duplicate/near-duplicate extras are likely part of the issue, but spurious
+  extras remain because wider NMS does not remove all over-count.
+- GT5 `5->4` must be watched before selecting an aggressive NMS row.
+
+Smallest safe next action:
+
+Freeze the current weights and complete official-val-only extra-lane
+diagnostics for `GT3->4`, `GT3->5`, `GT4->5`, and `GT5->4`. For every extra
+predicted lane, record score, valid point count, nearest-GT distance,
+nearest-pred distance, and duplicate-like versus spurious classification. Then
+run the fine decoder sweep:
+
+```text
+conf: 0.008, 0.010, 0.012, 0.015, 0.020
+point_valid_thr: 0.43, 0.45, 0.47, 0.50
+nms_dist_px: 30, 36, 42, 50, 60
+max_det: 5
+min_points: 2, 3
+```
+
+Select only on official-val. Report `official_acc`, `official_score`, `FP`,
+`FN`, `count_acc_4`, `3->4`, `3->5`, and `4->5`. Keep final test closed until
+one decode is selected by the official-val table and the extra-lane diagnosis
+does not reveal a hidden GT5 under-count tradeoff.

@@ -160,8 +160,8 @@ GT4 count_acc should not drop sharply
 APE / matched geometry metrics should not regress
 ```
 
-For future candidates after the 2026-06-25 GT4 lane-balanced point sweep, the
-current official-val ACC gate is `0.970975` from `gt4pt025`.
+After the 2026-06-25 `v2_validbranch_neg05-3` result, the strict official-val
+ACC gate is `0.971029`; the previous gate was `0.970975` from `gt4pt025`.
 
 After training, run train/val failure traces and check that
 `geometry_miss_short_gt` and `min_points_visibility_short_gt` decrease without
@@ -483,10 +483,11 @@ python tools/train_gcs.py \
 
 The completed result was judged only on the same 363-image official-val
 surface. It failed the then-current required gate `ACC >= 0.970851`, so final
-test remained closed. If this mechanism is revisited, compare against the
-current `gt4pt025` gate (`ACC >= 0.970975`), run a train/val failure trace first
-to verify whether `low_score_short_gt` improved enough to justify a narrower
-variant, and do not tune from final test.
+test remained closed. If this mechanism is revisited, compare first against
+the latest `v2_validbranch_neg05-3` gate (`ACC >= 0.971029`) and also track the
+previous `gt4pt025` gate (`ACC >= 0.970975`), run a train/val failure trace
+first to verify whether `low_score_short_gt` improved enough to justify a
+narrower variant, and do not tune from final test.
 
 ## Legacy count_under5=0.0 Ablation and Reporting Test
 
@@ -605,7 +606,7 @@ used for threshold, checkpoint, postprocess, or loss selection.
 
 ## GT4 Lane-Balanced Point 0.25 Selected Candidate
 
-The 2026-06-25 `dupmargin005_gt4pt025` official-val sweep is the current
+The 2026-06-25 `dupmargin005_gt4pt025` official-val sweep is the previous
 selection surface for this branch-local GT4 candidate-recall line:
 
 ```text
@@ -627,8 +628,8 @@ official-val363: ACC=0.964381, FP=0.034389, FN=0.021120, official_score=0.963271
 count_acc_4=0.803030
 ```
 
-One-shot official test command for the selected `gt4pt025` run, using only the
-frozen official-val selected decode:
+Historical one-shot official test command for the selected `gt4pt025` run,
+using only the frozen official-val selected decode:
 
 ```bash
 python tools/eval_tusimple_official.py \
@@ -647,14 +648,17 @@ python tools/eval_tusimple_official.py \
   --save-records
 ```
 
-Do not run final test for `gt4pt050`. Do not use the selected `gt4pt025`
+Do not run final test for `gt4pt050`. Do not use any selected `gt4pt025`
 final-test result for threshold, checkpoint, postprocess, or loss-gain tuning.
+After the `v2_validbranch_neg05-3` result, the immediate next action is v2
+extra-lane diagnosis and a fine official-val sweep, not a `gt4pt025` final-test
+run.
 
 ## GT4 Short-Lane Recall Lane-Balanced Endpoint Rejection
 
 The 2026-06-25 `gt4shortrecall_lbpt_endpoint` experiment uses the active
 default-off GT4 short-lane candidate-recall knobs. It is rejected and must not
-replace the current `gt4pt025` official-val candidate:
+replace the previous `gt4pt025` official-val candidate:
 
 ```text
 run: gcs_yolo_lane_s_tusimple_fixed_y_gt4shortrecall_lbpt_endpoint
@@ -779,6 +783,123 @@ Decision: reject this run as a promotion. The selected decode removes
 official-val `4->3`, but it worsens GT4 `4->5` to `8`, raises FP, lowers ACC
 below the `gt4pt025` gate, and the fixed-pool diagnostic still identifies
 geometry-bad candidate recall. Do not run final test for this rejected run.
+
+## v2_validbranch_neg05-3 Extra-Lane Diagnostic and Fine Sweep
+
+The 2026-06-25 `v2_validbranch_neg05-3` result is valid official-val evidence
+only. It exceeds the previous `gt4pt025` gate but should not go to final test
+until the extra-lane diagnostic and fine official-val sweep are complete.
+
+Known rows:
+
+```text
+strict ACC best:
+  conf=0.01, point_valid_thr=0.45, nms_dist_px=30, max_det=5, min_points=2/3
+  official-val ACC=0.971029
+
+risk-reduced near tie:
+  conf=0.015, point_valid_thr=0.45, nms_dist_px=60, max_det=5, min_points=2/3
+  official-val ACC=0.971016, FP=0.022498, FN=0.012167
+  official_score=0.970323, count_acc_4=0.878788
+  count extras: 3->4=8, 3->5=1, 4->5=7
+```
+
+Do not continue this line by increasing valid recall, enabling valid count
+floor, lowering `point_valid_thr` below `0.45`, or increasing `max_det` above
+`5`.
+
+Extra-lane diagnostic command template. Replace `<weights.pt>` and
+`<save-prefix>` with the actual remote run paths. This command depends on the
+workspace helper `tools/diagnose_tusimple_extra_lanes.py`; if preparing a clean
+server checkout, sync that helper together with the algorithm payload before
+running the command.
+
+```bash
+python tools/diagnose_tusimple_extra_lanes.py \
+  --archive-root archive/TUSimple \
+  --split val \
+  --gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
+  --weights <weights.pt> \
+  --imgsz 544 960 \
+  --device 0 \
+  --half \
+  --conf 0.01 \
+  --point-valid-thr 0.45 \
+  --nms-dist-px 30 \
+  --max-det 5 \
+  --min-points 2 \
+  --count-pairs 3->4 3->5 4->5 5->4 \
+  --save-dir <save-prefix>_extra_lane_diag_conf001_pvalid045_nms30_minp2
+```
+
+Run the same diagnostic for the risk-reduced near-tie decode:
+
+```bash
+python tools/diagnose_tusimple_extra_lanes.py \
+  --archive-root archive/TUSimple \
+  --split val \
+  --gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
+  --weights <weights.pt> \
+  --imgsz 544 960 \
+  --device 0 \
+  --half \
+  --conf 0.015 \
+  --point-valid-thr 0.45 \
+  --nms-dist-px 60 \
+  --max-det 5 \
+  --min-points 2 \
+  --count-pairs 3->4 3->5 4->5 5->4 \
+  --save-dir <save-prefix>_extra_lane_diag_conf0015_pvalid045_nms60_minp2
+```
+
+Required diagnostic artifacts:
+
+```text
+image lists and visualizations for GT3->4, GT3->5, GT4->5, GT5->4
+extra_lanes.csv with:
+  score
+  valid point count
+  nearest GT overlap and mean_abs_x_error
+  nearest pred overlap and mean_abs_x_error
+  possible_duplicate / possible_spurious
+```
+
+Fine official-val decoder sweep command:
+
+```bash
+python tools/sweep_tusimple_official.py \
+  --archive-root archive/TUSimple \
+  --split val \
+  --gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
+  --weights <weights.pt> \
+  --imgsz 544 960 \
+  --device 0 \
+  --half \
+  --confs 0.008 0.010 0.012 0.015 0.020 \
+  --point-valid-thrs 0.43 0.45 0.47 0.50 \
+  --nms-dist-pxs 30 36 42 50 60 \
+  --max-dets 5 \
+  --min-points 2 3 \
+  --save-dir <save-prefix>_official_val_fine_decoder_sweep
+```
+
+Report these columns from the sweep and confusion output:
+
+```text
+official_acc
+official_score
+FP
+FN
+count_acc_4
+3->4
+3->5
+4->5
+```
+
+Selection rule: official ACC remains primary. If rows are within about
+`1e-5` to `2e-5`, prefer the row with higher official score, lower FP, better
+`count_acc_4`, fewer `3->5` / `4->5`, and no new `GT5->4` regression. Do not
+use final test for any part of this choice.
 
 ## GT3 Extra-Survival 0.03 Rejection and Reporting Test
 

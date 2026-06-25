@@ -404,7 +404,49 @@ python tools/eval_tusimple_official.py \
 
 ## official-val 最优结果
 
-截至 2026-06-25，按 official-val ACC 选择的当前最高候选为：
+截至 2026-06-25，按 official-val ACC 选择的当前最高证据来自
+`v2_validbranch_neg05-3`，但该结果仍处在 extra-lane 诊断和固定权重细扫
+阶段，尚不能进入 final-test 调参或声称最终提升：
+
+- run：`v2_validbranch_neg05-3`
+- weights：固定当前 best 权重；执行诊断前必须从远端 run 目录补齐实际 `weights/best.pt` 路径
+- official-val split：363 images
+- strict ACC-best decode：`conf=0.01, point_valid_thr=0.45, nms_dist_px=30, max_det=5, min_points=2/3`
+- strict official-val ACC：`0.971029`
+- 上一轮 gate：`gt4pt025 official-val ACC = 0.970975`
+- 风险降低 near-tie decode：`conf=0.015, point_valid_thr=0.45, nms_dist_px=60, max_det=5, min_points=2/3`
+- near-tie metrics：`official_acc=0.971016, FP=0.022498, FN=0.012167, official_score=0.970323, count_acc_4=0.878788`
+
+当前剩余错误以 extra-lane / over-count 为主：`GT4 4->3=1` 但
+`4->5=11`，`GT3 3->4=9`、`3->5=3`，且 5 条预测偏多。下一步只允许固定权重
+official-val 诊断和细粒度 decoder sweep；不要继续加大 valid recall，不要开启
+valid count floor，不要降低 `point_valid_thr`，不要增加 `max_det`，不要用 final
+test 做阈值、NMS、checkpoint 或 loss 选择。
+
+需要保存的诊断：
+
+```text
+GT3->4, GT3->5, GT4->5, GT5->4 image lists and visualizations
+per-extra-pred-lane fields:
+  score
+  valid point count
+  nearest GT distance
+  nearest pred-lane distance
+  duplicate-like vs spurious label
+```
+
+需要补跑的 official-val 细扫：
+
+```text
+conf: 0.008, 0.010, 0.012, 0.015, 0.020
+point_valid_thr: 0.43, 0.45, 0.47, 0.50
+nms_dist_px: 30, 36, 42, 50, 60
+max_det: 5
+min_points: 2, 3
+required columns: official_acc, official_score, FP, FN, count_acc_4, 3->4, 3->5, 4->5
+```
+
+上一轮 official-val gate 为：
 
 - run：`gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt4pt025`
 - weights：`/root/GCS-YOLO-Lane_LSA_5-25-3-k56/runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt4pt025/weights/best.pt`
@@ -447,8 +489,10 @@ gcs_gt4_lane_balanced_max_mult = 2.0
 gcs_gt4_sample_gain = 1.0
 ```
 
-official-test 尚未作为选择依据使用。允许的下一步只有一次按
-official-val selected decode 冻结执行的 reporting-only final test：
+official-test 未作为 `gt4pt025` 的选择依据使用。在 `v2_validbranch_neg05-3`
+出现前，`gt4pt025` 只允许按 official-val selected decode 冻结执行一次
+reporting-only final test；在当前阶段，下一步已经转为 `v2_validbranch_neg05-3`
+固定权重 extra-lane 诊断和 official-val 细扫：
 
 ```bash
 python tools/eval_tusimple_official.py \
