@@ -1445,6 +1445,25 @@ python tools/sweep_tusimple_official.py \
   --device 0
 ```
 
+For q18 countguard official-val count-head guided sweeps, use the same
+official-val surface and keep normal/count-guided rows in one sweep table:
+
+```bash
+python tools/sweep_tusimple_official.py \
+  --archive-root archive/TUSimple \
+  --split val \
+  --weights <weights.pt> \
+  --imgsz 544 960 \
+  --device 0 \
+  --count-guided-topk \
+  --count-guided-min-probs 0.60 0.65 \
+  --count-guided-allowed-counts 3,4,5
+```
+
+Do not pass `--count-guided-allow-unsupported-fallback` for candidate
+selection. It is only for diagnostics when intentionally checking fallback
+behavior with checkpoints that lack count-head logits.
+
 ## TuSimple Final Test
 
 Run test only once for a candidate already selected on official-val:

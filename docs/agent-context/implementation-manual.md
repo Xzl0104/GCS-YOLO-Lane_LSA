@@ -59,6 +59,8 @@ tools/sweep_tusimple_official.py
 tools/diagnose_gt4_missing_lane_raw_queries.py
 tools/build_gt4_hard_val_split.py
 tools/check_model.py
+tools/check_count_guided_sweep_smoke.py
+tools/check_q18_dryrun_metrics_contract.py
 ultralytics/nn/modules/gcs_lane.py
 ```
 
@@ -80,6 +82,9 @@ aux_edge_logits: B x 1 x H x W
 3. Run `tools/check_model.py` with `--imgsz 544 960`.
 4. Check fixed-y anchors are exactly `710..160` step `-10`.
 5. If a K56 dataset root is available, run label order/split checks against that root.
+6. For q18 countguard validation, run `tools/check_count_guided_sweep_smoke.py`
+   and `tools/check_q18_dryrun_metrics_contract.py` before remote official-val
+   count-guided sweeps.
 
 ## Agent Tooling
 

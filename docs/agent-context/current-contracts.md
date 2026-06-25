@@ -207,6 +207,15 @@ any of them is an explicit experiment contract change.
 `clamp(num_lanes, 3, 5) - 3`. `count_ce_acc` is a diagnostic log item and does
 not affect loss scaling.
 
+For the q18-k56-gt4-candidate-countguard dry-run acceptance, check these
+training progress fields:
+`cnt_ce`, `cnt_acc`, `gt4_pt`, `gt4_lbp`, `uvneg_loss`, `uvneg_prob`,
+`vlb_vprob`, and `vlb_vsum`. Do not require `gt4_vprob` or `gt4_vsum` to be
+non-zero in that dry-run: those columns belong to the disabled
+`gcs_gt4_short_valid_recall` / `gcs_gt4_short_valid_count_floor` paths. When
+both of those flags are disabled, non-zero `gt4_vprob` or `gt4_vsum` should be
+treated as a flag/verification issue.
+
 `gcs_lane_balanced_point_loss` is a boolean switch, default `false`. When it is
 `true`, the base `point_loss` uses x-only per-lane reduction instead of the
 legacy valid-point pooled reduction. In GT4 images, lanes with visible points
@@ -274,3 +283,10 @@ does not include
 training-time `official_best` checkpoint preservation, or later mainline
 Count/Quality/Boundary diagnostics unless a future task explicitly ports them.
 Use official-val for selection and test only once for final evaluation.
+
+`tools/sweep_tusimple_official.py` supports normal official-val rows and
+count-head guided top-K rows. With `--count-guided-topk`, every threshold base
+combo emits one `mode=normal` row and one `mode=count_guided_topk` row per
+`--count-guided-min-probs` value. Count-guided sweep rows require count-head
+logits by default; `--count-guided-allow-unsupported-fallback` must be passed
+explicitly to allow fallback rows when count logits are unavailable.

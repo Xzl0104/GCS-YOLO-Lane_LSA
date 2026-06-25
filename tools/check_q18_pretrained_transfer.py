@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -75,9 +76,17 @@ def is_allowed_q_shape_skip(key: str, source_shape: torch.Size, target_shape: to
         return source_shape[0] != target_shape[0] and source_shape[1:] == target_shape[1:]
     if "point_reference_logits" in key:
         return True
-    if len(source_shape) == len(target_shape) and any(s == 12 and t == 18 for s, t in zip(source_shape, target_shape)):
-        return True
     return False
+
+
+def is_allowed_random_init(key: str) -> bool:
+    """Return True for target tensors that are intentionally new in the Q18 countguard model."""
+    return ".count_mlp." in key
+
+
+def shape_skip_record(key: str, source_shape: tuple[int, ...], target_shape: tuple[int, ...]) -> dict:
+    """Build a JSON-serializable shape mismatch record."""
+    return {"key": key, "source_shape": list(source_shape), "target_shape": list(target_shape)}
 
 
 def main() -> None:
@@ -98,14 +107,14 @@ def main() -> None:
         raise RuntimeError(f"Expected a GCS checkpoint, got a non-GCS checkpoint: {weights}")
 
     loadable: dict[str, torch.Tensor] = {}
-    skipped_missing: list[str] = []
+    source_missing_in_target: list[str] = []
     skipped_shape: list[tuple[str, tuple[int, ...], tuple[int, ...]]] = []
     gcs_candidates = 0
     gcs_loaded = 0
 
     for key, value in source_state.items():
         if key not in target_state:
-            skipped_missing.append(key)
+            source_missing_in_target.append(key)
             continue
         if is_gcs_key(key):
             gcs_candidates += 1
@@ -118,33 +127,62 @@ def main() -> None:
 
     model.load_state_dict(loadable, strict=False)
 
-    disallowed_shape = [
-        (key, source_shape, target_shape)
+    target_missing_from_source = sorted(key for key in target_state if key not in source_state)
+    allowed_random_init = [key for key in target_missing_from_source if is_allowed_random_init(key)]
+    unexpected_target_missing = [key for key in target_missing_from_source if not is_allowed_random_init(key)]
+    unexpected_shape = [
+        shape_skip_record(key, source_shape, target_shape)
         for key, source_shape, target_shape in skipped_shape
         if not is_allowed_q_shape_skip(key, torch.Size(source_shape), torch.Size(target_shape))
     ]
     gcs_loaded_ratio = float(gcs_loaded / max(gcs_candidates, 1))
 
-    print("OK: Q18 pretrained transfer dry-run completed.")
-    print(f"weights: {weights}")
-    print(f"loaded: {len(loadable)}/{len(target_state)}")
-    print(f"gcs_loaded: {gcs_loaded}/{gcs_candidates} ({gcs_loaded_ratio:.3f})")
-    print(f"skipped_missing: {len(skipped_missing)}")
-    print(f"skipped_shape: {len(skipped_shape)}")
-    for key, source_shape, target_shape in skipped_shape:
-        print(f"shape_skip: {key}: {source_shape} -> {target_shape}")
+    report = {
+        "ok": True,
+        "cfg": str(cfg),
+        "weights": str(weights),
+        "loaded_count": len(loadable),
+        "target_count": len(target_state),
+        "gcs_loaded_count": gcs_loaded,
+        "gcs_candidate_count": gcs_candidates,
+        "gcs_loaded_ratio": round(gcs_loaded_ratio, 6),
+        "skipped_shape": [shape_skip_record(key, src, dst) for key, src, dst in skipped_shape],
+        "source_missing_in_target": sorted(source_missing_in_target),
+        "target_missing_from_source": target_missing_from_source,
+        "allowed_random_init": allowed_random_init,
+        "unexpected_shape": unexpected_shape,
+        "unexpected_target_missing": unexpected_target_missing,
+        "explanation": {
+            "allowed_shape_mismatch": "Only query_embed.weight and point_reference_logits are allowed Q-shape skips.",
+            "allowed_random_init": "count_mlp.* missing from the source checkpoint is expected and remains randomly initialized.",
+        },
+    }
 
     if len(loadable) == 0:
+        report["ok"] = False
+        print(json.dumps(report, indent=2), flush=True)
         raise RuntimeError("No tensors transferred from checkpoint.")
     if len(skipped_shape) > int(args.max_skipped_shape):
+        report["ok"] = False
+        print(json.dumps(report, indent=2), flush=True)
         raise RuntimeError(f"Too many shape-skipped tensors: {len(skipped_shape)} > {args.max_skipped_shape}")
-    if disallowed_shape:
-        raise RuntimeError(f"Non-Q shape mismatches found: {disallowed_shape}")
+    if unexpected_shape:
+        report["ok"] = False
+        print(json.dumps(report, indent=2), flush=True)
+        raise RuntimeError(f"Unexpected shape mismatches found: {unexpected_shape}")
+    if unexpected_target_missing:
+        report["ok"] = False
+        print(json.dumps(report, indent=2), flush=True)
+        raise RuntimeError(f"Unexpected target tensors missing from source checkpoint: {unexpected_target_missing}")
     if gcs_loaded == 0 or gcs_loaded_ratio < float(args.min_gcs_loaded_ratio):
+        report["ok"] = False
+        print(json.dumps(report, indent=2), flush=True)
         raise RuntimeError(
             f"Insufficient GCS transfer: loaded {gcs_loaded}/{gcs_candidates} "
             f"({gcs_loaded_ratio:.3f}) < {args.min_gcs_loaded_ratio:.3f}"
         )
+
+    print(json.dumps(report, indent=2))
 
 
 if __name__ == "__main__":

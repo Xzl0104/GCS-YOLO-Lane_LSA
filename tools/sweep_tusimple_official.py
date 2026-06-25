@@ -29,7 +29,12 @@ from gcs_tools.tusimple_official_eval import (  # noqa: E402
     tusimple_image_path,
 )
 from gcs_tools.tusimple_split_guard import reject_tusimple_test_search_gt_json  # noqa: E402
-from tools.eval_tusimple_official import _count_diagnostics  # noqa: E402
+from tools.eval_tusimple_official import (  # noqa: E402
+    COUNT_HEAD_LOGIT_KEYS,
+    _count_diagnostics,
+    _count_head_prediction,
+    _parse_allowed_counts,
+)
 from tools.infer_gcs import load_gcs_model, preprocess_image, warn_max_det_mismatch  # noqa: E402
 from ultralytics.utils.gcs_postprocess import decode_gcs_predictions  # noqa: E402
 from ultralytics.utils.gcs_shape import normalize_imgsz, shape_str  # noqa: E402
@@ -107,6 +112,28 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_OFFICIAL_SCORE_FN_WEIGHT,
         help="FN penalty in official_score = official_acc - w_fp * FP - w_fn * FN.",
     )
+    parser.add_argument(
+        "--count-guided-topk",
+        action="store_true",
+        help="Also sweep count-head guided top-K rows for every base threshold combo. Default off.",
+    )
+    parser.add_argument(
+        "--count-guided-min-probs",
+        nargs="+",
+        type=float,
+        default=[0.0],
+        help="Count-head probability thresholds for count-guided topK rows.",
+    )
+    parser.add_argument(
+        "--count-guided-allowed-counts",
+        default="3,4,5",
+        help="Comma-separated count-head counts allowed for count-guided topK. Default: 3,4,5.",
+    )
+    parser.add_argument(
+        "--count-guided-allow-unsupported-fallback",
+        action="store_true",
+        help="Allow count-guided rows to fall back to normal lanes if no count-head logits are present.",
+    )
     return parser.parse_args()
 
 
@@ -137,7 +164,7 @@ def _limit_records(records: list[dict], max_images: int) -> list[dict]:
     return records
 
 
-def _combo_key(combo: dict) -> tuple[float, float, float, int, int]:
+def _base_combo_key(combo: dict) -> tuple[float, float, float, int, int]:
     return (
         float(combo["conf"]),
         float(combo["point_valid_thr"]),
@@ -147,7 +174,12 @@ def _combo_key(combo: dict) -> tuple[float, float, float, int, int]:
     )
 
 
-def build_combos(args: argparse.Namespace) -> list[dict]:
+def _combo_key(combo: dict) -> tuple[float, float, float, int, int, str, float]:
+    min_prob = combo.get("count_guided_min_prob")
+    return (*_base_combo_key(combo), str(combo["mode"]), -1.0 if min_prob is None else float(min_prob))
+
+
+def build_base_combos(args: argparse.Namespace) -> list[dict]:
     combos: list[dict] = []
     for conf, point_valid_thr, nms_dist_px, max_det, min_points in product(
         sorted({float(x) for x in args.confs}),
@@ -176,6 +208,21 @@ def build_combos(args: argparse.Namespace) -> list[dict]:
     return combos
 
 
+def build_combos(args: argparse.Namespace) -> tuple[list[dict], list[dict]]:
+    """Return base threshold combos and expanded evaluation combos."""
+    base_combos = build_base_combos(args)
+    eval_combos: list[dict] = []
+    for combo in base_combos:
+        eval_combos.append({**combo, "mode": "normal", "count_guided_min_prob": None})
+        if args.count_guided_topk:
+            min_probs = sorted({float(x) for x in args.count_guided_min_probs})
+            for min_prob in min_probs:
+                if not 0.0 <= min_prob <= 1.0:
+                    raise ValueError(f"--count-guided-min-probs must be in [0, 1], got {min_prob}.")
+                eval_combos.append({**combo, "mode": "count_guided_topk", "count_guided_min_prob": min_prob})
+    return base_combos, eval_combos
+
+
 def select_best(rows: list[dict]) -> dict:
     """Pick the official-Accuracy best row with deterministic tie-breakers."""
     return dict(
@@ -187,11 +234,13 @@ def select_best(rows: list[dict]) -> dict:
                 -float(r["official_FP"]),
                 -float(r["official_FN"]),
                 float(r.get("count_acc", 0.0)),
+                0 if r.get("mode") == "normal" else -1,
                 -float(r["conf"]),
                 -float(r["nms_dist_px"]),
                 -float(r["point_valid_thr"]),
                 -int(r["max_det"]),
                 -int(r["min_points"]),
+                -float(-1.0 if r.get("count_guided_min_prob") is None else r.get("count_guided_min_prob")),
             ),
         )
     )
@@ -199,11 +248,18 @@ def select_best(rows: list[dict]) -> dict:
 
 def write_csv(path: Path, rows: list[dict]) -> None:
     fields = [
+        "mode",
         "conf",
         "point_valid_thr",
         "nms_dist_px",
         "max_det",
         "min_points",
+        "count_guided_min_prob",
+        "count_head_key",
+        "count_guided_applied_images",
+        "count_guided_fallback_images",
+        "count_guided_unsupported_images",
+        "count_guided_short_candidate_images",
         "official_acc",
         "official_FP",
         "official_FN",
@@ -229,6 +285,36 @@ def write_csv(path: Path, rows: list[dict]) -> None:
             writer.writerow(out)
 
 
+def _empty_count_guided_stats(requested: bool, min_prob: float | None = None) -> dict:
+    return {
+        "requested": bool(requested),
+        "min_prob": None if min_prob is None else float(min_prob),
+        "count_head_key": None,
+        "applied_images": 0,
+        "fallback_images": 0,
+        "unsupported_images": 0,
+        "short_candidate_images": 0,
+    }
+
+
+def _apply_count_guided_topk(
+    lanes: list[dict],
+    count_head_pred: dict,
+    min_prob: float,
+) -> tuple[list[dict], dict]:
+    """Apply count-head topK to a decoded lane list and return row stats."""
+    stats = _empty_count_guided_stats(requested=True, min_prob=min_prob)
+    stats["count_head_key"] = count_head_pred.get("head_key")
+    if float(count_head_pred["prob"]) >= float(min_prob):
+        keep_n = max(int(count_head_pred["pred_count"]), 0)
+        stats["applied_images"] = 1
+        if len(lanes) < keep_n:
+            stats["short_candidate_images"] = 1
+        return lanes[:keep_n], stats
+    stats["fallback_images"] = 1
+    return lanes, stats
+
+
 @torch.inference_mode()
 def sweep(args: argparse.Namespace) -> dict:
     args.split = validate_search_split(args.split)
@@ -240,8 +326,9 @@ def sweep(args: argparse.Namespace) -> dict:
         raise ValueError(f"No TuSimple GT records found in {gt_path}")
 
     imgsz = normalize_imgsz(args.imgsz, dataset=args.dataset)
-    combos = build_combos(args)
-    for max_det in sorted({int(c["max_det"]) for c in combos}):
+    allowed_counts = _parse_allowed_counts(args.count_guided_allowed_counts)
+    base_combos, eval_combos = build_combos(args)
+    for max_det in sorted({int(c["max_det"]) for c in base_combos}):
         warn_max_det_mismatch(args.weights, max_det=max_det, context="TuSimple official sweep")
 
     device_obj = select_device(args.device)
@@ -256,7 +343,15 @@ def sweep(args: argparse.Namespace) -> dict:
             _ = model(warm_tensor)
         _sync_if_cuda(device_obj)
 
-    combo_records = {_combo_key(combo): [] for combo in combos}
+    combo_by_key = {_combo_key(combo): combo for combo in eval_combos}
+    combo_records = {key: [] for key in combo_by_key}
+    combo_guided_stats = {
+        key: _empty_count_guided_stats(
+            requested=combo["mode"] == "count_guided_topk",
+            min_prob=combo.get("count_guided_min_prob"),
+        )
+        for key, combo in combo_by_key.items()
+    }
     infer_time_s = 0.0
     post_time_s = 0.0
     for record in gt_records:
@@ -274,8 +369,19 @@ def sweep(args: argparse.Namespace) -> dict:
         _sync_if_cuda(device_obj)
         t1 = time.perf_counter()
 
+        count_head_pred = None
+        count_head_reason = None
+        if args.count_guided_topk:
+            count_head_pred, count_head_reason = _count_head_prediction(preds, allowed_counts, batch_index=0)
+            if count_head_pred is None and not args.count_guided_allow_unsupported_fallback:
+                raise RuntimeError(
+                    "count-guided sweep requested but no supported count-head logits were found. "
+                    f"Reason: {count_head_reason}. Searched keys: {', '.join(COUNT_HEAD_LOGIT_KEYS)}. "
+                    "Pass --count-guided-allow-unsupported-fallback only for diagnostic fallback rows."
+                )
+
         pred_valid = preds.get("pred_valid_logits")
-        for combo in combos:
+        for combo in base_combos:
             lanes = decode_gcs_predictions(
                 preds["pred_points"][0],
                 preds["pred_logits"][0],
@@ -287,8 +393,9 @@ def sweep(args: argparse.Namespace) -> dict:
                 max_det=combo["max_det"],
                 nms_dist_px=combo["nms_dist_px"],
             )
+            normal_combo = {**combo, "mode": "normal", "count_guided_min_prob": None}
             tusimple_lanes = gcs_lanes_to_tusimple_lanes(lanes, record["h_samples"], image_shape=original_shape)
-            combo_records[_combo_key(combo)].append(
+            combo_records[_combo_key(normal_combo)].append(
                 {
                     "lanes": tusimple_lanes,
                     "h_samples": record["h_samples"],
@@ -296,16 +403,56 @@ def sweep(args: argparse.Namespace) -> dict:
                     "run_time": float(args.runtime_ms),
                 }
             )
+
+            if args.count_guided_topk:
+                for min_prob in sorted({float(x) for x in args.count_guided_min_probs}):
+                    guided_combo = {**combo, "mode": "count_guided_topk", "count_guided_min_prob": min_prob}
+                    guided_key = _combo_key(guided_combo)
+                    if count_head_pred is None:
+                        guided_lanes = lanes
+                        image_stats = _empty_count_guided_stats(requested=True, min_prob=min_prob)
+                        image_stats["unsupported_images"] = 1
+                    else:
+                        guided_lanes, image_stats = _apply_count_guided_topk(lanes, count_head_pred, min_prob)
+                    for stat_key in (
+                        "applied_images",
+                        "fallback_images",
+                        "unsupported_images",
+                        "short_candidate_images",
+                    ):
+                        combo_guided_stats[guided_key][stat_key] += int(image_stats[stat_key])
+                    if image_stats.get("count_head_key"):
+                        combo_guided_stats[guided_key]["count_head_key"] = image_stats["count_head_key"]
+                    guided_tusimple = gcs_lanes_to_tusimple_lanes(
+                        guided_lanes,
+                        record["h_samples"],
+                        image_shape=original_shape,
+                    )
+                    combo_records[guided_key].append(
+                        {
+                            "lanes": guided_tusimple,
+                            "h_samples": record["h_samples"],
+                            "raw_file": raw_file,
+                            "run_time": float(args.runtime_ms),
+                        }
+                    )
         post_time_s += time.perf_counter() - t1
         infer_time_s += t1 - t0
 
     rows: list[dict] = []
-    for combo in combos:
-        pred_records = combo_records[_combo_key(combo)]
+    for combo in eval_combos:
+        key = _combo_key(combo)
+        pred_records = combo_records[key]
         result, _ = TuSimpleOfficialLaneEval.bench_records(pred_records, gt_records, strict_length=True, return_records=False)
         metrics = result.as_dict()
+        guided_stats = combo_guided_stats[key]
         row = {
             **combo,
+            "count_head_key": guided_stats.get("count_head_key"),
+            "count_guided_applied_images": int(guided_stats["applied_images"]),
+            "count_guided_fallback_images": int(guided_stats["fallback_images"]),
+            "count_guided_unsupported_images": int(guided_stats["unsupported_images"]),
+            "count_guided_short_candidate_images": int(guided_stats["short_candidate_images"]),
             "official_acc": metrics["Accuracy"],
             "official_FP": metrics["FP"],
             "official_FN": metrics["FN"],
@@ -324,7 +471,18 @@ def sweep(args: argparse.Namespace) -> dict:
         row.update(_count_diagnostics(pred_records, gt_records))
         rows.append(row)
 
-    rows = sorted(rows, key=lambda r: (r["conf"], r["point_valid_thr"], r["nms_dist_px"], r["max_det"], r["min_points"]))
+    rows = sorted(
+        rows,
+        key=lambda r: (
+            r["conf"],
+            r["point_valid_thr"],
+            r["nms_dist_px"],
+            r["max_det"],
+            r["min_points"],
+            0 if r["mode"] == "normal" else 1,
+            -1.0 if r.get("count_guided_min_prob") is None else r["count_guided_min_prob"],
+        ),
+    )
     best = select_best(rows)
     save_dir = resolve_save_dir(args.save_dir, args.weights, args.split)
     save_dir.mkdir(parents=True, exist_ok=True)
@@ -346,6 +504,13 @@ def sweep(args: argparse.Namespace) -> dict:
             "nms_dist_pxs": [float(x) for x in sorted({float(x) for x in args.nms_dist_pxs})],
             "max_dets": [int(x) for x in sorted({int(x) for x in args.max_dets})],
             "min_points": [int(x) for x in sorted({int(x) for x in args.min_points})],
+            "count_guided_topk": bool(args.count_guided_topk),
+            "count_guided_min_probs": [float(x) for x in sorted({float(x) for x in args.count_guided_min_probs})],
+            "count_guided_allowed_counts": [int(x) for x in allowed_counts],
+            "count_guided_allow_unsupported_fallback": bool(args.count_guided_allow_unsupported_fallback),
+            "count_head_logit_keys": list(COUNT_HEAD_LOGIT_KEYS),
+            "base_combo_count": len(base_combos),
+            "eval_combo_count": len(eval_combos),
             "runtime_ms": float(args.runtime_ms),
             "max_images": int(args.max_images),
             "device": str(args.device),
