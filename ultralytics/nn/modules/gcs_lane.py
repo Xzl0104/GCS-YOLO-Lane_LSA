@@ -322,7 +322,32 @@ class GCSLaneHead(nn.Module):
         offsets when the image geometry requires it.
         """
         y = self._build_fixed_y_anchors()
-        bottom_x = torch.linspace(0.05, 0.95, self.num_queries)
+        if int(self.num_queries) == 18:
+            bottom_x = torch.tensor(
+                [
+                    0.02,
+                    0.05,
+                    0.08,
+                    0.12,
+                    0.17,
+                    0.23,
+                    0.30,
+                    0.38,
+                    0.46,
+                    0.54,
+                    0.62,
+                    0.70,
+                    0.77,
+                    0.83,
+                    0.88,
+                    0.92,
+                    0.95,
+                    0.98,
+                ],
+                dtype=torch.float32,
+            )
+        else:
+            bottom_x = torch.linspace(0.05, 0.95, self.num_queries)
         top_x = 0.5 + (bottom_x - 0.5) * 0.25
         t = torch.linspace(0.0, 1.0, self.num_points)
         x = bottom_x[:, None] * (1.0 - t[None]) + top_x[:, None] * t[None]
