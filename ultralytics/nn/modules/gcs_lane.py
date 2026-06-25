@@ -293,6 +293,11 @@ class GCSLaneHead(nn.Module):
             nn.ReLU(inplace=True),
             nn.Linear(c1, 1),
         )
+        self.count_mlp = nn.Sequential(
+            nn.Linear(c1, c1),
+            nn.ReLU(inplace=True),
+            nn.Linear(c1, 3),
+        )
 
         self.aux_mask = nn.Sequential(
             ConvBNAct(c1, c1, k=3),
@@ -308,6 +313,7 @@ class GCSLaneHead(nn.Module):
         self._init_point_valid_head()
         self._init_point_refine_head()
         self._init_point_valid_refine_head()
+        self._init_count_head()
 
     def _build_fixed_y_anchors(self):
         """Build shared bottom-to-top y anchors for fixed-y x-only prediction."""
@@ -379,6 +385,12 @@ class GCSLaneHead(nn.Module):
         """Initialize image-conditioned visibility refinement as a small residual update."""
         final = self.point_valid_refine_mlp[-1]
         nn.init.normal_(final.weight, mean=0.0, std=5e-3)
+        nn.init.zeros_(final.bias)
+
+    def _init_count_head(self):
+        """Initialize explicit 3/4/5 lane-count logits near zero."""
+        final = self.count_mlp[-1]
+        nn.init.normal_(final.weight, mean=0.0, std=1e-3)
         nn.init.zeros_(final.bias)
 
     def _sample_point_features(self, xs, points):
@@ -562,6 +574,7 @@ class GCSLaneHead(nn.Module):
             point_ref = point_ref.to(device=point_delta.device, dtype=point_delta.dtype).unsqueeze(0)
             pred_points = torch.sigmoid(point_delta + point_ref)
         pred_logits = self.exist_mlp(hs).squeeze(-1)
+        pred_count_logits = self.count_mlp(hs.mean(dim=1))
         if hasattr(self, "point_valid_mlp"):
             if point_mode == "fixed_y" and hasattr(self, "point_valid_refine_mlp"):
                 pred_valid_logits = self._refine_fixed_y_valid_logits(xs, hs, pred_points)
@@ -574,6 +587,7 @@ class GCSLaneHead(nn.Module):
             "pred_points": pred_points,
             "pred_logits": pred_logits,
             "pred_valid_logits": pred_valid_logits,
+            "pred_count_logits": pred_count_logits,
         }
 
         if self.aux and (self.training or self.return_aux):

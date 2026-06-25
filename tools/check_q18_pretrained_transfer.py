@@ -36,6 +36,7 @@ GCS_KEY_MARKERS = (
     ".point_valid_mlp.",
     ".point_valid_refine_mlp.",
     ".exist_mlp.",
+    ".count_mlp.",
     ".aux_mask.",
     ".aux_edge.",
     ".p2_in.",

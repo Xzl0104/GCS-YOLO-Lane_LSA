@@ -145,6 +145,7 @@ gcs_edge: 0.2 # (float) GCS auxiliary edge loss gain
 gcs_count: 0.0 # (float) GCS lane-count/cardinality loss gain; 0 disables
 gcs_count_under5: 0.0 # (float) extra GCS undercount loss gain for dense-lane samples; 0 disables
 gcs_count_under5_min_lanes: 5 # (int) minimum GT lane count that enables gcs_count_under5
+gcs_count_ce: 0.0 # (float) explicit 3/4/5 lane-count head CE gain; 0 disables
 gcs_duplicate_margin: 0.0 # (float) duplicate-like unmatched query pairwise logit margin loss gain; 0 disables
 gcs_duplicate_margin_logit: 1.0 # (float) required logit margin between reliable matched q+ and duplicate-like q-
 gcs_duplicate_gt_count: 4 # (int) only apply duplicate margin loss to images with this GT lane count

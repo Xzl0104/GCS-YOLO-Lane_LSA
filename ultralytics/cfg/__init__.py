@@ -202,6 +202,7 @@ CFG_FLOAT_KEYS = frozenset(
         "gcs_edge",
         "gcs_count",
         "gcs_count_under5",
+        "gcs_count_ce",
         "gcs_duplicate_margin",
         "gcs_duplicate_margin_logit",
         "gcs_duplicate_pos_ape_px",

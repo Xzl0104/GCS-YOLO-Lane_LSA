@@ -52,21 +52,24 @@ def main() -> None:
     with torch.no_grad():
         output = normalize_output(model(x))
 
-    expected_keys = {"pred_points", "pred_logits", "pred_valid_logits"}
+    expected_keys = {"pred_points", "pred_logits", "pred_valid_logits", "pred_count_logits"}
     assert expected_keys.issubset(output), output.keys()
     assert output["pred_points"].shape == (1, 18, 56, 2), output["pred_points"].shape
     assert output["pred_logits"].shape == (1, 18), output["pred_logits"].shape
     assert output["pred_valid_logits"].shape == (1, 18, 56), output["pred_valid_logits"].shape
+    assert output["pred_count_logits"].shape == (1, 3), output["pred_count_logits"].shape
 
     pred_points = output["pred_points"]
     assert torch.isfinite(pred_points).all()
     assert float(pred_points.min()) >= 0.0
     assert float(pred_points.max()) <= 1.0
+    assert torch.isfinite(output["pred_count_logits"]).all()
 
     print("OK: Q18 model forward works.")
     print("pred_points:", tuple(output["pred_points"].shape))
     print("pred_logits:", tuple(output["pred_logits"].shape))
     print("pred_valid_logits:", tuple(output["pred_valid_logits"].shape))
+    print("pred_count_logits:", tuple(output["pred_count_logits"].shape))
 
 
 if __name__ == "__main__":

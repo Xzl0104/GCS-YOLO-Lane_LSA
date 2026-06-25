@@ -302,6 +302,12 @@ def parse_args() -> argparse.Namespace:
         help="Minimum GT lane count that enables the targeted undercount penalty.",
     )
     parser.add_argument(
+        "--gcs-count-ce",
+        type=float,
+        default=0.0,
+        help="Cross-entropy loss gain for the explicit 3/4/5 lane-count head. 0 disables.",
+    )
+    parser.add_argument(
         "--gcs-duplicate-margin",
         type=float,
         default=0.0,
@@ -732,6 +738,7 @@ def main() -> None:
         "gcs_count": args.gcs_count,
         "gcs_count_under5": args.gcs_count_under5,
         "gcs_count_under5_min_lanes": args.gcs_count_under5_min_lanes,
+        "gcs_count_ce": args.gcs_count_ce,
         "gcs_duplicate_margin": args.gcs_duplicate_margin,
         "gcs_duplicate_margin_logit": args.gcs_duplicate_margin_logit,
         "gcs_duplicate_gt_count": args.gcs_duplicate_gt_count,

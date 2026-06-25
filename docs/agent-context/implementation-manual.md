@@ -6,7 +6,8 @@ This branch is the current mainline source import of `5-25-3.zip` with a K56 TuS
 
 - Keep the 5-25-3 algorithm body unchanged unless a future task explicitly asks for an algorithm change.
 - Only change code/config needed for Q=12/K=56, `fixed_y_start=710/720`, `fixed_y_end=160/720`, `--imgsz 544 960`, and the K56 data/model YAMLs.
-- Do not import later mainline Count Head, Count Boundary, Quality Head, Survival Head, near-miss, official-best, or K56 candidate machinery.
+- Do not import later mainline Count Boundary, Quality Head, Survival Head, near-miss, official-best, or K56 candidate machinery.
+- The q18-k56-gt4-candidate-countguard task explicitly adds a branch-local Q18 side-dense config and explicit 3/4/5 count head with default-disabled `gcs_count_ce`.
 - Do not track `datasets/`, generated runs, checkpoints, caches, or converted labels in Git.
 
 Active source/config is based on rollback commit `50999d6af` plus
@@ -67,6 +68,7 @@ ultralytics/nn/modules/gcs_lane.py
 pred_points: B x 12 x 56 x 2
 pred_logits: B x 12
 pred_valid_logits: B x 12 x 56
+pred_count_logits: B x 3
 aux_mask_logits: B x 2 x H x W
 aux_edge_logits: B x 1 x H x W
 ```

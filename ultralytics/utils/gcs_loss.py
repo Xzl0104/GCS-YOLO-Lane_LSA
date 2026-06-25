@@ -38,6 +38,8 @@ class GCSLoss(nn.Module):
         "edge_loss",
         "count_loss",
         "count_under5_loss",
+        "count_ce_loss",
+        "count_ce_acc",
         "duplicate_margin_loss",
         "spurious_margin_loss",
         "far_spurious_survival_loss",
@@ -86,6 +88,7 @@ class GCSLoss(nn.Module):
         lambda_edge: float | None = None,
         lambda_count: float | None = None,
         lambda_count_under5: float | None = None,
+        lambda_count_ce: float | None = None,
         duplicate_margin_gain: float | None = None,
         duplicate_margin_logit: float | None = None,
         duplicate_gt_count: int | None = None,
@@ -279,6 +282,9 @@ class GCSLoss(nn.Module):
             lambda_count_under5
             if lambda_count_under5 is not None
             else self._arg(args, "gcs_count_under5", 0.0)
+        )
+        self.count_ce_gain = float(
+            lambda_count_ce if lambda_count_ce is not None else self._arg(args, "gcs_count_ce", 0.0)
         )
         self.duplicate_margin_gain = float(
             duplicate_margin_gain
@@ -1677,6 +1683,28 @@ class GCSLoss(nn.Module):
         """Cardinality loss that aligns summed existence probability with GT lane count."""
         return self.count_losses(pred_logits, batch, gt_valid)[0]
 
+    def count_ce_loss(
+        self, preds: dict[str, torch.Tensor], pred_logits: torch.Tensor, batch: dict, gt_valid: list[torch.Tensor]
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return explicit 3/4/5 lane-count CE loss and accuracy."""
+        zero = self._zero_like(pred_logits)
+        if self.count_ce_gain <= 0.0:
+            return zero, zero.detach()
+
+        pred_count_logits = preds.get("pred_count_logits")
+        if pred_count_logits is None:
+            raise KeyError("gcs_count_ce > 0 requires preds['pred_count_logits'].")
+        expected_shape = (pred_logits.shape[0], 3)
+        if tuple(pred_count_logits.shape) != expected_shape:
+            raise ValueError(f"pred_count_logits must have shape {expected_shape}, got {tuple(pred_count_logits.shape)}.")
+
+        target_counts = self.target_lane_count(pred_logits, batch, gt_valid).detach()
+        target_classes = target_counts.clamp(3, 5).to(device=pred_count_logits.device, dtype=torch.long) - 3
+        loss = F.cross_entropy(pred_count_logits, target_classes)
+        with torch.no_grad():
+            acc = (pred_count_logits.argmax(dim=1) == target_classes).float().mean()
+        return loss, acc.to(device=loss.device, dtype=loss.dtype)
+
     def duplicate_margin_loss(
         self,
         pred_logits: torch.Tensor,
@@ -2273,6 +2301,7 @@ class GCSLoss(nn.Module):
         smooth_loss = self.smooth_loss(pred_points, gt_valid, indices)
         curve_loss = self.curve_loss(pred_points, gt_points, gt_valid, indices)
         count_loss, count_under5_loss = self.count_losses(pred_logits, batch, gt_valid)
+        count_ce_loss, count_ce_acc = self.count_ce_loss(preds, pred_logits, batch, gt_valid)
         duplicate_margin_loss = self.duplicate_margin_loss(
             pred_logits, pred_points, pred_valid_logits, batch, gt_points, gt_valid, indices
         )
@@ -2324,6 +2353,7 @@ class GCSLoss(nn.Module):
             + self.edge_gain * edge_loss
             + self.count_gain * count_loss
             + self.count_under5_gain * count_under5_loss
+            + self.count_ce_gain * count_ce_loss
             + self.duplicate_margin_gain * duplicate_margin_loss
             + self.spurious_margin_gain * spurious_margin_loss
             + self.far_spurious_survival_gain * far_spurious_survival_loss
@@ -2375,6 +2405,8 @@ class GCSLoss(nn.Module):
                 edge_loss.detach(),
                 count_loss.detach(),
                 count_under5_loss.detach(),
+                count_ce_loss.detach(),
+                count_ce_acc.detach(),
                 duplicate_margin_loss.detach(),
                 spurious_margin_loss.detach(),
                 far_spurious_survival_loss.detach(),

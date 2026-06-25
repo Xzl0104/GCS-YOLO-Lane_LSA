@@ -11,7 +11,12 @@ legacy archive: Q=8, K=32, fixed_y=[0.98, 0.25]
 this branch:    Q=12, K=56, fixed_y=[710/720, 160/720]
 ```
 
-Do not silently import later mainline mechanisms such as Count Head, Count Boundary, Quality Head, Survival Head, near-miss mining, or official-best checkpoint preservation into this branch unless a future task explicitly asks for that algorithm change.
+Do not silently import later mainline mechanisms such as Count Boundary, Quality Head, Survival Head, near-miss mining, or official-best checkpoint preservation into this branch unless a future task explicitly asks for that algorithm change.
+
+The q18-k56-gt4-candidate-countguard task explicitly adds a branch-local Q18
+side-dense model config and an explicit 3/4/5 `pred_count_logits` count head.
+The count-head CE objective is controlled by `gcs_count_ce` and remains
+default-disabled at `0.0`.
 
 ## Input Contract
 
@@ -56,7 +61,16 @@ ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml
 ultralytics/cfg/models/gcs/gcs-yolo-lane-s-fixed-y.yaml
 ```
 
-All branch configs keep `Q=12`, `K=56`, fixed-y anchors `710/720 -> 160/720`, and `--imgsz 544 960`.
+All default branch configs keep `Q=12`, `K=56`, fixed-y anchors
+`710/720 -> 160/720`, and `--imgsz 544 960`.
+The branch-local Q18 experiment config is:
+
+```text
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q18-k56-side.yaml
+```
+
+It keeps `K=56`, fixed-y anchors `710/720 -> 160/720`, and `--imgsz 544 960`,
+but sets `Q=18` with side-dense bottom query references.
 
 Historical q12-k56 experiment docs are old records. Preserve them, but do not let them override the active 5-25-3 K56 mainline contract.
 
@@ -122,6 +136,7 @@ This 5-25-3 branch model output must include:
 pred_points: B x Q x K x 2
 pred_logits: B x Q
 pred_valid_logits: B x Q x K
+pred_count_logits: B x 3
 aux_mask_logits: B x 2 x H x W
 aux_edge_logits: B x 1 x H x W
 ```
@@ -132,6 +147,7 @@ With the default K56 model this means:
 pred_points: B x 12 x 56 x 2
 pred_logits: B x 12
 pred_valid_logits: B x 12 x 56
+pred_count_logits: B x 3
 ```
 
 ## Loss Contract
@@ -161,6 +177,8 @@ mask_loss
 edge_loss
 count_loss
 count_under5_loss
+count_ce_loss
+count_ce_acc
 duplicate_margin_loss
 spurious_margin_loss
 far_spurious_survival_loss
@@ -177,10 +195,17 @@ gt4_short_pred_valid_sum_mean
 `duplicate_margin_loss`, `spurious_margin_loss`, `lane_balanced_point_loss`,
 `short_valid_recall_loss`, `far_spurious_survival_loss`, and
 `gt5_rank_consistency_loss`, `gt3_extra_survival_loss`, and
-`gt4_lane_balanced_point_loss`, `gt4_short_valid_recall_loss`, and
-`gt4_short_valid_count_floor_loss` are default-disabled experimental log items.
+`gt4_lane_balanced_point_loss`, `gt4_short_valid_recall_loss`,
+`gt4_short_valid_count_floor_loss`, and `count_ce_loss` are default-disabled
+experimental log items.
 With the default gains they contribute `0` to the training objective; enabling
 any of them is an explicit experiment contract change.
+
+`gcs_count_ce` is a default-disabled explicit count-head CE gain. When enabled,
+`pred_count_logits` is trained as a three-class classifier for GT lane counts
+`3`, `4`, and `5`, with target classes computed as
+`clamp(num_lanes, 3, 5) - 3`. `count_ce_acc` is a diagnostic log item and does
+not affect loss scaling.
 
 `gcs_lane_balanced_point_loss` is a boolean switch, default `false`. When it is
 `true`, the base `point_loss` uses x-only per-lane reduction instead of the
