@@ -2865,3 +2865,103 @@ The ACC margin is tiny. `point_valid_thr=0.45` is already lower than
 The top `conf=0.01,nms30` row does not yet have the same full extra-lane
 diagnostic detail as the supplied `conf=0.015,nms30/nms60` rows. GT5 `5->4`
 must be watched when choosing wider NMS.
+
+## 2026-06-26: Reject Q18 as a GT4-Hard Geometry Fix
+
+Decision:
+
+Do not continue tuning the Q18 valid-loss weights from
+`gcs_yolo_lane_s_q18_k56_side_gt4endpoint_validneg_countce_v1`. The first
+diagnostic target was GT4-hard raw geometry, not official ACC, and Q18 did not
+raise raw-query geometry recall on the fixed GT4-hard set.
+
+中文记录：
+
+Q18 side-dense reference failed the candidate-coverage gate.
+
+Evidence:
+
+- On current-missing diagnostic, `raw_match_recall = 8/20 = 0.400000`.
+- `geometry_bad` remains dominant: `12/20` missing lanes.
+- `after_point_valid_recall = 0/20`.
+- On fixed old-missing denominator from `gt4pt025`, Q18
+  `raw_match_recall = 9/22 = 0.409091`, identical to the old `gt4pt025`
+  hard-set raw recall.
+- Q18 therefore does not improve raw candidate coverage and stays below the
+  required `>= 0.55` gate.
+
+Decision:
+
+- Stop tuning Q18 loss.
+- Do not change `gcs_gt4_short_valid_pos_weight` to `1.25`.
+- Do not change `unmatched_valid_neg_weight` to `0.5`.
+- Next branch is Q20 side-geometry reference, preferably with side-slope
+  template diversity rather than only adding two more bottom references.
+
+Diagnostic protocol:
+
+Use the train-derived `gt4pt025` GT4-hard set as a fixed input:
+
+```text
+hard set = data/tusimple_gt4_hard_val_gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt4pt025.txt
+records = 19 images
+old missing denominator = 22 GT lanes from gt4pt025
+decode = conf=0.005, point_valid_thr=0.5, nms_dist_px=0.0, max_det=8, min_points=6
+match gate = overlap >= 3 h-samples and mean_abs_x_error <= 20px
+```
+
+Project raw-query diagnostic over the 19 fixed hard images:
+
+```text
+artifact = runs/gcs_lane/gcs_yolo_lane_s_q18_k56_side_gt4endpoint_validneg_countce_v1/gt4_hard_raw_query_fixed_gt4pt025/diagnostic_all_current_missing/summary.json
+current missing lanes = 20
+drop_reason = geometry_bad 12, low_point_valid 8
+raw_match_recall = 8/20 = 0.400000
+after_point_valid_recall = 0/20 = 0.000000
+final_decode_recall = 0/20 = 0.000000
+```
+
+Fixed old-missing recovery diagnostic, using the old `gt4pt025` 22 missing GT
+lanes as the denominator:
+
+```text
+artifact = runs/gcs_lane/gcs_yolo_lane_s_q18_k56_side_gt4endpoint_validneg_countce_v1/gt4_hard_raw_query_fixed_gt4pt025/fixed_old_missing_recovery/summary.json
+raw_match_recall = 9/22 = 0.409091
+after_point_valid_recall = 1/22 = 0.045455
+after_min_points_recall = 2/22 = 0.090909
+after_conf_recall = 2/22 = 0.090909
+final_decode_recall = 2/22 = 0.090909
+new_status = geometry_bad 12, low_point_valid 8, recovered_final_decode 2
+pred_count on 19 old hard images = 3 lanes: 16, 4 lanes: 3
+```
+
+Why:
+
+The target gate was `raw_match_recall >= 0.55` as a starting point, ideally
+`>= 0.65`. Q18 stayed at the previous `gt4pt025` fixed-hard raw recall
+`9/22 = 0.409091`; the current-missing diagnostic is similarly low at
+`8/20 = 0.400000`. `geometry_bad` remains the dominant residual failure
+bucket. Although Q18 recovers two old missing lanes and slightly improves
+point-valid survival on the fixed old-missing denominator, that is not enough
+to show that the Q18 side references cover the real short side-lane geometry.
+
+The attempted same-denominator `v2_validbranch_neg05-3` raw-query comparison
+was blocked by a checkpoint/current-code contract mismatch:
+
+```text
+AttributeError: 'GCSLaneHead' object has no attribute 'count_mlp'
+```
+
+This does not affect the Q18 decision because Q18 already fails the raw
+geometry gate.
+
+Next action:
+
+Keep the final-test path closed and do not tune ACC, `point_valid_thr`, NMS,
+`max_det`, `min_points`, checkpoint choice, or loss gains from this diagnostic.
+The next geometry-recall experiment should change the query coverage to Q20
+side-geometry reference rather than continuing to tune the Q18 loss weights.
+In particular, do not apply the valid-loss follow-up
+(`gcs_gt4_short_valid_pos_weight=1.25` and
+`gcs_unmatched_valid_neg_weight=0.5`) because that branch is reserved for the
+case where raw geometry rises but point-valid does not.
