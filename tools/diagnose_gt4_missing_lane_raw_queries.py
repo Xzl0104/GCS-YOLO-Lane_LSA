@@ -41,6 +41,7 @@ DEFAULT_WEIGHTS = (
     / "best.pt"
 )
 VALID_POINT_THRESHOLDS = (0.5, 0.45, 0.4, 0.35, 0.3)
+MIN_POINTS_SWEEP = (2, 3, 4)
 SCORE_BINS = (0.0, 0.001, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.000001)
 
 
@@ -58,9 +59,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--imgsz", nargs="+", type=int, default=[544, 960], help="GCS inference shape as H W.")
     parser.add_argument("--conf", type=float, default=0.005, help="Normal decode lane existence threshold.")
     parser.add_argument("--point-valid-thr", type=float, default=0.5, help="Normal decode point-valid threshold.")
+    parser.add_argument(
+        "--point-valid-sweep-thrs",
+        nargs="+",
+        type=float,
+        default=list(VALID_POINT_THRESHOLDS),
+        help="Point-valid thresholds to recheck on the fixed missing-GT set.",
+    )
     parser.add_argument("--nms-dist-px", type=float, default=0.0, help="Normal decode Lane-NMS threshold in original-image px.")
     parser.add_argument("--max-det", type=int, default=8, help="Normal decode max kept lanes.")
     parser.add_argument("--min-points", type=int, default=6, help="Normal decode minimum visible points.")
+    parser.add_argument(
+        "--min-points-sweep",
+        nargs="+",
+        type=int,
+        default=list(MIN_POINTS_SWEEP),
+        help="Min-points values to recheck on the fixed missing-GT set.",
+    )
     parser.add_argument(
         "--only-count-pair",
         default="4->3",
@@ -465,6 +480,23 @@ def rate(num: int, den: int) -> float:
     return round(float(num) / max(int(den), 1), 6)
 
 
+def _thr_key(thr: float) -> str:
+    return f"{float(thr):.2f}"
+
+
+def _init_point_valid_sweep(thresholds: tuple[float, ...], min_points_values: tuple[int, ...]) -> dict[str, dict]:
+    return {
+        _thr_key(thr): {
+            "point_valid_thr": float(thr),
+            "raw_match": 0,
+            "after_point_valid": 0,
+            "after_min_points": {str(int(min_points)): 0 for min_points in min_points_values},
+            "after_conf": {str(int(min_points)): 0 for min_points in min_points_values},
+        }
+        for thr in thresholds
+    }
+
+
 @torch.inference_mode()
 def run_diagnostic(args: argparse.Namespace) -> dict:
     """Run the raw-query diagnostic and write all configured artifacts."""
@@ -485,6 +517,16 @@ def run_diagnostic(args: argparse.Namespace) -> dict:
 
     imgsz = normalize_imgsz(args.imgsz, dataset="tusimple")
     count_pair = parse_count_pair(args.only_count_pair)
+    point_valid_sweep_thresholds = tuple(float(x) for x in args.point_valid_sweep_thrs)
+    min_points_sweep_values = tuple(int(x) for x in args.min_points_sweep)
+    if not point_valid_sweep_thresholds:
+        raise ValueError("--point-valid-sweep-thrs must contain at least one threshold.")
+    if not min_points_sweep_values:
+        raise ValueError("--min-points-sweep must contain at least one value.")
+    if any(thr < 0.0 or thr > 1.0 for thr in point_valid_sweep_thresholds):
+        raise ValueError(f"point-valid sweep thresholds must be in [0, 1], got {point_valid_sweep_thresholds}.")
+    if any(value <= 0 for value in min_points_sweep_values):
+        raise ValueError(f"min-points sweep values must be positive, got {min_points_sweep_values}.")
     save_dir = resolve_save_dir(args, weights=weights, count_pair=count_pair)
     save_dir.mkdir(parents=True, exist_ok=True)
     vis_dir = save_dir / "vis"
@@ -501,6 +543,7 @@ def run_diagnostic(args: argparse.Namespace) -> dict:
     image_rows: list[dict] = []
     raw_query_rows: list[dict] = []
     missing_rows: list[dict] = []
+    point_valid_sweep = _init_point_valid_sweep(point_valid_sweep_thresholds, min_points_sweep_values)
     vis_count = 0
     t0 = time.perf_counter()
 
@@ -662,6 +705,50 @@ def run_diagnostic(args: argparse.Namespace) -> dict:
                 exist_logit = finite_round(exist_logits[q])
                 score = finite_round(scores[q], ndigits=8)
 
+                for thr in point_valid_sweep_thresholds:
+                    sweep_entry = point_valid_sweep[_thr_key(thr)]
+                    if raw_match:
+                        sweep_entry["raw_match"] += 1
+                    sweep_stage1_lane = query_points_to_tusimple_lane(
+                        pred_points[q],
+                        h_samples=h_samples,
+                        image_shape=image_shape,
+                        valid_mask=np.asarray(point_valid_prob[q] >= float(thr), dtype=bool),
+                    )
+                    sweep_stage1_stats = best_query_for_gt(
+                        [sweep_stage1_lane],
+                        gt_lane,
+                        min_overlap=int(args.match_overlap),
+                    )
+                    sweep_stage1_match = is_match(
+                        sweep_stage1_stats,
+                        int(args.match_overlap),
+                        float(args.match_x_thr),
+                    )
+                    if sweep_stage1_match:
+                        sweep_entry["after_point_valid"] += 1
+                    for min_points in min_points_sweep_values:
+                        sweep_stage2_lane = query_points_to_tusimple_lane(
+                            pred_points[q],
+                            h_samples=h_samples,
+                            image_shape=image_shape,
+                            valid_mask=contiguous_valid_mask(point_valid_prob[q], float(thr), int(min_points)),
+                        )
+                        sweep_stage2_stats = best_query_for_gt(
+                            [sweep_stage2_lane],
+                            gt_lane,
+                            min_overlap=int(args.match_overlap),
+                        )
+                        sweep_stage2_match = is_match(
+                            sweep_stage2_stats,
+                            int(args.match_overlap),
+                            float(args.match_x_thr),
+                        )
+                        if sweep_stage2_match:
+                            sweep_entry["after_min_points"][str(int(min_points))] += 1
+                            if float(scores[q]) >= float(args.conf):
+                                sweep_entry["after_conf"][str(int(min_points))] += 1
+
             order, side = order_side.get(gt_idx, (gt_idx, "unknown"))
             drop_reason = classify_drop_reason(best, raw_match, stage1_match, stage2_match, stage3_match, final_match)
             row = {
@@ -746,6 +833,27 @@ def run_diagnostic(args: argparse.Namespace) -> dict:
     stage_conf = sum(int(row["survives_conf"]) for row in missing_rows)
     stage_final = sum(int(row["survives_final_decode"]) for row in missing_rows)
     drop_reason_hist = Counter(row["drop_reason"] for row in missing_rows)
+    point_valid_sweep_rows = []
+    for thr in point_valid_sweep_thresholds:
+        entry = point_valid_sweep[_thr_key(thr)]
+        for min_points in min_points_sweep_values:
+            after_min_points = int(entry["after_min_points"][str(int(min_points))])
+            after_conf = int(entry["after_conf"][str(int(min_points))])
+            point_valid_sweep_rows.append(
+                {
+                    "point_valid_thr": float(thr),
+                    "min_points": int(min_points),
+                    "denominator_missing_gt_lanes": int(total_missing),
+                    "raw_match": int(entry["raw_match"]),
+                    "after_point_valid": int(entry["after_point_valid"]),
+                    "after_min_points": after_min_points,
+                    "after_conf": after_conf,
+                    "raw_match_recall": rate(int(entry["raw_match"]), total_missing),
+                    "after_point_valid_recall": rate(int(entry["after_point_valid"]), total_missing),
+                    "after_min_points_recall": rate(after_min_points, total_missing),
+                    "after_conf_recall": rate(after_conf, total_missing),
+                }
+            )
 
     visible_values = [int(row["gt_visible_points"]) for row in missing_rows]
     score_values = [row["best_query_score"] for row in missing_rows]
@@ -763,6 +871,8 @@ def run_diagnostic(args: argparse.Namespace) -> dict:
             "nms_dist_px": float(args.nms_dist_px),
             "max_det": int(args.max_det),
             "min_points": int(args.min_points),
+            "point_valid_sweep_thrs": [float(x) for x in point_valid_sweep_thresholds],
+            "min_points_sweep": [int(x) for x in min_points_sweep_values],
             "only_count_pair": None if count_pair is None else f"{count_pair[0]}->{count_pair[1]}",
             "match_overlap": int(args.match_overlap),
             "match_x_thr": float(args.match_x_thr),
@@ -815,6 +925,18 @@ def run_diagnostic(args: argparse.Namespace) -> dict:
                 "after_conf": int(stage_conf),
                 "final_decode": int(stage_final),
             },
+        },
+        "point_valid_threshold_sweep": {
+            "fixed_missing_set": True,
+            "baseline_decode": {
+                "conf": float(args.conf),
+                "point_valid_thr": float(args.point_valid_thr),
+                "nms_dist_px": float(args.nms_dist_px),
+                "max_det": int(args.max_det),
+                "min_points": int(args.min_points),
+                "only_count_pair": None if count_pair is None else f"{count_pair[0]}->{count_pair[1]}",
+            },
+            "rows": point_valid_sweep_rows,
         },
         "artifacts": {
             "summary_json": str((save_dir / "summary.json").resolve()),
@@ -917,7 +1039,22 @@ def run_diagnostic(args: argparse.Namespace) -> dict:
     write_csv(save_dir / "per_missing_lane.csv", missing_rows, missing_fields)
     write_csv(save_dir / "per_image_summary.csv", image_rows, image_fields)
     write_csv(save_dir / "raw_queries.csv", raw_query_rows, raw_query_fields)
-    print(json.dumps({k: summary[k] for k in ("selected_images", "total_gt4_4to3_images", "total_missing_gt_lanes", "drop_reason_histogram", "stage_recall")}, indent=2))
+    print(
+        json.dumps(
+            {
+                k: summary[k]
+                for k in (
+                    "selected_images",
+                    "total_gt4_4to3_images",
+                    "total_missing_gt_lanes",
+                    "drop_reason_histogram",
+                    "stage_recall",
+                    "point_valid_threshold_sweep",
+                )
+            },
+            indent=2,
+        )
+    )
     print(f"saved: {save_dir.resolve()}")
     return summary
 

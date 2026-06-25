@@ -2965,3 +2965,82 @@ In particular, do not apply the valid-loss follow-up
 (`gcs_gt4_short_valid_pos_weight=1.25` and
 `gcs_unmatched_valid_neg_weight=0.5`) because that branch is reserved for the
 case where raw geometry rises but point-valid does not.
+
+## 2026-06-26: Reject Q20 as a GT4-Hard Geometry Fix
+
+Decision:
+
+Reject `gcs_yolo_lane_s_q20_k56_sidegeom_gt4endpoint_validneg_countce_v1` at
+the hard diagnostic gate. Do not run the official-val normal/count-guided
+sweep for this run, because the requested protocol says official ACC is only
+checked after hard diagnostic passes.
+
+Diagnostic protocol:
+
+Use the same train-derived `gt4pt025` GT4-hard set as the Q18 check:
+
+```text
+hard set = data/tusimple_gt4_hard_val_gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt4pt025.txt
+records = 19 images
+old missing denominator = 22 GT lanes from gt4pt025
+decode = conf=0.005, point_valid_thr=0.5, nms_dist_px=0.0, max_det=8, min_points=6
+match gate = overlap >= 3 h-samples and mean_abs_x_error <= 20px
+```
+
+Fixed old-missing recovery diagnostic:
+
+```text
+artifact = runs/gcs_lane/gcs_yolo_lane_s_q20_k56_sidegeom_gt4endpoint_validneg_countce_v1/gt4_hard_raw_query_fixed_gt4pt025/fixed_old_missing_recovery/summary.json
+old missing GT lanes = 22
+raw_match_recall = 12/22 = 0.545455
+after_point_valid_recall = 2/22 = 0.090909
+after_min_points_recall = 2/22 = 0.090909
+after_conf_recall = 2/22 = 0.090909
+final_decode_recall = 2/22 = 0.090909
+new_status = geometry_bad 10, low_point_valid 10, recovered_final_decode 2
+```
+
+Current-missing diagnostic:
+
+```text
+artifact = runs/gcs_lane/gcs_yolo_lane_s_q20_k56_sidegeom_gt4endpoint_validneg_countce_v1/gt4_hard_raw_query_fixed_gt4pt025/diagnostic_all_current_missing/summary.json
+current missing lanes = 20
+drop_reason = geometry_bad 10, low_point_valid 10
+raw_match_recall = 10/20 = 0.500000
+after_point_valid_recall = 0/20 = 0.000000
+after_min_points_recall = 0/20 = 0.000000
+after_conf_recall = 0/20 = 0.000000
+final_decode_recall = 0/20 = 0.000000
+```
+
+Why:
+
+Q20 only reaches the fixed old-missing starting line
+`raw_match_recall >= 12/22`; it does not reach the true qualification gate
+`raw_match_recall >= 13/22`, `after_point_valid_recall >= 4/22`, and
+`final_decode_recall > 2/22`. The current-missing diagnostic is also below the
+requested target: `raw_match_recall = 0.500000 < 0.55`,
+`geometry_bad = 10 > 7`, and baseline `after_point_valid_recall = 0.0`.
+
+Compared with Q18, Q20 reduces `geometry_bad` from `12` to `10`, but that is
+not enough to show that side-geometry references solved candidate coverage.
+The point-valid threshold sweep recovers at most one current missing lane at
+lower thresholds, while the baseline valid stage stays at `0/20`; therefore
+the valid-loss follow-up condition is not met.
+
+Rejected actions:
+
+- Do not run the Q20 official-val sweep from this checkpoint.
+- Do not change `gcs_gt4_short_valid_pos_weight` to `1.25`.
+- Do not change `gcs_unmatched_valid_neg_weight` to `0.5`.
+- Do not tune loss, threshold, NMS, `max_det`, `min_points`, checkpoint choice,
+  or final-test behavior from this diagnostic.
+
+Next action:
+
+Move from hand-designed Q20 side-geometry references to data-driven reference
+clustering over the actual failed GT4-hard lane shapes. Start with the `10`
+`geometry_bad` current-missing lanes, compare each failed lane against its
+nearest raw queries and reference templates, and identify which side/order/slope
+shapes are still uncovered. The next candidate should pass the hard
+raw-geometry gate before any official-val sweep is run.

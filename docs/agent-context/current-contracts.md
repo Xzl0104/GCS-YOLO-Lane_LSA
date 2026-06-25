@@ -18,6 +18,10 @@ side-dense model config and an explicit 3/4/5 `pred_count_logits` count head.
 The count-head CE objective is controlled by `gcs_count_ce` and remains
 default-disabled at `0.0`.
 
+The q20 side-geometry follow-up explicitly adds a branch-local Q20 experiment
+config. It remains an experiment config, not the default branch model, and its
+2026-06-26 hard diagnostic was rejected before official-val sweep.
+
 ## Input Contract
 
 TuSimple uses:
@@ -71,6 +75,17 @@ ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q18-k56-side.yaml
 
 It keeps `K=56`, fixed-y anchors `710/720 -> 160/720`, and `--imgsz 544 960`,
 but sets `Q=18` with side-dense bottom query references.
+
+The branch-local Q20 experiment config is:
+
+```text
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q20-k56-sidegeom.yaml
+```
+
+It keeps `K=56`, fixed-y anchors `710/720 -> 160/720`, and `--imgsz 544 960`,
+but sets `Q=20` with side-geometry query references. It is not the default
+model and should not be promoted without passing the GT4-hard raw-geometry
+gate first.
 
 Historical q12-k56 experiment docs are old records. Preserve them, but do not let them override the active 5-25-3 K56 mainline contract.
 

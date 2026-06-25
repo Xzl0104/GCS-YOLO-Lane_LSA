@@ -1464,6 +1464,66 @@ Do not pass `--count-guided-allow-unsupported-fallback` for candidate
 selection. It is only for diagnostics when intentionally checking fallback
 behavior with checkpoints that lack count-head logits.
 
+## Q20 GT4-Hard Diagnostic Gate
+
+Before any Q20 official-val sweep, run the GT4-hard raw-query diagnostic on the
+fixed `gt4pt025` hard set. The 2026-06-26 Q20 run failed this gate, so its
+official sweep was intentionally not run:
+
+```text
+run = gcs_yolo_lane_s_q20_k56_sidegeom_gt4endpoint_validneg_countce_v1
+fixed old-missing raw_match_recall = 12/22 = 0.545455
+current-missing raw_match_recall = 10/20 = 0.500000
+current geometry_bad = 10
+current after_point_valid_recall = 0/20
+```
+
+The diagnostic decode is:
+
+```text
+conf=0.005, point_valid_thr=0.5, nms_dist_px=0.0, max_det=8, min_points=6
+match gate = overlap >= 3 h-samples and mean_abs_x_error <= 20px
+```
+
+Current-missing command:
+
+```bash
+python tools/diagnose_gt4_missing_lane_raw_queries.py \
+  --weights runs/gcs_lane/gcs_yolo_lane_s_q20_k56_sidegeom_gt4endpoint_validneg_countce_v1/weights/best.pt \
+  --split train \
+  --gt-json runs/gcs_lane/gcs_yolo_lane_s_q18_k56_side_gt4endpoint_validneg_countce_v1/gt4_hard_raw_query_fixed_gt4pt025/gt4_hard_gt4pt025_19_records.jsonl \
+  --imgsz 544 960 \
+  --conf 0.005 \
+  --point-valid-thr 0.5 \
+  --nms-dist-px 0.0 \
+  --max-det 8 \
+  --min-points 6 \
+  --only-count-pair all \
+  --device 0 \
+  --half \
+  --save-dir runs/gcs_lane/gcs_yolo_lane_s_q20_k56_sidegeom_gt4endpoint_validneg_countce_v1/gt4_hard_raw_query_fixed_gt4pt025/diagnostic_all_current_missing
+```
+
+For any future Q20/reference-clustering follow-up, do not run official-val
+sweep unless hard diagnostic first reaches at least:
+
+```text
+fixed old-missing:
+  raw_match_recall >= 13/22
+  after_point_valid_recall >= 4/22
+  final_decode_recall > 2/22
+  geometry_bad clearly below Q18
+
+current missing:
+  raw_match_recall >= 0.55
+  geometry_bad <= 7
+  after_point_valid_recall > 0
+```
+
+Only consider valid-loss follow-up when raw geometry clearly improves and
+`geometry_bad` clearly drops, but point-valid survival remains low. Otherwise,
+keep valid weights unchanged and move to data-driven reference clustering.
+
 ## TuSimple Final Test
 
 Run test only once for a candidate already selected on official-val:

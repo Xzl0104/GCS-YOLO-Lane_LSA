@@ -8,6 +8,7 @@ This branch is the current mainline source import of `5-25-3.zip` with a K56 TuS
 - Only change code/config needed for Q=12/K=56, `fixed_y_start=710/720`, `fixed_y_end=160/720`, `--imgsz 544 960`, and the K56 data/model YAMLs.
 - Do not import later mainline Count Boundary, Quality Head, Survival Head, near-miss, official-best, or K56 candidate machinery.
 - The q18-k56-gt4-candidate-countguard task explicitly adds a branch-local Q18 side-dense config and explicit 3/4/5 count head with default-disabled `gcs_count_ce`.
+- The q20 side-geometry follow-up explicitly adds a branch-local Q20 experiment config. It is not the default model and its 2026-06-26 hard diagnostic is rejected before official-val sweep.
 - Do not track `datasets/`, generated runs, checkpoints, caches, or converted labels in Git.
 
 Active source/config is based on rollback commit `50999d6af` plus
@@ -57,10 +58,14 @@ tools/train_gcs.py
 tools/eval_tusimple_official.py
 tools/sweep_tusimple_official.py
 tools/diagnose_gt4_missing_lane_raw_queries.py
+tools/diagnose_tusimple_extra_lanes.py
 tools/build_gt4_hard_val_split.py
 tools/check_model.py
 tools/check_count_guided_sweep_smoke.py
 tools/check_q18_dryrun_metrics_contract.py
+tools/check_q20_contract.py
+tools/check_q20_pretrained_transfer.py
+tools/check_q20_reference_coverage.py
 ultralytics/nn/modules/gcs_lane.py
 ```
 
@@ -85,6 +90,8 @@ aux_edge_logits: B x 1 x H x W
 6. For q18 countguard validation, run `tools/check_count_guided_sweep_smoke.py`
    and `tools/check_q18_dryrun_metrics_contract.py` before remote official-val
    count-guided sweeps.
+7. For Q20 side-geometry validation, run `tools/check_q20_contract.py` and
+   hard GT4 raw-query diagnostics before any official-val sweep.
 
 ## Agent Tooling
 

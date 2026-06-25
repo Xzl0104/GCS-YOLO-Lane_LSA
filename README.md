@@ -49,6 +49,34 @@ Do not continue this line by increasing valid recall, enabling valid count
 floor, lowering `point_valid_thr`, increasing `max_det`, or using final test
 for threshold/postprocess selection.
 
+## Latest Hard-Diagnostic Evidence
+
+The 2026-06-26 Q18 and Q20 side-reference checks were run before looking at
+official ACC. Both used the fixed train-derived `gt4pt025` GT4-hard set:
+
+```text
+hard set: data/tusimple_gt4_hard_val_gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt4pt025.txt
+records: 19 images
+old missing denominator: 22 GT lanes
+decode: conf=0.005, point_valid_thr=0.5, nms_dist_px=0.0, max_det=8, min_points=6
+```
+
+Q18 failed the candidate-coverage gate with fixed old-missing
+`raw_match_recall=9/22=0.409091` and current-missing
+`raw_match_recall=8/20=0.400000`.
+
+Q20 also fails the hard gate. It reaches only the fixed old-missing starting
+line (`raw_match_recall=12/22=0.545455`) and misses the true qualification
+line (`raw_match_recall>=13/22`, `after_point_valid_recall>=4/22`, and
+`final_decode_recall>2/22`). On current missing lanes it gets
+`raw_match_recall=10/20=0.500000`, `geometry_bad=10`, and baseline
+`after_point_valid_recall=0/20`.
+
+Decision: reject Q20 as a GT4-hard geometry fix, do not run its official-val
+sweep, and do not tune valid-loss weights. The next geometry candidate should
+move to data-driven reference clustering over the actual failed GT4-hard lane
+shapes.
+
 ## Current Official-Val Candidate
 
 The 2026-06-25 `dupmargin005_gt4pt025` run is the previous official-val
