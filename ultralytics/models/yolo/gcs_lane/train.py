@@ -22,7 +22,7 @@ from ultralytics.data.utils import check_det_dataset
 from ultralytics.engine.trainer import BaseTrainer
 from ultralytics.models.yolo.gcs_lane.val import GCSLaneValidator
 from ultralytics.nn.modules import GCSLaneHead, LaneBiFPN, LSEM
-from ultralytics.nn.tasks import GCSLaneModel, load_checkpoint
+from ultralytics.nn.tasks import GCSLaneModel, load_checkpoint, torch_safe_load
 from ultralytics.utils import DEFAULT_CFG, LOCAL_RANK, LOGGER, RANK, ROOT, YAML
 from ultralytics.utils.gcs_shape import assert_gcs_image_tensor, assert_gcs_shape, normalize_imgsz
 from ultralytics.utils.torch_utils import strip_optimizer, torch_distributed_zero_first
@@ -386,13 +386,14 @@ class GCSLaneTrainer(BaseTrainer):
         return model
 
     @staticmethod
-    def _state_dict_from_weights(weights: str | Path | dict | nn.Module) -> dict[str, torch.Tensor]:
-        """Extract a plain state_dict from a checkpoint path, checkpoint dict, or loaded module."""
-        if isinstance(weights, (str, Path)):
-            weights, _ = load_checkpoint(weights)
-
+    def _unwrap_state_dict(weights: dict | nn.Module) -> dict[str, torch.Tensor]:
+        """Extract a plain state_dict from a checkpoint dict or loaded module."""
         if isinstance(weights, dict):
-            weights = weights.get("ema") or weights.get("model") or weights.get("state_dict") or weights
+            for key in ("ema", "model", "state_dict"):
+                value = weights.get(key)
+                if value is not None:
+                    weights = value
+                    break
 
         if isinstance(weights, nn.Module):
             state = weights.float().state_dict()
@@ -402,6 +403,18 @@ class GCSLaneTrainer(BaseTrainer):
             raise TypeError(f"Unsupported pretrained weights type for GCSLaneTrainer: {type(weights).__name__}")
 
         return {k[7:] if k.startswith("module.") else k: v for k, v in state.items() if isinstance(v, torch.Tensor)}
+
+    @classmethod
+    def _state_dict_from_weights(cls, weights: str | Path | dict | nn.Module) -> dict[str, torch.Tensor]:
+        """Extract a plain state_dict from a checkpoint path, checkpoint dict, or loaded module."""
+        if isinstance(weights, (str, Path)):
+            ckpt, _ = torch_safe_load(weights)
+            if isinstance(ckpt, dict) and ckpt.get("model") is None and ckpt.get("ema") is None:
+                weights = ckpt
+            else:
+                weights, _ = load_checkpoint(weights)
+
+        return cls._unwrap_state_dict(weights)
 
     @staticmethod
     def _gcs_module_prefixes(model: nn.Module) -> tuple[str, ...]:
@@ -467,12 +480,17 @@ class GCSLaneTrainer(BaseTrainer):
         source_is_gcs = self._state_dict_has_gcs_modules(source_state)
         candidate_state = source_state if source_is_gcs else self.remap_yolo11_backbone_to_gcs(source_state)
         gcs_prefixes = () if source_is_gcs else self._gcs_module_prefixes(model)
+        reset_point_reference = bool(getattr(self.args, "reset_point_reference", False))
 
         loadable = {}
         skipped_gcs = 0
         skipped_shape = 0
         skipped_missing = 0
+        skipped_reset = []
         for key, value in candidate_state.items():
+            if reset_point_reference and key.endswith("point_reference_logits"):
+                skipped_reset.append(key)
+                continue
             if key not in target_state:
                 skipped_missing += 1
                 continue
@@ -489,8 +507,10 @@ class GCSLaneTrainer(BaseTrainer):
         LOGGER.info(
             f"GCS pretrained transfer ({source_kind}): loaded {len(loadable)}/{len(target_state)} tensors "
             f"(candidates={len(candidate_state)}, skipped_missing={skipped_missing}, "
-            f"skipped_gcs={skipped_gcs}, skipped_shape={skipped_shape})"
+            f"skipped_gcs={skipped_gcs}, skipped_shape={skipped_shape}, skipped_reset={len(skipped_reset)})"
         )
+        if skipped_reset:
+            LOGGER.info(f"Skipped reset-sensitive pretrained tensors: {skipped_reset}")
         if not loadable:
             LOGGER.warning(
                 "No pretrained tensors were transferred. Check that the weight file is a YOLO11/YOLO11-seg "

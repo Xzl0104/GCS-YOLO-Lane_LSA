@@ -112,6 +112,7 @@ train_gcs_labels: # (str, optional) explicit GCS-YOLO-Lane train labels_gcs dire
 val_images: # (str, optional) explicit GCS-YOLO-Lane val image directory/list
 val_gcs_labels: # (str, optional) explicit GCS-YOLO-Lane val labels_gcs directory
 gcs_imgsz: # (list[int], optional) real GCS input shape as [height, width], e.g. [544, 960]
+reset_point_reference: False # (bool) skip point_reference_logits during pretrained transfer
 gcs_exist: 2.0 # (float) GCS lane existence loss gain
 gcs_point: 15.0 # (float) GCS normalized point L1 loss gain
 gcs_lane_balanced_point_loss: False # (bool) replace base x point loss with per-lane balanced reduction

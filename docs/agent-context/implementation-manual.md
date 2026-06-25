@@ -9,6 +9,14 @@ This branch is the current mainline source import of `5-25-3.zip` with a K56 TuS
 - Do not import later mainline Count Boundary, Quality Head, Survival Head, near-miss, official-best, or K56 candidate machinery.
 - The q18-k56-gt4-candidate-countguard task explicitly adds a branch-local Q18 side-dense config and explicit 3/4/5 count head with default-disabled `gcs_count_ce`.
 - The q20 side-geometry follow-up explicitly adds a branch-local Q20 experiment config. It is not the default model and its 2026-06-26 hard diagnostic is rejected before official-val sweep.
+- The q20 dataref follow-up explicitly adds a branch-local Q20 experiment
+  config with `reference_mode="dataref"` and a data-driven side reference bank.
+  It is not the default model and must pass the GT4-hard raw-geometry gate
+  before any official-val sweep.
+  Dataref template building must deduplicate source lanes by default and report
+  duplicate rows plus unique left/right side-lane counts. The overlapping
+  old/current 42-row diagnostic bank has only 22 unique source lanes and is
+  debug evidence, not formal promotion evidence.
 - Do not track `datasets/`, generated runs, checkpoints, caches, or converted labels in Git.
 
 Active source/config is based on rollback commit `50999d6af` plus
@@ -49,6 +57,14 @@ data/tusimple_gcs_fixed_y_k56_960x544.yaml
 ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml
 ```
 
+Branch-local Q18/Q20 experiment configs:
+
+```text
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q18-k56-side.yaml
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q20-k56-sidegeom.yaml
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q20-k56-dataref.yaml
+```
+
 Shared implementation files:
 
 ```text
@@ -64,6 +80,11 @@ tools/check_model.py
 tools/check_count_guided_sweep_smoke.py
 tools/check_q18_dryrun_metrics_contract.py
 tools/check_q20_contract.py
+tools/q20_dataref_common.py
+tools/check_q20_dataref_contract.py
+tools/check_q20_dataref_reference_coverage.py
+tools/check_q20_dataref_reference_coverage_duplicate_guard.py
+tools/check_q20_dataref_reset_point_reference.py
 tools/check_q20_pretrained_transfer.py
 tools/check_q20_reference_coverage.py
 ultralytics/nn/modules/gcs_lane.py

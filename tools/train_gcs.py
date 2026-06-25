@@ -60,6 +60,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data", default=None)
     parser.add_argument("--pretrained", default="yolo11s-seg.pt")
     parser.add_argument(
+        "--reset-point-reference",
+        action="store_true",
+        help="Skip loading point_reference_logits from pretrained checkpoints so model config/reference_mode init is kept.",
+    )
+    parser.add_argument(
         "--imgsz",
         nargs="+",
         type=int,
@@ -674,6 +679,7 @@ def main() -> None:
         "model": args.model,
         "data": args.data or str(defaults["data"]),
         "pretrained": parse_pretrained(args.pretrained),
+        "reset_point_reference": args.reset_point_reference,
         "imgsz": trainer_imgsz(gcs_imgsz),
         "gcs_imgsz": list(gcs_imgsz),
         "epochs": args.epochs,

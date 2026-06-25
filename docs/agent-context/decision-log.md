@@ -3069,3 +3069,151 @@ clustering over the actual failed GT4-hard lane shapes. Start with the `10`
 nearest raw queries and reference templates, and identify which side/order/slope
 shapes are still uncovered. The next candidate should pass the hard
 raw-geometry gate before any official-val sweep is run.
+
+## 2026-06-26: Implement Q20-Dataref Reference Bank as Next Geometry Candidate
+
+Decision:
+
+Keep the Q20 sidegeom run rejected at the hard diagnostic gate and move the
+next geometry experiment to Q20-dataref. Do not continue tuning Q20 sidegeom
+loss weights.
+
+Evidence:
+
+```text
+fixed old-missing:
+raw_match_recall = 12/22 = 0.545455
+after_point_valid = 2/22
+final_decode = 2/22
+geometry_bad = 10
+low_point_valid = 10
+
+current-missing:
+raw_match_recall = 10/20 = 0.500000
+geometry_bad = 10
+after_point_valid = 0/20
+```
+
+Why:
+
+Q20 sidegeom improved partial raw candidate coverage relative to Q18
+(`9/22 -> 12/22` on the fixed old-missing denominator), but it only reached
+the starting line and failed the promotion gate. It did not exceed Q18 at
+final decode, and current-missing raw geometry stayed below the `0.55` target.
+
+Rejected actions:
+
+- Do not change `gcs_gt4_short_valid_pos_weight` to `1.25`.
+- Do not change `gcs_unmatched_valid_neg_weight` to `0.5`.
+- Do not enable `gcs_gt4_short_valid_recall`.
+- Do not enable `gcs_gt4_short_valid_count_floor`.
+- Do not run official-val or final-test selection from the rejected Q20
+  sidegeom checkpoint.
+
+Implementation direction:
+
+Add an explicit Q20-dataref experiment config and `reference_mode="dataref"` in
+`GCSLaneHead`. The dataref reference bank is:
+
+```text
+[4 left hard side templates] + [12 unchanged normal templates] + [4 right hard side templates]
+```
+
+The side templates are generated from true GT4-hard missing-lane shapes, with
+valid spans interpolated and endpoints extended. Training from a Q20 sidegeom
+checkpoint must use `--reset-point-reference` so same-shaped
+`point_reference_logits` cannot overwrite the dataref initialization.
+
+Promotion gate for the trained Q20-dataref candidate:
+
+```text
+fixed old raw_match_recall >= 14/22
+fixed old after_point_valid >= 4/22
+fixed old final_decode > 2/22
+fixed old geometry_bad <= 7
+current raw_match_recall >= 0.55
+current geometry_bad <= 7
+current after_point_valid > 0
+```
+
+Mainline or experiment:
+
+Branch-local Q20 experiment only. The default Q12 model, Q18 config, and Q20
+sidegeom config remain unchanged.
+
+## 2026-06-26: Tighten Q20-Dataref Acceptance Chain
+
+Decision:
+
+Keep the Q20-dataref reference bank logic itself unchanged, but tighten the
+contract checks around it before any formal training evidence is accepted.
+
+Changes:
+
+- `reference_mode="dataref"` is valid only for `num_queries=20` and
+  `point_mode="fixed_y"`.
+- `reference_mode="sidegeom"` is valid only for `num_queries=20`.
+- The template builder deduplicates source lanes by default using normalized
+  `raw_file + lane_id`, falling back to an x/valid signature when `lane_id` is
+  missing.
+- The builder reports duplicate counts and per-side unique lane counts, and it
+  refuses to cluster when either side has fewer than four unique lanes by
+  default.
+- `--allow-duplicate-weighting` is debug-only. `--require-no-duplicates` is the
+  clean-input check for formal sources.
+- The reset-point-reference check must call the real
+  `GCSLaneTrainer.load_gcs_pretrained()` path and prove that a normal probe
+  tensor loads while `point_reference_logits` remains initialized from
+  `Q20_DATAREF_X`.
+
+Evidence caveat:
+
+The current old/current missing-lane source has 42 rows but only 22 unique
+source lanes, with 20 duplicate rows. Any reference-only coverage result from
+that duplicate bank is debug evidence and must not be used as formal promotion
+evidence. Formal Q20-dataref evidence requires a deduplicated rebuild or a
+clean train-derived hard-lane source.
+
+Rejected actions:
+
+- Do not change the Q20 bottom bank/top-pull sidegeom logic.
+- Do not change the Q18 reference branch.
+- Do not tune loss weights or enable GT4 short-valid recall/count-floor knobs
+  from the duplicate-bank reference-only evidence.
+
+## 2026-06-26: Add Q20-Dataref Reference-Coverage Duplicate Guard
+
+Decision:
+
+Make duplicate-source-lane evidence a hard formal-mode failure in
+`tools/check_q20_dataref_reference_coverage.py`.
+
+Why:
+
+The template builder already detected that the old/current diagnostic input has
+42 rows but only 22 unique source lanes. The reference-only coverage checker
+previously accumulated all 42 rows and printed a passing OK result, which could
+mislabel duplicate-weighted debug evidence as formal promotion evidence.
+
+Implementation:
+
+- Add shared `tools/q20_dataref_common.py` for `raw_file + lane_id` lane keys,
+  x/valid signature fallback, JSONL loading, dedup reports, and deduplication.
+- Make both the builder and coverage checker use the same dedup logic.
+- Coverage default mode now raises when duplicate rows exist.
+- `--dedup-evidence` computes formal evidence on deduplicated rows.
+- `--allow-duplicate-evidence` computes debug duplicate-weighted metrics, but
+  forces `gate.formal_eligible=false` and `gate.passed=false`.
+- Add `tools/check_q20_dataref_reference_coverage_duplicate_guard.py` to cover
+  default failure, debug-only duplicate evidence, and deduplicated formal
+  evidence.
+
+Evidence:
+
+On the current old/current diagnostic CSV inputs:
+
+```text
+default mode: RuntimeError with input_rows=42, unique_source_lanes=22, duplicate_rows=20
+--allow-duplicate-evidence: evidence_mode=debug_duplicate_weighted, gate.debug_passed=true, gate.passed=false
+--dedup-evidence: evidence_mode=formal_deduplicated, lanes=22, gate.passed=true
+```

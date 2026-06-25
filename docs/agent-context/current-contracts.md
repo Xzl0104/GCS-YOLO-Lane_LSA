@@ -87,6 +87,24 @@ but sets `Q=20` with side-geometry query references. It is not the default
 model and should not be promoted without passing the GT4-hard raw-geometry
 gate first.
 
+The branch-local Q20 data-driven reference follow-up config is:
+
+```text
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q20-k56-dataref.yaml
+```
+
+It keeps `K=56`, fixed-y anchors `710/720 -> 160/720`, and `--imgsz 544 960`,
+but sets `Q=20` with `reference_mode="dataref"`. Its reference bank is
+`[4 left hard side] + [12 normal] + [4 right hard side]`, where the side
+templates come from true GT4-hard missing-lane shapes. It is not the default
+model and must pass the GT4-hard raw-geometry gate before any official-val
+sweep.
+The initial old/current missing-lane bank built from 42 diagnostic rows has
+only 22 unique source lanes because the diagnostic inputs overlap. Treat that
+bank as debug evidence only. Formal Q20-dataref training evidence must use the
+deduplicating builder path or a clean train-derived hard-lane source, and the
+builder must report duplicate rows and per-side unique lane counts.
+
 Historical q12-k56 experiment docs are old records. Preserve them, but do not let them override the active 5-25-3 K56 mainline contract.
 
 Active source/config is based on rollback commit `50999d6af` (`Document 5-25-3

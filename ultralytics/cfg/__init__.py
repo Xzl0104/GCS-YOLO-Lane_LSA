@@ -337,6 +337,7 @@ CFG_BOOL_KEYS = frozenset(
         "cos_lr",
         "overlap_mask",
         "val",
+        "reset_point_reference",
         "gcs_lane_balanced_point_loss",
         "gcs_lane_balanced_valid_loss",
         "gcs_gt4_short_valid_recall",
