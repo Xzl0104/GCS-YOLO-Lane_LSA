@@ -3028,6 +3028,31 @@ The point-valid threshold sweep recovers at most one current missing lane at
 lower thresholds, while the baseline valid stage stays at `0/20`; therefore
 the valid-loss follow-up condition is not met.
 
+中文记录：
+
+Q20 sidegeom 部分改善了 raw candidate coverage，但没有通过 hard diagnostic
+promotion gate。
+
+证据：
+
+- fixed old-missing `raw_match_recall` 从 Q18 的 `9/22` 提升到 Q20 的
+  `12/22`。
+- 但它只达到起步线 `12/22`，没有达到真正通过线 `13/22`。
+- `after_point_valid` 只有 `2/22`，低于要求的 `4/22`。
+- `final_decode` 仍然是 `2/22`，没有优于 Q18。
+- current-missing `raw_match_recall` 是 `10/20 = 0.500000`，低于目标
+  `0.55`。
+- current `geometry_bad` 仍为 `10`，高于目标 `<=7`。
+- current `after_point_valid` 是 `0/20`。
+
+决定：
+
+- 不调 Q20 sidegeom loss。
+- 不把 `gcs_gt4_short_valid_pos_weight` 改成 `1.25`。
+- 不把 `unmatched_valid_neg_weight` 改成 `0.5`。
+- 下一分支：从真实 GT4 hard/missing lanes 生成 Q20 data-driven reference
+  bank。
+
 Rejected actions:
 
 - Do not run the Q20 official-val sweep from this checkpoint.
