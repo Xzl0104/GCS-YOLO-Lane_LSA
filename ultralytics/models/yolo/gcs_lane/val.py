@@ -15,46 +15,13 @@ from ultralytics.data.utils import check_det_dataset
 from ultralytics.nn.modules import GCSLaneHead
 from ultralytics.nn.tasks import load_checkpoint
 from ultralytics.utils import ROOT
+from ultralytics.utils.gcs_loss import GCSLoss
 from ultralytics.utils.gcs_shape import assert_gcs_image_tensor, assert_gcs_shape, normalize_imgsz
 from ultralytics.utils.gcs_postprocess import decode_gcs_predictions
 from ultralytics.utils.torch_utils import select_device
 
 
-LOSS_NAMES = (
-    "exist_loss",
-    "point_loss",
-    "lane_balanced_point_loss",
-    "gt4_short_lane_loss",
-    "gt4_lane_balanced_point_loss",
-    "point_valid_loss",
-    "short_valid_recall_loss",
-    "gt4_short_valid_recall_loss",
-    "gt4_short_valid_count_floor_loss",
-    "valid_lb_gt4_short_count",
-    "valid_lb_gt4_short_gt_points_mean",
-    "valid_lb_gt4_short_pred_prob_mean",
-    "valid_lb_gt4_short_pred_sum_mean",
-    "unmatched_valid_neg_loss",
-    "unmatched_valid_query_count",
-    "unmatched_valid_prob_mean",
-    "smooth_loss",
-    "curve_loss",
-    "mask_loss",
-    "edge_loss",
-    "count_loss",
-    "count_under5_loss",
-    "duplicate_margin_loss",
-    "spurious_margin_loss",
-    "far_spurious_survival_loss",
-    "gt5_rank_consistency_loss",
-    "gt3_extra_survival_loss",
-    "gt4_short_lane_valid_points_mean",
-    "gt4_short_lane_count",
-    "gt4_short_valid_lane_count",
-    "gt4_short_gt_valid_points_mean",
-    "gt4_short_pred_valid_prob_mean",
-    "gt4_short_pred_valid_sum_mean",
-)
+LOSS_NAMES = GCSLoss.loss_names
 LOSS_GAIN_ARGS = (
     "gcs_exist",
     "gcs_point",
@@ -78,6 +45,8 @@ LOSS_GAIN_ARGS = (
     "gcs_edge",
     "gcs_count",
     "gcs_count_under5",
+    "gcs_count_ce",
+    "gcs_count_ce_acc_log_gain",
     "gcs_duplicate_margin",
     "gcs_spurious_margin",
     "gcs_far_spurious_survival",
@@ -124,7 +93,14 @@ DEFAULT_LOSS_GAINS = (
     0.0,
     0.0,
     0.0,
+    0.0,
+    0.0,
 )
+if len(LOSS_NAMES) != len(LOSS_GAIN_ARGS) or len(LOSS_NAMES) != len(DEFAULT_LOSS_GAINS):
+    raise AssertionError(
+        "GCS validation loss contract mismatch: "
+        f"loss_names={len(LOSS_NAMES)}, gain_args={len(LOSS_GAIN_ARGS)}, defaults={len(DEFAULT_LOSS_GAINS)}"
+    )
 METRIC_NAMES = (
     "precision",
     "recall",
