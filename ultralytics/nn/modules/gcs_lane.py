@@ -622,11 +622,14 @@ class GCSLaneHead(nn.Module):
         point_delta = self.point_mlp(hs).view(b, self.num_queries, self.num_points, point_dims)
         point_ref = getattr(self, "point_reference_logits", None)
         point_mode = getattr(self, "point_mode", "free")
+        reference_mode = getattr(self, "reference_mode", "default")
+        pred_reference_x = None
         if point_mode == "fixed_y":
             if point_ref is None:
                 x_logits = point_delta.squeeze(-1)
             else:
                 point_ref = point_ref.to(device=point_delta.device, dtype=point_delta.dtype).unsqueeze(0)
+                pred_reference_x = torch.sigmoid(point_ref).expand(b, -1, -1)
                 x_logits = point_delta.squeeze(-1) + point_ref
             fixed_y = getattr(self, "fixed_y_anchors", None)
             if fixed_y is None:
@@ -657,7 +660,11 @@ class GCSLaneHead(nn.Module):
             "pred_logits": pred_logits,
             "pred_valid_logits": pred_valid_logits,
             "pred_count_logits": pred_count_logits,
+            "reference_mode": reference_mode,
+            "is_dataref_reference": pred_logits.new_tensor(1.0 if reference_mode == "dataref" else 0.0),
         }
+        if pred_reference_x is not None:
+            out["pred_reference_x"] = pred_reference_x
 
         if self.aux and (self.training or self.return_aux):
             aux_size = self.aux_output_size(orig_size=orig_size)

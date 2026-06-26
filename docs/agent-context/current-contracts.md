@@ -104,6 +104,12 @@ only 22 unique source lanes because the diagnostic inputs overlap. Treat that
 bank as debug evidence only. Formal Q20-dataref training evidence must use the
 deduplicating builder path or a clean train-derived hard-lane source, and the
 builder must report duplicate rows and per-side unique lane counts.
+The 2026-06-26 `gcs_yolo_lane_s_q20_k56_dataref_gt4endpoint_validneg_countce_v1`
+attempt used `reset_point_reference=false`, but checkpoint audit found no
+`point_reference_logits` keys in the sidegeom or dataref `best.pt`
+`state_dict()` because the reference buffer is non-persistent. Therefore this
+flag did not overwrite the configured dataref reference bank for that run. The
+run still failed the hard diagnostic gate and must not be swept on official-val.
 
 Historical q12-k56 experiment docs are old records. Preserve them, but do not let them override the active 5-25-3 K56 mainline contract.
 
@@ -170,9 +176,17 @@ pred_points: B x Q x K x 2
 pred_logits: B x Q
 pred_valid_logits: B x Q x K
 pred_count_logits: B x 3
+pred_reference_x: B x Q x K
+reference_mode: string metadata
+is_dataref_reference: scalar tensor flag
 aux_mask_logits: B x 2 x H x W
 aux_edge_logits: B x 1 x H x W
 ```
+
+`pred_reference_x` is emitted by fixed-y heads that have
+`point_reference_logits`; it is reference geometry metadata and is not by
+itself a dataref signal. Any dataref-specific training path must check
+`reference_mode="dataref"` or `is_dataref_reference=1`.
 
 With the default K56 model this means:
 
@@ -181,6 +195,9 @@ pred_points: B x 12 x 56 x 2
 pred_logits: B x 12
 pred_valid_logits: B x 12 x 56
 pred_count_logits: B x 3
+pred_reference_x: B x 12 x 56
+reference_mode: "default"
+is_dataref_reference: 0
 ```
 
 ## Loss Contract
@@ -223,16 +240,30 @@ gt4_short_valid_lane_count
 gt4_short_gt_valid_points_mean
 gt4_short_pred_valid_prob_mean
 gt4_short_pred_valid_sum_mean
+dataref_side_aux_loss
+dataref_side_aux_point
+dataref_side_aux_valid
+dataref_side_aux_exist
+dataref_side_aux_lanes
+dataref_side_aux_refdist
 ```
 
 `duplicate_margin_loss`, `spurious_margin_loss`, `lane_balanced_point_loss`,
 `short_valid_recall_loss`, `far_spurious_survival_loss`, and
 `gt5_rank_consistency_loss`, `gt3_extra_survival_loss`, and
 `gt4_lane_balanced_point_loss`, `gt4_short_valid_recall_loss`,
-`gt4_short_valid_count_floor_loss`, and `count_ce_loss` are default-disabled
-experimental log items.
+`gt4_short_valid_count_floor_loss`, `count_ce_loss`, and
+`dataref_side_aux_loss` are default-disabled experimental log items.
 With the default gains they contribute `0` to the training objective; enabling
 any of them is an explicit experiment contract change.
+
+`gcs_dataref_side_aux` is guarded as a Q20 fixed-y dataref-only objective. When
+`gcs_dataref_side_aux > 0`, trainer setup and loss computation must hard-require
+`reference_mode="dataref"`, `num_queries=20`, `point_mode="fixed_y"`, and a
+`pred_reference_x` output. Q20-sidegeom, Q18, and Q12 configurations must fail
+fast with instructions to use
+`gcs-yolo-lane-s-q20-k56-dataref.yaml` or disable
+`--gcs-dataref-side-aux`.
 
 `gcs_count_ce` is a default-disabled explicit count-head CE gain. When enabled,
 `pred_count_logits` is trained as a three-class classifier for GT lane counts

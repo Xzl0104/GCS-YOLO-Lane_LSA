@@ -3120,9 +3120,10 @@ Add an explicit Q20-dataref experiment config and `reference_mode="dataref"` in
 ```
 
 The side templates are generated from true GT4-hard missing-lane shapes, with
-valid spans interpolated and endpoints extended. Training from a Q20 sidegeom
-checkpoint must use `--reset-point-reference` so same-shaped
-`point_reference_logits` cannot overwrite the dataref initialization.
+valid spans interpolated and endpoints extended. A later checkpoint audit found
+that `point_reference_logits` is a non-persistent buffer and is absent from the
+audited sidegeom/dataref `best.pt` `state_dict()` values, so normal GCS
+checkpoint loading does not overwrite the dataref initialization.
 
 Promotion gate for the trained Q20-dataref candidate:
 
@@ -3217,3 +3218,173 @@ default mode: RuntimeError with input_rows=42, unique_source_lanes=22, duplicate
 --allow-duplicate-evidence: evidence_mode=debug_duplicate_weighted, gate.debug_passed=true, gate.passed=false
 --dedup-evidence: evidence_mode=formal_deduplicated, lanes=22, gate.passed=true
 ```
+
+## 2026-06-26: Reject Q20-Dataref v1 Hard-Gate Attempt
+
+Decision:
+
+Do not run official-val for
+`gcs_yolo_lane_s_q20_k56_dataref_gt4endpoint_validneg_countce_v1`. The hard
+GT4 diagnostic did not pass the stricter Q20-dataref acceptance gate.
+
+Run parameter audit:
+
+```text
+run = gcs_yolo_lane_s_q20_k56_dataref_gt4endpoint_validneg_countce_v1
+model = ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q20-k56-dataref.yaml
+pretrained = runs/gcs_lane/gcs_yolo_lane_s_q20_k56_sidegeom_gt4endpoint_validneg_countce_v1/weights/best.pt
+reset_point_reference = false
+sidegeom best.pt point_reference_logits keys = 0
+dataref best.pt point_reference_logits keys = 0
+fresh dataref model point_reference_logits = non-persistent buffer
+```
+
+The recorded `reset_point_reference=false` is not considered the cause of this
+failure. `point_reference_logits` is registered as a non-persistent buffer and
+is absent from the audited sidegeom/dataref checkpoint `state_dict()` values,
+so normal GCS pretrained loading does not overwrite the configured dataref
+reference bank in this run.
+
+Hard diagnostic protocol:
+
+```text
+hard set = data/tusimple_gt4_hard_val_gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt4pt025.txt
+records = 19 images
+decode = conf=0.005, point_valid_thr=0.5, nms_dist_px=0.0, max_det=8, min_points=6
+match gate = overlap >= 3 h-samples and mean_abs_x_error <= 20px
+```
+
+Fixed old-missing recovery diagnostic:
+
+```text
+artifact = runs/gcs_lane/gcs_yolo_lane_s_q20_k56_dataref_gt4endpoint_validneg_countce_v1/gt4_hard_raw_query_fixed_gt4pt025/fixed_old_missing_recovery/summary.json
+old missing GT lanes = 22
+raw_match_recall = 12/22 = 0.545455
+after_point_valid_recall = 3/22 = 0.136364
+after_min_points_recall = 2/22 = 0.090909
+after_conf_recall = 2/22 = 0.090909
+final_decode_recall = 2/22 = 0.090909
+new_status = geometry_bad 10, low_point_valid 10, recovered_final_decode 2
+```
+
+The fixed-old summary was derived from the dataref
+`diagnostic_all_current_missing/raw_queries.csv`; the reconstruction method was
+checked by reproducing the Q20 sidegeom fixed-old summary with zero row
+mismatches.
+
+Current-missing diagnostic:
+
+```text
+artifact = runs/gcs_lane/gcs_yolo_lane_s_q20_k56_dataref_gt4endpoint_validneg_countce_v1/gt4_hard_raw_query_fixed_gt4pt025/diagnostic_all_current_missing/summary.json
+current missing lanes = 20
+drop_reason = geometry_bad 10, low_point_valid 10
+raw_match_recall = 10/20 = 0.500000
+after_point_valid_recall = 1/20 = 0.050000
+after_min_points_recall = 0/20 = 0.000000
+after_conf_recall = 0/20 = 0.000000
+final_decode_recall = 0/20 = 0.000000
+```
+
+Why:
+
+The stricter Q20-dataref acceptance gate was:
+
+```text
+fixed old-missing:
+raw_match_recall >= 14/22
+after_point_valid_recall >= 4/22
+final_decode_recall > 2/22
+geometry_bad <= 7
+
+current-missing:
+raw_match_recall >= 0.55
+geometry_bad <= 7
+after_point_valid_recall > 0
+```
+
+This attempt fails fixed-old raw geometry (`12/22 < 14/22`), fixed-old
+point-valid survival (`3/22 < 4/22`), fixed-old final decode (`2/22` is not
+`> 2/22`), fixed-old geometry (`10 > 7`), current raw geometry
+(`0.500000 < 0.55`), and current geometry (`10 > 7`). It only satisfies the
+current `after_point_valid > 0` condition.
+
+Integrated conclusion:
+
+- Supported fact: this run does not improve raw geometry over Q20 sidegeom on
+  either denominator. Fixed old stays at `12/22`; current stays at `10/20`;
+  `geometry_bad` stays at `10`.
+- Supported fact: point-valid survival shows a tiny signal
+  (`fixed old 2/22 -> 3/22`, current `0/20 -> 1/20`), but the raw-geometry
+  gate did not move.
+- Decision: reject this attempt before official-val, keep final test closed,
+  and do not tune valid-loss weights from this evidence.
+- Next action: continue only with a Q20-dataref follow-up that has a clear path
+  to improve raw geometry, such as reference-bank construction changes. Do not
+  move to valid-loss tuning from this result.
+
+## 2026-06-27: Add Hard Guard for Q20-Dataref Side-Aux
+
+Decision:
+
+`gcs_dataref_side_aux > 0` must hard-require the Q20 fixed-y dataref model
+contract before training or loss computation proceeds:
+
+```text
+reference_mode = dataref
+num_queries = 20
+point_mode = fixed_y
+pred_reference_x output present
+```
+
+Why:
+
+`pred_reference_x` is now emitted for fixed-y heads with point reference logits,
+including Q20-sidegeom and the default fixed-y heads. It is useful reference
+metadata but is not a sufficient dataref signal. Without a separate guard,
+enabling `--gcs-dataref-side-aux` on the Q20-sidegeom YAML could silently train
+the side-query auxiliary objective on the wrong reference bank.
+
+Implementation:
+
+- `GCSLaneHead.forward()` emits `reference_mode` and scalar tensor
+  `is_dataref_reference` alongside `pred_reference_x`.
+- `GCSLoss._dataref_side_aux_loss()` returns zero only when the aux gain is
+  disabled. When enabled, it raises unless the output metadata marks dataref,
+  Q is exactly 20, and `pred_reference_x` exists.
+- `GCSLaneTrainer.get_model()` checks the constructed `GCSLaneHead` before the
+  first batch. Q20-sidegeom, Q18, and Q12 models must fail fast with
+  instructions to use `gcs-yolo-lane-s-q20-k56-dataref.yaml` or disable
+  `--gcs-dataref-side-aux`.
+
+Validation target:
+
+`tools/check_dataref_side_aux_guard.py` must pass for Q20-dataref and must
+observe `ValueError` for Q20-sidegeom, Q18, and Q12 when
+`gcs_dataref_side_aux=0.25`.
+
+中文记录：
+
+Q20-dataref v1 没有通过 hard diagnostic promotion gate。
+
+证据：
+
+fixed old-missing denominator=22：
+
+- `raw_match_recall = 12/22 = 0.545455`，低于要求的 `14/22`。
+- `after_point_valid = 3/22`，低于要求的 `4/22`。
+- `final_decode = 2/22`，没有高于之前的 `2/22`。
+- `geometry_bad = 10`，高于允许的 `<=7`。
+
+current-missing：
+
+- `raw_match_recall = 10/20 = 0.500000`，低于要求的 `>=0.55`。
+- `geometry_bad = 10`，高于允许的 `<=7`。
+- `after_point_valid = 1/20`，但 `final_decode = 0/20`。
+
+决定：
+
+- 不提升 Q20-dataref v1。
+- 不在这个分支上调 valid loss。
+- 不把 `gcs_gt4_short_valid_pos_weight` 改成 `1.25`。
+- 不把 `unmatched_valid_neg_weight` 改成 `0.5`。
+- 下一步诊断 dataref 失败是因为 reference bank 本身不对，还是因为训练/加载后预测偏离了 reference。

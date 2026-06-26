@@ -51,6 +51,12 @@ class GCSLoss(nn.Module):
         "gt4_short_gt_valid_points_mean",
         "gt4_short_pred_valid_prob_mean",
         "gt4_short_pred_valid_sum_mean",
+        "dataref_side_aux_loss",
+        "dataref_side_aux_point",
+        "dataref_side_aux_valid",
+        "dataref_side_aux_exist",
+        "dataref_side_aux_lanes",
+        "dataref_side_aux_refdist",
     )
 
     def __init__(
@@ -126,6 +132,15 @@ class GCSLoss(nn.Module):
         gt3_extra_survival_gain: float | None = None,
         gt3_extra_margin_logit: float | None = None,
         gt3_extra_topk: int | None = None,
+        dataref_side_aux_gain: float | None = None,
+        dataref_side_aux_point_gain: float | None = None,
+        dataref_side_aux_valid_gain: float | None = None,
+        dataref_side_aux_exist_gain: float | None = None,
+        dataref_side_max_points: int | None = None,
+        dataref_side_ref_thr_px: float | None = None,
+        dataref_side_gt_count: int | None = None,
+        dataref_side_left_thr: float | None = None,
+        dataref_side_right_thr: float | None = None,
         count_under5_min_lanes: int | None = None,
         curve_alpha: float | None = None,
         curve_weight_max: float | None = None,
@@ -473,6 +488,51 @@ class GCSLoss(nn.Module):
             if gt3_extra_topk is not None
             else self._arg(args, "gcs_gt3_extra_topk", 1)
         )
+        self.dataref_side_aux_gain = float(
+            dataref_side_aux_gain
+            if dataref_side_aux_gain is not None
+            else self._arg(args, "gcs_dataref_side_aux", 0.0)
+        )
+        self.dataref_side_aux_point_gain = float(
+            dataref_side_aux_point_gain
+            if dataref_side_aux_point_gain is not None
+            else self._arg(args, "gcs_dataref_side_aux_point", 1.0)
+        )
+        self.dataref_side_aux_valid_gain = float(
+            dataref_side_aux_valid_gain
+            if dataref_side_aux_valid_gain is not None
+            else self._arg(args, "gcs_dataref_side_aux_valid", 1.0)
+        )
+        self.dataref_side_aux_exist_gain = float(
+            dataref_side_aux_exist_gain
+            if dataref_side_aux_exist_gain is not None
+            else self._arg(args, "gcs_dataref_side_aux_exist", 1.0)
+        )
+        self.dataref_side_max_points = int(
+            dataref_side_max_points
+            if dataref_side_max_points is not None
+            else self._arg(args, "gcs_dataref_side_max_points", 24)
+        )
+        self.dataref_side_ref_thr_px = float(
+            dataref_side_ref_thr_px
+            if dataref_side_ref_thr_px is not None
+            else self._arg(args, "gcs_dataref_side_ref_thr_px", 80.0)
+        )
+        self.dataref_side_gt_count = int(
+            dataref_side_gt_count
+            if dataref_side_gt_count is not None
+            else self._arg(args, "gcs_dataref_side_gt_count", 4)
+        )
+        self.dataref_side_left_thr = float(
+            dataref_side_left_thr
+            if dataref_side_left_thr is not None
+            else self._arg(args, "gcs_dataref_side_left_thr", 0.35)
+        )
+        self.dataref_side_right_thr = float(
+            dataref_side_right_thr
+            if dataref_side_right_thr is not None
+            else self._arg(args, "gcs_dataref_side_right_thr", 0.65)
+        )
         if self.duplicate_margin_gain < 0.0:
             raise ValueError(f"gcs_duplicate_margin must be >= 0, got {self.duplicate_margin_gain}.")
         if self.duplicate_margin_logit < 0.0:
@@ -595,6 +655,35 @@ class GCSLoss(nn.Module):
             raise ValueError(f"gcs_gt3_extra_margin_logit must be >= 0, got {self.gt3_extra_margin_logit}.")
         if self.gt3_extra_topk < 1:
             raise ValueError(f"gcs_gt3_extra_topk must be >= 1, got {self.gt3_extra_topk}.")
+        if self.dataref_side_aux_gain < 0.0:
+            raise ValueError(f"gcs_dataref_side_aux must be >= 0, got {self.dataref_side_aux_gain}.")
+        if self.dataref_side_aux_point_gain < 0.0:
+            raise ValueError(
+                f"gcs_dataref_side_aux_point must be >= 0, got {self.dataref_side_aux_point_gain}."
+            )
+        if self.dataref_side_aux_valid_gain < 0.0:
+            raise ValueError(
+                f"gcs_dataref_side_aux_valid must be >= 0, got {self.dataref_side_aux_valid_gain}."
+            )
+        if self.dataref_side_aux_exist_gain < 0.0:
+            raise ValueError(
+                f"gcs_dataref_side_aux_exist must be >= 0, got {self.dataref_side_aux_exist_gain}."
+            )
+        if self.dataref_side_max_points < 1:
+            raise ValueError(f"gcs_dataref_side_max_points must be >= 1, got {self.dataref_side_max_points}.")
+        if self.dataref_side_ref_thr_px < 0.0:
+            raise ValueError(f"gcs_dataref_side_ref_thr_px must be >= 0, got {self.dataref_side_ref_thr_px}.")
+        if self.dataref_side_gt_count < 1:
+            raise ValueError(f"gcs_dataref_side_gt_count must be >= 1, got {self.dataref_side_gt_count}.")
+        if not (0.0 <= self.dataref_side_left_thr <= 1.0):
+            raise ValueError(f"gcs_dataref_side_left_thr must be in [0, 1], got {self.dataref_side_left_thr}.")
+        if not (0.0 <= self.dataref_side_right_thr <= 1.0):
+            raise ValueError(f"gcs_dataref_side_right_thr must be in [0, 1], got {self.dataref_side_right_thr}.")
+        if self.dataref_side_left_thr >= self.dataref_side_right_thr:
+            raise ValueError(
+                "gcs_dataref_side_left_thr must be smaller than gcs_dataref_side_right_thr "
+                f"({self.dataref_side_left_thr} >= {self.dataref_side_right_thr})."
+            )
         if self.lane_balanced_point_gain < 0.0:
             raise ValueError(f"gcs_lane_balanced_point must be >= 0, got {self.lane_balanced_point_gain}.")
         if self.gt4_short_lane_weight < 0.0:
@@ -798,7 +887,16 @@ class GCSLoss(nn.Module):
             f"gt4_short_valid_count_floor={self.gt4_short_valid_count_floor_enabled}, "
             f"gt4_short_valid_count_floor_weight={self.gt4_short_valid_count_floor_weight}, "
             f"gt4_short_match_endpoint={self.matcher.gt4_short_match_endpoint}, "
-            f"gt4_short_match_max_points={self.matcher.gt4_short_match_max_points}"
+            f"gt4_short_match_max_points={self.matcher.gt4_short_match_max_points}, "
+            f"dataref_side_aux_gain={self.dataref_side_aux_gain}, "
+            f"dataref_side_aux_point_gain={self.dataref_side_aux_point_gain}, "
+            f"dataref_side_aux_valid_gain={self.dataref_side_aux_valid_gain}, "
+            f"dataref_side_aux_exist_gain={self.dataref_side_aux_exist_gain}, "
+            f"dataref_side_max_points={self.dataref_side_max_points}, "
+            f"dataref_side_ref_thr_px={self.dataref_side_ref_thr_px}, "
+            f"dataref_side_gt_count={self.dataref_side_gt_count}, "
+            f"dataref_side_left_thr={self.dataref_side_left_thr}, "
+            f"dataref_side_right_thr={self.dataref_side_right_thr}"
         )
 
     @staticmethod
@@ -1023,6 +1121,186 @@ class GCSLoss(nn.Module):
                 f"got {tuple(pred_valid_logits.shape)} vs {tuple(pred_points.shape[:3])}."
             )
         return pred_valid_logits
+
+    @staticmethod
+    def _empty_dataref_side_aux_stats(ref: torch.Tensor) -> dict[str, torch.Tensor]:
+        """Return zero-valued dataref side-query auxiliary loss diagnostics."""
+        zero = ref.sum() * 0.0
+        zero_detached = zero.detach()
+        return {
+            "dataref_side_aux_loss": zero,
+            "dataref_side_aux_point": zero,
+            "dataref_side_aux_valid": zero,
+            "dataref_side_aux_exist": zero,
+            "dataref_side_aux_lanes": zero_detached,
+            "dataref_side_aux_refdist": zero_detached,
+        }
+
+    def _dataref_side_aux_loss(
+        self,
+        outputs: dict[str, object],
+        targets: tuple[list[torch.Tensor], list[torch.Tensor], torch.Tensor],
+    ) -> dict[str, torch.Tensor]:
+        """Supervise Q20 dataref side queries on GT4 short side lanes."""
+        pred_points = outputs["pred_points"]
+        stats = self._empty_dataref_side_aux_stats(pred_points)
+        if self.dataref_side_aux_gain <= 0.0:
+            return stats
+
+        guard_hint = "Use gcs-yolo-lane-s-q20-k56-dataref.yaml or disable --gcs-dataref-side-aux."
+        reference_mode = outputs.get("reference_mode")
+        dataref_flag = outputs.get("is_dataref_reference")
+        is_dataref_reference = isinstance(reference_mode, str) and reference_mode == "dataref"
+        flag_repr = dataref_flag
+        if isinstance(dataref_flag, torch.Tensor):
+            if dataref_flag.numel() > 0:
+                dataref_flag_detached = dataref_flag.detach().float()
+                is_dataref_reference = is_dataref_reference or bool((dataref_flag_detached > 0.5).any().item())
+                flag_repr = float(dataref_flag_detached.max().cpu().item())
+            else:
+                flag_repr = "empty"
+        elif dataref_flag is not None:
+            is_dataref_reference = is_dataref_reference or bool(dataref_flag)
+        if not is_dataref_reference:
+            raise ValueError(
+                "gcs_dataref_side_aux > 0 requires reference_mode='dataref' or is_dataref_reference=1; "
+                f"got reference_mode={reference_mode!r}, is_dataref_reference={flag_repr!r}. {guard_hint}"
+            )
+        if pred_points.shape[1] != 20:
+            raise ValueError(
+                f"gcs_dataref_side_aux > 0 requires Q=20, got Q={pred_points.shape[1]}. {guard_hint}"
+            )
+
+        pred_logits = outputs.get("pred_logits")
+        pred_valid_logits = outputs.get("pred_valid_logits")
+        pred_reference_x = outputs.get("pred_reference_x")
+        if pred_logits is None or pred_valid_logits is None or pred_reference_x is None:
+            raise ValueError(
+                "gcs_dataref_side_aux > 0 requires pred_logits, pred_valid_logits, and pred_reference_x outputs. "
+                f"{guard_hint}"
+            )
+        if pred_valid_logits.ndim == 4 and pred_valid_logits.shape[-1] == 1:
+            pred_valid_logits = pred_valid_logits.squeeze(-1)
+        if pred_logits.ndim == 3 and pred_logits.shape[-1] == 1:
+            pred_logits = pred_logits.squeeze(-1)
+        if pred_valid_logits.shape != pred_points.shape[:3]:
+            raise ValueError(
+                "pred_valid_logits must have shape B x Q x K for dataref side aux, "
+                f"got {tuple(pred_valid_logits.shape)} vs {tuple(pred_points.shape[:3])}."
+            )
+        if pred_reference_x.shape != pred_points.shape[:3]:
+            raise ValueError(
+                "pred_reference_x must have shape B x Q x K for dataref side aux, "
+                f"got {tuple(pred_reference_x.shape)} vs {tuple(pred_points.shape[:3])}."
+            )
+        if pred_logits.shape != pred_points.shape[:2]:
+            raise ValueError(
+                "pred_logits must have shape B x Q for dataref side aux, "
+                f"got {tuple(pred_logits.shape)} vs {tuple(pred_points.shape[:2])}."
+            )
+        gt_points, gt_valid, target_counts = targets
+        device = pred_points.device
+        dtype = pred_points.dtype
+        pred_reference_x = pred_reference_x.detach().to(device=device, dtype=dtype)
+        image_width = float(self.image_size[1])
+        point_losses = []
+        valid_losses = []
+        exist_losses = []
+        ref_distances = []
+        side_query_ids = {
+            "left": tuple(range(0, 4)),
+            "right": tuple(range(16, 20)),
+        }
+
+        for b in range(pred_points.shape[0]):
+            gt_count = int(round(float(target_counts[b].detach().item())))
+            if gt_count != int(self.dataref_side_gt_count):
+                continue
+            points_b = gt_points[b].to(device=device, dtype=dtype)
+            valid_b = gt_valid[b].to(device=device, dtype=torch.bool)
+            if points_b.numel() == 0 or valid_b.numel() == 0:
+                continue
+
+            candidates = []
+            for lane_idx in range(points_b.shape[0]):
+                valid_mask = valid_b[lane_idx]
+                valid_count = int(valid_mask.sum().item())
+                if valid_count < 2 or valid_count > int(self.dataref_side_max_points):
+                    continue
+                valid_idx = torch.nonzero(valid_mask, as_tuple=False).flatten()
+                if valid_idx.numel() == 0:
+                    continue
+                bottom_x = float(points_b[lane_idx, valid_idx[0], 0].detach().item())
+                if bottom_x <= float(self.dataref_side_left_thr):
+                    query_ids = side_query_ids["left"]
+                elif bottom_x >= float(self.dataref_side_right_thr):
+                    query_ids = side_query_ids["right"]
+                else:
+                    continue
+
+                query_tensor = torch.as_tensor(query_ids, device=device, dtype=torch.long)
+                ref_x = pred_reference_x[b, query_tensor]
+                gt_x = points_b[lane_idx, :, 0]
+                dist_px = ((ref_x[:, valid_mask] - gt_x[valid_mask]).abs() * image_width).mean(dim=1)
+                best_dist, best_rel = dist_px.min(dim=0)
+                best_dist_float = float(best_dist.detach().cpu().item())
+                if best_dist_float <= float(self.dataref_side_ref_thr_px):
+                    query_idx = int(query_ids[int(best_rel.detach().cpu().item())])
+                    candidates.append((best_dist_float, best_dist, lane_idx, query_idx))
+
+            if not candidates:
+                continue
+
+            candidates.sort(key=lambda item: item[0])
+            used_queries = set()
+            used_lanes = set()
+            for _, ref_dist, lane_idx, query_idx in candidates:
+                if query_idx in used_queries or lane_idx in used_lanes:
+                    continue
+                used_queries.add(query_idx)
+                used_lanes.add(lane_idx)
+
+                valid_mask = valid_b[lane_idx]
+                target_x = points_b[lane_idx, :, 0]
+                point_losses.append(
+                    F.smooth_l1_loss(
+                        pred_points[b, query_idx, valid_mask, 0],
+                        target_x[valid_mask],
+                        reduction="mean",
+                    )
+                )
+                valid_target = valid_mask.to(device=device, dtype=pred_valid_logits.dtype)
+                valid_losses.append(
+                    F.binary_cross_entropy_with_logits(pred_valid_logits[b, query_idx], valid_target)
+                )
+                exist_losses.append(
+                    F.binary_cross_entropy_with_logits(
+                        pred_logits[b, query_idx].view(1),
+                        pred_logits.new_ones(1),
+                    )
+                )
+                ref_distances.append(ref_dist.detach())
+
+        if not point_losses:
+            return stats
+
+        point_loss = torch.stack(point_losses).mean()
+        valid_loss = torch.stack(valid_losses).mean()
+        exist_loss = torch.stack(exist_losses).mean()
+        aux_loss = (
+            float(self.dataref_side_aux_point_gain) * point_loss
+            + float(self.dataref_side_aux_valid_gain) * valid_loss
+            + float(self.dataref_side_aux_exist_gain) * exist_loss
+        )
+        stats = {
+            "dataref_side_aux_loss": aux_loss,
+            "dataref_side_aux_point": point_loss,
+            "dataref_side_aux_valid": valid_loss,
+            "dataref_side_aux_exist": exist_loss,
+            "dataref_side_aux_lanes": pred_points.new_tensor(float(len(point_losses))).detach(),
+            "dataref_side_aux_refdist": torch.stack(ref_distances).mean().to(device=device, dtype=dtype).detach(),
+        }
+        return stats
 
     def exist_loss(
         self,
@@ -2313,6 +2591,17 @@ class GCSLoss(nn.Module):
         )
         gt5_rank_consistency_loss = self.gt5_rank_consistency_loss(pred_logits, pred_points, batch, gt_valid, indices)
         gt3_extra_survival_loss = self.gt3_extra_survival_loss(pred_logits, batch, gt_valid, indices)
+        dataref_side_aux_stats = self._dataref_side_aux_loss(
+            {
+                "pred_points": pred_points,
+                "pred_logits": pred_logits,
+                "pred_valid_logits": pred_valid_logits,
+                "pred_reference_x": preds.get("pred_reference_x"),
+                "reference_mode": preds.get("reference_mode"),
+                "is_dataref_reference": preds.get("is_dataref_reference"),
+            },
+            (gt_points, gt_valid, target_counts),
+        )
         gt4_short_lane_loss = point_stats["gt4_short_lane_loss"]
         gt4_short_lane_valid_points_mean = point_stats["gt4_short_lane_valid_points_mean"]
         gt4_short_lane_count = point_stats["gt4_short_lane_count"]
@@ -2327,6 +2616,12 @@ class GCSLoss(nn.Module):
         unmatched_valid_neg_loss = unmatched_valid_stats["unmatched_valid_neg_loss"]
         unmatched_valid_query_count = unmatched_valid_stats["unmatched_valid_query_count"]
         unmatched_valid_prob_mean = unmatched_valid_stats["unmatched_valid_prob_mean"]
+        dataref_side_aux_loss = dataref_side_aux_stats["dataref_side_aux_loss"]
+        dataref_side_aux_point = dataref_side_aux_stats["dataref_side_aux_point"]
+        dataref_side_aux_valid = dataref_side_aux_stats["dataref_side_aux_valid"]
+        dataref_side_aux_exist = dataref_side_aux_stats["dataref_side_aux_exist"]
+        dataref_side_aux_lanes = dataref_side_aux_stats["dataref_side_aux_lanes"]
+        dataref_side_aux_refdist = dataref_side_aux_stats["dataref_side_aux_refdist"]
 
         mask_loss = self._zero_like(pred_points)
         if "aux_mask_logits" in preds and "semantic_mask" in batch:
@@ -2359,6 +2654,7 @@ class GCSLoss(nn.Module):
             + self.far_spurious_survival_gain * far_spurious_survival_loss
             + self.gt5_rank_consistency_gain * gt5_rank_consistency_loss
             + self.gt3_extra_survival_gain * gt3_extra_survival_loss
+            + self.dataref_side_aux_gain * dataref_side_aux_loss
         )
         self._log_first_batch_debug(
             indices=indices,
@@ -2418,6 +2714,12 @@ class GCSLoss(nn.Module):
                 gt4_short_gt_valid_points_mean.detach(),
                 gt4_short_pred_valid_prob_mean.detach(),
                 gt4_short_pred_valid_sum_mean.detach(),
+                dataref_side_aux_loss.detach(),
+                dataref_side_aux_point.detach(),
+                dataref_side_aux_valid.detach(),
+                dataref_side_aux_exist.detach(),
+                dataref_side_aux_lanes.detach(),
+                dataref_side_aux_refdist.detach(),
             )
         )
         return total, loss_items

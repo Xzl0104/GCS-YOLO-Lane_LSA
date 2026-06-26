@@ -1504,21 +1504,45 @@ python tools/diagnose_gt4_missing_lane_raw_queries.py \
   --save-dir runs/gcs_lane/gcs_yolo_lane_s_q20_k56_sidegeom_gt4endpoint_validneg_countce_v1/gt4_hard_raw_query_fixed_gt4pt025/diagnostic_all_current_missing
 ```
 
-For any future Q20/reference-clustering follow-up, do not run official-val
-sweep unless hard diagnostic first reaches at least:
+For Q20-dataref/reference-clustering follow-ups, do not run official-val sweep
+unless the hard diagnostic first reaches the stricter dataref gate:
 
 ```text
 fixed old-missing:
-  raw_match_recall >= 13/22
+  raw_match_recall >= 14/22
   after_point_valid_recall >= 4/22
   final_decode_recall > 2/22
-  geometry_bad clearly below Q18
+  geometry_bad <= 7
 
 current missing:
   raw_match_recall >= 0.55
   geometry_bad <= 7
   after_point_valid_recall > 0
 ```
+
+The 2026-06-26 Q20-dataref v1 attempt failed this gate and should not receive
+an official-val sweep:
+
+```text
+run = gcs_yolo_lane_s_q20_k56_dataref_gt4endpoint_validneg_countce_v1
+checkpoint audit = no point_reference_logits keys in sidegeom/dataref best.pt state_dict
+
+fixed old-missing:
+raw_match_recall = 12/22 = 0.545455
+after_point_valid_recall = 3/22 = 0.136364
+final_decode_recall = 2/22 = 0.090909
+geometry_bad = 10
+
+current missing:
+raw_match_recall = 10/20 = 0.500000
+geometry_bad = 10
+after_point_valid_recall = 1/20 = 0.050000
+final_decode_recall = 0/20 = 0.000000
+```
+
+The recorded `reset_point_reference=false` is not considered the cause of this
+failure: `point_reference_logits` is a non-persistent buffer and was absent from
+both audited checkpoints. The failure is the hard-gate result itself.
 
 Only consider valid-loss follow-up when raw geometry clearly improves and
 `geometry_bad` clearly drops, but point-valid survival remains low. Otherwise,

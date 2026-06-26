@@ -1675,3 +1675,84 @@ candidate should derive query references from those failed GT4-hard lane shapes
 instead of only adding side-geometry query slots. Keep official-val and final
 test closed until a new reference design passes the hard raw-geometry gate
 first.
+
+## 2026-06-26 Q20-Dataref v1 Hard-Gate Failure
+
+The first dataref training attempt
+`gcs_yolo_lane_s_q20_k56_dataref_gt4endpoint_validneg_countce_v1` did not pass
+the stricter Q20-dataref hard diagnostic gate.
+
+Checkpoint audit:
+
+```text
+pretrained = runs/gcs_lane/gcs_yolo_lane_s_q20_k56_sidegeom_gt4endpoint_validneg_countce_v1/weights/best.pt
+reset_point_reference = false
+sidegeom best.pt point_reference_logits keys = 0
+dataref best.pt point_reference_logits keys = 0
+fresh dataref model point_reference_logits = non-persistent buffer
+```
+
+The recorded `reset_point_reference=false` is not considered the cause of this
+failure. The configured dataref reference bank is not overwritten by normal GCS
+checkpoint loading when `point_reference_logits` is absent from the checkpoint
+`state_dict()`.
+
+Diagnostic protocol:
+
+```text
+hard set = data/tusimple_gt4_hard_val_gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt4pt025.txt
+records = 19 images
+decode = conf=0.005, point_valid_thr=0.5, nms_dist_px=0.0, max_det=8, min_points=6
+match gate = overlap >= 3 h-samples and mean_abs_x_error <= 20px
+```
+
+Fixed old-missing recovery:
+
+```text
+artifact = runs/gcs_lane/gcs_yolo_lane_s_q20_k56_dataref_gt4endpoint_validneg_countce_v1/gt4_hard_raw_query_fixed_gt4pt025/fixed_old_missing_recovery/summary.json
+raw_match_recall = 12/22 = 0.545455
+after_point_valid_recall = 3/22 = 0.136364
+final_decode_recall = 2/22 = 0.090909
+new_status = geometry_bad 10, low_point_valid 10, recovered_final_decode 2
+```
+
+Current-missing diagnostic:
+
+```text
+artifact = runs/gcs_lane/gcs_yolo_lane_s_q20_k56_dataref_gt4endpoint_validneg_countce_v1/gt4_hard_raw_query_fixed_gt4pt025/diagnostic_all_current_missing/summary.json
+current missing lanes = 20
+drop_reason = geometry_bad 10, low_point_valid 10
+raw_match_recall = 10/20 = 0.500000
+after_point_valid_recall = 1/20 = 0.050000
+final_decode_recall = 0/20 = 0.000000
+```
+
+Interpretation:
+
+- Raw geometry did not improve over Q20 sidegeom: fixed old stays at `12/22`,
+  current stays at `10/20`, and `geometry_bad` stays at `10`.
+- Point-valid survival moved only slightly, from sidegeom `2/22` to dataref
+  `3/22` on fixed old and from `0/20` to `1/20` on current missing.
+- This is not the condition for valid-loss tuning. The intended valid-loss
+  follow-up requires raw geometry to rise and `geometry_bad` to drop first.
+
+Smallest safe next action:
+
+Do not run official-val or final test for this attempt. Relaunch only a clean
+Q20-dataref follow-up if it changes reference-bank coverage or otherwise has a
+clear reason to improve raw geometry; do not move to valid-loss tuning from
+this result.
+
+中文结论：
+
+Q20-dataref v1 没有通过 hard diagnostic promotion gate。fixed old-missing
+denominator=22 上，`raw_match_recall=12/22=0.545455` 低于 `14/22`，
+`after_point_valid=3/22` 低于 `4/22`，`final_decode=2/22` 没有高于之前的
+`2/22`，`geometry_bad=10` 高于 `<=7`。current-missing 上，
+`raw_match_recall=10/20=0.500000` 低于 `>=0.55`，`geometry_bad=10` 高于
+`<=7`，虽然 `after_point_valid=1/20`，但 `final_decode=0/20`。
+
+决定：不提升 Q20-dataref v1，不在这个分支上调 valid loss，不把
+`gcs_gt4_short_valid_pos_weight` 改成 `1.25`，不把
+`unmatched_valid_neg_weight` 改成 `0.5`。下一步诊断 dataref 失败是因为
+reference bank 本身不对，还是因为训练/加载后预测偏离了 reference。

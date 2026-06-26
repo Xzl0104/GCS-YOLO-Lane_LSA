@@ -98,7 +98,7 @@ def main():
 
     print(type(y))
     for k, v in y.items():
-        print(k, v.shape)
+        print(k, v.shape if hasattr(v, "shape") else v)
 
 
 if __name__ == "__main__":

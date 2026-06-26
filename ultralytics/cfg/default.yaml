@@ -113,6 +113,7 @@ val_images: # (str, optional) explicit GCS-YOLO-Lane val image directory/list
 val_gcs_labels: # (str, optional) explicit GCS-YOLO-Lane val labels_gcs directory
 gcs_imgsz: # (list[int], optional) real GCS input shape as [height, width], e.g. [544, 960]
 reset_point_reference: False # (bool) skip point_reference_logits during pretrained transfer
+freeze_point_reference: False # (bool) keep point_reference_logits non-trainable after model construction
 gcs_exist: 2.0 # (float) GCS lane existence loss gain
 gcs_point: 15.0 # (float) GCS normalized point L1 loss gain
 gcs_lane_balanced_point_loss: False # (bool) replace base x point loss with per-lane balanced reduction
@@ -139,6 +140,15 @@ gcs_gt4_short_valid_count_floor: False # (bool) enable GT4 short valid probabili
 gcs_gt4_short_valid_count_floor_weight: 0.05 # (float) gain for GT4 short valid count floor loss
 gcs_gt4_short_valid_count_floor_ratio: 0.6 # (float) target floor ratio of GT valid points
 gcs_gt4_short_valid_count_floor_min: 3 # (int) minimum target floor before clamping to GT valid points
+gcs_dataref_side_aux: 0.0 # (float) Q20 dataref side-query auxiliary supervision gain; 0 disables
+gcs_dataref_side_aux_point: 1.0 # (float) point SmoothL1 gain inside dataref side-query aux
+gcs_dataref_side_aux_valid: 1.0 # (float) point-valid BCE gain inside dataref side-query aux
+gcs_dataref_side_aux_exist: 1.0 # (float) existence BCE gain inside dataref side-query aux
+gcs_dataref_side_max_points: 24 # (int) maximum GT-visible anchors for dataref side-query aux lanes
+gcs_dataref_side_ref_thr_px: 80.0 # (float) maximum nearest-reference mean x distance in pixels
+gcs_dataref_side_gt_count: 4 # (int) GT lane count that enables dataref side-query aux
+gcs_dataref_side_left_thr: 0.35 # (float) bottom x threshold for left hard side lanes
+gcs_dataref_side_right_thr: 0.65 # (float) bottom x threshold for right hard side lanes
 gcs_smooth: 0.05 # (float) GCS second-order smoothness loss gain
 gcs_curve: 0.1 # (float) GCS adaptive curvature-aware loss gain
 gcs_mask: 0.2 # (float) GCS auxiliary semantic mask loss gain

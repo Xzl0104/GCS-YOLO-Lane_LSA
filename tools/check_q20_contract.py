@@ -114,15 +114,24 @@ def check_model_forward(cfg: Path, batch: int, device: str) -> None:
         "pred_logits": (int(batch), 20),
         "pred_valid_logits": (int(batch), 20, 56),
         "pred_count_logits": (int(batch), 3),
+        "pred_reference_x": (int(batch), 20, 56),
     }
     for key, shape in expected_shapes.items():
         assert key in out, out.keys()
         assert tuple(out[key].shape) == shape, (key, out[key].shape, shape)
         assert torch.isfinite(out[key]).all(), key
+    assert out.get("reference_mode") != "dataref", out.get("reference_mode")
+    assert "is_dataref_reference" in out, out.keys()
+    assert float(out["is_dataref_reference"].detach().cpu().item()) == 0.0, out["is_dataref_reference"]
 
     anchors = head.fixed_y_anchors.to(device=out["pred_points"].device, dtype=out["pred_points"].dtype)
     y_err = (out["pred_points"][..., 1] - anchors.view(1, 1, -1)).abs().max()
     assert float(y_err.detach().cpu()) <= 1e-6, float(y_err.detach().cpu())
+    ref_err = (
+        out["pred_reference_x"].detach().cpu()
+        - torch.sigmoid(head.point_reference_logits.detach().cpu()).view(1, 20, 56)
+    ).abs().max()
+    assert float(ref_err) <= 1e-6, float(ref_err)
 
 
 def main() -> None:

@@ -67,6 +67,12 @@ class GCSLaneTrainer(BaseTrainer):
         "gt4_short_gt_valid_points_mean",
         "gt4_short_pred_valid_prob_mean",
         "gt4_short_pred_valid_sum_mean",
+        "dataref_side_aux_loss",
+        "dataref_side_aux_point",
+        "dataref_side_aux_valid",
+        "dataref_side_aux_exist",
+        "dataref_side_aux_lanes",
+        "dataref_side_aux_refdist",
     )
     # Keep tqdm headers within BaseTrainer's 11-character progress columns.
     progress_loss_names = (
@@ -105,6 +111,12 @@ class GCSLaneTrainer(BaseTrainer):
         "gt4_gtpts",
         "gt4_vprob",
         "gt4_vsum",
+        "dr_aux",
+        "dr_point",
+        "dr_valid",
+        "dr_exist",
+        "dr_lanes",
+        "dr_refpx",
     )
     # YOLO11 backbone -> GCS-YOLO-Lane backbone. LSEM is inserted after old
     # layers 4 and 6, so all later backbone layers must be shifted explicitly.
@@ -383,7 +395,55 @@ class GCSLaneTrainer(BaseTrainer):
         model = GCSLaneModel(cfg, nc=self.data["nc"], ch=self.data.get("channels", 3), verbose=verbose and RANK == -1)
         if weights is not None:
             self.load_gcs_pretrained(model, weights)
+        if bool(getattr(self.args, "freeze_point_reference", False)):
+            frozen = self._freeze_point_reference(model)
+            if RANK in {-1, 0}:
+                LOGGER.info(f"Frozen point_reference_logits tensors: {frozen or 'none'}")
+        self._validate_dataref_side_aux_model(model)
         return model
+
+    def _validate_dataref_side_aux_model(self, model: nn.Module) -> None:
+        """Fail fast when dataref side aux is enabled on a non-dataref head."""
+        try:
+            gain = float(getattr(self.args, "gcs_dataref_side_aux", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            gain = 0.0
+        if gain <= 0.0:
+            return
+
+        hint = "Use gcs-yolo-lane-s-q20-k56-dataref.yaml or disable --gcs-dataref-side-aux."
+        heads = [(name, module) for name, module in model.named_modules() if isinstance(module, GCSLaneHead)]
+        if not heads:
+            raise ValueError(f"gcs_dataref_side_aux > 0 requires a GCSLaneHead. {hint}")
+
+        found = []
+        for name, head in heads:
+            reference_mode = getattr(head, "reference_mode", None)
+            num_queries = int(getattr(head, "num_queries", -1))
+            point_mode = getattr(head, "point_mode", None)
+            if reference_mode == "dataref" and num_queries == 20 and point_mode == "fixed_y":
+                return
+            found.append(
+                f"{name or '<root>'}(reference_mode={reference_mode!r}, num_queries={num_queries}, "
+                f"point_mode={point_mode!r})"
+            )
+        raise ValueError(
+            "gcs_dataref_side_aux > 0 requires GCSLaneHead reference_mode='dataref', num_queries=20, "
+            f"and point_mode='fixed_y'; found {', '.join(found)}. {hint}"
+        )
+
+    @staticmethod
+    def _freeze_point_reference(model: nn.Module) -> list[str]:
+        """Ensure GCS point reference tensors do not receive gradients."""
+        frozen = []
+        for name, module in model.named_modules():
+            if not isinstance(module, GCSLaneHead) or not hasattr(module, "point_reference_logits"):
+                continue
+            ref = getattr(module, "point_reference_logits")
+            if isinstance(ref, torch.Tensor):
+                ref.requires_grad_(False)
+                frozen.append(f"{name}.point_reference_logits" if name else "point_reference_logits")
+        return frozen
 
     @staticmethod
     def _unwrap_state_dict(weights: dict | nn.Module) -> dict[str, torch.Tensor]:
@@ -579,6 +639,8 @@ class GCSLaneTrainer(BaseTrainer):
             names[names.index("gt4_vrec")] = "gt4vrec_off"
         if not bool(getattr(args, "gcs_gt4_short_valid_count_floor", False)) and "gt4_vfloor" in names:
             names[names.index("gt4_vfloor")] = "gt4vf_off"
+        if arg_float("gcs_dataref_side_aux") <= 0.0 and "dr_aux" in names:
+            names[names.index("dr_aux")] = "dref_off"
         return tuple(names)
 
     def progress_string(self):

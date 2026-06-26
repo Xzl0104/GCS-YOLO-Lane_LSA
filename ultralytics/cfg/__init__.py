@@ -196,6 +196,11 @@ CFG_FLOAT_KEYS = frozenset(
         "gcs_unmatched_valid_neg_weight",
         "gcs_gt4_short_valid_recall_weight",
         "gcs_gt4_short_valid_count_floor_weight",
+        "gcs_dataref_side_aux",
+        "gcs_dataref_side_aux_point",
+        "gcs_dataref_side_aux_valid",
+        "gcs_dataref_side_aux_exist",
+        "gcs_dataref_side_ref_thr_px",
         "gcs_smooth",
         "gcs_curve",
         "gcs_mask",
@@ -288,6 +293,8 @@ CFG_FRACTION_KEYS = frozenset(
         "gcs_gt5_rank_min_qminus_score",
         "gcs_short_valid_min_visible_iou",
         "gcs_gt4_short_valid_count_floor_ratio",
+        "gcs_dataref_side_left_thr",
+        "gcs_dataref_side_right_thr",
     }
 )
 CFG_INT_KEYS = frozenset(
@@ -313,6 +320,8 @@ CFG_INT_KEYS = frozenset(
         "gcs_short_valid_min_visible",
         "gcs_gt4_short_valid_max_points",
         "gcs_gt4_short_valid_count_floor_min",
+        "gcs_dataref_side_max_points",
+        "gcs_dataref_side_gt_count",
         "gcs_count_under5_min_lanes",
         "gcs_duplicate_gt_count",
         "gcs_duplicate_short_visible_max",
@@ -338,6 +347,7 @@ CFG_BOOL_KEYS = frozenset(
         "overlap_mask",
         "val",
         "reset_point_reference",
+        "freeze_point_reference",
         "gcs_lane_balanced_point_loss",
         "gcs_lane_balanced_valid_loss",
         "gcs_gt4_short_valid_recall",

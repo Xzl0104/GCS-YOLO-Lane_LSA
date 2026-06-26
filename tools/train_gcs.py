@@ -65,6 +65,11 @@ def parse_args() -> argparse.Namespace:
         help="Skip loading point_reference_logits from pretrained checkpoints so model config/reference_mode init is kept.",
     )
     parser.add_argument(
+        "--freeze-point-reference",
+        action="store_true",
+        help="Keep point_reference_logits non-trainable after model construction.",
+    )
+    parser.add_argument(
         "--imgsz",
         nargs="+",
         type=int,
@@ -283,6 +288,60 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=3,
         help="Minimum target floor before clamping to GT valid points.",
+    )
+    parser.add_argument(
+        "--gcs-dataref-side-aux",
+        type=float,
+        default=0.0,
+        help="Q20 dataref side-query auxiliary supervision gain. 0 disables.",
+    )
+    parser.add_argument(
+        "--gcs-dataref-side-aux-point",
+        type=float,
+        default=1.0,
+        help="Point SmoothL1 gain inside dataref side-query auxiliary supervision.",
+    )
+    parser.add_argument(
+        "--gcs-dataref-side-aux-valid",
+        type=float,
+        default=1.0,
+        help="Point-valid BCE gain inside dataref side-query auxiliary supervision.",
+    )
+    parser.add_argument(
+        "--gcs-dataref-side-aux-exist",
+        type=float,
+        default=1.0,
+        help="Existence BCE gain inside dataref side-query auxiliary supervision.",
+    )
+    parser.add_argument(
+        "--gcs-dataref-side-max-points",
+        type=int,
+        default=24,
+        help="Maximum GT-visible anchors for GT hard side lanes supervised by dataref side aux.",
+    )
+    parser.add_argument(
+        "--gcs-dataref-side-ref-thr-px",
+        type=float,
+        default=80.0,
+        help="Maximum nearest-reference mean x distance in pixels for dataref side aux assignment.",
+    )
+    parser.add_argument(
+        "--gcs-dataref-side-gt-count",
+        type=int,
+        default=4,
+        help="GT lane count that enables dataref side aux.",
+    )
+    parser.add_argument(
+        "--gcs-dataref-side-left-thr",
+        type=float,
+        default=0.35,
+        help="Bottom normalized x threshold for left hard side lanes.",
+    )
+    parser.add_argument(
+        "--gcs-dataref-side-right-thr",
+        type=float,
+        default=0.65,
+        help="Bottom normalized x threshold for right hard side lanes.",
     )
     parser.add_argument("--gcs-smooth", type=float, default=0.05)
     parser.add_argument("--gcs-curve", type=float, default=0.1)
@@ -680,6 +739,7 @@ def main() -> None:
         "data": args.data or str(defaults["data"]),
         "pretrained": parse_pretrained(args.pretrained),
         "reset_point_reference": args.reset_point_reference,
+        "freeze_point_reference": args.freeze_point_reference,
         "imgsz": trainer_imgsz(gcs_imgsz),
         "gcs_imgsz": list(gcs_imgsz),
         "epochs": args.epochs,
@@ -737,6 +797,15 @@ def main() -> None:
         "gcs_gt4_short_valid_count_floor_weight": args.gcs_gt4_short_valid_count_floor_weight,
         "gcs_gt4_short_valid_count_floor_ratio": args.gcs_gt4_short_valid_count_floor_ratio,
         "gcs_gt4_short_valid_count_floor_min": args.gcs_gt4_short_valid_count_floor_min,
+        "gcs_dataref_side_aux": args.gcs_dataref_side_aux,
+        "gcs_dataref_side_aux_point": args.gcs_dataref_side_aux_point,
+        "gcs_dataref_side_aux_valid": args.gcs_dataref_side_aux_valid,
+        "gcs_dataref_side_aux_exist": args.gcs_dataref_side_aux_exist,
+        "gcs_dataref_side_max_points": args.gcs_dataref_side_max_points,
+        "gcs_dataref_side_ref_thr_px": args.gcs_dataref_side_ref_thr_px,
+        "gcs_dataref_side_gt_count": args.gcs_dataref_side_gt_count,
+        "gcs_dataref_side_left_thr": args.gcs_dataref_side_left_thr,
+        "gcs_dataref_side_right_thr": args.gcs_dataref_side_right_thr,
         "gcs_smooth": args.gcs_smooth,
         "gcs_curve": args.gcs_curve,
         "gcs_mask": args.gcs_mask,
