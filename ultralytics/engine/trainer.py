@@ -874,6 +874,20 @@ class BaseTrainer:
                     "freeze",
                     "val",
                     "plots",
+                    "gcs_official_best",
+                    "gcs_official_interval",
+                    "gcs_official_archive_root",
+                    "gcs_official_gt_json",
+                    "gcs_official_max_images",
+                    "gcs_official_warmup",
+                    "gcs_official_confs",
+                    "gcs_official_point_valid_thrs",
+                    "gcs_official_nms_dist_pxs",
+                    "gcs_official_max_dets",
+                    "gcs_official_min_points",
+                    "gcs_official_score_fp_weight",
+                    "gcs_official_score_fn_weight",
+                    "gcs_official_half",
                 ):  # allow arg updates to reduce memory or update device on resume
                     if k in overrides:
                         setattr(self.args, k, overrides[k])

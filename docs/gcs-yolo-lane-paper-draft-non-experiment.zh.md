@@ -220,3 +220,9 @@ GCS-YOLO-Lane 应被理解为对 YOLO-style lane detector 的表示层重构。�
 - **Experimental strength**：active-default 实验完成前无法判断。
 - **Evaluation completeness**：缺 verified baseline table、ablations 和 failure analysis。
 - **Method soundness**：representation 和 output contract 具体明确；最终可信度取决于证据和公平对比。
+Legacy/non-contract draft note: this document was added after rollback target
+`b6535f641` and is retained only as a writing draft. It does not define the
+active algorithm, available CLI flags, loss items, selected candidates, or
+experiment conclusions. Use `docs/agent-context/current-contracts.md` for the
+active rollback contract; any post-`b6535f641` experiment content is legacy
+only.

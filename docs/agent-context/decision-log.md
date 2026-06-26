@@ -2,6 +2,139 @@
 
 This file records decisions for branch `codex/5-25-3-k56`.
 
+## 2026-06-27: Add Default-Off Count Boundary Loss
+
+Decision:
+
+Add a default-disabled `count_boundary_loss` to the existing GCS loss for
+adjacent GT3/GT4/GT5 lane-count boundaries. The loss uses:
+
+```text
+count_score = sigmoid(pred_logits).sum(dim=1)
+```
+
+Boundaries:
+
+```text
+GT3: penalize count_score > 3.35
+GT4: penalize count_score < 3.65 and count_score > 4.35
+GT5: penalize count_score < 4.65
+```
+
+Defaults:
+
+```text
+gcs_count_boundary = 0.0
+gcs_count_boundary_gt4_weight = 2.0
+gcs_count_boundary_gt5_weight = 1.5
+gcs_count_boundary_margin34 = 0.35
+gcs_count_boundary_margin45 = 0.35
+```
+
+Why:
+
+The user explicitly requested a targeted train-side loss for the current
+`count03_under5_03` bottleneck: GT4 and GT5 adjacent count errors, especially
+`GT4->5`, `GT4->3`, and `GT5->4`. The existing `gcs_count` and
+`gcs_count_under5` losses constrain global count score but do not explicitly
+shape these adjacent decision bands.
+
+Scope:
+
+This is a branch-local loss/logging option only. It does not add Count Head,
+Quality Head, Survival Head, near-miss mining, matcher changes, point loss
+changes, smooth loss changes, curve loss changes, or decode changes. The
+default gain is `0.0`, so old experiments keep the previous weighted objective.
+
+Validation evidence:
+
+Local checks covered Python compilation, CLI/config parsing, model shape, a
+loss-level default-off total-loss regression, and a 1-epoch synthetic
+train/val smoke with `gcs_count_boundary=0.2`. The smoke wrote
+`train/count_boundary_loss`, `val/count_boundary_loss`,
+`train/count_score_mean`, and `val/count_score_mean` with finite values.
+
+## 2026-06-27: Select Training Checkpoints by Official-Val Metric
+
+Decision:
+
+Add explicit training-time `official_best` checkpoint preservation for formal
+TuSimple runs. The training hook runs a lightweight official-val sweep every 5
+epochs and again on the final/early-stop epoch, then writes:
+
+```text
+weights/official_best.pt
+weights/official_best_sweep.json
+weights/official_best_decode.yaml
+```
+
+Selection priority:
+
+```text
+1. maximum official_acc
+2. maximum official_score
+3. lower official_FP
+4. lower official_FN
+5. higher count_acc_4
+```
+
+Why:
+
+The user reported a concrete mismatch between internal validation surfaces and
+the desired official selection surface:
+
+```text
+best val/f1:         epoch 91  = 0.971997
+best val/total_loss: epoch 116 = 0.69639
+last epoch 131:      val/f1    = 0.968382
+```
+
+This means selecting the final model only from `val/total_loss`, internal
+`val/f1`, or generic `weights/best.pt` can choose the wrong checkpoint for
+TuSimple reporting.
+
+Scope:
+
+This is a selection/protocol change only. It does not alter the 5-25-3 model
+body, labels, losses, decode implementation, or official metric. It also does
+not import Count Head, Quality Head, Survival Head, near-miss, or later
+mainline K56 candidate machinery.
+
+Validation target:
+
+Compile `tools/train_gcs.py`, `tools/sweep_tusimple_official.py`,
+`ultralytics/models/yolo/gcs_lane/train.py`, and `ultralytics/cfg/__init__.py`.
+Full official-best behavior requires a remote TuSimple archive and should be
+verified during the next formal training run, not with local 8GB-GPU training.
+
+## 2026-06-27: Roll Active Code Back to b6535f641
+
+Decision:
+
+Restore the active source/config state to commit `b6535f641`
+(`Fix GCS training progress header alignment`).
+
+Scope:
+
+The active code baseline is the 5-25-3 K56 mainline at `b6535f641`. Later
+commits, including duplicate/spurious/ranking losses, GT3/GT4/GT5 follow-up
+losses, Q18/Q20/dataref configs, Count Head, count-guided decode, side-aux
+guards, GT4-hard diagnostics, paper-generation scripts, and their helper
+checks, are retained below only as legacy experiment conclusions. They do not
+describe currently available CLI flags, loss items, scripts, configs, model
+outputs, or active selected candidates unless a future task explicitly restores
+those mechanisms.
+
+Why:
+
+The user requested the code rollback while keeping later experiment content in
+the documentation as old conclusions.
+
+Mainline or experiment:
+
+Current mainline rollback decision. Later experiment sections remain historical
+records.
+
 ## 2026-06-21: Roll Active Code Back to 50999d6af
 
 Decision:
@@ -11,14 +144,12 @@ K56 as mainline`).
 
 Scope:
 
-The active code baseline is the 5-25-3 K56 mainline contract at `50999d6af`
-plus later default-disabled experiment knobs that are explicitly documented in
-`docs/agent-context/current-contracts.md`. Other later commits and notes,
-including reusable count diagnostics, GT4 short-lane sampling,
-`extra_exist_loss`, short matched existence floor, and reporting-only test
-batches, are retained below as legacy experiment conclusions only. They do not
-describe currently available CLI flags, loss items, scripts, or active selected
-candidates unless a future task explicitly restores those mechanisms.
+The active code baseline at that point was the 5-25-3 K56 mainline contract at
+`50999d6af`. Later commits and notes, including reusable count diagnostics, GT4
+short-lane sampling, `extra_exist_loss`, short matched existence floor, and
+reporting-only test batches, were retained below as legacy experiment
+conclusions only. This decision is now superseded by the 2026-06-27
+`b6535f641` rollback above.
 
 Why:
 
@@ -3388,3 +3519,104 @@ current-missing：
 - 不把 `gcs_gt4_short_valid_pos_weight` 改成 `1.25`。
 - 不把 `unmatched_valid_neg_weight` 改成 `0.5`。
 - 下一步诊断 dataref 失败是因为 reference bank 本身不对，还是因为训练/加载后预测偏离了 reference。
+
+## 2026-06-27: Reject Q20-Dataref Refaux v1 at Hard Gate
+
+Decision:
+
+Do not run official-val or final test for
+`gcs_yolo_lane_s_q20_k56_dataref_refaux_v1`. The run has useful refaux
+training-log signals, but it fails the required GT4-hard raw-query gate.
+
+Training-log and checkpoint audit:
+
+```text
+run = runs/gcs_lane/gcs_yolo_lane_s_q20_k56_dataref_refaux_v1
+epochs recorded = 26
+train dataref_side_aux_lanes last10 mean = 20.598
+train dataref_side_aux_refdist last10 mean = 30.7414
+train dataref_side_aux_point first10 -> last10 = 0.0027 -> 0.001507
+train dataref_side_aux_valid first10 -> last10 = 0.366196 -> 0.162195
+train dataref_side_aux_exist first10 -> last10 = 1.95761 -> 1.04107
+train unmatched_valid_prob_mean first10 -> last10 = 0.020455 -> 0.014513
+val dataref_side_aux_lanes = 78.8333
+val dataref_side_aux_refdist = 32.4967
+val unmatched_valid_prob_mean first10 -> last10 = 0.036695 -> 0.029314
+loss NaN check = clean
+```
+
+`tools/check_saved_dataref_reference.py` passed on `weights/best.pt`:
+
+```text
+reference_mode = dataref
+num_queries = 20
+num_points = 56
+point_mode = fixed_y
+point_reference_logits_requires_grad = false
+max_abs_diff_vs_Q20_DATAREF_X = 8.471310138702393e-05
+```
+
+Hard diagnostic protocol:
+
+```text
+hard set = data/tusimple_gt4_hard_val_gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt4pt025.txt
+records = 19 images
+decode = conf=0.005, point_valid_thr=0.5, nms_dist_px=0.0, max_det=8, min_points=6
+match gate = overlap >= 3 h-samples and mean_abs_x_error <= 20px
+```
+
+Fixed old-missing recovery:
+
+```text
+artifact = runs/gcs_lane/gcs_yolo_lane_s_q20_k56_dataref_refaux_v1/gt4_hard_raw_query_fixed_gt4pt025/fixed_old_missing_recovery/summary.json
+old missing GT lanes = 22
+raw_match_recall = 11/22 = 0.500000
+after_point_valid_recall = 5/22 = 0.227273
+after_min_points_recall = 3/22 = 0.136364
+after_conf_recall = 3/22 = 0.136364
+final_decode_recall = 3/22 = 0.136364
+new_status = geometry_bad 11, low_point_valid 7, low_min_points 1, recovered_final_decode 3
+old22 categories = pred_close_valid_bad 7, ref_close_pred_bad 2, ref_bad 9, recovered_final_decode 3, pred_close_later_drop 1
+```
+
+Current-missing diagnostic:
+
+```text
+artifact = runs/gcs_lane/gcs_yolo_lane_s_q20_k56_dataref_refaux_v1/gt4_hard_raw_query_fixed_gt4pt025/diagnostic_all_current_missing/summary.json
+current missing GT lanes = 19
+drop_reason = geometry_bad 11, low_point_valid 7, low_min_points 1
+raw_match_recall = 8/19 = 0.421053
+after_point_valid_recall = 2/19 = 0.105263
+after_min_points_recall = 0/19 = 0.000000
+after_conf_recall = 0/19 = 0.000000
+final_decode_recall = 0/19 = 0.000000
+```
+
+Why:
+
+The gate required fixed old-missing `raw_match_recall >= 14/22`,
+`after_point_valid >= 5/22`, `final_decode >= 4/22`, and `geometry_bad <= 7`.
+This run only meets the fixed-old point-valid threshold. It regresses fixed-old
+raw geometry from the previous Q20-dataref v1 `12/22` to `11/22`, improves
+fixed-old final decode only from `2/22` to `3/22`, and worsens
+`geometry_bad` from `10` to `11`.
+
+The current-missing side is a stronger failure: raw recall drops below the
+previous `10/20` baseline to `8/19`, `geometry_bad` is `11`, and
+`final_decode` remains `0`.
+
+Integrated conclusion:
+
+- Supported fact: refaux remained active in the training logs and did not raise
+  unmatched valid probability.
+- Supported fact: the saved checkpoint still uses the intended Q20 dataref
+  reference bank.
+- Supported fact: the auxiliary signal did not improve hard raw geometry or
+  final decode enough to justify official-val.
+- Decision: reject `gcs_yolo_lane_s_q20_k56_dataref_refaux_v1` before
+  official-val, keep final test closed, and do not tune decode thresholds from
+  this checkpoint.
+- Smallest safe next action: do not simply increase valid loss. If this line
+  continues, use a geometry-focused follow-up that changes reference-bank
+  coverage or strengthens the point/refaux pull; the `valid05` branch is not
+  justified because raw geometry failed first.

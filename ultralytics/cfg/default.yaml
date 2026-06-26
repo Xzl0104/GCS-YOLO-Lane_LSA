@@ -112,43 +112,9 @@ train_gcs_labels: # (str, optional) explicit GCS-YOLO-Lane train labels_gcs dire
 val_images: # (str, optional) explicit GCS-YOLO-Lane val image directory/list
 val_gcs_labels: # (str, optional) explicit GCS-YOLO-Lane val labels_gcs directory
 gcs_imgsz: # (list[int], optional) real GCS input shape as [height, width], e.g. [544, 960]
-reset_point_reference: False # (bool) skip point_reference_logits during pretrained transfer
-freeze_point_reference: False # (bool) keep point_reference_logits non-trainable after model construction
 gcs_exist: 2.0 # (float) GCS lane existence loss gain
 gcs_point: 15.0 # (float) GCS normalized point L1 loss gain
-gcs_lane_balanced_point_loss: False # (bool) replace base x point loss with per-lane balanced reduction
-gcs_lane_balanced_point: 0.0 # (float) extra lane-balanced matched point loss gain; 0 disables
-gcs_gt4_short_lane_weight: 1.0 # (float) multiplier for GT4 short lanes in lane-balanced base point loss
-gcs_gt4_short_lane_max_points: 20 # (int) maximum GT-visible anchors for GT4 short-lane point weighting
-gcs_gt4_lane_balanced_point: 0.0 # (float) GT4-only weak matched-lane point reweighting gain; 0 disables
-gcs_gt4_lane_balanced_topk: 1 # (int) number of highest point-loss matched GT4 lanes to upweight
-gcs_gt4_lane_balanced_max_mult: 2.0 # (float) maximum weak-lane multiplier before per-image mean normalization
 gcs_point_valid: 1.0 # (float) GCS per-point visibility BCE loss gain for fixed-y lane anchors
-gcs_short_valid_recall: 0.0 # (float) positive-only point-valid recall loss gain for matched short lanes; 0 disables
-gcs_short_valid_max_visible: 20 # (int) maximum visible anchors for short-valid recall loss
-gcs_short_valid_min_visible: 4 # (int) minimum visible anchors for short-valid recall loss
-gcs_short_valid_max_ape_px: 40.0 # (float) maximum matched APE in pixels for short-valid recall loss
-gcs_short_valid_min_visible_iou: 0.3 # (float) minimum matched visible-IoU for short-valid recall loss
-gcs_lane_balanced_valid_loss: False # (bool) replace base point-valid BCE with matched per-lane balanced reduction
-gcs_gt4_short_valid_lane_weight: 1.5 # (float) lane-balanced valid-loss multiplier for matched GT4 short lanes
-gcs_gt4_short_valid_pos_weight: 1.0 # (float) optional positive-point multiplier inside lane-balanced valid BCE
-gcs_unmatched_valid_neg_weight: 0.5 # (float) unmatched-query zero-target valid BCE weight inside lane-balanced valid replacement
-gcs_gt4_short_valid_recall: False # (bool) enable positive-only valid recall loss for matched GT4 short lanes
-gcs_gt4_short_valid_recall_weight: 0.2 # (float) gain for GT4 short valid recall loss
-gcs_gt4_short_valid_max_points: 20 # (int) maximum GT-visible anchors for GT4 short valid repair
-gcs_gt4_short_valid_count_floor: False # (bool) enable GT4 short valid probability count floor loss
-gcs_gt4_short_valid_count_floor_weight: 0.05 # (float) gain for GT4 short valid count floor loss
-gcs_gt4_short_valid_count_floor_ratio: 0.6 # (float) target floor ratio of GT valid points
-gcs_gt4_short_valid_count_floor_min: 3 # (int) minimum target floor before clamping to GT valid points
-gcs_dataref_side_aux: 0.0 # (float) Q20 dataref side-query auxiliary supervision gain; 0 disables
-gcs_dataref_side_aux_point: 1.0 # (float) point SmoothL1 gain inside dataref side-query aux
-gcs_dataref_side_aux_valid: 1.0 # (float) point-valid BCE gain inside dataref side-query aux
-gcs_dataref_side_aux_exist: 1.0 # (float) existence BCE gain inside dataref side-query aux
-gcs_dataref_side_max_points: 24 # (int) maximum GT-visible anchors for dataref side-query aux lanes
-gcs_dataref_side_ref_thr_px: 80.0 # (float) maximum nearest-reference mean x distance in pixels
-gcs_dataref_side_gt_count: 4 # (int) GT lane count that enables dataref side-query aux
-gcs_dataref_side_left_thr: 0.35 # (float) bottom x threshold for left hard side lanes
-gcs_dataref_side_right_thr: 0.65 # (float) bottom x threshold for right hard side lanes
 gcs_smooth: 0.05 # (float) GCS second-order smoothness loss gain
 gcs_curve: 0.1 # (float) GCS adaptive curvature-aware loss gain
 gcs_mask: 0.2 # (float) GCS auxiliary semantic mask loss gain
@@ -156,44 +122,11 @@ gcs_edge: 0.2 # (float) GCS auxiliary edge loss gain
 gcs_count: 0.0 # (float) GCS lane-count/cardinality loss gain; 0 disables
 gcs_count_under5: 0.0 # (float) extra GCS undercount loss gain for dense-lane samples; 0 disables
 gcs_count_under5_min_lanes: 5 # (int) minimum GT lane count that enables gcs_count_under5
-gcs_count_ce: 0.0 # (float) explicit 3/4/5 lane-count head CE gain; 0 disables
-gcs_duplicate_margin: 0.0 # (float) duplicate-like unmatched query pairwise logit margin loss gain; 0 disables
-gcs_duplicate_margin_logit: 1.0 # (float) required logit margin between reliable matched q+ and duplicate-like q-
-gcs_duplicate_gt_count: 4 # (int) only apply duplicate margin loss to images with this GT lane count
-gcs_duplicate_short_visible_max: 20 # (int) only apply to GT lanes with at most this many visible anchors
-gcs_duplicate_min_overlap: 2 # (int) minimum hard visible-anchor overlap between q- and the short GT lane
-gcs_duplicate_min_visible_iou: 0.4 # (float) minimum soft visibility IoU for q+ reliability and q- duplicate selection
-gcs_duplicate_pos_ape_px: 20.0 # (float) maximum APE in pixels for the matched q+ to be treated as reliable
-gcs_duplicate_neg_ape_px: 120.0 # (float) maximum APE in pixels for q- duplicate selection; filters far background queries
-gcs_duplicate_ape_gap_px: 5.0 # (float) q- must be this much worse than q+, unless above the absolute q+ APE threshold
-gcs_duplicate_max_pairs_per_gt: 2 # (int) maximum high-logit q- pairs kept per matched GT lane
-gcs_spurious_margin: 0.0 # (float) far-unmatched spurious query pairwise logit margin loss gain; 0 disables
-gcs_spurious_margin_logit: 1.0 # (float) required logit margin between reliable matched q+ and far spurious q-
-gcs_spurious_gt_counts: [3, 4] # (list[int]) GT lane counts that enable spurious margin loss
-gcs_spurious_pos_ape_px: 20.0 # (float) maximum APE in pixels for reliable matched q+
-gcs_spurious_pos_min_visible_iou: 0.4 # (float) minimum soft visible IoU for reliable matched q+
-gcs_spurious_neg_min_ape_px: 50.0 # (float) q- is spurious if its best GT APE is above this, unless duplicate-like
-gcs_spurious_neg_max_visible_iou: 0.2 # (float) q- is spurious if its best GT visible IoU is below this, unless duplicate-like
-gcs_spurious_duplicate_ape_px: 50.0 # (float) near-GT duplicate exclusion APE threshold
-gcs_spurious_duplicate_visible_iou: 0.4 # (float) near-GT duplicate exclusion visible-IoU threshold
-gcs_spurious_max_pairs_per_image: 4 # (int) maximum high-risk spurious ranking pairs kept per image
-gcs_far_spurious_survival: 0.0 # (float) absolute-logit loss for decode-risk far-spurious unmatched q- in selected GT-count images; 0 disables
-gcs_far_spurious_gt_counts: [3, 4] # (list[int]) GT lane counts that enable far-spurious survival loss
-gcs_far_spurious_score_thr: 0.03 # (float) target score threshold for far-spurious q- suppression
-gcs_far_spurious_min_score: 0.03 # (float) minimum q- score required before applying far-spurious survival loss
-gcs_far_spurious_min_ape_px: 50.0 # (float) q- is far-spurious if best-GT APE is above this or visible IoU is low
-gcs_far_spurious_max_visible_iou: 0.2 # (float) q- is far-spurious if best-GT visible IoU is below this or APE is high
-gcs_far_spurious_point_valid_thr: 0.5 # (float) point-valid threshold used for the decode-risk visible-run gate
-gcs_far_spurious_min_visible_run: 5 # (int) minimum contiguous predicted visible anchors for q- decode survival risk
-gcs_far_spurious_max_neg_per_image: 1 # (int) maximum highest-logit far-spurious q- penalties per image
-gcs_far_spurious_loss_type: relu # (str) relu or softplus absolute-logit penalty for far-spurious survival loss
-gcs_gt5_rank_consistency: 0.0 # (float) GT5-only weakest matched q+ vs top unmatched q- rank consistency loss gain; 0 disables
-gcs_gt5_rank_margin_logit: 0.5 # (float) required logit margin between GT5 weakest q+ and top q-
-gcs_gt5_rank_min_qminus_score: 0.02 # (float) minimum top q- score required before applying GT5 rank loss
-gcs_gt5_rank_max_pairs_per_image: 1 # (int) maximum high-logit unmatched q- pairs per GT5 image
-gcs_gt3_extra_survival: 0.0 # (float) GT3-only top unmatched q- vs weakest matched q+ hinge loss gain; 0 disables
-gcs_gt3_extra_margin_logit: 0.05 # (float) required logit margin between GT3 weakest q+ and top extra q-
-gcs_gt3_extra_topk: 1 # (int) number of highest-logit unmatched GT3 queries to rank below weakest q+
+gcs_count_boundary: 0.0 # (float) GT3/GT4/GT5 adjacent count-boundary loss gain; 0 disables
+gcs_count_boundary_gt4_weight: 2.0 # (float) weight for GT4 lower/upper count-boundary terms
+gcs_count_boundary_gt5_weight: 1.5 # (float) weight for GT5 undercount boundary term
+gcs_count_boundary_margin34: 0.35 # (float) margin for GT3 upper and GT4 lower count-score boundaries
+gcs_count_boundary_margin45: 0.35 # (float) margin for GT4 upper and GT5 lower count-score boundaries
 gcs_exist_pos_weight: 1.0 # (float) positive query weight for GCS lane existence BCE
 gcs_exist_focal_gamma: 0.0 # (float) optional focal gamma for GCS existence BCE; 0 disables focal weighting
 gcs_exist_focal_alpha: -1.0 # (float) optional focal alpha for GCS existence BCE; set 0..1 to enable alpha weighting
@@ -215,8 +148,6 @@ gcs_cost_exist: 0.1 # (float) Hungarian matching existence-confidence cost gain
 gcs_match_min_overlap: 2 # (int) minimum valid GT points required for training Hungarian matching
 gcs_match_max_x_dist: 0.0 # (float) optional training matcher mean x-distance gate in pixels; 0 disables
 gcs_match_gate_px: 160.0 # (float) training matcher APE gate in pixels; 0 disables
-gcs_gt4_short_match_endpoint: 0.0 # (float) extra normalized-x endpoint cost gain for short GT lanes in GT4 images; 0 disables
-gcs_gt4_short_match_max_points: 20 # (int) maximum GT-visible anchors for GT4 short-lane endpoint matcher cost
 gcs_eval_conf: 0.2 # (float) GCS validation lane existence threshold for Precision/Recall/F1; quality-aware exist is calibrated lower
 gcs_eval_ape_thr: 20.0 # (float) GCS validation APE threshold in pixels for TP matching
 gcs_eval_match_gate_px: # (float, optional) strict validation APE gate; null defaults to gcs_eval_ape_thr
@@ -225,10 +156,23 @@ gcs_eval_min_overlap: 2 # (int) minimum valid overlapping GT points required for
 gcs_eval_nms_dist_px: 50.0 # (float) optional lane duplicate suppression distance in pixels; 0 disables
 gcs_eval_point_valid_thr: 0.5 # (float) per-point visibility threshold used when decoding fixed-y lanes for validation
 gcs_eval_max_det: 8 # (int) maximum decoded lane queries kept for GCS validation metrics
+gcs_official_best: False # (bool) run periodic TuSimple official-val sweeps and preserve weights/official_best.pt
+gcs_official_interval: 5 # (int) epoch interval for periodic official-val checkpoint selection
+gcs_official_archive_root: archive # (str) path to archive/ or archive/TUSimple for official-val selection
+gcs_official_gt_json: # (str, optional) explicit official-val GT json-lines file
+gcs_official_max_images: 0 # (int) limit official-val images per hook; 0 means all
+gcs_official_warmup: 5 # (int) warmup forwards for training-time official sweeps
+gcs_official_confs: [0.005, 0.01, 0.02, 0.05, 0.1] # (list[float]) official-val sweep existence thresholds
+gcs_official_point_valid_thrs: [0.45, 0.5] # (list[float]) official-val sweep point-valid thresholds
+gcs_official_nms_dist_pxs: [0.0, 18.0, 30.0, 50.0] # (list[float]) official-val sweep lane NMS distances
+gcs_official_max_dets: [5, 6, 8] # (list[int]) official-val sweep max_det values
+gcs_official_min_points: [4, 5, 6] # (list[int]) official-val sweep visible-anchor floors
+gcs_official_score_fp_weight: 0.02 # (float) FP penalty for official_score tie-break logging
+gcs_official_score_fn_weight: 0.02 # (float) FN penalty for official_score tie-break logging
+gcs_official_half: False # (bool) use FP16 inference for training-time official sweeps
 gcs_lane_count_balanced: True # (bool) sample GCS training images with inverse-frequency lane-count weights
 gcs_lane_count_balance_power: 1.0 # (float) lane-count sampler exponent; 1.0 gives equal lane-count groups
 gcs_lane_count_min_group: 50 # (int) minimum group size used to smooth lane-count sampler weights
-gcs_gt4_sample_gain: 1.0 # (float) optional train-only extra sampler gain for GT4 images; 1 disables
 nbs: 64 # (int) nominal batch size used for loss normalization
 hsv_h: 0.015 # (float) HSV hue augmentation fraction
 hsv_s: 0.7 # (float) HSV saturation augmentation fraction

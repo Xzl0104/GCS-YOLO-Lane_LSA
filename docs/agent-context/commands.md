@@ -24,25 +24,15 @@ fixed_y_end:   160 / 720 = 0.2222222222222222
 
 The q12-k56-named model/data files are compatibility paths for old experiment records and keep the same K56 fixed-y contract. New commands should use the mainline paths above.
 
-The 5-25-3 branch does not include later mainline `--gcs-official-best`, Count/Quality/Survival, near-miss, or training-time official-best machinery. It does include branch-local TuSimple official eval/sweep helpers: `tools/eval_tusimple_official.py` and `tools/sweep_tusimple_official.py`.
+The 5-25-3 branch now includes explicit branch-local `--gcs-official-best` training-time checkpoint selection. It does not include later mainline Count/Quality/Survival, near-miss, or K56 candidate machinery. It also includes branch-local TuSimple official eval/sweep helpers: `tools/eval_tusimple_official.py` and `tools/sweep_tusimple_official.py`.
 
-Active source/config is based on rollback commit `50999d6af` (`Document 5-25-3
-K56 as mainline`) plus the default-disabled `duplicate_margin_loss`,
-`spurious_margin_loss`, `lane_balanced_point_loss`,
-`short_valid_recall_loss`, `far_spurious_survival_loss`, and
-`gt5_rank_consistency_loss`, `gt3_extra_survival_loss`, and
-`gt4_lane_balanced_point_loss` experiment knobs, plus train-only
-`gcs_gt4_sample_gain`. It also includes default-off GT4 short-lane
-candidate-recall knobs:
-`--gcs-lane-balanced-point-loss`, `--gcs-gt4-short-lane-weight`,
-`--gcs-gt4-short-lane-max-points`, `--gcs-gt4-short-match-endpoint`, and
-`--gcs-gt4-short-match-max-points`.
-Sections below that mention legacy GT4 short sampling flags such as
-`--gcs-gt4-short-boost` / `--gcs-gt4-short-min-visible-max`,
-`--gcs-extra-exist`, `--gcs-short-exist-*`, or
-`tools/diagnose_tusimple_count_confusion.py` are legacy post-`50999d6af`
-experiment records only. They are not commands for the current code state
-unless a future task explicitly restores those commits.
+Active source/config is rolled back to commit `b6535f641` (`Fix GCS training
+progress header alignment`). Sections below that mention post-`b6535f641`
+mechanisms such as duplicate/spurious/ranking losses, GT3/GT4/GT5 follow-up
+losses, Q18/Q20/dataref configs, Count Head, count-guided decode, side-aux,
+or GT4-hard diagnostics are legacy experiment records only. They are not
+commands for the current code state unless a future task explicitly restores
+those commits.
 
 ## Full Remote Training
 
@@ -88,6 +78,10 @@ python tools/train_gcs.py \
   --gcs-count-under5 0.3 \
   --gcs-count-under5-min-lanes 5 \
   --gcs-lane-count-balanced \
+  --gcs-official-best \
+  --gcs-official-interval 5 \
+  --gcs-official-gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
+  --gcs-official-half \
   --project runs/gcs_lane \
   --name gcs_yolo_lane_s_tusimple_fixed_y_visible_iou_count02_under5_03
 ```
@@ -96,7 +90,38 @@ If `batch=32` OOMs on the target machine, reduce batch only for OOM/instability 
 
 `--no-amp` is included because the current remote run hit an Ultralytics AMP self-check failure while loading `yolo26n.pt`. If that server cache/checkpoint issue is fixed, AMP may be re-enabled only with a run note.
 
-## Positive Short-Lane Point/Visibility Experiment
+## Training-Time Official-Best Selection
+
+Formal TuSimple training must not select the final checkpoint from `val/total_loss`, internal `val/f1`, or generic `weights/best.pt` alone. Use `--gcs-official-best` so training runs a lightweight official-val sweep every 5 epochs and again on the final/early-stop epoch.
+
+The selected artifacts are:
+
+```text
+weights/official_best.pt
+weights/official_best_sweep.json
+weights/official_best_decode.yaml
+official_sweeps/epoch*/tusimple_official_sweep_summary.json
+```
+
+Selection priority:
+
+1. maximum `official_acc`
+2. if tied, maximum `official_score`
+3. if tied, lower `official_FP`
+4. if tied, lower `official_FN`
+5. if tied, higher `count_acc_4`
+
+The 2026-06-27 checkpoint-selection failure case that motivated this rule:
+
+```text
+best val/f1:         epoch 91  = 0.971997
+best val/total_loss: epoch 116 = 0.69639
+last epoch 131:      val/f1    = 0.968382
+```
+
+This shows why `weights/best.pt` and `val/total_loss` are insufficient selection surfaces. Use `weights/official_best.pt` plus the decode in `weights/official_best_decode.yaml` for final-test reporting.
+
+## Legacy Positive Short-Lane Point/Visibility Experiment
 
 This default-disabled experiment targets true short-lane learning, not
 unmatched-query suppression. It keeps decode, NMS, official metrics, and final
@@ -238,7 +263,7 @@ failure images, `+30` `spurious_extra`, `+18` `duplicate_like_extra`, and
 `+33` `duplicate_like_extra_short_gt`. Do not continue this exact positive
 short-lane loss setting.
 
-## Legacy Post-50999 Official-Val Selection
+## Legacy Post-b653 Official-Val Selection
 
 The 2026-06-21 `gt4short15` candidate was selected on official-val in a later
 post-`50999d6af` experiment line. After the rollback, it is a legacy result,
@@ -547,7 +572,7 @@ final-test ACC while raising FP/FN. The official-val best decode uses
 `max_det=6` even though training args record `gcs_eval_max_det=8`; keep that as
 a comparability caveat and do not retune from test.
 
-## Duplicate Margin 0.05 Near-Miss and Reporting Test
+## Legacy Duplicate Margin 0.05 Near-Miss and Reporting Test
 
 The 2026-06-22 `dupmargin005` official test was requested after its 363-image
 official-val sweep completed. It is a reporting-only near-miss, not a promoted
@@ -604,7 +629,7 @@ Do not promote this run from final-test ACC. It beats the older
 official-val gate `0.970851`. Final test is reporting-only and must not be
 used for threshold, checkpoint, postprocess, or loss selection.
 
-## GT4 Lane-Balanced Point 0.25 Selected Candidate
+## Legacy GT4 Lane-Balanced Point 0.25 Candidate
 
 The 2026-06-25 `dupmargin005_gt4pt025` official-val sweep is the previous
 selection surface for this branch-local GT4 candidate-recall line:
@@ -654,11 +679,12 @@ After the `v2_validbranch_neg05-3` result, the immediate next action is v2
 extra-lane diagnosis and a fine official-val sweep, not a `gt4pt025` final-test
 run.
 
-## GT4 Short-Lane Recall Lane-Balanced Endpoint Rejection
+## Legacy GT4 Short-Lane Recall Lane-Balanced Endpoint Rejection
 
-The 2026-06-25 `gt4shortrecall_lbpt_endpoint` experiment uses the active
-default-off GT4 short-lane candidate-recall knobs. It is rejected and must not
-replace the previous `gt4pt025` official-val candidate:
+The 2026-06-25 `gt4shortrecall_lbpt_endpoint` experiment used post-`b6535f641`
+GT4 short-lane candidate-recall knobs that are no longer part of the active
+rollback code. It is rejected and must not replace the previous `gt4pt025`
+official-val candidate:
 
 ```text
 run: gcs_yolo_lane_s_tusimple_fixed_y_gt4shortrecall_lbpt_endpoint
@@ -784,7 +810,7 @@ official-val `4->3`, but it worsens GT4 `4->5` to `8`, raises FP, lowers ACC
 below the `gt4pt025` gate, and the fixed-pool diagnostic still identifies
 geometry-bad candidate recall. Do not run final test for this rejected run.
 
-## v2_validbranch_neg05-3 Extra-Lane Diagnostic and Fine Sweep
+## Legacy v2_validbranch_neg05-3 Extra-Lane Diagnostic and Fine Sweep
 
 The 2026-06-25 `v2_validbranch_neg05-3` result is valid official-val evidence
 only. It exceeds the previous `gt4pt025` gate but should not go to final test
@@ -901,7 +927,7 @@ Selection rule: official ACC remains primary. If rows are within about
 `count_acc_4`, fewer `3->5` / `4->5`, and no new `GT5->4` regression. Do not
 use final test for any part of this choice.
 
-## GT3 Extra-Survival 0.03 Rejection and Reporting Test
+## Legacy GT3 Extra-Survival 0.03 Rejection and Reporting Test
 
 The 2026-06-24 `dupmargin005_gt3extra003` run enabled the default-disabled GT3
 extra-survival loss on top of `dupmargin005`:
@@ -1010,7 +1036,7 @@ GT4 relative to `dupmargin005` (`count_acc_4=0.939394 -> 0.909091`,
 `4->5=3 -> 4`) and raises all-image `missed_short_gt` to `36`. The official-test
 result is reporting-only and must not be used for tuning.
 
-## Spurious Margin 0.03 Rejection and Reporting Test
+## Legacy Spurious Margin 0.03 Rejection and Reporting Test
 
 The 2026-06-23 `spurmargin003` official test was requested after its 363-image
 official-val sweep completed. It is a reporting-only rejected follow-up, not a
@@ -1087,7 +1113,7 @@ Use this test result only as final reporting evidence for the previous `count03_
 
 ## Legacy Train/Val Count-Confusion Diagnostic
 
-The 2026-06-20 train/val diagnostic for `count03_under5_03` groups decoded lane-count confusion by date, GT lane count, and the shortest visible GT lane bucket. It is a legacy post-`50999d6af` diagnostic; `tools/diagnose_tusimple_count_confusion.py` is not present in the active rollback code. It used the frozen official-val selected decode and did not touch final test:
+The 2026-06-20 train/val diagnostic for `count03_under5_03` groups decoded lane-count confusion by date, GT lane count, and the shortest visible GT lane bucket. It is a legacy post-`b6535f641` diagnostic; `tools/diagnose_tusimple_count_confusion.py` is not present in the active rollback code. It used the frozen official-val selected decode and did not touch final test:
 
 ```text
 output: runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_visible_iou_count03_under5_03_count_confusion_train_val_by_visibility/summary.json
@@ -1129,7 +1155,7 @@ python tools/diagnose_tusimple_count_confusion.py \
 
 This diagnostic is for train/val bottleneck localization only. Do not use final test for count-policy, threshold, checkpoint, or postprocess selection.
 
-## Train/Val Query-Trace Diagnostic
+## Legacy Train/Val Query-Trace Diagnostic
 
 Use the self-contained query-trace helper when comparing matched q+ and
 unmatched q- behavior on fixed-y train/val. It does not depend on legacy
@@ -1225,7 +1251,7 @@ short-lane failure trace. The main outputs are `summary.json`,
 
 ## Legacy GT4 Short-Lane Weighted Training
 
-The GT4 short-lane sampler boost was an explicit post-`50999d6af`
+The GT4 short-lane sampler boost was an explicit post-`b6535f641`
 experimental option. It is not present in the active rollback code. Historical
 defaults were:
 
@@ -1445,8 +1471,9 @@ python tools/sweep_tusimple_official.py \
   --device 0
 ```
 
-For q18 countguard official-val count-head guided sweeps, use the same
-official-val surface and keep normal/count-guided rows in one sweep table:
+Legacy post-`b6535f641` Q18/count-head guided sweeps used the same
+official-val surface and kept normal/count-guided rows in one sweep table.
+These flags are not available in the active rollback code:
 
 ```bash
 python tools/sweep_tusimple_official.py \
@@ -1464,7 +1491,7 @@ Do not pass `--count-guided-allow-unsupported-fallback` for candidate
 selection. It is only for diagnostics when intentionally checking fallback
 behavior with checkpoints that lack count-head logits.
 
-## Q20 GT4-Hard Diagnostic Gate
+## Legacy Q20 GT4-Hard Diagnostic Gate
 
 Before any Q20 official-val sweep, run the GT4-hard raw-query diagnostic on the
 fixed `gt4pt025` hard set. The 2026-06-26 Q20 run failed this gate, so its
@@ -1584,7 +1611,7 @@ python -m py_compile <changed-python-files>
 
 ## Known Validation Limitation
 
-This branch was imported from `5-25-3.zip` and includes standalone TuSimple official eval/sweep helpers. Server-side sync only needs algorithm/runtime code. Mainline Count/Quality/Survival tests, agent setup checks, and training-time official-best checkpoint preservation are intentionally not part of the server payload unless a future task explicitly restores them.
+This branch was imported from `5-25-3.zip` and includes standalone TuSimple official eval/sweep helpers plus the explicit `--gcs-official-best` selection hook. Server-side sync only needs algorithm/runtime code. Mainline Count/Quality/Survival tests and agent setup checks are intentionally not part of the server payload unless a future task explicitly restores them.
 
 ## Official TuSimple Evaluation Helpers
 

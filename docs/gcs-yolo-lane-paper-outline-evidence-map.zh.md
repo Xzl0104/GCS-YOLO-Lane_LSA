@@ -641,3 +641,9 @@ GCS-YOLO-Lane 将 YOLO-style 车道线感知重构为结构化 lane instance pre
 - 结果语言在证据完成前保持条件式。
 - 本地文献最终引用前必须核验，不只依赖文件名。
 - 所有 TuSimple commands 保持 `--imgsz 544 960` 的 H,W 顺序。
+Legacy/non-contract draft note: this document was added after rollback target
+`b6535f641` and is retained only as a writing outline. It does not define the
+active algorithm, available CLI flags, loss items, selected candidates, or
+experiment conclusions. Use `docs/agent-context/current-contracts.md` for the
+active rollback contract; any post-`b6535f641` experiment content is legacy
+only.

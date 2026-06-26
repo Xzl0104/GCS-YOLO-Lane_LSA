@@ -750,3 +750,9 @@ count_confusion = 2->2:1, 2->3:3, 2->4:1,
                   4->3:118, 4->4:256, 4->5:90, 4->6:4,
                   5->3:25, 5->4:73, 5->5:461, 5->6:10
 ```
+Legacy snapshot warning: despite the filename, this document is no longer the
+current source of truth after rollback to `b6535f641` (`Fix GCS training
+progress header alignment`). It is retained only as historical context. Any
+post-`b6535f641` mechanisms, commands, losses, tools, selected candidates, and
+results described below are legacy experiment conclusions only. Use
+`docs/agent-context/current-contracts.md` for the active rollback contract.

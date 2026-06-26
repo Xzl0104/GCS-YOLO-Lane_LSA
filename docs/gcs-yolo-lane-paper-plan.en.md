@@ -1,5 +1,12 @@
 # GCS-YOLO-Lane Research Paper Plan (English Version)
 
+Legacy/non-contract draft note: this document was added after rollback target
+`b6535f641` and is retained only as a writing plan. It does not define the
+active algorithm, available CLI flags, loss items, selected candidates, or
+experiment conclusions. Use `docs/agent-context/current-contracts.md` for the
+active rollback contract; any post-`b6535f641` experiment content is legacy
+only.
+
 Updated on 2026-06-23
 
 ## 1. Recommended Paper Title
@@ -44,7 +51,10 @@ The reproducible TuSimple official-val/test protocol remains an important credib
 
 ## 5. Experimental Writing Boundaries
 
-This paper plan now uses the active default configuration as the main result line. Therefore:
+This legacy paper plan assumed the active default configuration at the time as
+the main result line. After rollback to `b6535f641`, treat this section as
+writing guidance only and resolve the active configuration from
+`docs/agent-context/current-contracts.md`. Therefore:
 
 - The legacy `gt4short15` run must not be used as the selected main paper result.
 - The reporting-only final-test ACC from `dupmargin005` must not be used for model selection.

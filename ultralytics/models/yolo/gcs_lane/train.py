@@ -3,13 +3,17 @@
 
 from __future__ import annotations
 
+import ast
+import json
 import math
 import numpy as np
 import random
 import re
+import shutil
 from collections import Counter
 from copy import copy
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import torch
@@ -22,7 +26,7 @@ from ultralytics.data.utils import check_det_dataset
 from ultralytics.engine.trainer import BaseTrainer
 from ultralytics.models.yolo.gcs_lane.val import GCSLaneValidator
 from ultralytics.nn.modules import GCSLaneHead, LaneBiFPN, LSEM
-from ultralytics.nn.tasks import GCSLaneModel, load_checkpoint, torch_safe_load
+from ultralytics.nn.tasks import GCSLaneModel, load_checkpoint
 from ultralytics.utils import DEFAULT_CFG, LOCAL_RANK, LOGGER, RANK, ROOT, YAML
 from ultralytics.utils.gcs_shape import assert_gcs_image_tensor, assert_gcs_shape, normalize_imgsz
 from ultralytics.utils.torch_utils import strip_optimizer, torch_distributed_zero_first
@@ -34,89 +38,29 @@ class GCSLaneTrainer(BaseTrainer):
     loss_names = (
         "exist_loss",
         "point_loss",
-        "lane_balanced_point_loss",
-        "gt4_short_lane_loss",
-        "gt4_lane_balanced_point_loss",
         "point_valid_loss",
-        "short_valid_recall_loss",
-        "gt4_short_valid_recall_loss",
-        "gt4_short_valid_count_floor_loss",
-        "valid_lb_gt4_short_count",
-        "valid_lb_gt4_short_gt_points_mean",
-        "valid_lb_gt4_short_pred_prob_mean",
-        "valid_lb_gt4_short_pred_sum_mean",
-        "unmatched_valid_neg_loss",
-        "unmatched_valid_query_count",
-        "unmatched_valid_prob_mean",
         "smooth_loss",
         "curve_loss",
         "mask_loss",
         "edge_loss",
         "count_loss",
         "count_under5_loss",
-        "count_ce_loss",
-        "count_ce_acc",
-        "duplicate_margin_loss",
-        "spurious_margin_loss",
-        "far_spurious_survival_loss",
-        "gt5_rank_consistency_loss",
-        "gt3_extra_survival_loss",
-        "gt4_short_lane_valid_points_mean",
-        "gt4_short_lane_count",
-        "gt4_short_valid_lane_count",
-        "gt4_short_gt_valid_points_mean",
-        "gt4_short_pred_valid_prob_mean",
-        "gt4_short_pred_valid_sum_mean",
-        "dataref_side_aux_loss",
-        "dataref_side_aux_point",
-        "dataref_side_aux_valid",
-        "dataref_side_aux_exist",
-        "dataref_side_aux_lanes",
-        "dataref_side_aux_refdist",
+        "count_boundary_loss",
+        "count_score_mean",
     )
     # Keep tqdm headers within BaseTrainer's 11-character progress columns.
     progress_loss_names = (
         "exist",
         "point",
-        "lane_bal",
-        "gt4_pt",
-        "gt4_lbp",
         "pt_valid",
-        "short_rec",
-        "gt4_vrec",
-        "gt4_vfloor",
-        "vlb_gt4_n",
-        "vlb_gtpts",
-        "vlb_vprob",
-        "vlb_vsum",
-        "uvneg_loss",
-        "uvneg_n",
-        "uvneg_prob",
         "smooth",
         "curve",
         "mask",
         "edge",
         "count",
         "cnt_under5",
-        "cnt_ce",
-        "cnt_acc",
-        "dup_margin",
-        "spur_margin",
-        "far_surv",
-        "gt5_rank",
-        "gt3_ext",
-        "gt4_vmean",
-        "gt4_n",
-        "gt4_vn",
-        "gt4_gtpts",
-        "gt4_vprob",
-        "gt4_vsum",
-        "dr_aux",
-        "dr_point",
-        "dr_valid",
-        "dr_exist",
-        "dr_lanes",
-        "dr_refpx",
+        "cnt_bound",
+        "cnt_score",
     )
     # YOLO11 backbone -> GCS-YOLO-Lane backbone. LSEM is inserted after old
     # layers 4 and 6, so all later backbone layers must be shifted explicitly.
@@ -147,6 +91,10 @@ class GCSLaneTrainer(BaseTrainer):
         overrides.setdefault("scale", 0.0)
         overrides.setdefault("erasing", 0.0)
         super().__init__(cfg, overrides, _callbacks)
+        self.official_best = self.wdir / "official_best.pt"
+        self.official_best_sweep = self.wdir / "official_best_sweep.json"
+        self.official_best_decode = self.wdir / "official_best_decode.yaml"
+        self._official_best_state = self._load_official_best_state()
         self._lock_gcs_shape_contract()
 
     def get_dataset(self) -> dict[str, Any]:
@@ -272,32 +220,16 @@ class GCSLaneTrainer(BaseTrainer):
                 return int((data["lane_valid"].sum(axis=1) >= 2).sum())
             return int(data["lanes"].shape[0])
 
-    def _lane_count_sampler(self, dataset: GCSLaneDataset, balance_lane_counts: bool = True) -> WeightedRandomSampler:
-        """Build a replacement sampler that balances GT lane counts and can upweight GT4 samples."""
+    def _lane_count_sampler(self, dataset: GCSLaneDataset) -> WeightedRandomSampler:
+        """Build a replacement sampler that balances samples by GT lane count."""
         counts = [self._label_lane_count(Path(p)) for p in dataset.label_files]
         hist = Counter(counts)
-        power = float(getattr(self.args, "gcs_lane_count_balance_power", 1.0)) if balance_lane_counts else 0.0
+        power = float(getattr(self.args, "gcs_lane_count_balance_power", 1.0))
         min_group = max(int(getattr(self.args, "gcs_lane_count_min_group", 50) or 0), 1)
-        gt4_gain = float(getattr(self.args, "gcs_gt4_sample_gain", 1.0) or 1.0)
-        if gt4_gain < 1.0 or gt4_gain > 2.0:
-            raise ValueError(f"gcs_gt4_sample_gain must be in [1.0, 2.0], got {gt4_gain}.")
-        weights = torch.as_tensor(
-            [
-                (1.0 / (float(max(hist[c], min_group)) ** power)) * (gt4_gain if int(c) == 4 else 1.0)
-                for c in counts
-            ],
-            dtype=torch.double,
-        )
-        total_weight = float(weights.sum().item())
-        effective_hist = {}
-        for lane_count in sorted(hist):
-            mask = torch.as_tensor([int(c) == int(lane_count) for c in counts], dtype=torch.bool)
-            expected = float(weights[mask].sum().item()) / max(total_weight, 1e-12) * float(len(weights))
-            effective_hist[int(lane_count)] = round(expected, 3)
+        weights = torch.as_tensor([1.0 / (float(max(hist[c], min_group)) ** power) for c in counts], dtype=torch.double)
         LOGGER.info(
-            "GCS lane-count sampler enabled: "
-            f"hist={dict(sorted(hist.items()))}, train_gt_count_hist_effective={effective_hist}, "
-            f"balance={bool(balance_lane_counts)}, power={power:g}, min_group={min_group}, gt4_gain={gt4_gain:g}, "
+            "GCS lane-count balanced sampling enabled: "
+            f"hist={dict(sorted(hist.items()))}, power={power:g}, min_group={min_group}, "
             f"samples_per_epoch={len(weights)}"
         )
         return WeightedRandomSampler(weights=weights, num_samples=len(weights), replacement=True)
@@ -311,18 +243,11 @@ class GCSLaneTrainer(BaseTrainer):
             dataset = self.build_dataset(dataset_path, mode, batch_size)
         sampler = None
         shuffle = mode == "train"
-        gt4_sample_gain = float(getattr(self.args, "gcs_gt4_sample_gain", 1.0) or 1.0)
-        if mode == "train" and (gt4_sample_gain < 1.0 or gt4_sample_gain > 2.0):
-            raise ValueError(f"gcs_gt4_sample_gain must be in [1.0, 2.0], got {gt4_sample_gain}.")
-        use_sampler = bool(getattr(self.args, "gcs_lane_count_balanced", False)) or gt4_sample_gain != 1.0
-        if mode == "train" and use_sampler:
+        if mode == "train" and bool(getattr(self.args, "gcs_lane_count_balanced", False)):
             if rank != -1:
-                LOGGER.warning("GCS lane-count/GT4 sampling is only enabled for single-process training.")
+                LOGGER.warning("GCS lane-count balanced sampling is only enabled for single-process training.")
             else:
-                sampler = self._lane_count_sampler(
-                    dataset,
-                    balance_lane_counts=bool(getattr(self.args, "gcs_lane_count_balanced", False)),
-                )
+                sampler = self._lane_count_sampler(dataset)
                 shuffle = False
         return build_dataloader(
             dataset,
@@ -395,65 +320,16 @@ class GCSLaneTrainer(BaseTrainer):
         model = GCSLaneModel(cfg, nc=self.data["nc"], ch=self.data.get("channels", 3), verbose=verbose and RANK == -1)
         if weights is not None:
             self.load_gcs_pretrained(model, weights)
-        if bool(getattr(self.args, "freeze_point_reference", False)):
-            frozen = self._freeze_point_reference(model)
-            if RANK in {-1, 0}:
-                LOGGER.info(f"Frozen point_reference_logits tensors: {frozen or 'none'}")
-        self._validate_dataref_side_aux_model(model)
         return model
 
-    def _validate_dataref_side_aux_model(self, model: nn.Module) -> None:
-        """Fail fast when dataref side aux is enabled on a non-dataref head."""
-        try:
-            gain = float(getattr(self.args, "gcs_dataref_side_aux", 0.0) or 0.0)
-        except (TypeError, ValueError):
-            gain = 0.0
-        if gain <= 0.0:
-            return
-
-        hint = "Use gcs-yolo-lane-s-q20-k56-dataref.yaml or disable --gcs-dataref-side-aux."
-        heads = [(name, module) for name, module in model.named_modules() if isinstance(module, GCSLaneHead)]
-        if not heads:
-            raise ValueError(f"gcs_dataref_side_aux > 0 requires a GCSLaneHead. {hint}")
-
-        found = []
-        for name, head in heads:
-            reference_mode = getattr(head, "reference_mode", None)
-            num_queries = int(getattr(head, "num_queries", -1))
-            point_mode = getattr(head, "point_mode", None)
-            if reference_mode == "dataref" and num_queries == 20 and point_mode == "fixed_y":
-                return
-            found.append(
-                f"{name or '<root>'}(reference_mode={reference_mode!r}, num_queries={num_queries}, "
-                f"point_mode={point_mode!r})"
-            )
-        raise ValueError(
-            "gcs_dataref_side_aux > 0 requires GCSLaneHead reference_mode='dataref', num_queries=20, "
-            f"and point_mode='fixed_y'; found {', '.join(found)}. {hint}"
-        )
-
     @staticmethod
-    def _freeze_point_reference(model: nn.Module) -> list[str]:
-        """Ensure GCS point reference tensors do not receive gradients."""
-        frozen = []
-        for name, module in model.named_modules():
-            if not isinstance(module, GCSLaneHead) or not hasattr(module, "point_reference_logits"):
-                continue
-            ref = getattr(module, "point_reference_logits")
-            if isinstance(ref, torch.Tensor):
-                ref.requires_grad_(False)
-                frozen.append(f"{name}.point_reference_logits" if name else "point_reference_logits")
-        return frozen
+    def _state_dict_from_weights(weights: str | Path | dict | nn.Module) -> dict[str, torch.Tensor]:
+        """Extract a plain state_dict from a checkpoint path, checkpoint dict, or loaded module."""
+        if isinstance(weights, (str, Path)):
+            weights, _ = load_checkpoint(weights)
 
-    @staticmethod
-    def _unwrap_state_dict(weights: dict | nn.Module) -> dict[str, torch.Tensor]:
-        """Extract a plain state_dict from a checkpoint dict or loaded module."""
         if isinstance(weights, dict):
-            for key in ("ema", "model", "state_dict"):
-                value = weights.get(key)
-                if value is not None:
-                    weights = value
-                    break
+            weights = weights.get("ema") or weights.get("model") or weights.get("state_dict") or weights
 
         if isinstance(weights, nn.Module):
             state = weights.float().state_dict()
@@ -463,18 +339,6 @@ class GCSLaneTrainer(BaseTrainer):
             raise TypeError(f"Unsupported pretrained weights type for GCSLaneTrainer: {type(weights).__name__}")
 
         return {k[7:] if k.startswith("module.") else k: v for k, v in state.items() if isinstance(v, torch.Tensor)}
-
-    @classmethod
-    def _state_dict_from_weights(cls, weights: str | Path | dict | nn.Module) -> dict[str, torch.Tensor]:
-        """Extract a plain state_dict from a checkpoint path, checkpoint dict, or loaded module."""
-        if isinstance(weights, (str, Path)):
-            ckpt, _ = torch_safe_load(weights)
-            if isinstance(ckpt, dict) and ckpt.get("model") is None and ckpt.get("ema") is None:
-                weights = ckpt
-            else:
-                weights, _ = load_checkpoint(weights)
-
-        return cls._unwrap_state_dict(weights)
 
     @staticmethod
     def _gcs_module_prefixes(model: nn.Module) -> tuple[str, ...]:
@@ -498,7 +362,6 @@ class GCSLaneTrainer(BaseTrainer):
             ".point_valid_mlp.",
             ".point_valid_refine_mlp.",
             ".exist_mlp.",
-            ".count_mlp.",
             ".aux_mask.",
             ".aux_edge.",
             ".p2_in.",
@@ -540,17 +403,12 @@ class GCSLaneTrainer(BaseTrainer):
         source_is_gcs = self._state_dict_has_gcs_modules(source_state)
         candidate_state = source_state if source_is_gcs else self.remap_yolo11_backbone_to_gcs(source_state)
         gcs_prefixes = () if source_is_gcs else self._gcs_module_prefixes(model)
-        reset_point_reference = bool(getattr(self.args, "reset_point_reference", False))
 
         loadable = {}
         skipped_gcs = 0
         skipped_shape = 0
         skipped_missing = 0
-        skipped_reset = []
         for key, value in candidate_state.items():
-            if reset_point_reference and key.endswith("point_reference_logits"):
-                skipped_reset.append(key)
-                continue
             if key not in target_state:
                 skipped_missing += 1
                 continue
@@ -567,10 +425,8 @@ class GCSLaneTrainer(BaseTrainer):
         LOGGER.info(
             f"GCS pretrained transfer ({source_kind}): loaded {len(loadable)}/{len(target_state)} tensors "
             f"(candidates={len(candidate_state)}, skipped_missing={skipped_missing}, "
-            f"skipped_gcs={skipped_gcs}, skipped_shape={skipped_shape}, skipped_reset={len(skipped_reset)})"
+            f"skipped_gcs={skipped_gcs}, skipped_shape={skipped_shape})"
         )
-        if skipped_reset:
-            LOGGER.info(f"Skipped reset-sensitive pretrained tensors: {skipped_reset}")
         if not loadable:
             LOGGER.warning(
                 "No pretrained tensors were transferred. Check that the weight file is a YOLO11/YOLO11-seg "
@@ -601,6 +457,197 @@ class GCSLaneTrainer(BaseTrainer):
                     strip_optimizer(self.best, updates={"train_results": ckpt.get("train_results")})
         LOGGER.info("Skipping final validation because val=False.")
 
+    @staticmethod
+    def _official_float_list(value: Any, default: tuple[float, ...]) -> list[float]:
+        """Normalize list-like official sweep float args from YAML, CLI, or resume metadata."""
+        if value is None or value == "":
+            return [float(x) for x in default]
+        if isinstance(value, str):
+            text = value.strip()
+            if text.startswith("["):
+                value = ast.literal_eval(text)
+            else:
+                value = [x for x in re.split(r"[\s,;]+", text) if x]
+        if isinstance(value, (int, float)):
+            value = [value]
+        return [float(x) for x in value]
+
+    @staticmethod
+    def _official_int_list(value: Any, default: tuple[int, ...]) -> list[int]:
+        """Normalize list-like official sweep int args from YAML, CLI, or resume metadata."""
+        if value is None or value == "":
+            return [int(x) for x in default]
+        if isinstance(value, str):
+            text = value.strip()
+            if text.startswith("["):
+                value = ast.literal_eval(text)
+            else:
+                value = [x for x in re.split(r"[\s,;]+", text) if x]
+        if isinstance(value, int):
+            value = [value]
+        return [int(x) for x in value]
+
+    @staticmethod
+    def _official_best_key(best: dict[str, Any], epoch: int) -> tuple[float, float, float, float, float, float, float, int]:
+        """Order official-val candidates by the project checkpoint-selection contract."""
+
+        def f(name: str, default: float = 0.0) -> float:
+            value = best.get(name, default)
+            return float(default if value is None else value)
+
+        return (
+            f("official_acc"),
+            f("official_score"),
+            -f("official_FP"),
+            -f("official_FN"),
+            f("count_acc_4"),
+            f("count_acc"),
+            f("count_acc_5"),
+            -int(epoch),
+        )
+
+    def _load_official_best_state(self) -> dict[str, Any] | None:
+        """Restore official-best comparison state when resuming a run."""
+        if not self.official_best_sweep.exists():
+            return None
+        try:
+            data = json.loads(self.official_best_sweep.read_text(encoding="utf-8"))
+            meta = data.get("official_best", {})
+            best = meta.get("best") or data.get("best")
+            epoch = int(meta.get("epoch", data.get("selected_epoch", 0)) or 0)
+            if isinstance(best, dict):
+                return {"best": best, "epoch": epoch, "key": self._official_best_key(best, epoch)}
+        except Exception as exc:
+            LOGGER.warning(f"Could not restore existing official_best state from {self.official_best_sweep}: {exc}")
+        return None
+
+    def _should_run_official_best(self) -> bool:
+        """Return True when this epoch should run training-time official-val selection."""
+        if not bool(getattr(self.args, "gcs_official_best", False)):
+            return False
+        interval = int(getattr(self.args, "gcs_official_interval", 5) or 0)
+        if interval <= 0:
+            raise ValueError(f"gcs_official_interval must be > 0 when gcs_official_best=True, got {interval}.")
+        epoch_num = int(self.epoch) + 1
+        return (epoch_num % interval == 0) or bool(getattr(self, "stop", False)) or epoch_num >= int(self.epochs)
+
+    def _official_device_arg(self) -> str:
+        """Return a stable device string for the in-process official sweep."""
+        value = getattr(self.args, "device", None)
+        if value is not None and str(value).strip() and str(value).strip().lower() != "none":
+            return str(value)
+        if self.device.type == "cuda":
+            return str(0 if self.device.index is None else self.device.index)
+        return str(self.device)
+
+    def _official_sweep_args(self, save_dir: Path) -> SimpleNamespace:
+        """Build the in-process official-val sweep args for the current checkpoint."""
+        shape = self._resolve_gcs_imgsz()
+        return SimpleNamespace(
+            dataset="tusimple",
+            archive_root=str(getattr(self.args, "gcs_official_archive_root", "archive") or "archive"),
+            split="val",
+            gt_json=getattr(self.args, "gcs_official_gt_json", None),
+            weights=str(self.last),
+            imgsz=[int(shape[0]), int(shape[1])],
+            confs=self._official_float_list(getattr(self.args, "gcs_official_confs", None), (0.005, 0.01, 0.02, 0.05, 0.1)),
+            point_valid_thrs=self._official_float_list(getattr(self.args, "gcs_official_point_valid_thrs", None), (0.45, 0.5)),
+            nms_dist_pxs=self._official_float_list(getattr(self.args, "gcs_official_nms_dist_pxs", None), (0.0, 18.0, 30.0, 50.0)),
+            max_dets=self._official_int_list(getattr(self.args, "gcs_official_max_dets", None), (5, 6, 8)),
+            min_points=self._official_int_list(getattr(self.args, "gcs_official_min_points", None), (4, 5, 6)),
+            max_images=int(getattr(self.args, "gcs_official_max_images", 0) or 0),
+            warmup=int(getattr(self.args, "gcs_official_warmup", 5) or 0),
+            device=self._official_device_arg(),
+            half=bool(getattr(self.args, "gcs_official_half", False)),
+            runtime_ms=1.0,
+            save_dir=str(save_dir),
+            score_fp_weight=float(getattr(self.args, "gcs_official_score_fp_weight", 0.02) or 0.02),
+            score_fn_weight=float(getattr(self.args, "gcs_official_score_fn_weight", 0.02) or 0.02),
+        )
+
+    def _write_official_best_artifacts(self, output: dict[str, Any], epoch_num: int, sweep_dir: Path) -> None:
+        """Persist official-best checkpoint, sweep summary, and decode config."""
+        best = dict(output["best"])
+        summary = dict(output)
+        meta = {
+            "epoch": int(epoch_num),
+            "checkpoint": str(self.official_best.resolve()),
+            "source_checkpoint": str(self.last.resolve()),
+            "sweep_dir": str(sweep_dir.resolve()),
+            "selection_policy": [
+                "max official_acc",
+                "then max official_score",
+                "then lower official_FP",
+                "then lower official_FN",
+                "then max count_acc_4",
+            ],
+            "best": best,
+        }
+        summary["official_best"] = meta
+        shutil.copy2(self.last, self.official_best)
+        self.official_best_sweep.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        YAML.save(
+            self.official_best_decode,
+            {
+                "weights": str(self.official_best.resolve()),
+                "source_epoch": int(epoch_num),
+                "sweep_summary": str(self.official_best_sweep.resolve()),
+                "selection_policy": meta["selection_policy"],
+                "decode": {
+                    "conf": float(best["conf"]),
+                    "point_valid_thr": float(best["point_valid_thr"]),
+                    "nms_dist_px": float(best["nms_dist_px"]),
+                    "max_det": int(best["max_det"]),
+                    "min_points": int(best["min_points"]),
+                },
+                "official_metrics": {
+                    "official_acc": float(best["official_acc"]),
+                    "official_score": float(best["official_score"]),
+                    "official_FP": float(best["official_FP"]),
+                    "official_FN": float(best["official_FN"]),
+                    "count_acc": float(best.get("count_acc", 0.0)),
+                    "count_acc_4": float(best.get("count_acc_4", 0.0)),
+                    "count_acc_5": float(best.get("count_acc_5", 0.0)),
+                },
+            },
+        )
+        self._official_best_state = {"best": best, "epoch": int(epoch_num), "key": self._official_best_key(best, epoch_num)}
+
+    def _maybe_update_official_best(self) -> None:
+        """Run periodic official-val sweep and update official_best when the official metric improves."""
+        if RANK not in {-1, 0} or not self._should_run_official_best():
+            return
+        if not self.last.exists():
+            raise FileNotFoundError(f"Cannot run official-best selection because {self.last} does not exist.")
+
+        from tools.sweep_tusimple_official import sweep
+
+        epoch_num = int(self.epoch) + 1
+        sweep_dir = self.save_dir / "official_sweeps" / f"epoch{epoch_num:03d}"
+        LOGGER.info(f"Running TuSimple official-val sweep for checkpoint selection at epoch {epoch_num}...")
+        output = sweep(self._official_sweep_args(sweep_dir))
+        best = dict(output["best"])
+        new_key = self._official_best_key(best, epoch_num)
+        old_key = self._official_best_state.get("key") if self._official_best_state else None
+        if old_key is None or new_key > old_key:
+            self._write_official_best_artifacts(output, epoch_num=epoch_num, sweep_dir=sweep_dir)
+            LOGGER.info(
+                "Updated official_best.pt: "
+                f"epoch={epoch_num}, official_acc={float(best['official_acc']):.6f}, "
+                f"official_score={float(best['official_score']):.6f}, "
+                f"FP={float(best['official_FP']):.6f}, FN={float(best['official_FN']):.6f}, "
+                f"count_acc_4={float(best.get('count_acc_4', 0.0)):.6f}"
+            )
+        else:
+            current = self._official_best_state["best"]
+            LOGGER.info(
+                "Kept existing official_best.pt: "
+                f"epoch={self._official_best_state['epoch']}, official_acc={float(current['official_acc']):.6f}, "
+                f"new_epoch={epoch_num}, new_official_acc={float(best['official_acc']):.6f}"
+            )
+        if self.device.type == "cuda":
+            torch.cuda.empty_cache()
+
     def save_model(self):
         """Save checkpoints with explicit rectangular GCS imgsz in train_args."""
         old_imgsz = self.args.imgsz
@@ -608,9 +655,12 @@ class GCSLaneTrainer(BaseTrainer):
         self.args.gcs_imgsz = [int(shape[0]), int(shape[1])]
         self.args.imgsz = max(int(shape[0]), int(shape[1]))
         try:
-            return super().save_model()
+            saved = bool(super().save_model())
         finally:
             self.args.imgsz = old_imgsz
+        if saved:
+            self._maybe_update_official_best()
+        return saved
 
     def label_loss_items(self, loss_items: list[float] | torch.Tensor | None = None, prefix: str = "train"):
         """Return named GCS loss items for logging."""
@@ -619,37 +669,12 @@ class GCSLaneTrainer(BaseTrainer):
             return keys
         return dict(zip(keys, [round(float(x), 5) for x in loss_items]))
 
-    def _progress_loss_names(self) -> tuple[str, ...]:
-        """Return short progress labels, marking default-off experiment columns explicitly."""
-        names = list(self.progress_loss_names)
-        args = getattr(self, "args", None)
-
-        def arg_float(name: str, default: float = 0.0) -> float:
-            value = getattr(args, name, default) if args is not None else default
-            try:
-                return float(default if value is None else value)
-            except (TypeError, ValueError):
-                return default
-
-        if arg_float("gcs_gt4_lane_balanced_point") <= 0.0 and "gt4_lbp" in names:
-            names[names.index("gt4_lbp")] = "gt4lbp_off"
-        if arg_float("gcs_short_valid_recall") <= 0.0 and "short_rec" in names:
-            names[names.index("short_rec")] = "short_off"
-        if not bool(getattr(args, "gcs_gt4_short_valid_recall", False)) and "gt4_vrec" in names:
-            names[names.index("gt4_vrec")] = "gt4vrec_off"
-        if not bool(getattr(args, "gcs_gt4_short_valid_count_floor", False)) and "gt4_vfloor" in names:
-            names[names.index("gt4_vfloor")] = "gt4vf_off"
-        if arg_float("gcs_dataref_side_aux") <= 0.0 and "dr_aux" in names:
-            names[names.index("dr_aux")] = "dref_off"
-        return tuple(names)
-
     def progress_string(self):
         """Return a progress header matching the GCS loss vector."""
-        progress_loss_names = self._progress_loss_names()
-        return ("\n" + "%11s" * (4 + len(progress_loss_names))) % (
+        return ("\n" + "%11s" * (4 + len(self.progress_loss_names))) % (
             "Epoch",
             "GPU_mem",
-            *progress_loss_names,
+            *self.progress_loss_names,
             "Lanes",
             "Size",
         )

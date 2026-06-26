@@ -9,7 +9,7 @@
 
 This branch is the current GCS-YOLO-Lane mainline, imported from the historical `5-25-3.zip` algorithm.
 
-The branch keeps the historical 5-25-3 algorithm body and changes only the TuSimple fixed-y contract needed by the current request.
+The branch keeps the historical 5-25-3 algorithm body, the TuSimple fixed-y contract, and the explicit default-off `count_boundary_loss` requested on 2026-06-27.
 
 It is not the current mainline Count Head / Quality Head branch. Current behavior is governed by `docs/agent-context/current-contracts.md`.
 
@@ -105,12 +105,13 @@ The K56 labels must be regenerated from original TuSimple JSON and images, not r
 
 Historical q12-k56 experiment notes and compatibility paths must stay as old records. They do not override the active 5-25-3 K56 mainline contract.
 
-The active source code is based on rollback commit `50999d6af` (`Document 5-25-3 K56 as mainline`) plus default-disabled experiment knobs for `duplicate_margin_loss`, `spurious_margin_loss`, `lane_balanced_point_loss`, `short_valid_recall_loss`, `far_spurious_survival_loss`, `gt5_rank_consistency_loss`, `gt3_extra_survival_loss`, and `gt4_lane_balanced_point_loss`, plus the train-only `gcs_gt4_sample_gain` sampler knob. It also includes default-off GT4 short-lane candidate-recall knobs for replacing the base x point-loss reduction with lane-balanced reduction and for adding GT4-short endpoint matching cost: `gcs_lane_balanced_point_loss`, `gcs_gt4_short_lane_weight`, `gcs_gt4_short_lane_max_points`, `gcs_gt4_short_match_endpoint`, and `gcs_gt4_short_match_max_points`. Other later experiment commits and their documentation are legacy conclusions only unless a future task explicitly re-enables those mechanisms.
-The `gt3_extra_survival_loss` knob is a narrow follow-up to `dupmargin005`; it does not change the model structure, decoder, eval, or final-test selection rules unless explicitly enabled for training.
+The active source/config is rolled back to commit `b6535f641` (`Fix GCS training progress header alignment`). Its algorithm contract remains the 5-25-3 K56 mainline with no later Count Head, Q18/Q20/dataref, duplicate/spurious/ranking, lane-balanced, valid-repair, or side-aux experiment mechanisms active. Later commits and their documentation are legacy conclusions only unless a future task explicitly re-enables those mechanisms.
 
 ## Branch Scope
 
-Do not silently import later mainline mechanisms into this branch. In particular, do not add Count Head, Count Boundary, Quality Head, Survival Head, near-miss mining, official-best checkpoint preservation, or mainline K56 candidate scripts unless a future task explicitly asks for that algorithm change.
+Do not silently import later mainline mechanisms into this branch. In particular, do not add Count Head, Quality Head, Survival Head, near-miss mining, or mainline K56 candidate scripts unless a future task explicitly asks for that algorithm change. The only active Count Boundary mechanism is the 2026-06-27 user-requested, default-off `count_boundary_loss`.
+
+Training-time `official_best` checkpoint preservation is now an explicit protocol change requested on 2026-06-27. It is selection/evaluation tooling only, not an algorithm-body change.
 
 Agent/Skill tooling may exist in a local Codex workspace, but it is not part of the server-side algorithm payload for this branch. Datasets, generated runs, checkpoints, caches, converted labels, and large runtime artifacts must stay out of Git.
 
@@ -133,24 +134,15 @@ Default logged loss items on this branch:
 ```text
 exist_loss
 point_loss
-lane_balanced_point_loss
-gt4_short_lane_loss
-gt4_lane_balanced_point_loss
 point_valid_loss
-short_valid_recall_loss
 smooth_loss
 curve_loss
 mask_loss
 edge_loss
 count_loss
 count_under5_loss
-duplicate_margin_loss
-spurious_margin_loss
-far_spurious_survival_loss
-gt5_rank_consistency_loss
-gt3_extra_survival_loss
-gt4_short_lane_valid_points_mean
-gt4_short_lane_count
+count_boundary_loss
+count_score_mean
 ```
 
 ## Agent Coordination Rules
@@ -235,7 +227,15 @@ Formal training should run on the remote CUDA server, not on the local 8GB GPU, 
 
 ## Research Integrity
 
-Use official-val for threshold, checkpoint, and postprocess selection. Use test only once for final evaluation of a selected candidate.
+Use official-val for threshold, checkpoint, and postprocess selection. For formal TuSimple training, enable periodic training-time official-val selection and use `weights/official_best.pt` plus `weights/official_best_decode.yaml` as the selected candidate. Use test only once for final evaluation of a selected candidate.
+
+Checkpoint selection priority is:
+
+1. maximum `official_acc`
+2. if tied, maximum `official_score`
+3. if tied, lower `official_FP`
+4. if tied, lower `official_FN`
+5. if tied, higher `count_acc_4`
 
 Do not tune on test, use GT during inference or decode, fabricate lanes, silently change official metrics, or claim improvement without official-val evidence.
 

@@ -197,3 +197,9 @@ GCS-YOLO-Lane 将 YOLO11 从通用目标/分割框架改造成结构化车道线
 2. `docs/gcs-yolo-lane-related-work-matrix.md`：建立候选 baseline 的 WHY/HOW/WHAT、TuSimple 指标、是否可比、引用状态。
 
 这两个文件完成后，再进入 Abstract、Introduction 和 Method 的正式英文初稿会更稳。
+Legacy/non-contract draft note: this document was added after rollback target
+`b6535f641` and is retained only as a writing plan. It does not define the
+active algorithm, available CLI flags, loss items, selected candidates, or
+experiment conclusions. Use `docs/agent-context/current-contracts.md` for the
+active rollback contract; any post-`b6535f641` experiment content is legacy
+only.

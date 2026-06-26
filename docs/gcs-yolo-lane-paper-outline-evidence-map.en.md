@@ -1,5 +1,12 @@
 # GCS-YOLO-Lane Paper Outline and Evidence Map
 
+Legacy/non-contract draft note: this document was added after rollback target
+`b6535f641` and is retained only as a writing outline. It does not define the
+active algorithm, available CLI flags, loss items, selected candidates, or
+experiment conclusions. Use `docs/agent-context/current-contracts.md` for the
+active rollback contract; any post-`b6535f641` experiment content is legacy
+only.
+
 Title: **GCS-YOLO-Lane: A YOLO11-Based Structured Lane Detection Network**
 
 Workflow: `ars-outline`, academic-paper `outline-only` mode. This file is a detailed outline and evidence map, not a full manuscript draft.

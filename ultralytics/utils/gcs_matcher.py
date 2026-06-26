@@ -34,8 +34,6 @@ class GCSHungarianMatcher:
         min_overlap: int = 2,
         max_x_dist: float = 0.0,
         match_gate_px: float = 0.0,
-        gt4_short_match_endpoint: float = 0.0,
-        gt4_short_match_max_points: int = 20,
     ):
         """Initialize the three matching cost weights used by GCS-YOLO-Lane."""
         self.cost_point = float(cost_point)
@@ -46,12 +44,6 @@ class GCSHungarianMatcher:
         self.min_overlap = max(int(min_overlap), 0)
         self.max_x_dist = float(max_x_dist)
         self.match_gate_px = float(match_gate_px)
-        self.gt4_short_match_endpoint = float(gt4_short_match_endpoint)
-        self.gt4_short_match_max_points = max(int(gt4_short_match_max_points), 1)
-        if self.gt4_short_match_endpoint < 0.0:
-            raise ValueError(
-                f"gcs_gt4_short_match_endpoint must be >= 0, got {self.gt4_short_match_endpoint}."
-            )
 
     @staticmethod
     def _point_scale(image_size) -> tuple[float, float]:
@@ -87,38 +79,6 @@ class GCSHungarianMatcher:
         point_dist = (pred_points[:, None] - gt_points[None]).abs() * scale * gt_valid[None, :, :, None]
         valid_count = gt_valid.sum(dim=1).clamp_min(1.0)
         return point_dist.sum(dim=(2, 3)) / valid_count[None, :]
-
-    def _gt4_short_endpoint_cost(
-        self, pred_points: torch.Tensor, gt_points: torch.Tensor, gt_valid: torch.Tensor
-    ) -> torch.Tensor:
-        """Return Q x N normalized-x endpoint cost for short GT lanes in GT4 images."""
-        if self.gt4_short_match_endpoint <= 0.0 or gt_points.shape[0] != 4:
-            return pred_points.new_zeros((pred_points.shape[0], gt_points.shape[0]))
-
-        valid_count = gt_valid.sum(dim=1)
-        short_mask = valid_count <= float(self.gt4_short_match_max_points)
-        if not short_mask.any():
-            return pred_points.new_zeros((pred_points.shape[0], gt_points.shape[0]))
-
-        # GCS fixed-y x coordinates are normalized to 0..1 in labels and head output,
-        # so endpoint matching must not divide by image width again.
-        pred_x = pred_points[..., 0]
-        gt_x = gt_points[..., 0]
-        costs = []
-        for gt_idx in range(gt_points.shape[0]):
-            if not bool(short_mask[gt_idx].item()):
-                costs.append(pred_x.new_zeros(pred_x.shape[0]))
-                continue
-            valid_idx = torch.nonzero(gt_valid[gt_idx] > 0.5, as_tuple=False).flatten()
-            if valid_idx.numel() == 0:
-                costs.append(pred_x.new_zeros(pred_x.shape[0]))
-                continue
-            first = valid_idx[0]
-            last = valid_idx[-1]
-            endpoint_error = (pred_x[:, first] - gt_x[gt_idx, first]).abs()
-            endpoint_error = endpoint_error + (pred_x[:, last] - gt_x[gt_idx, last]).abs()
-            costs.append(endpoint_error * 0.5)
-        return torch.stack(costs, dim=1)
 
     def _curve_cost(self, pred_points: torch.Tensor, gt_points: torch.Tensor, gt_valid: torch.Tensor) -> torch.Tensor:
         """Compute Q x N aspect-weighted L1 second-order curvature cost."""
@@ -160,15 +120,9 @@ class GCSHungarianMatcher:
     def cost_matrix(self, pred_points: torch.Tensor, pred_logits: torch.Tensor, gt_points: torch.Tensor, gt_valid: torch.Tensor) -> torch.Tensor:
         """Build the Q x N Hungarian cost matrix for one image."""
         cost_point = self._point_cost(pred_points, gt_points, gt_valid)
-        endpoint_cost = self._gt4_short_endpoint_cost(pred_points, gt_points, gt_valid)
         cost_curve = self._curve_cost(pred_points, gt_points, gt_valid)
         cost_exist = -pred_logits.sigmoid()[:, None].expand_as(cost_point)
-        cost = (
-            self.cost_point * cost_point
-            + self.gt4_short_match_endpoint * endpoint_cost
-            + self.cost_curve * cost_curve
-            + self.cost_exist * cost_exist
-        )
+        cost = self.cost_point * cost_point + self.cost_curve * cost_curve + self.cost_exist * cost_exist
         gate = self._gate_mask(pred_points, gt_points, gt_valid)
         return cost.masked_fill(~gate, torch.inf)
 

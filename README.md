@@ -2,7 +2,7 @@
 
 This is the current GCS-YOLO-Lane mainline branch. It imports the historical `5-25-3.zip` algorithm and adapts only the TuSimple fixed-y contract.
 
-Active source/config is based on rollback commit `50999d6af` (`Document 5-25-3 K56 as mainline`) plus default-disabled experiment knobs for `duplicate_margin_loss`, `spurious_margin_loss`, `lane_balanced_point_loss`, `short_valid_recall_loss`, `far_spurious_survival_loss`, `gt5_rank_consistency_loss`, `gt3_extra_survival_loss`, and `gt4_lane_balanced_point_loss`, plus the train-only `gcs_gt4_sample_gain` sampler knob. It also includes default-off GT4 short-lane candidate-recall knobs for replacing the base point-loss reduction with lane-balanced reduction and adding GT4-short endpoint matching cost. Results and mechanisms from other later commits are retained below as legacy experiment conclusions only; they do not describe currently available CLI flags, loss items, diagnostic scripts, or selected candidates.
+Active source/config is rolled back to commit `b6535f641` (`Fix GCS training progress header alignment`). Its active algorithm contract remains the 5-25-3 K56 mainline with no later Count Head, Q18/Q20/dataref, duplicate/spurious/ranking, lane-balanced, valid-repair, side-aux, or GT4-hard diagnostic mechanisms active. Results and mechanisms from later commits are retained below as legacy experiment conclusions only; they do not describe currently available CLI flags, loss items, diagnostic scripts, model outputs, configs, or selected candidates.
 
 ## Contract
 
@@ -25,11 +25,11 @@ Compatibility paths `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml` an
 
 The 5-25-3 algorithm body is intentionally not upgraded to later mainline Count Head, Count Boundary, Quality Head, Survival Head, near-miss, or official-best checkpoint machinery.
 
-## Latest Official-Val Evidence
+## Legacy Post-b653 Official-Val Evidence
 
-The 2026-06-25 `v2_validbranch_neg05-3` result is the latest official-val ACC
-leader, but it is still in the extra-lane diagnostic phase and has not been
-sent to final test:
+The 2026-06-25 `v2_validbranch_neg05-3` result was a post-`b6535f641`
+official-val ACC leader in the later experiment line, but after the rollback it
+is a legacy result only:
 
 ```text
 strict ACC-best decode: conf=0.01, point_valid_thr=0.45, nms_dist_px=30, max_det=5, min_points=2/3
@@ -49,7 +49,7 @@ Do not continue this line by increasing valid recall, enabling valid count
 floor, lowering `point_valid_thr`, increasing `max_det`, or using final test
 for threshold/postprocess selection.
 
-## Latest Hard-Diagnostic Evidence
+## Legacy Post-b653 Hard-Diagnostic Evidence
 
 The 2026-06-26 Q18 and Q20 side-reference checks were run before looking at
 official ACC. Both used the fixed train-derived `gt4pt025` GT4-hard set:
@@ -72,17 +72,17 @@ line (`raw_match_recall>=13/22`, `after_point_valid_recall>=4/22`, and
 `raw_match_recall=10/20=0.500000`, `geometry_bad=10`, and baseline
 `after_point_valid_recall=0/20`.
 
-Decision: reject Q20 as a GT4-hard geometry fix, do not run its official-val
-sweep, and do not tune valid-loss weights. The next geometry candidate should
-move to data-driven reference clustering over the actual failed GT4-hard lane
-shapes.
+Decision at the time: reject Q20 as a GT4-hard geometry fix, do not run its
+official-val sweep, and do not tune valid-loss weights. After the
+`b6535f641` rollback, Q18/Q20/dataref tooling is not part of the active code
+surface.
 
-## Current Official-Val Candidate
+## Legacy Post-b653 Official-Val Candidate
 
 The 2026-06-25 `dupmargin005_gt4pt025` run is the previous official-val
-selected candidate and now serves as the gate that `v2_validbranch_neg05-3`
-must beat cleanly. It uses the branch-local default-disabled GT4 lane-balanced
-point loss on top of `dupmargin005`:
+selected candidate in the later experiment line. After the `b6535f641`
+rollback, it is legacy evidence only and does not define an active selected
+candidate or available loss/config surface:
 
 ```text
 run: gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt4pt025
@@ -160,9 +160,9 @@ FP, and FN were worse. Its final-test run used the official-val selected
 `max_det=6`, while the train args recorded `gcs_eval_max_det=8`; keep that as a
 comparability caveat, not a reason to tune test.
 
-The 2026-06-22 `dupmargin005` run is a valid near-miss for the current
-default-disabled `duplicate_margin_loss` experiment, not a promoted selected
-candidate:
+The 2026-06-22 `dupmargin005` run is a valid near-miss from the
+post-`b6535f641` duplicate-margin experiment line, not a promoted selected
+candidate or an active-code capability:
 
 ```text
 run: gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_count03_under5_03
@@ -178,8 +178,8 @@ reporting-only final-test ACC recorded through 2026-06-22, but it does not beat 
 `gt4short15` official-val gate `0.970851`. Final test is not a selection
 surface, so do not promote it or tune thresholds from its test report.
 
-The 2026-06-23 `spurmargin003` run is a rejected follow-up for the current
-default-disabled `spurious_margin_loss` experiment:
+The 2026-06-23 `spurmargin003` run is a rejected follow-up from the
+post-`b6535f641` spurious-margin experiment line:
 
 ```text
 run: gcs_yolo_lane_s_tusimple_fixed_y_spurmargin003_count03_under5_03
@@ -194,8 +194,8 @@ It did not beat `count03_under5_03`, `dupmargin005`, or `gt4short15` on
 official-val ACC. Its reporting-only final-test ACC is also below those three
 comparators, so it is not a promotion candidate.
 
-The 2026-06-23 `shortpos` run is a rejected follow-up for the current
-default-disabled positive short-lane point/visibility losses:
+The 2026-06-23 `shortpos` run is a rejected follow-up from the
+post-`b6535f641` positive short-lane point/visibility experiment line:
 
 ```text
 run: gcs_yolo_lane_s_tusimple_fixed_y_shortpos_count03_under5_03
@@ -244,7 +244,7 @@ continue by sweeping `gcs_far_spurious_survival` and
 first, then ablate one mechanism at a time if further evidence justifies it.
 
 These decodes were selected on official-val only in their historical experiment
-contexts. None is a current active-code contract after the rollback, and neither
+contexts. None is an active-code contract after the rollback, and neither
 the `gt4short15` nor `count03_under5_00` final-test report beat the older
 `count03_under5_03` final-test ACC `0.965459`. The later `dupmargin005`
 reporting-only final-test ACC does beat it, but official-val still controls
@@ -252,7 +252,7 @@ selection; do not use final test for threshold, checkpoint, postprocess, or
 loss tuning. The later `spurmargin003`, `shortpos`, and
 `farspur001_gt5rank001` runs do not improve official-val ACC.
 
-Current bottleneck evidence is documented in `docs/agent-context/known-bottlenecks.md`. The train/val diagnostics localize the main count weakness to `GT4` scenes with short visible side lanes, not to a simple decode-threshold issue. The relevant remote diagnostic artifacts are:
+Legacy bottleneck evidence is documented in `docs/agent-context/known-bottlenecks.md`. The post-`b6535f641` train/val diagnostics localized the main count weakness to `GT4` scenes with short visible side lanes, not to a simple decode-threshold issue. The relevant remote diagnostic artifacts are:
 
 ```text
 runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_visible_iou_count03_under5_03_count_confusion_train_val_by_visibility/summary.json
@@ -272,7 +272,7 @@ raising FN as soon as it removes duplicate-like predictions.
 
 The high-score unmatched-query suppression runs are rejected legacy experiments.
 Their `--gcs-extra-exist` flags and `extra_exist_loss` logging are not present
-in the active `50999d6af` code state.
+in the active `b6535f641` rollback code state.
 The first run,
 `gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_extraexist005_count03_under5_03`,
 had best 363-image official-val
@@ -291,7 +291,7 @@ extra-exist gain sweeps or send these candidates to final test; return to
 short-lane score/geometry retention work selected only on official-val.
 
 The short matched existence floor experiment is a rejected legacy experiment.
-Its `--gcs-short-exist-*` flags are not present in the active `50999d6af` code
+Its `--gcs-short-exist-*` flags are not present in the active `b6535f641` rollback code
 state. It used a then-experimental `GCSLoss.exist_loss()` floor to protect only
 Hungarian-matched short GT lanes after the existing APE quality and visible-IoU
 quality were computed:

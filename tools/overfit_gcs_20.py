@@ -39,6 +39,7 @@ DEFAULT_LOSS_GAINS = {
     "edge_loss": 0.2,
     "count_loss": 0.0,
     "count_under5_loss": 0.0,
+    "count_boundary_loss": 0.0,
 }
 
 
@@ -114,6 +115,36 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=5,
         help="Minimum GT lane count that enables the targeted undercount penalty.",
+    )
+    parser.add_argument(
+        "--gcs-count-boundary",
+        type=float,
+        default=0.0,
+        help="GT3/GT4/GT5 adjacent lane-count boundary loss gain. 0 disables.",
+    )
+    parser.add_argument(
+        "--gcs-count-boundary-gt4-weight",
+        type=float,
+        default=2.0,
+        help="Weight for the GT4 lower/upper count boundary terms.",
+    )
+    parser.add_argument(
+        "--gcs-count-boundary-gt5-weight",
+        type=float,
+        default=1.5,
+        help="Weight for the GT5 undercount boundary term.",
+    )
+    parser.add_argument(
+        "--gcs-count-boundary-margin34",
+        type=float,
+        default=0.35,
+        help="Margin around the 3/4 boundary: GT3 upper=3+margin, GT4 lower=4-margin.",
+    )
+    parser.add_argument(
+        "--gcs-count-boundary-margin45",
+        type=float,
+        default=0.35,
+        help="Margin around the 4/5 boundary: GT4 upper=4+margin, GT5 lower=5-margin.",
     )
     parser.add_argument("--gcs-exist-pos-weight", type=float, default=1.0, help="Positive query weight for existence BCE.")
     parser.add_argument("--gcs-exist-focal-gamma", type=float, default=0.0, help="Optional focal gamma for existence BCE.")
@@ -307,6 +338,7 @@ def _load_loss_gains(save_dir: Path) -> dict[str, float]:
         "edge_loss": "gcs_edge",
         "count_loss": "gcs_count",
         "count_under5_loss": "gcs_count_under5",
+        "count_boundary_loss": "gcs_count_boundary",
     }
     for loss_name, arg_name in key_map.items():
         if arg_name in args:
@@ -349,6 +381,7 @@ def summarize_overfit_results(save_dir: str | Path) -> Path | None:
         "train/edge_loss",
         "train/count_loss",
         "train/count_under5_loss",
+        "train/count_boundary_loss",
         "val/exist_loss",
         "val/point_loss",
         "val/point_valid_loss",
@@ -358,6 +391,7 @@ def summarize_overfit_results(save_dir: str | Path) -> Path | None:
         "val/edge_loss",
         "val/count_loss",
         "val/count_under5_loss",
+        "val/count_boundary_loss",
     )
 
     losses = {}
@@ -396,7 +430,7 @@ def summarize_overfit_results(save_dir: str | Path) -> Path | None:
         "losses": losses,
         "interpretation": (
             "20-image overfit is considered healthy only when total, existence, point, point-valid, mask, edge, "
-            "and enabled count losses trend down and rendered predictions align with GT lanes."
+            "and enabled count/boundary losses trend down and rendered predictions align with GT lanes."
         ),
     }
     out_path = save_dir / "overfit_summary.json"
@@ -589,6 +623,11 @@ def main() -> None:
         "gcs_count": args.gcs_count,
         "gcs_count_under5": args.gcs_count_under5,
         "gcs_count_under5_min_lanes": args.gcs_count_under5_min_lanes,
+        "gcs_count_boundary": args.gcs_count_boundary,
+        "gcs_count_boundary_gt4_weight": args.gcs_count_boundary_gt4_weight,
+        "gcs_count_boundary_gt5_weight": args.gcs_count_boundary_gt5_weight,
+        "gcs_count_boundary_margin34": args.gcs_count_boundary_margin34,
+        "gcs_count_boundary_margin45": args.gcs_count_boundary_margin45,
         "gcs_exist_pos_weight": args.gcs_exist_pos_weight,
         "gcs_exist_focal_gamma": args.gcs_exist_focal_gamma,
         "gcs_exist_focal_alpha": args.gcs_exist_focal_alpha,
@@ -659,7 +698,7 @@ def main() -> None:
     if metrics_path is not None:
         print(f"overfit metrics: {metrics_path.resolve()}")
     print(
-        "success signals: weighted total, existence, point, point-valid, mask, edge, and enabled count losses should fall; "
+        "success signals: weighted total, existence, point, point-valid, mask, edge, and enabled count/boundary losses should fall; "
         "overfit_metrics.json should show low APE and high F1."
     )
 

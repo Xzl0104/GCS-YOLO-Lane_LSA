@@ -4,21 +4,19 @@ This file applies to branch `codex/5-25-3-k56`.
 
 ## Branch Scope
 
-The current mainline imports the historical `5-25-3.zip` algorithm and changes only the TuSimple fixed-y contract to Q=12/K=56 with official h-sample anchors.
+The current mainline imports the historical `5-25-3.zip` algorithm and changes the TuSimple fixed-y contract to Q=12/K=56 with official h-sample anchors. It also includes the 2026-06-27 user-requested default-off `count_boundary_loss` for GT3/GT4/GT5 adjacent count-score boundaries.
 
-Do not read mainline Count Head, Count Boundary, Quality Head, Survival Head, near-miss, or official-best bottlenecks as active branch behavior. Those mechanisms are not part of this 5-25-3 branch.
+Do not read mainline Count Head, Quality Head, Survival Head, near-miss, or old mainline official-best bottlenecks as active branch behavior. Those algorithm mechanisms are not part of this 5-25-3 branch. The only active Count Boundary behavior is the branch-local default-off `count_boundary_loss`, and the only active official-best behavior is the explicit 2026-06-27 training-time official-val selection hook.
 
-Active source/config is based on rollback commit `50999d6af` (`Document 5-25-3
-K56 as mainline`) plus the default-disabled `duplicate_margin_loss`,
-`spurious_margin_loss`, `lane_balanced_point_loss`,
-`short_valid_recall_loss`, `far_spurious_survival_loss`, and
-`gt5_rank_consistency_loss`, `gt3_extra_survival_loss`, and
-`gt4_lane_balanced_point_loss` experiment knobs, plus train-only
-`gcs_gt4_sample_gain`. Bottleneck notes below that depend on
+Active source/config is rolled back to commit `b6535f641` (`Fix GCS training
+progress header alignment`). Bottleneck notes below that depend on
+post-`b6535f641` mechanisms such as duplicate/spurious/ranking losses,
+GT3/GT4/GT5 follow-up losses, Q18/Q20/dataref configs, Count Head,
+count-guided decode, side-aux, GT4-hard diagnostics,
 `tools/diagnose_tusimple_count_confusion.py`, `--gcs-gt4-short-*`,
-`extra_exist_loss`, or `--gcs-short-exist-*` are legacy post-`50999d6af`
-experiment conclusions only. They do not describe currently available code,
-CLI flags, loss terms, or active selected candidates.
+`extra_exist_loss`, or `--gcs-short-exist-*` are legacy experiment conclusions
+only. They do not describe currently available code, CLI flags, loss terms,
+diagnostic scripts, configs, model outputs, or active selected candidates.
 
 ## Data And Geometry
 
@@ -34,12 +32,13 @@ CLI flags, loss terms, or active selected candidates.
 - Formal training and official-val evaluation should run on the remote CUDA server.
 - This branch includes `tools/eval_tusimple_official.py` and `tools/sweep_tusimple_official.py` for official-val and final TuSimple test evaluation.
 - The active rollback code does not include `tools/diagnose_tusimple_count_confusion.py`.
-- It still does not include later mainline `diagnose_gcs_gt5.py`, training-time `official_best` checkpoint preservation, Count/Quality/Boundary diagnostics, Survival, or near-miss machinery.
+- It includes explicit training-time `official_best` checkpoint preservation for official-val selection.
+- It still does not include later mainline `diagnose_gcs_gt5.py`, Count/Quality/Boundary diagnostics, Survival, or near-miss machinery.
 
-## Legacy Post-50999 Official-Val Selection State
+## Legacy Post-b653 Official-Val Selection State
 
 The 2026-06-21 `gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03`
-candidate was selected on official-val in a later post-`50999d6af` experiment
+candidate was selected on official-val in a later post-`b6535f641` experiment
 line. After the rollback, it is a legacy result, not the active code baseline:
 
 ```text
@@ -88,7 +87,7 @@ gt4short15 count_acc_4 = 0.482906, confusion 4->3=118, 4->5=117, 4->6=7
 
 Any threshold, max-det, min-points, checkpoint, or postprocess changes must be selected on official-val. Do not tune from the final test breakdown.
 
-## 2026-06-20 Train/Val Count-Confusion Diagnostic
+## Legacy 2026-06-20 Train/Val Count-Confusion Diagnostic
 
 A train/val-only diagnostic was run on the remote server with the frozen `count03_under5_03` checkpoint and the official-val selected decode:
 
@@ -136,7 +135,7 @@ Integrated conclusion:
 - Hypothesis: the current `sum(sigmoid(pred_logits))` count loss plus `target>=5` undercount penalty does not provide enough targeted pressure for `GT4` short-lane undercount and overcount.
 - Legacy next action at the time: use `tools/diagnose_tusimple_count_confusion.py` for reusable train/val `(date, lane_count, min_visible_points)` confusion, then run a train-only experiment with explicit `--gcs-gt4-short-boost` sampling for `GT4` short-side-lane samples. This is historical context only because the active rollback code no longer includes that diagnostic or sampler flag.
 
-## 2026-06-20 GT4 Short-Lane Boost Result
+## Legacy 2026-06-20 GT4 Short-Lane Boost Result
 
 The completed `gcs_yolo_lane_s_tusimple_fixed_y_gt4short2_count03_under5_03`
 experiment is rejected for promotion because the 363-image official-val ACC did
@@ -194,7 +193,7 @@ collateral FN/GT3/GT5 cost, for example `--gcs-gt4-short-boost 1.5` with
 sweep, then rerun the train/val count-confusion diagnostic before any final-test
 reporting.
 
-## 2026-06-21 GT4 Short-Lane Boost 1.5 Result
+## Legacy 2026-06-21 GT4 Short-Lane Boost 1.5 Result
 
 The completed `gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03`
 experiment was accepted as the official-val selected candidate in the legacy
@@ -283,7 +282,7 @@ Integrated conclusion:
 - Bottleneck: the branch still fails on count stability around short or ambiguous `GT4` side lanes, with both undercount and overcount. The problem is not solved by weaker GT4 short-lane oversampling plus a looser selected decode.
 - Smallest safe next action: do not tune on final test. Return to official-val and train/val diagnostics, and target a train-side count/visibility refinement that separates `GT4` false-fifth suppression from true `GT5` retention.
 
-## 2026-06-21 gt4short15 Failure Trace and NMS Check
+## Legacy 2026-06-21 gt4short15 Failure Trace and NMS Check
 
 Before changing `count_under5_loss`, a train/val failure-trace diagnostic and a
 363-image official-val NMS-only sweep were run for the selected `gt4short15`
@@ -401,7 +400,7 @@ Integrated conclusion:
   decode if we need to confirm whether the floor reduced `low_score_short_gt`
   while shifting errors into FN or count tradeoffs.
 
-## 2026-06-21 User-Requested Reporting-Only Test Batch
+## Legacy 2026-06-21 User-Requested Reporting-Only Test Batch
 
 The user requested official test ACC for the recent experiments. The runs below
 use each experiment's official-val selected decode and must not be used to tune
@@ -427,7 +426,7 @@ Integrated conclusion:
   to official-val and train/val diagnostics instead of using these test results
   for selection.
 
-## 2026-06-22 count03_under5_00 Under5-Loss Ablation
+## Legacy 2026-06-22 count03_under5_00 Under5-Loss Ablation
 
 The completed `gcs_yolo_lane_s_tusimple_fixed_y_visible_iou_count03_under5_00`
 run set `gcs_count=0.3`, `gcs_count_under5=0.0`, and
@@ -487,10 +486,11 @@ Integrated conclusion:
   checkpoint choice, `max_det`, `min_points`, NMS, or loss weights from the
   final-test breakdown.
 
-## 2026-06-22 dupmargin005 Duplicate-Margin Near-Miss
+## Legacy 2026-06-22 dupmargin005 Duplicate-Margin Near-Miss
 
 The completed `gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_count03_under5_03`
-run enabled the current default-disabled duplicate-margin experiment:
+run enabled a post-`b6535f641` duplicate-margin experiment that is not present
+in the active rollback code:
 
 ```text
 gcs_duplicate_margin = 0.05
@@ -548,16 +548,17 @@ Integrated conclusion:
   errors.
 - Decision: keep it as a rejected near-miss. The duplicate-margin idea is
   useful, but this setting has not solved count stability and is not the
-  selected candidate under official-val protocol.
+  selected candidate in that legacy official-val protocol.
 - Smallest safe next action: if continuing this line, run train/val-only
   failure traces for the selected decode `conf=0.05`, `point_valid_thr=0.45`,
   `nms_dist_px=0.0`, `max_det=6`, `min_points=6` and compare failure buckets
   against `count03_under5_03` and `gt4short15`. Do not tune from final test.
 
-## 2026-06-23 spurmargin003 Spurious-Margin Rejection
+## Legacy 2026-06-23 spurmargin003 Spurious-Margin Rejection
 
 The completed `gcs_yolo_lane_s_tusimple_fixed_y_spurmargin003_count03_under5_03`
-run enabled the current default-disabled spurious-margin experiment:
+run enabled a post-`b6535f641` spurious-margin experiment that is not present
+in the active rollback code:
 
 ```text
 gcs_spurious_margin = 0.03
@@ -620,10 +621,11 @@ Integrated conclusion:
 - Decision: reject `spurmargin003`; do not continue by sweeping
   `gcs_spurious_margin` gains or retuning NMS/thresholds from test.
 
-## 2026-06-23 shortpos Positive Short-Lane Loss Rejection
+## Legacy 2026-06-23 shortpos Positive Short-Lane Loss Rejection
 
 The completed `gcs_yolo_lane_s_tusimple_fixed_y_shortpos_count03_under5_03`
-run enabled the current default-disabled positive short-lane losses:
+run enabled post-`b6535f641` positive short-lane losses that are not present in
+the active rollback code:
 
 ```text
 gcs_lane_balanced_point = 3.0
@@ -732,7 +734,7 @@ is query existence/ranking calibration under short-lane retention pressure,
 especially spurious and duplicate-like extras causing `3->4`, `4->5`, and
 `4->6` overcount.
 
-## 2026-06-23 farspur001 + gt5rank001 Rejection
+## Legacy 2026-06-23 farspur001 + gt5rank001 Rejection
 
 The completed
 `gcs_yolo_lane_s_tusimple_fixed_y_farspur001_gt5rank001_count03_under5_03`
@@ -827,7 +829,7 @@ should an ablation be considered, and it should separate
 `far_spurious_survival` from `gt5_rank_consistency` instead of combining them
 again.
 
-## 2026-06-24 dupmargin005 Official-Val Failure-Mode Compare
+## Legacy 2026-06-24 dupmargin005 Official-Val Failure-Mode Compare
 
 The requested comparison used only the 363-image TuSimple official-val subset.
 No model was trained and final test stayed closed.
@@ -915,7 +917,7 @@ creates more `GT3` extras while still slightly weakening `GT5` retention, then
 consider a narrower score/ranking change only if it targets that specific
 pattern without reopening final test.
 
-## 2026-06-24 GT3 Extra-Survival Follow-Up
+## Legacy 2026-06-24 GT3 Extra-Survival Follow-Up
 
 The smallest follow-up to `dupmargin005` is a default-disabled GT3-only query
 ranking loss, not another duplicate-like suppression pass and not a positive
@@ -965,9 +967,9 @@ Risks to monitor on official-val:
 - If GT3 `3->4` does not drop, the surplus query may be surviving through
   point-valid/min-points interactions rather than pure existence-logit ranking.
 
-## 2026-06-24 Official-Test GT4 Count-Shape Collapse
+## Legacy 2026-06-24 Official-Test GT4 Count-Shape Collapse
 
-The latest reporting-only official-test result exposed a sharper bottleneck
+The later reporting-only official-test result exposed a sharper bottleneck
 than the official-val sweep suggested. The fixed candidate pool is:
 
 ```text
@@ -1087,7 +1089,7 @@ Updated conclusion:
   model adds a real count head and official-val evidence shows it fixes GT4
   without a material ACC/FN regression.
 
-## 2026-06-24 GT4 4->3 Missing-Lane Raw-Query Diagnostic
+## Legacy 2026-06-24 GT4 4->3 Missing-Lane Raw-Query Diagnostic
 
 The follow-up diagnostic is now `tools/diagnose_gt4_missing_lane_raw_queries.py`.
 It uses the same normal decode candidate pool:
@@ -1190,7 +1192,7 @@ fixed candidate pool. The generated hard-val list is diagnostic-only and must
 not be fed back into training. Promotion still uses official-val, with final
 test reserved for reporting-only evidence after selection.
 
-## 2026-06-24 dupmargin005_gt3extra003 Rejection
+## Legacy 2026-06-24 dupmargin005_gt3extra003 Rejection
 
 The completed
 `gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_gt3extra003_count03_under5_03`
@@ -1295,7 +1297,7 @@ weakest GT3 matched logit side of the hinge. A smaller gain or
 `min_matched_logit.detach()` is only a train/val or official-val ablation, not
 a final-test-driven change.
 
-## 2026-06-25 GT4 Lane-Balanced Point Sweep Result
+## Legacy 2026-06-25 GT4 Lane-Balanced Point Sweep Result
 
 The two requested GT4 lane-balanced point official-val sweeps are complete.
 Both runs build on `dupmargin005` and use the branch-local default-disabled
@@ -1371,7 +1373,7 @@ action is the v2 extra-lane diagnostic and fine official-val sweep. Do not tune
 final-test thresholds, NMS, `max_det`, `min_points`, checkpoint choice, or loss
 gain from any final-test report.
 
-## 2026-06-25 GT4 Short-Lane Recall Endpoint Rejection
+## Legacy 2026-06-25 GT4 Short-Lane Recall Endpoint Rejection
 
 The completed `gcs_yolo_lane_s_tusimple_fixed_y_gt4shortrecall_lbpt_endpoint`
 run enabled the default-off base lane-balanced point reduction and GT4-short
@@ -1419,10 +1421,10 @@ revisited, isolate matcher/label/query candidate geometry around
 `clips/0601/1494453641541664519/20.jpg`, and compare against `gt4pt025` before
 launching another training change.
 
-## 2026-06-25 v2_validbranch_neg05-3 Extra-Lane Bottleneck
+## Legacy 2026-06-25 v2_validbranch_neg05-3 Extra-Lane Bottleneck
 
-The `v2_validbranch_neg05-3` run moves the active official-val bottleneck away
-from GT4 missing-lane recall and toward extra-lane over-count. It exceeds the
+The `v2_validbranch_neg05-3` run moved the later official-val bottleneck away
+from GT4 missing-lane recall and toward extra-lane over-count in that legacy experiment line. It exceeds the
 previous `gt4pt025` ACC gate, but the margin is narrow and the count-shape
 evidence is not robust enough to justify final-test evaluation yet.
 
@@ -1502,7 +1504,7 @@ Select only on official-val. Report `official_acc`, `official_score`, `FP`,
 one decode is selected by the official-val table and the extra-lane diagnosis
 does not reveal a hidden GT5 under-count tradeoff.
 
-## 2026-06-26 Q18 GT4-Hard Raw Geometry Check
+## Legacy 2026-06-26 Q18 GT4-Hard Raw Geometry Check
 
 The Q18 run
 `gcs_yolo_lane_s_q18_k56_side_gt4endpoint_validneg_countce_v1` was checked
@@ -1575,7 +1577,7 @@ geometry. The next geometry-recall experiment should move to Q20 instead of
 continuing Q18 loss tuning. Keep final test closed and do not lower
 `point_valid_thr` from this evidence.
 
-## 2026-06-26 Q20 GT4-Hard Raw Geometry Check
+## Legacy 2026-06-26 Q20 GT4-Hard Raw Geometry Check
 
 The Q20 run
 `gcs_yolo_lane_s_q20_k56_sidegeom_gt4endpoint_validneg_countce_v1` was checked
@@ -1676,7 +1678,7 @@ instead of only adding side-geometry query slots. Keep official-val and final
 test closed until a new reference design passes the hard raw-geometry gate
 first.
 
-## 2026-06-26 Q20-Dataref v1 Hard-Gate Failure
+## Legacy 2026-06-26 Q20-Dataref v1 Hard-Gate Failure
 
 The first dataref training attempt
 `gcs_yolo_lane_s_q20_k56_dataref_gt4endpoint_validneg_countce_v1` did not pass

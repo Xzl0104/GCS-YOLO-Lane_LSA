@@ -15,15 +15,13 @@ The model is expected to output lane instances as ordered 2D point sequences, no
 - Custom GCS eval: `tools/eval_gcs.py`
 - TuSimple official eval: `tools/eval_tusimple_official.py`
 - TuSimple official sweep: `tools/sweep_tusimple_official.py`
-- GT4 missing-lane diagnostic: `tools/diagnose_gt4_missing_lane_raw_queries.py`
-- GT4-hard train-derived validation list builder: `tools/build_gt4_hard_val_split.py`
 - Model shape check: `tools/check_model.py`
 
 ## Current Branch Direction
 
 This branch imports the historical `5-25-3.zip` algorithm and is now the current K56 mainline.
 
-Only the explicit TuSimple contract was changed from the legacy `Q=8/K=32/fixed_y=[0.98,0.25]` setup to the current `Q=12/K=56/fixed_y=710/720 -> 160/720` setup. The 5-25-3 algorithm body is intentionally not upgraded to the later Count Head, Count Boundary, Quality Head, Survival Head, or near-miss machinery.
+Only the explicit TuSimple contract was changed from the legacy `Q=8/K=32/fixed_y=[0.98,0.25]` setup to the current `Q=12/K=56/fixed_y=710/720 -> 160/720` setup, plus the 2026-06-27 user-requested default-off `count_boundary_loss`. The 5-25-3 algorithm body is intentionally not upgraded to the later Count Head, Quality Head, Survival Head, or near-miss machinery.
 
 Previous q12-k56 experiment documentation remains historical context. Do not delete it, and do not read it as the active algorithm unless it is explicitly marked as a legacy run record.
 
@@ -47,7 +45,7 @@ The official-val subset is aligned with the current validation split and must st
 
 The K56 labels keep the same split sizes and align fixed-y anchors exactly to TuSimple official h-samples `710..160`, descending by `10` pixels.
 
-Official TuSimple Accuracy evaluation needs the original TuSimple archive layout, not only the fixed-y converted dataset. This branch includes `tools/eval_tusimple_official.py`, `tools/sweep_tusimple_official.py`, and `gcs_tools/tusimple_official_eval.py` for official-val evaluation and threshold sweeps, but it does not include later mainline training-time `official_best` checkpoint preservation. Use official-val for threshold/postprocess selection and test only once for the selected candidate.
+Official TuSimple Accuracy evaluation needs the original TuSimple archive layout, not only the fixed-y converted dataset. This branch includes `tools/eval_tusimple_official.py`, `tools/sweep_tusimple_official.py`, and `gcs_tools/tusimple_official_eval.py` for official-val evaluation and threshold sweeps. It also includes the explicit 2026-06-27 training-time `official_best` checkpoint-selection hook. Use official-val for checkpoint, threshold, and postprocess selection, and use test only once for the selected candidate.
 
 Required test archive shape:
 

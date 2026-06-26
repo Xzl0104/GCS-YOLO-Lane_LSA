@@ -15,104 +15,38 @@ from ultralytics.data.utils import check_det_dataset
 from ultralytics.nn.modules import GCSLaneHead
 from ultralytics.nn.tasks import load_checkpoint
 from ultralytics.utils import ROOT
-from ultralytics.utils.gcs_loss import GCSLoss
 from ultralytics.utils.gcs_shape import assert_gcs_image_tensor, assert_gcs_shape, normalize_imgsz
 from ultralytics.utils.gcs_postprocess import decode_gcs_predictions
 from ultralytics.utils.torch_utils import select_device
 
 
-LOSS_NAMES = GCSLoss.loss_names
+LOSS_NAMES = (
+    "exist_loss",
+    "point_loss",
+    "point_valid_loss",
+    "smooth_loss",
+    "curve_loss",
+    "mask_loss",
+    "edge_loss",
+    "count_loss",
+    "count_under5_loss",
+    "count_boundary_loss",
+    "count_score_mean",
+)
 LOSS_GAIN_ARGS = (
     "gcs_exist",
     "gcs_point",
-    "gcs_lane_balanced_point",
-    "gcs_gt4_short_lane_log_gain",
-    "gcs_gt4_lane_balanced_point",
     "gcs_point_valid",
-    "gcs_short_valid_recall",
-    "gcs_gt4_short_valid_recall_weight",
-    "gcs_gt4_short_valid_count_floor_weight",
-    "gcs_valid_lb_gt4_short_count_log_gain",
-    "gcs_valid_lb_gt4_short_gt_points_log_gain",
-    "gcs_valid_lb_gt4_short_pred_valid_prob_log_gain",
-    "gcs_valid_lb_gt4_short_pred_valid_sum_log_gain",
-    "gcs_unmatched_valid_neg_loss_log_gain",
-    "gcs_unmatched_valid_query_count_log_gain",
-    "gcs_unmatched_valid_prob_log_gain",
     "gcs_smooth",
     "gcs_curve",
     "gcs_mask",
     "gcs_edge",
     "gcs_count",
     "gcs_count_under5",
-    "gcs_count_ce",
-    "gcs_count_ce_acc_log_gain",
-    "gcs_duplicate_margin",
-    "gcs_spurious_margin",
-    "gcs_far_spurious_survival",
-    "gcs_gt5_rank_consistency",
-    "gcs_gt3_extra_survival",
-    "gcs_gt4_short_lane_valid_points_log_gain",
-    "gcs_gt4_short_lane_count_log_gain",
-    "gcs_gt4_short_valid_lane_count_log_gain",
-    "gcs_gt4_short_gt_valid_points_log_gain",
-    "gcs_gt4_short_pred_valid_prob_log_gain",
-    "gcs_gt4_short_pred_valid_sum_log_gain",
-    "gcs_dataref_side_aux",
-    "gcs_dataref_side_aux_point_log_gain",
-    "gcs_dataref_side_aux_valid_log_gain",
-    "gcs_dataref_side_aux_exist_log_gain",
-    "gcs_dataref_side_aux_lanes_log_gain",
-    "gcs_dataref_side_aux_refdist_log_gain",
+    "gcs_count_boundary",
+    None,
 )
-DEFAULT_LOSS_GAINS = (
-    2.0,
-    15.0,
-    0.0,
-    0.0,
-    0.0,
-    1.0,
-    0.0,
-    0.2,
-    0.05,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.05,
-    0.1,
-    0.2,
-    0.2,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-)
-if len(LOSS_NAMES) != len(LOSS_GAIN_ARGS) or len(LOSS_NAMES) != len(DEFAULT_LOSS_GAINS):
-    raise AssertionError(
-        "GCS validation loss contract mismatch: "
-        f"loss_names={len(LOSS_NAMES)}, gain_args={len(LOSS_GAIN_ARGS)}, defaults={len(DEFAULT_LOSS_GAINS)}"
-    )
+DEFAULT_LOSS_GAINS = (2.0, 15.0, 1.0, 0.05, 0.1, 0.2, 0.2, 0.0, 0.0, 0.0, 0.0)
 METRIC_NAMES = (
     "precision",
     "recall",
@@ -284,10 +218,10 @@ class GCSLaneValidator:
 
     def _loss_gains(self, device: torch.device) -> torch.Tensor:
         """Return validation loss gains matching the training objective."""
-        gains = [
-            float(self._arg(self.args, name, default))
-            for name, default in zip(LOSS_GAIN_ARGS, DEFAULT_LOSS_GAINS)
-        ]
+        gains = []
+        for name, default in zip(LOSS_GAIN_ARGS, DEFAULT_LOSS_GAINS):
+            value = default if name is None else self._arg(self.args, name, default)
+            gains.append(float(value))
         return torch.tensor(gains, device=device, dtype=torch.float32)
 
     def _eval_conf(self) -> float:

@@ -1,5 +1,12 @@
 # GCS-YOLO-Lane: A YOLO11-Based Structured Lane Detection Network
 
+Legacy/non-contract draft note: this document was added after rollback target
+`b6535f641` and is retained only as a writing draft. It does not define the
+active algorithm, available CLI flags, loss items, selected candidates, or
+experiment conclusions. Use `docs/agent-context/current-contracts.md` for the
+active rollback contract; any post-`b6535f641` experiment content is legacy
+only.
+
 Draft status: non-experimental manuscript sections only.
 
 This draft intentionally leaves experimental results, numerical comparisons, and final performance claims unresolved. Citations are written as verification placeholders, for example `[REF: LSTR]`, and must be checked against the original papers before submission. The main experimental line is assumed to be the current active default configuration, not legacy `gt4short15` or reporting-only final-test runs.
