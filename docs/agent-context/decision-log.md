@@ -2,6 +2,56 @@
 
 This file records decisions for branch `codex/5-25-3-k56`.
 
+## 2026-06-27: Add Default-Off Count-Aware Top-K Decode Ablation
+
+Decision:
+
+Add a default-disabled inference/evaluation postprocess option,
+`count_aware_topk`, to the shared GCS decode helper and expose it through
+`tools/infer_gcs.py`, `tools/eval_gcs.py`,
+`tools/eval_tusimple_official.py`, and `tools/sweep_tusimple_official.py`.
+
+When enabled, decode computes:
+
+```text
+count_score = sigmoid(pred_logits).sum()
+k_hat = round(count_score)
+k_hat = clip(k_hat, count_aware_min_k, count_aware_max_k)
+```
+
+Default bounds:
+
+```text
+count_aware_min_k = 3
+count_aware_max_k = 5
+count_aware_length_norm = 12
+```
+
+After ordinary confidence filtering and Lane-NMS, decoded candidate lanes are
+ranked by:
+
+```text
+quality = exist_prob * mean(point_valid_prob_on_visible_segment) * length_factor
+length_factor = min(visible_count / count_aware_length_norm, 1.0)
+```
+
+Only the quality-best `k_hat` lanes are kept. If the candidate count is below
+`k_hat`, all candidates are retained.
+
+Scope:
+
+This is a postprocess ablation only. It does not change training, labels,
+losses, model outputs, matcher behavior, official metrics, Count Head, Quality
+Head, Survival Head, or near-miss machinery. The option is disabled by default,
+so existing inference, eval, and official sweep behavior remains unchanged.
+
+Validation target:
+
+Compile changed Python files, run a synthetic decode check proving default-off
+keeps the old lane count while count-aware top-k trims to dynamic `k_hat`, then
+select any candidate only on official-val. The requested E3 official-val
+normal/count-aware sweeps require the remote E3 `best.pt` checkpoint.
+
 ## 2026-06-27: Add Default-Off Train-Only Hard Sampling
 
 Decision:

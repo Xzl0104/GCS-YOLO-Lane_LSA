@@ -129,6 +129,64 @@ def lane_nms(
     return torch.tensor(keep, dtype=torch.long, device=points.device)
 
 
+def _validate_count_aware_topk(min_k: int, max_k: int, length_norm: float) -> tuple[int, int, float]:
+    """Validate count-aware top-k controls and return normalized values."""
+    min_k = int(min_k)
+    max_k = int(max_k)
+    length_norm = float(length_norm)
+    if min_k < 0 or max_k < 0:
+        raise ValueError(f"count-aware k bounds must be >= 0, got min_k={min_k}, max_k={max_k}.")
+    if min_k > max_k:
+        raise ValueError(f"count-aware min_k must be <= max_k, got min_k={min_k}, max_k={max_k}.")
+    if length_norm <= 0.0:
+        raise ValueError(f"count-aware length_norm must be > 0, got {length_norm}.")
+    return min_k, max_k, length_norm
+
+
+def _count_aware_k_hat(count_score: float, min_k: int, max_k: int) -> int:
+    """Round the count score and clamp it to the configured lane-count range."""
+    k_hat = int(round(float(count_score)))
+    return max(int(min_k), min(int(max_k), k_hat))
+
+
+def _count_aware_lane_quality(lane: dict, length_norm: float) -> float:
+    """Return count-aware lane quality from existence, visible-valid probability, and visible length."""
+    exist_prob = float(lane["score"])
+    valid_mask = None
+    if "point_valid" in lane:
+        valid_mask = np.asarray(lane["point_valid"], dtype=np.float32) > 0.5
+        visible_count = int(valid_mask.sum())
+    elif "visible_points_norm" in lane:
+        visible_count = int(np.asarray(lane["visible_points_norm"], dtype=np.float32).shape[0])
+    else:
+        visible_count = int(np.asarray(lane["points_norm"], dtype=np.float32).shape[0])
+
+    mean_valid_prob = 1.0
+    if "point_valid_scores" in lane and valid_mask is not None:
+        valid_scores = np.asarray(lane["point_valid_scores"], dtype=np.float32)
+        if valid_scores.shape[0] == valid_mask.shape[0] and int(valid_mask.sum()) > 0:
+            mean_valid_prob = float(valid_scores[valid_mask].mean())
+        else:
+            mean_valid_prob = 0.0
+
+    length_factor = min(float(visible_count) / float(length_norm), 1.0)
+    return float(exist_prob * mean_valid_prob * length_factor)
+
+
+def _apply_count_aware_topk(lanes: list[dict], k_hat: int, length_norm: float) -> list[dict]:
+    """Keep the highest-quality lanes after ordinary conf filtering and Lane-NMS."""
+    if not lanes:
+        return lanes
+    qualities = [_count_aware_lane_quality(lane, length_norm=length_norm) for lane in lanes]
+    for lane, quality in zip(lanes, qualities):
+        lane["count_aware_quality"] = float(quality)
+    if len(lanes) <= int(k_hat):
+        return lanes
+    keep_by_quality = sorted(range(len(lanes)), key=lambda i: (-qualities[i], i))[: int(k_hat)]
+    keep = set(keep_by_quality)
+    return [lane for i, lane in enumerate(lanes) if i in keep]
+
+
 def decode_gcs_predictions(
     pred_points: torch.Tensor,
     pred_logits: torch.Tensor,
@@ -139,6 +197,10 @@ def decode_gcs_predictions(
     min_points: int = 2,
     max_det: int | None = None,
     nms_dist_px: float = 0.0,
+    count_aware_topk: bool = False,
+    count_aware_min_k: int = 3,
+    count_aware_max_k: int = 5,
+    count_aware_length_norm: float = 12.0,
 ) -> list[dict]:
     """Decode ``pred_points`` and ``pred_logits`` into ordered lane point sequences.
 
@@ -153,6 +215,10 @@ def decode_gcs_predictions(
         min_points: Minimum number of points required to keep a lane.
         max_det: Optional maximum number of kept lanes after score sorting.
         nms_dist_px: Optional duplicate-lane suppression threshold in pixels. 0 disables lane NMS.
+        count_aware_topk: If true, keep only the quality-best ``k_hat`` lanes after conf/NMS.
+        count_aware_min_k: Minimum dynamic lane count when count-aware top-k is enabled.
+        count_aware_max_k: Maximum dynamic lane count when count-aware top-k is enabled.
+        count_aware_length_norm: Visible-point count that saturates the count-aware length factor.
 
     Returns:
         A list of dictionaries with score, query index, normalized points, and optional pixel points.
@@ -177,6 +243,16 @@ def decode_gcs_predictions(
 
     points = pred_points.detach().float().cpu().clamp(0.0, 1.0)
     scores = pred_logits.detach().float().cpu().sigmoid()
+    count_aware_k = None
+    if count_aware_topk:
+        min_k, max_k, length_norm = _validate_count_aware_topk(
+            count_aware_min_k,
+            count_aware_max_k,
+            count_aware_length_norm,
+        )
+        count_aware_k = _count_aware_k_hat(float(scores.sum()), min_k=min_k, max_k=max_k)
+    else:
+        length_norm = float(count_aware_length_norm)
     point_valid_scores = pred_valid_logits.detach().float().cpu().sigmoid() if pred_valid_logits is not None else None
     query_indices = torch.arange(points.shape[0], dtype=torch.long)
 
@@ -267,6 +343,8 @@ def decode_gcs_predictions(
             if visible_mask is not None:
                 item["visible_points"] = points_px[visible_mask]
         lanes.append(item)
+    if count_aware_topk and count_aware_k is not None:
+        lanes = _apply_count_aware_topk(lanes, k_hat=count_aware_k, length_norm=length_norm)
     return lanes
 
 

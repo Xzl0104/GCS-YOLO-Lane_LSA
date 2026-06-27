@@ -148,6 +148,13 @@ diagnostic and is not part of the weighted training objective.
 
 Decode must use real query predictions only, must not use GT during inference, and must not fabricate lanes. Final output should be sorted from left to right by bottom visible x.
 
+The branch includes a default-off count-aware top-k postprocess ablation for
+inference/evaluation only. When explicitly enabled with `--count-aware-topk`,
+decode uses `sum(sigmoid(pred_logits))` to choose a dynamic final lane count
+and keeps the quality-best post-conf, post-NMS lanes. This does not change
+training, labels, losses, model outputs, official metrics, Count Head, Quality
+Head, Survival Head, or default decode behavior.
+
 This branch includes `tools/eval_tusimple_official.py`, `tools/sweep_tusimple_official.py`, `gcs_tools/tusimple_official_eval.py`, and explicit training-time `official_best` checkpoint preservation. It does not include `tools/diagnose_tusimple_count_confusion.py`, `tools/diagnose_gcs_gt5.py`, or later mainline Count/Quality/Boundary diagnostics unless a future task explicitly ports them. Use official-val for selection and test only once for final evaluation.
 
 Formal TuSimple checkpoint selection must use `official_acc` first, then `official_score`, then lower `official_FP`, lower `official_FN`, and higher `count_acc_4`. Do not select the final checkpoint only by `val/total_loss`, internal `val/f1`, or generic `best.pt`.

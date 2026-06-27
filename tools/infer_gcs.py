@@ -97,6 +97,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", default="0", help="Inference device, e.g. 0 or cpu.")
     parser.add_argument("--half", action="store_true", help="Use FP16 on CUDA.")
     parser.add_argument("--max-det", type=int, default=8, help="Maximum lane queries to keep after score sorting.")
+    parser.add_argument("--count-aware-topk", action="store_true", help="Use count_score to keep only the quality-best dynamic lane count.")
+    parser.add_argument("--count-aware-min-k", type=int, default=3, help="Minimum k_hat for --count-aware-topk.")
+    parser.add_argument("--count-aware-max-k", type=int, default=5, help="Maximum k_hat for --count-aware-topk.")
+    parser.add_argument("--count-aware-length-norm", type=float, default=12.0, help="Visible-point count that saturates count-aware length quality.")
     parser.add_argument("--max-images", type=int, default=0, help="Limit number of images. 0 means all images.")
     parser.add_argument("--save-dir", default="runs/gcs_lane/infer", help="Directory for rendered images and labels.")
     parser.add_argument("--no-save-img", action="store_true", help="Do not save rendered lane images.")
@@ -224,6 +228,8 @@ def _json_lane(lane: dict) -> dict:
         item["visible_points_norm"] = np.asarray(lane["visible_points_norm"], dtype=float).round(6).tolist()
     if "visible_points" in lane:
         item["visible_points"] = np.asarray(lane["visible_points"], dtype=float).round(2).tolist()
+    if "count_aware_quality" in lane:
+        item["count_aware_quality"] = round(float(lane["count_aware_quality"]), 6)
     return item
 
 
@@ -239,6 +245,10 @@ def run_inference(
     device: str = "0",
     half: bool = False,
     max_det: int = 8,
+    count_aware_topk: bool = False,
+    count_aware_min_k: int = 3,
+    count_aware_max_k: int = 5,
+    count_aware_length_norm: float = 12.0,
     max_images: int = 0,
     save_img: bool = True,
     save_txt: bool = False,
@@ -291,6 +301,10 @@ def run_inference(
             point_valid_thr=point_valid_thr,
             max_det=max_det,
             nms_dist_px=nms_dist_px,
+            count_aware_topk=count_aware_topk,
+            count_aware_min_k=count_aware_min_k,
+            count_aware_max_k=count_aware_max_k,
+            count_aware_length_norm=count_aware_length_norm,
         )
         post_s = time.perf_counter() - t1
         total_infer += infer_s
@@ -342,6 +356,10 @@ def main() -> None:
         device=args.device,
         half=args.half,
         max_det=args.max_det,
+        count_aware_topk=args.count_aware_topk,
+        count_aware_min_k=args.count_aware_min_k,
+        count_aware_max_k=args.count_aware_max_k,
+        count_aware_length_norm=args.count_aware_length_norm,
         max_images=args.max_images,
         save_img=not args.no_save_img,
         save_txt=args.save_txt,

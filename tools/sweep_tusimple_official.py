@@ -89,6 +89,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--max-dets", nargs="+", type=int, default=[8], help="max_det values to sweep.")
     parser.add_argument("--min-points", nargs="+", type=int, default=[6], help="Minimum visible-anchor floors to sweep.")
+    parser.add_argument("--count-aware-topk", action="store_true", help="Use count_score to keep only the quality-best dynamic lane count.")
+    parser.add_argument("--count-aware-min-k", type=int, default=3, help="Minimum k_hat for --count-aware-topk.")
+    parser.add_argument("--count-aware-max-k", type=int, default=5, help="Maximum k_hat for --count-aware-topk.")
+    parser.add_argument("--count-aware-length-norm", type=float, default=12.0, help="Visible-point count that saturates count-aware length quality.")
     parser.add_argument("--max-images", type=int, default=0, help="Limit number of GT records. 0 means all.")
     parser.add_argument("--warmup", type=int, default=20, help="Number of untimed warmup forwards.")
     parser.add_argument("--device", default="0", help="Inference device, e.g. 0 or cpu.")
@@ -122,13 +126,14 @@ def _weight_run_dir(weights: str | Path) -> Path | None:
     return None
 
 
-def resolve_save_dir(save_dir: str | Path | None, weights: str | Path, split: str) -> Path:
+def resolve_save_dir(save_dir: str | Path | None, weights: str | Path, split: str, count_aware_topk: bool = False) -> Path:
     if save_dir is not None and str(save_dir).strip():
         return Path(save_dir)
+    suffix = "_count_aware_topk" if count_aware_topk else ""
     run_dir = _weight_run_dir(weights)
     if run_dir is not None:
-        return run_dir / f"official_sweep_{split}"
-    return ROOT / "runs" / "gcs_lane" / "tusimple_official_sweep" / Path(weights).stem / f"official_sweep_{split}"
+        return run_dir / f"official_sweep_{split}{suffix}"
+    return ROOT / "runs" / "gcs_lane" / "tusimple_official_sweep" / Path(weights).stem / f"official_sweep_{split}{suffix}"
 
 
 def _limit_records(records: list[dict], max_images: int) -> list[dict]:
@@ -149,6 +154,18 @@ def _combo_key(combo: dict) -> tuple[float, float, float, int, int]:
 
 def build_combos(args: argparse.Namespace) -> list[dict]:
     combos: list[dict] = []
+    count_aware_topk = bool(getattr(args, "count_aware_topk", False))
+    count_aware_min_k = int(getattr(args, "count_aware_min_k", 3))
+    count_aware_max_k = int(getattr(args, "count_aware_max_k", 5))
+    count_aware_length_norm = float(getattr(args, "count_aware_length_norm", 12.0))
+    if count_aware_topk:
+        if count_aware_min_k < 0 or count_aware_max_k < 0 or count_aware_min_k > count_aware_max_k:
+            raise ValueError(
+                "count-aware k bounds must satisfy 0 <= min_k <= max_k, "
+                f"got min_k={count_aware_min_k}, max_k={count_aware_max_k}."
+            )
+        if count_aware_length_norm <= 0.0:
+            raise ValueError(f"count-aware length norm must be > 0, got {count_aware_length_norm}.")
     for conf, point_valid_thr, nms_dist_px, max_det, min_points in product(
         sorted({float(x) for x in args.confs}),
         sorted({float(x) for x in args.point_valid_thrs}),
@@ -169,6 +186,10 @@ def build_combos(args: argparse.Namespace) -> list[dict]:
                 "nms_dist_px": nms_dist_px,
                 "max_det": max_det,
                 "min_points": min_points,
+                "count_aware_topk": count_aware_topk,
+                "count_aware_min_k": count_aware_min_k,
+                "count_aware_max_k": count_aware_max_k,
+                "count_aware_length_norm": count_aware_length_norm,
             }
         )
     if not combos:
@@ -206,6 +227,10 @@ def write_csv(path: Path, rows: list[dict]) -> None:
         "nms_dist_px",
         "max_det",
         "min_points",
+        "count_aware_topk",
+        "count_aware_min_k",
+        "count_aware_max_k",
+        "count_aware_length_norm",
         "official_acc",
         "official_FP",
         "official_FN",
@@ -288,6 +313,10 @@ def sweep(args: argparse.Namespace) -> dict:
                 min_points=combo["min_points"],
                 max_det=combo["max_det"],
                 nms_dist_px=combo["nms_dist_px"],
+                count_aware_topk=combo["count_aware_topk"],
+                count_aware_min_k=combo["count_aware_min_k"],
+                count_aware_max_k=combo["count_aware_max_k"],
+                count_aware_length_norm=combo["count_aware_length_norm"],
             )
             tusimple_lanes = gcs_lanes_to_tusimple_lanes(lanes, record["h_samples"], image_shape=original_shape)
             combo_records[_combo_key(combo)].append(
@@ -328,7 +357,12 @@ def sweep(args: argparse.Namespace) -> dict:
 
     rows = sorted(rows, key=lambda r: (r["conf"], r["point_valid_thr"], r["nms_dist_px"], r["max_det"], r["min_points"]))
     best = select_best(rows)
-    save_dir = resolve_save_dir(args.save_dir, args.weights, args.split)
+    save_dir = resolve_save_dir(
+        args.save_dir,
+        args.weights,
+        args.split,
+        count_aware_topk=bool(getattr(args, "count_aware_topk", False)),
+    )
     save_dir.mkdir(parents=True, exist_ok=True)
     write_csv(save_dir / "tusimple_official_sweep.csv", rows)
 
@@ -348,6 +382,10 @@ def sweep(args: argparse.Namespace) -> dict:
             "nms_dist_pxs": [float(x) for x in sorted({float(x) for x in args.nms_dist_pxs})],
             "max_dets": [int(x) for x in sorted({int(x) for x in args.max_dets})],
             "min_points": [int(x) for x in sorted({int(x) for x in args.min_points})],
+            "count_aware_topk": bool(getattr(args, "count_aware_topk", False)),
+            "count_aware_min_k": int(getattr(args, "count_aware_min_k", 3)),
+            "count_aware_max_k": int(getattr(args, "count_aware_max_k", 5)),
+            "count_aware_length_norm": float(getattr(args, "count_aware_length_norm", 12.0)),
             "runtime_ms": float(args.runtime_ms),
             "max_images": int(args.max_images),
             "device": str(args.device),

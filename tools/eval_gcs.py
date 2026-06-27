@@ -64,6 +64,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-overlap", type=int, default=2, help="Minimum valid overlapping GT points required for eval matching.")
     parser.add_argument("--nms-dist-px", type=float, default=50.0, help="Optional lane duplicate suppression distance in pixels. 0 disables.")
     parser.add_argument("--max-det", type=int, default=8, help="Maximum decoded lane queries per image.")
+    parser.add_argument("--count-aware-topk", action="store_true", help="Use count_score to keep only the quality-best dynamic lane count.")
+    parser.add_argument("--count-aware-min-k", type=int, default=3, help="Minimum k_hat for --count-aware-topk.")
+    parser.add_argument("--count-aware-max-k", type=int, default=5, help="Maximum k_hat for --count-aware-topk.")
+    parser.add_argument("--count-aware-length-norm", type=float, default=12.0, help="Visible-point count that saturates count-aware length quality.")
     parser.add_argument("--max-images", type=int, default=0, help="Limit number of images. 0 means all.")
     parser.add_argument("--warmup", type=int, default=20, help="Number of untimed warmup forwards before benchmarking.")
     parser.add_argument("--device", default="0", help="Inference device, e.g. 0 or cpu.")
@@ -453,6 +457,10 @@ def evaluate(
     min_overlap: int = 2,
     nms_dist_px: float = 50.0,
     max_det: int = 8,
+    count_aware_topk: bool = False,
+    count_aware_min_k: int = 3,
+    count_aware_max_k: int = 5,
+    count_aware_length_norm: float = 12.0,
     max_images: int = 0,
     warmup: int = 20,
     device: str = "0",
@@ -530,6 +538,10 @@ def evaluate(
             point_valid_thr=point_valid_thr,
             max_det=max_det,
             nms_dist_px=nms_dist_px,
+            count_aware_topk=count_aware_topk,
+            count_aware_min_k=count_aware_min_k,
+            count_aware_max_k=count_aware_max_k,
+            count_aware_length_norm=count_aware_length_norm,
         )
         metrics, matches = match_lanes(
             lanes,
@@ -581,6 +593,10 @@ def evaluate(
             "min_overlap": int(min_overlap),
             "nms_dist_px": float(nms_dist_px),
             "max_det": int(max_det),
+            "count_aware_topk": bool(count_aware_topk),
+            "count_aware_min_k": int(count_aware_min_k),
+            "count_aware_max_k": int(count_aware_max_k),
+            "count_aware_length_norm": float(count_aware_length_norm),
             "warmup": int(warmup),
             "device": str(device),
             "half": bool(half),
@@ -616,6 +632,10 @@ def main() -> None:
         min_overlap=args.min_overlap,
         nms_dist_px=args.nms_dist_px,
         max_det=args.max_det,
+        count_aware_topk=args.count_aware_topk,
+        count_aware_min_k=args.count_aware_min_k,
+        count_aware_max_k=args.count_aware_max_k,
+        count_aware_length_norm=args.count_aware_length_norm,
         max_images=args.max_images,
         warmup=args.warmup,
         device=args.device,

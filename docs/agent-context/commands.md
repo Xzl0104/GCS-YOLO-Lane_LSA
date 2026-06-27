@@ -1471,6 +1471,35 @@ python tools/sweep_tusimple_official.py \
   --device 0
 ```
 
+Default-off count-aware top-k postprocess ablation uses the same official-val
+surface and must be selected on validation only:
+
+```bash
+python tools/sweep_tusimple_official.py \
+  --archive-root archive/TUSimple \
+  --split val \
+  --gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
+  --weights runs/gcs_lane/gcs_yolo_lane_s_q12_k56_boundary_shortpv_spurious_v1/weights/best.pt \
+  --imgsz 544 960 \
+  --confs 0.005 0.01 0.02 0.03 0.05 0.08 0.10 0.15 0.20 0.25 \
+  --point-valid-thrs 0.30 0.35 0.40 0.45 0.50 \
+  --nms-dist-pxs 0 18 30 50 \
+  --max-dets 5 6 8 \
+  --min-points 5 6 8 \
+  --device 0 \
+  --half \
+  --count-aware-topk \
+  --count-aware-min-k 3 \
+  --count-aware-max-k 5 \
+  --count-aware-length-norm 12 \
+  --save-dir runs/gcs_lane/gcs_yolo_lane_s_q12_k56_boundary_shortpv_spurious_v1_official_val363_sweep_countaware
+```
+
+Compare this only against the matching normal official-val sweep for the same
+E3 `best.pt`, focusing on `official_acc`, `count_acc_4`, `count_acc_5`,
+`official_FP`, and `official_FN`. The sweep summary records
+`count_aware_topk`.
+
 Legacy post-`b6535f641` Q18/count-head guided sweeps used the same
 official-val surface and kept normal/count-guided rows in one sweep table.
 These flags are not available in the active rollback code:

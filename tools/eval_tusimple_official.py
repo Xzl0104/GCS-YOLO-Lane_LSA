@@ -63,6 +63,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--nms-dist-px", type=float, default=18.0, help="Lane-NMS distance in original-image pixels. 0 disables.")
     parser.add_argument("--min-points", type=int, default=6, help="Minimum visible anchors required to keep a lane.")
     parser.add_argument("--max-det", type=int, default=8, help="Maximum decoded lane queries kept before official evaluation.")
+    parser.add_argument("--count-aware-topk", action="store_true", help="Use count_score to keep only the quality-best dynamic lane count.")
+    parser.add_argument("--count-aware-min-k", type=int, default=3, help="Minimum k_hat for --count-aware-topk.")
+    parser.add_argument("--count-aware-max-k", type=int, default=5, help="Maximum k_hat for --count-aware-topk.")
+    parser.add_argument("--count-aware-length-norm", type=float, default=12.0, help="Visible-point count that saturates count-aware length quality.")
     parser.add_argument("--max-images", type=int, default=0, help="Limit number of GT records. 0 means all.")
     parser.add_argument("--warmup", type=int, default=20, help="Number of untimed warmup forwards.")
     parser.add_argument("--device", default="0", help="Inference device, e.g. 0 or cpu.")
@@ -116,12 +120,14 @@ def resolve_save_dir(
     nms_dist_px: float,
     max_det: int,
     min_points: int,
+    count_aware_topk: bool = False,
 ) -> Path:
     if save_dir is not None and str(save_dir).strip():
         return Path(save_dir)
+    count_tag = "_catopk" if count_aware_topk else ""
     tag = (
         f"official_{split}_conf{float(conf):.4g}_pvalid{float(point_valid_thr):.4g}_"
-        f"nms{float(nms_dist_px):.4g}_maxdet{int(max_det)}_minp{int(min_points)}"
+        f"nms{float(nms_dist_px):.4g}_maxdet{int(max_det)}_minp{int(min_points)}{count_tag}"
     ).replace(".", "p")
     run_dir = _weight_run_dir(weights)
     if run_dir is not None:
@@ -174,6 +180,10 @@ def generate_predictions(
     warmup: int,
     device: str,
     half: bool,
+    count_aware_topk: bool = False,
+    count_aware_min_k: int = 3,
+    count_aware_max_k: int = 5,
+    count_aware_length_norm: float = 12.0,
 ) -> tuple[list[dict], dict]:
     device_obj = select_device(device)
     model = load_gcs_model(weights, device=device_obj, half=half, gcs_imgsz=imgsz)
@@ -217,6 +227,10 @@ def generate_predictions(
             min_points=min_points,
             max_det=max_det,
             nms_dist_px=nms_dist_px,
+            count_aware_topk=count_aware_topk,
+            count_aware_min_k=count_aware_min_k,
+            count_aware_max_k=count_aware_max_k,
+            count_aware_length_norm=count_aware_length_norm,
         )
         tusimple_lanes = gcs_lanes_to_tusimple_lanes(lanes, record["h_samples"], image_shape=original_shape)
         t2 = time.perf_counter()
@@ -251,6 +265,7 @@ def evaluate_official(args: argparse.Namespace) -> dict:
         args.nms_dist_px,
         args.max_det,
         args.min_points,
+        count_aware_topk=args.count_aware_topk,
     )
     save_dir.mkdir(parents=True, exist_ok=True)
 
@@ -272,6 +287,10 @@ def evaluate_official(args: argparse.Namespace) -> dict:
             nms_dist_px=args.nms_dist_px,
             max_det=args.max_det,
             min_points=args.min_points,
+            count_aware_topk=args.count_aware_topk,
+            count_aware_min_k=args.count_aware_min_k,
+            count_aware_max_k=args.count_aware_max_k,
+            count_aware_length_norm=args.count_aware_length_norm,
             runtime_ms=args.runtime_ms,
             use_measured_runtime=args.use_measured_runtime,
             warmup=args.warmup,
@@ -317,6 +336,10 @@ def evaluate_official(args: argparse.Namespace) -> dict:
             "nms_dist_px": float(args.nms_dist_px),
             "max_det": int(args.max_det),
             "min_points": int(args.min_points),
+            "count_aware_topk": bool(args.count_aware_topk),
+            "count_aware_min_k": int(args.count_aware_min_k),
+            "count_aware_max_k": int(args.count_aware_max_k),
+            "count_aware_length_norm": float(args.count_aware_length_norm),
             "runtime_ms": float(args.runtime_ms),
             "use_measured_runtime": bool(args.use_measured_runtime),
             "max_images": int(args.max_images),
