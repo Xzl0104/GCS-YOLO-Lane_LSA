@@ -33,6 +33,12 @@ LOSS_NAMES = (
     "count_boundary_loss",
     "spurious_neg_loss",
     "spurious_negative_count",
+    "spur_cnt_gt3",
+    "spur_cnt_gt4",
+    "spur_cnt_gt5",
+    "spur_neg_gt3",
+    "spur_neg_gt4",
+    "spur_neg_gt5",
     "count_score_mean",
 )
 LOSS_GAIN_ARGS = (
@@ -49,8 +55,34 @@ LOSS_GAIN_ARGS = (
     (("gcs_spurious_neg", 0.0), ("gcs_spurious_neg_weight", 1.0)),
     None,
     None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
 )
-DEFAULT_LOSS_GAINS = (2.0, 15.0, 1.0, 0.05, 0.1, 0.2, 0.2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+DEFAULT_LOSS_GAINS = (
+    2.0,
+    15.0,
+    1.0,
+    0.05,
+    0.1,
+    0.2,
+    0.2,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+)
 METRIC_NAMES = (
     "precision",
     "recall",

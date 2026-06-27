@@ -196,6 +196,17 @@ def parse_args() -> argparse.Namespace:
         help="Multiplier inside the spurious-negative loss term.",
     )
     parser.add_argument(
+        "--gcs-spurious-gt5-weight",
+        type=float,
+        default=1.0,
+        help="Per-image multiplier for spurious-negative loss on GT5-or-denser samples.",
+    )
+    parser.add_argument(
+        "--gcs-spurious-disable-gt5",
+        action="store_true",
+        help="Disable spurious-negative loss on GT5-or-denser samples.",
+    )
+    parser.add_argument(
         "--gcs-spurious-max-points",
         type=int,
         default=12,
@@ -472,6 +483,8 @@ def main() -> None:
         "gcs_count_boundary_margin45": args.gcs_count_boundary_margin45,
         "gcs_spurious_neg": args.gcs_spurious_neg,
         "gcs_spurious_neg_weight": args.gcs_spurious_neg_weight,
+        "gcs_spurious_gt5_weight": args.gcs_spurious_gt5_weight,
+        "gcs_spurious_disable_gt5": args.gcs_spurious_disable_gt5,
         "gcs_spurious_max_points": args.gcs_spurious_max_points,
         "gcs_spurious_close_px": args.gcs_spurious_close_px,
         "gcs_spurious_min_overlap": args.gcs_spurious_min_overlap,

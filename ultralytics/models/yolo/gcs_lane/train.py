@@ -48,6 +48,12 @@ class GCSLaneTrainer(BaseTrainer):
         "count_boundary_loss",
         "spurious_neg_loss",
         "spurious_negative_count",
+        "spur_cnt_gt3",
+        "spur_cnt_gt4",
+        "spur_cnt_gt5",
+        "spur_neg_gt3",
+        "spur_neg_gt4",
+        "spur_neg_gt5",
         "count_score_mean",
     )
     # Keep tqdm headers within BaseTrainer's 11-character progress columns.
@@ -64,6 +70,12 @@ class GCSLaneTrainer(BaseTrainer):
         "cnt_bound",
         "spur_neg",
         "spur_cnt",
+        "spcnt_g3",
+        "spcnt_g4",
+        "spcnt_g5",
+        "spneg_g3",
+        "spneg_g4",
+        "spneg_g5",
         "cnt_score",
     )
     # YOLO11 backbone -> GCS-YOLO-Lane backbone. LSEM is inserted after old

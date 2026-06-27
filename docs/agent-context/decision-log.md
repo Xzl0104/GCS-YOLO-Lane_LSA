@@ -2,6 +2,57 @@
 
 This file records decisions for branch `codex/5-25-3-k56`.
 
+## 2026-06-27: Add GT5-Safe Spurious Negative Control
+
+Decision:
+
+Extend the default-off E3-lite `gcs_spurious_neg` loss with GT5-safe controls:
+
+```text
+gcs_spurious_gt5_weight = 1.0
+gcs_spurious_disable_gt5 = false
+```
+
+When `gcs_spurious_neg` is enabled, each image now derives `gt_lanes` from
+`batch["num_lanes"]` or from `lane_valid` without changing the dataloader. If
+`gt_lanes >= 5` and `gcs_spurious_disable_gt5=true`, the image is skipped for
+spurious-negative loss. Otherwise GT5-or-denser images multiply their selected
+spurious-negative terms by `gcs_spurious_gt5_weight`.
+
+Why:
+
+The E1 + spurious-lite result improved official-val ACC and reduced FP, but
+`count_acc_5` regressed with `5->4=9`, indicating that the short true fifth
+side lane can look like a short duplicate-like spurious negative. The next
+GT5-safe run should keep the existing spurious-negative selection logic while
+reducing collateral pressure on true GT5 lanes:
+
+```text
+--gcs-spurious-neg 0.1
+--gcs-spurious-gt5-weight 0.25
+```
+
+Scope:
+
+This is a loss-weighting and logging extension only. It does not change data
+sampling, dataset labels, Hungarian matcher behavior, point/smooth/curve
+losses, decode, NMS, or official metrics. The defaults preserve the original
+spurious-lite behavior.
+
+New diagnostics:
+
+```text
+spur_cnt_gt3
+spur_cnt_gt4
+spur_cnt_gt5
+spur_neg_gt3
+spur_neg_gt4
+spur_neg_gt5
+```
+
+Select any candidate only on official-val. The target tradeoff is lower GT5
+`5->4` than spurious-lite, official ACC not below E1, and no large FP rebound.
+
 ## 2026-06-27: Add Default-Off E3-Lite Spurious Negative Loss
 
 Decision:

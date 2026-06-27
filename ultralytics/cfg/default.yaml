@@ -129,6 +129,8 @@ gcs_count_boundary_margin34: 0.35 # (float) margin for GT3 upper and GT4 lower c
 gcs_count_boundary_margin45: 0.35 # (float) margin for GT4 upper and GT5 lower count-score boundaries
 gcs_spurious_neg: 0.0 # (float) extra BCE negative loss gain for short unmatched duplicate lane queries; 0 disables
 gcs_spurious_neg_weight: 1.0 # (float) multiplier for the spurious negative loss term
+gcs_spurious_gt5_weight: 1.0 # (float) per-image spurious-negative multiplier for GT5-or-denser samples
+gcs_spurious_disable_gt5: False # (bool) disable spurious-negative loss on GT5-or-denser samples
 gcs_spurious_max_points: 12 # (int) maximum visible anchors for short spurious duplicate candidates
 gcs_spurious_close_px: 30.0 # (float) maximum mean x distance in pixels to a matched query
 gcs_spurious_min_overlap: 3 # (int) minimum overlapping visible anchors with a matched query

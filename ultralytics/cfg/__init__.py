@@ -199,6 +199,7 @@ CFG_FLOAT_KEYS = frozenset(
         "gcs_count_boundary_margin45",
         "gcs_spurious_neg",
         "gcs_spurious_neg_weight",
+        "gcs_spurious_gt5_weight",
         "gcs_spurious_close_px",
         "gcs_exist_pos_weight",
         "gcs_exist_focal_gamma",
@@ -330,6 +331,7 @@ CFG_BOOL_KEYS = frozenset(
         "gcs_official_half",
         "gcs_lane_count_balanced",
         "gcs_hard_sampling",
+        "gcs_spurious_disable_gt5",
     }
 )
 

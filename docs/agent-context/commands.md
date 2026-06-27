@@ -131,6 +131,7 @@ python tools/train_gcs.py \
   --gcs-count-boundary 0.2 \
   --gcs-spurious-neg 0.1 \
   --gcs-spurious-neg-weight 1.0 \
+  --gcs-spurious-gt5-weight 0.25 \
   --gcs-spurious-max-points 12 \
   --gcs-spurious-close-px 30.0 \
   --gcs-spurious-min-overlap 3 \
@@ -146,6 +147,12 @@ python tools/train_gcs.py \
 Select only on official-val. Compare against E1 on `official_acc`,
 `official_FP`, `official_FN`, `count_acc_4`, `count_acc_5`, and count-confusion
 `4->5` / `5->4`.
+
+The default `gcs_spurious_gt5_weight=1.0` preserves the original spurious-lite
+behavior. Use `--gcs-spurious-gt5-weight 0.25` for the GT5-safe follow-up that
+keeps spurious-negative suppression on GT3/GT4 while reducing pressure on true
+short fifth lanes. `--gcs-spurious-disable-gt5` is the harder ablation that
+skips the spurious-negative loss entirely on `gt_lanes >= 5` samples.
 
 ## Training-Time Official-Best Selection
 
