@@ -15,6 +15,8 @@ Do not silently import later mainline mechanisms such as Count Head, Quality Hea
 
 The branch also includes the 2026-06-27 user-requested, default-off `gcs_hard_sampling` train-only sampler for short-visible GT3/GT4/GT5 and 0601 samples. It changes only the training dataloader sampling frequency through `WeightedRandomSampler`; it does not change labels, validation/test dataloaders, point/smooth/curve losses, decode, or official metrics.
 
+The branch also includes the 2026-06-27 user-requested, default-off `gcs_spurious_neg` loss for E3-lite. It uses the training Hungarian matcher indices only to select unmatched short duplicate-like queries near matched queries, then adds an extra target-zero BCE on their `pred_logits`. It does not change data sampling, dataset labels, matcher logic, point/smooth/curve losses, decode, NMS, or official metrics.
+
 Training-time `official_best` checkpoint preservation is active as an explicit 2026-06-27 selection-protocol change. It preserves the 5-25-3 algorithm body and only changes how formal TuSimple checkpoints are selected.
 
 ## Input Contract
@@ -71,7 +73,9 @@ lane-balanced, valid-repair, side-aux, legacy `gcs_gt4_short_boost` sampling,
 `extra_exist_loss`, short matched existence floor, or count-confusion
 diagnostic tooling is active. Later commits and notes are preserved only as
 legacy experiment conclusions in the docs. They are not active CLI, loss,
-model-output, tool, or config contracts in this code state.
+model-output, tool, or config contracts in this code state. The explicit
+default-off `gcs_spurious_neg` E3-lite loss above is branch-local and is not an
+import of the later legacy spurious/ranking loss family.
 
 ## Label Contract
 
@@ -136,13 +140,22 @@ edge_loss
 count_loss
 count_under5_loss
 count_boundary_loss
+spurious_neg_loss
+spurious_negative_count
 count_score_mean
 ```
 
 `count_boundary_loss` is disabled by default through `gcs_count_boundary=0.0`.
 When enabled, it applies to `sum(sigmoid(pred_logits))` with GT3 upper, GT4
-lower/upper, and GT5 lower boundaries. `count_score_mean` is a log-only
-diagnostic and is not part of the weighted training objective.
+lower/upper, and GT5 lower boundaries.
+
+`spurious_neg_loss` is disabled by default through `gcs_spurious_neg=0.0`.
+When enabled, it requires `pred_valid_logits` and applies only to unmatched
+queries with visible-anchor count in `[2, gcs_spurious_max_points]`, at least
+`gcs_spurious_min_overlap` overlapping predicted-valid anchors with any matched
+query, and mean overlapping x distance at most `gcs_spurious_close_px` pixels.
+`spurious_negative_count` and `count_score_mean` are log-only diagnostics and
+are not directly part of the weighted training objective.
 
 ## Decode And Evaluation Contract
 

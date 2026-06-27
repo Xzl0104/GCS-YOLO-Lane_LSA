@@ -90,6 +90,63 @@ If `batch=32` OOMs on the target machine, reduce batch only for OOM/instability 
 
 `--no-amp` is included because the current remote run hit an Ultralytics AMP self-check failure while loading `yolo26n.pt`. If that server cache/checkpoint issue is fixed, AMP may be re-enabled only with a run note.
 
+## E3-Lite Spurious Negative From E1
+
+The E3-lite experiment must initialize from the E1 count-boundary checkpoint,
+not from E2 hard sampling or count-aware top-k results. Keep hard sampling
+disabled.
+
+```bash
+python tools/train_gcs.py \
+  --dataset tusimple \
+  --model ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml \
+  --data data/tusimple_gcs_fixed_y_960x544.yaml \
+  --pretrained runs/gcs_lane/gcs_yolo_lane_s_q12_k56_count03_under5_boundary02_v1/weights/best.pt \
+  --imgsz 544 960 \
+  --epochs 160 \
+  --batch 32 \
+  --workers 4 \
+  --device 0 \
+  --no-amp \
+  --optimizer AdamW \
+  --lr0 5e-4 \
+  --lrf 0.05 \
+  --cos-lr \
+  --weight-decay 1e-4 \
+  --warmup-epochs 3.0 \
+  --warmup-bias-lr 0.0 \
+  --patience 40 \
+  --erasing 0.1 \
+  --scale 0.3 \
+  --gcs-exist 2.0 \
+  --gcs-point 15.0 \
+  --gcs-point-valid 1.0 \
+  --gcs-smooth 0.05 \
+  --gcs-curve 0.1 \
+  --gcs-mask 0.2 \
+  --gcs-edge 0.2 \
+  --gcs-count 0.3 \
+  --gcs-count-under5 0.3 \
+  --gcs-count-under5-min-lanes 5 \
+  --gcs-count-boundary 0.2 \
+  --gcs-spurious-neg 0.1 \
+  --gcs-spurious-neg-weight 1.0 \
+  --gcs-spurious-max-points 12 \
+  --gcs-spurious-close-px 30.0 \
+  --gcs-spurious-min-overlap 3 \
+  --gcs-lane-count-balanced \
+  --gcs-official-best \
+  --gcs-official-interval 5 \
+  --gcs-official-gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
+  --gcs-official-half \
+  --project runs/gcs_lane \
+  --name gcs_yolo_lane_s_q12_k56_count03_under5_boundary02_spuriousneg01_v1
+```
+
+Select only on official-val. Compare against E1 on `official_acc`,
+`official_FP`, `official_FN`, `count_acc_4`, `count_acc_5`, and count-confusion
+`4->5` / `5->4`.
+
 ## Training-Time Official-Best Selection
 
 Formal TuSimple training must not select the final checkpoint from `val/total_loss`, internal `val/f1`, or generic `weights/best.pt` alone. Use `--gcs-official-best` so training runs a lightweight official-val sweep every 5 epochs and again on the final/early-stop epoch.

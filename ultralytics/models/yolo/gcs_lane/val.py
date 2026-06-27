@@ -31,6 +31,8 @@ LOSS_NAMES = (
     "count_loss",
     "count_under5_loss",
     "count_boundary_loss",
+    "spurious_neg_loss",
+    "spurious_negative_count",
     "count_score_mean",
 )
 LOSS_GAIN_ARGS = (
@@ -44,9 +46,11 @@ LOSS_GAIN_ARGS = (
     "gcs_count",
     "gcs_count_under5",
     "gcs_count_boundary",
+    (("gcs_spurious_neg", 0.0), ("gcs_spurious_neg_weight", 1.0)),
+    None,
     None,
 )
-DEFAULT_LOSS_GAINS = (2.0, 15.0, 1.0, 0.05, 0.1, 0.2, 0.2, 0.0, 0.0, 0.0, 0.0)
+DEFAULT_LOSS_GAINS = (2.0, 15.0, 1.0, 0.05, 0.1, 0.2, 0.2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 METRIC_NAMES = (
     "precision",
     "recall",
@@ -220,7 +224,14 @@ class GCSLaneValidator:
         """Return validation loss gains matching the training objective."""
         gains = []
         for name, default in zip(LOSS_GAIN_ARGS, DEFAULT_LOSS_GAINS):
-            value = default if name is None else self._arg(self.args, name, default)
+            if name is None:
+                value = default
+            elif isinstance(name, tuple):
+                value = 1.0
+                for sub_name, sub_default in name:
+                    value *= float(self._arg(self.args, sub_name, sub_default))
+            else:
+                value = self._arg(self.args, name, default)
             gains.append(float(value))
         return torch.tensor(gains, device=device, dtype=torch.float32)
 

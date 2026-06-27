@@ -9,6 +9,7 @@ This branch is the current mainline source import of `5-25-3.zip` with a K56 TuS
 - Do not import later mainline Count Head, Quality Head, Survival Head, near-miss, or K56 candidate machinery.
 - The only active Count Boundary mechanism is the 2026-06-27 user-requested, default-off `count_boundary_loss` on `sum(sigmoid(pred_logits))`; keep it separate from Count Head and decode changes.
 - The active train-only hard-sampling mechanism is the 2026-06-27 user-requested, default-off `gcs_hard_sampling`; keep it limited to the training dataloader and do not change labels, validation/test dataloaders, point loss, smooth loss, curve loss, decode, or official metrics.
+- The active E3-lite spurious negative mechanism is the 2026-06-27 user-requested, default-off `gcs_spurious_neg`; keep it limited to an extra `GCSLoss` BCE term on selected unmatched short duplicate-like queries and do not change data sampling, matcher logic, point loss, smooth loss, curve loss, decode, or official metrics.
 - Keep the explicit 2026-06-27 `official_best` hook limited to official-val checkpoint/decode selection; it must not change model outputs, loss terms, training labels, or official metrics.
 - Do not track `datasets/`, generated runs, checkpoints, caches, or converted labels in Git.
 
@@ -18,7 +19,8 @@ Q18/Q20/dataref, duplicate/spurious/ranking losses, lane-balanced or
 valid-repair objectives, side-aux checks, and their diagnostic helpers are
 legacy records only and are not available in the current code unless a future
 task explicitly restores them. The branch-local `count_boundary_loss` added on
-2026-06-27 and the branch-local train-only `gcs_hard_sampling` added on
+2026-06-27, the branch-local train-only `gcs_hard_sampling` added on
+2026-06-27, and the branch-local `gcs_spurious_neg` E3-lite loss added on
 2026-06-27 are explicit exceptions requested by the user and remain
 default-disabled.
 

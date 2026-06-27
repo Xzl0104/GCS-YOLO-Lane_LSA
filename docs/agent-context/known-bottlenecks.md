@@ -4,9 +4,9 @@ This file applies to branch `codex/5-25-3-k56`.
 
 ## Branch Scope
 
-The current mainline imports the historical `5-25-3.zip` algorithm and changes the TuSimple fixed-y contract to Q=12/K=56 with official h-sample anchors. It also includes the 2026-06-27 user-requested default-off `count_boundary_loss` for GT3/GT4/GT5 adjacent count-score boundaries and default-off train-only `gcs_hard_sampling` for 0601 and short-visible GT3/GT4/GT5 samples.
+The current mainline imports the historical `5-25-3.zip` algorithm and changes the TuSimple fixed-y contract to Q=12/K=56 with official h-sample anchors. It also includes the 2026-06-27 user-requested default-off `count_boundary_loss` for GT3/GT4/GT5 adjacent count-score boundaries, default-off train-only `gcs_hard_sampling` for 0601 and short-visible GT3/GT4/GT5 samples, and default-off E3-lite `gcs_spurious_neg` loss for short unmatched duplicate-like queries.
 
-Do not read mainline Count Head, Quality Head, Survival Head, near-miss, or old mainline official-best bottlenecks as active branch behavior. Those algorithm mechanisms are not part of this 5-25-3 branch. The only active Count Boundary behavior is the branch-local default-off `count_boundary_loss`, the only active hard sampler is the branch-local default-off train-only `gcs_hard_sampling`, and the only active official-best behavior is the explicit 2026-06-27 training-time official-val selection hook.
+Do not read mainline Count Head, Quality Head, Survival Head, near-miss, or old mainline official-best bottlenecks as active branch behavior. Those algorithm mechanisms are not part of this 5-25-3 branch. The only active Count Boundary behavior is the branch-local default-off `count_boundary_loss`, the only active hard sampler is the branch-local default-off train-only `gcs_hard_sampling`, the only active E3-lite spurious negative behavior is the branch-local default-off `gcs_spurious_neg`, and the only active official-best behavior is the explicit 2026-06-27 training-time official-val selection hook.
 
 Active source/config is rolled back to commit `b6535f641` (`Fix GCS training
 progress header alignment`). Bottleneck notes below that depend on

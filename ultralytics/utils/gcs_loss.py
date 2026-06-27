@@ -25,6 +25,8 @@ class GCSLoss(nn.Module):
         "count_loss",
         "count_under5_loss",
         "count_boundary_loss",
+        "spurious_neg_loss",
+        "spurious_negative_count",
         "count_score_mean",
     )
 
@@ -41,11 +43,17 @@ class GCSLoss(nn.Module):
         lambda_count: float | None = None,
         lambda_count_under5: float | None = None,
         lambda_count_boundary: float | None = None,
+        lambda_spurious_neg: float | None = None,
         count_under5_min_lanes: int | None = None,
         count_boundary_gt4_weight: float | None = None,
         count_boundary_gt5_weight: float | None = None,
         count_boundary_margin34: float | None = None,
         count_boundary_margin45: float | None = None,
+        spurious_neg_weight: float | None = None,
+        spurious_max_points: int | None = None,
+        spurious_close_px: float | None = None,
+        spurious_min_overlap: int | None = None,
+        eval_point_valid_thr: float | None = None,
         curve_alpha: float | None = None,
         curve_weight_max: float | None = None,
         exist_pos_weight: float | None = None,
@@ -90,6 +98,9 @@ class GCSLoss(nn.Module):
             if lambda_count_boundary is not None
             else self._arg(args, "gcs_count_boundary", 0.0)
         )
+        self.spurious_neg_gain = float(
+            lambda_spurious_neg if lambda_spurious_neg is not None else self._arg(args, "gcs_spurious_neg", 0.0)
+        )
         self.count_boundary_gt4_weight = float(
             count_boundary_gt4_weight
             if count_boundary_gt4_weight is not None
@@ -110,6 +121,25 @@ class GCSLoss(nn.Module):
             if count_boundary_margin45 is not None
             else self._arg(args, "gcs_count_boundary_margin45", 0.35)
         )
+        self.spurious_neg_weight = float(
+            spurious_neg_weight if spurious_neg_weight is not None else self._arg(args, "gcs_spurious_neg_weight", 1.0)
+        )
+        self.spurious_max_points = int(
+            spurious_max_points if spurious_max_points is not None else self._arg(args, "gcs_spurious_max_points", 12)
+        )
+        self.spurious_close_px = float(
+            spurious_close_px if spurious_close_px is not None else self._arg(args, "gcs_spurious_close_px", 30.0)
+        )
+        self.spurious_min_overlap = int(
+            spurious_min_overlap
+            if spurious_min_overlap is not None
+            else self._arg(args, "gcs_spurious_min_overlap", 3)
+        )
+        self.eval_point_valid_thr = float(
+            eval_point_valid_thr
+            if eval_point_valid_thr is not None
+            else self._arg(args, "gcs_eval_point_valid_thr", 0.5)
+        )
         self.count_under5_min_lanes = int(
             count_under5_min_lanes
             if count_under5_min_lanes is not None
@@ -121,6 +151,18 @@ class GCSLoss(nn.Module):
             raise ValueError(f"gcs_count_boundary_margin34 must be >= 0, got {self.count_boundary_margin34}.")
         if self.count_boundary_margin45 < 0.0:
             raise ValueError(f"gcs_count_boundary_margin45 must be >= 0, got {self.count_boundary_margin45}.")
+        if self.spurious_neg_gain < 0.0:
+            raise ValueError(f"gcs_spurious_neg must be >= 0, got {self.spurious_neg_gain}.")
+        if self.spurious_neg_weight < 0.0:
+            raise ValueError(f"gcs_spurious_neg_weight must be >= 0, got {self.spurious_neg_weight}.")
+        if self.spurious_max_points < 2:
+            raise ValueError(f"gcs_spurious_max_points must be >= 2, got {self.spurious_max_points}.")
+        if self.spurious_close_px < 0.0:
+            raise ValueError(f"gcs_spurious_close_px must be >= 0, got {self.spurious_close_px}.")
+        if self.spurious_min_overlap < 1:
+            raise ValueError(f"gcs_spurious_min_overlap must be >= 1, got {self.spurious_min_overlap}.")
+        if not 0.0 <= self.eval_point_valid_thr <= 1.0:
+            raise ValueError(f"gcs_eval_point_valid_thr must be in [0, 1], got {self.eval_point_valid_thr}.")
         self.curve_alpha = float(curve_alpha if curve_alpha is not None else self._arg(args, "gcs_curve_alpha", 5.0))
         self.curve_weight_max = float(
             curve_weight_max if curve_weight_max is not None else self._arg(args, "gcs_curve_weight_max", 5.0)
@@ -536,6 +578,78 @@ class GCSLoss(nn.Module):
             + float(self.count_boundary_gt5_weight) * masked_mean(gt5_under, gt5)
         )
 
+    def _spurious_x_scale(self, pred_points: torch.Tensor) -> torch.Tensor:
+        """Return x-coordinate scale, avoiding double scaling if points are already pixel coordinates."""
+        points = pred_points.detach()
+        finite = points[torch.isfinite(points)]
+        if finite.numel() and float(finite.abs().max().item()) > 2.0:
+            return pred_points.new_tensor(1.0)
+        return self._pixel_scale_for(pred_points).reshape(-1)[0]
+
+    def spurious_negative_loss(
+        self,
+        pred_points: torch.Tensor,
+        pred_logits: torch.Tensor,
+        pred_valid_logits: torch.Tensor | None,
+        indices: list[tuple[torch.Tensor, torch.Tensor]],
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Extra BCE negative loss for short unmatched queries duplicating matched lanes."""
+        if self.spurious_neg_gain == 0.0:
+            return self._zero_like(pred_points), pred_logits.new_zeros(())
+        if pred_valid_logits is None:
+            raise ValueError(
+                "gcs_spurious_neg requires preds['pred_valid_logits'] with shape B x Q x K; "
+                "disable --gcs-spurious-neg or use a GCS head that emits per-point visibility logits."
+            )
+
+        bsz, num_queries, _, _ = pred_points.shape
+        device = pred_logits.device
+        valid_thr = float(self.eval_point_valid_thr)
+        valid_prob = pred_valid_logits.detach().sigmoid()
+        points = pred_points.detach()
+        x_scale = self._spurious_x_scale(pred_points)
+        selected_logits = []
+        spurious_count = 0
+
+        for b in range(bsz):
+            src_idx, _ = indices[b]
+            if src_idx.numel() == 0:
+                continue
+            src_idx = src_idx.to(device=device, dtype=torch.long)
+            matched_mask = torch.zeros(num_queries, dtype=torch.bool, device=device)
+            matched_mask[src_idx] = True
+            unmatched_idx = torch.arange(num_queries, device=device)[~matched_mask]
+            if unmatched_idx.numel() == 0:
+                continue
+
+            for uq in unmatched_idx:
+                uq_valid = valid_prob[b, uq] >= valid_thr
+                uq_count = int(uq_valid.sum().item())
+                if uq_count < 2 or uq_count > self.spurious_max_points:
+                    continue
+
+                is_duplicate = False
+                for mq in src_idx:
+                    mq_valid = valid_prob[b, mq] >= valid_thr
+                    overlap = uq_valid & mq_valid
+                    if int(overlap.sum().item()) < self.spurious_min_overlap:
+                        continue
+                    dx_px = (points[b, uq, overlap, 0] - points[b, mq, overlap, 0]).abs() * x_scale
+                    if float(dx_px.mean().item()) <= self.spurious_close_px:
+                        is_duplicate = True
+                        break
+
+                if is_duplicate:
+                    selected_logits.append(pred_logits[b, uq])
+                    spurious_count += 1
+
+        if not selected_logits:
+            return self._zero_like(pred_points), pred_logits.new_zeros(())
+
+        logits = torch.stack(selected_logits)
+        loss = F.binary_cross_entropy_with_logits(logits, torch.zeros_like(logits))
+        return loss, pred_logits.new_tensor(float(spurious_count))
+
     @staticmethod
     def _foreground_pos_weight(target: torch.Tensor, max_weight: float) -> torch.Tensor:
         """Return a capped foreground weight for sparse binary auxiliary targets."""
@@ -636,6 +750,9 @@ class GCSLoss(nn.Module):
         count_loss, count_under5_loss, count_boundary_loss, count_score_mean = self.count_losses(
             pred_logits, batch, gt_valid
         )
+        spurious_neg_loss, spurious_negative_count = self.spurious_negative_loss(
+            pred_points, pred_logits, pred_valid_logits, indices
+        )
 
         mask_loss = self._zero_like(pred_points)
         if "aux_mask_logits" in preds and "semantic_mask" in batch:
@@ -660,6 +777,8 @@ class GCSLoss(nn.Module):
         )
         if self.count_boundary_gain != 0.0:
             total = total + self.count_boundary_gain * count_boundary_loss
+        if self.spurious_neg_gain != 0.0:
+            total = total + self.spurious_neg_gain * self.spurious_neg_weight * spurious_neg_loss
         loss_items = torch.stack(
             (
                 exist_loss.detach(),
@@ -672,6 +791,8 @@ class GCSLoss(nn.Module):
                 count_loss.detach(),
                 count_under5_loss.detach(),
                 count_boundary_loss.detach(),
+                spurious_neg_loss.detach(),
+                spurious_negative_count.detach(),
                 count_score_mean.detach(),
             )
         )

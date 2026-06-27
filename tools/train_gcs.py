@@ -183,6 +183,36 @@ def parse_args() -> argparse.Namespace:
         default=0.35,
         help="Margin around the 4/5 boundary: GT4 upper=4+margin, GT5 lower=5-margin.",
     )
+    parser.add_argument(
+        "--gcs-spurious-neg",
+        type=float,
+        default=0.0,
+        help="Extra BCE negative loss gain for short unmatched duplicate lane queries. 0 disables.",
+    )
+    parser.add_argument(
+        "--gcs-spurious-neg-weight",
+        type=float,
+        default=1.0,
+        help="Multiplier inside the spurious-negative loss term.",
+    )
+    parser.add_argument(
+        "--gcs-spurious-max-points",
+        type=int,
+        default=12,
+        help="Maximum visible anchors for an unmatched query to be treated as a short spurious duplicate.",
+    )
+    parser.add_argument(
+        "--gcs-spurious-close-px",
+        type=float,
+        default=30.0,
+        help="Maximum mean x distance in pixels to a matched query over overlapping visible anchors.",
+    )
+    parser.add_argument(
+        "--gcs-spurious-min-overlap",
+        type=int,
+        default=3,
+        help="Minimum overlapping visible anchors with a matched query for spurious duplicate detection.",
+    )
     parser.add_argument("--gcs-exist-pos-weight", type=float, default=1.0)
     parser.add_argument("--gcs-exist-focal-gamma", type=float, default=0.0, help="Optional focal gamma for existence BCE. 0 disables focal weighting.")
     parser.add_argument(
@@ -440,6 +470,11 @@ def main() -> None:
         "gcs_count_boundary_gt5_weight": args.gcs_count_boundary_gt5_weight,
         "gcs_count_boundary_margin34": args.gcs_count_boundary_margin34,
         "gcs_count_boundary_margin45": args.gcs_count_boundary_margin45,
+        "gcs_spurious_neg": args.gcs_spurious_neg,
+        "gcs_spurious_neg_weight": args.gcs_spurious_neg_weight,
+        "gcs_spurious_max_points": args.gcs_spurious_max_points,
+        "gcs_spurious_close_px": args.gcs_spurious_close_px,
+        "gcs_spurious_min_overlap": args.gcs_spurious_min_overlap,
         "gcs_exist_pos_weight": args.gcs_exist_pos_weight,
         "gcs_exist_focal_gamma": args.gcs_exist_focal_gamma,
         "gcs_exist_focal_alpha": args.gcs_exist_focal_alpha,

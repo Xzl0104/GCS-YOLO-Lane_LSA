@@ -21,7 +21,7 @@ The model is expected to output lane instances as ordered 2D point sequences, no
 
 This branch imports the historical `5-25-3.zip` algorithm and is now the current K56 mainline.
 
-Only the explicit TuSimple contract was changed from the legacy `Q=8/K=32/fixed_y=[0.98,0.25]` setup to the current `Q=12/K=56/fixed_y=710/720 -> 160/720` setup, plus the 2026-06-27 user-requested default-off `count_boundary_loss` and train-only `gcs_hard_sampling`. The 5-25-3 algorithm body is intentionally not upgraded to the later Count Head, Quality Head, Survival Head, or near-miss machinery.
+Only the explicit TuSimple contract was changed from the legacy `Q=8/K=32/fixed_y=[0.98,0.25]` setup to the current `Q=12/K=56/fixed_y=710/720 -> 160/720` setup, plus the 2026-06-27 user-requested default-off `count_boundary_loss`, train-only `gcs_hard_sampling`, and default-off E3-lite `gcs_spurious_neg` loss. The 5-25-3 algorithm body is intentionally not upgraded to the later Count Head, Quality Head, Survival Head, or near-miss machinery.
 
 Previous q12-k56 experiment documentation remains historical context. Do not delete it, and do not read it as the active algorithm unless it is explicitly marked as a legacy run record.
 

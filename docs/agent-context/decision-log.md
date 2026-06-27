@@ -2,6 +2,58 @@
 
 This file records decisions for branch `codex/5-25-3-k56`.
 
+## 2026-06-27: Add Default-Off E3-Lite Spurious Negative Loss
+
+Decision:
+
+Add a default-disabled `gcs_spurious_neg` loss to `GCSLoss` for the E3-lite
+follow-up from the E1 count-boundary checkpoint.
+
+When enabled, the loss uses Hungarian matcher `src_idx` only to identify
+matched queries, then treats all other queries as unmatched. An unmatched query
+is selected as a spurious short duplicate when:
+
+```text
+pred_valid_count >= 2
+pred_valid_count <= gcs_spurious_max_points
+overlap with any matched query >= gcs_spurious_min_overlap
+mean overlapping x distance <= gcs_spurious_close_px pixels
+```
+
+Selected unmatched queries receive an extra target-zero
+`BCEWithLogits(pred_logits, 0)`. The weighted objective contribution is:
+
+```text
+gcs_spurious_neg * gcs_spurious_neg_weight * spurious_neg_loss
+```
+
+Defaults:
+
+```text
+gcs_spurious_neg = 0.0
+gcs_spurious_neg_weight = 1.0
+gcs_spurious_max_points = 12
+gcs_spurious_close_px = 30.0
+gcs_spurious_min_overlap = 3
+```
+
+Scope:
+
+This is a branch-local loss/logging option only. It does not change data
+sampling, dataset labels, matcher logic, point loss, smooth loss, curve loss,
+decode, NMS, official metrics, Count Head, Quality Head, Survival Head, or
+near-miss machinery. When `gcs_spurious_neg > 0`, `pred_valid_logits` is
+required and missing per-point visibility logits must fail fast.
+
+Experiment protocol:
+
+Run E3-lite from the E1 count-boundary `best.pt`
+(`gcs_yolo_lane_s_q12_k56_count03_under5_boundary02_v1`), not from E2 hard
+sampling or count-aware top-k results. Keep `gcs_hard_sampling` disabled.
+Select checkpoint/decode on official-val and compare against E1 on
+`official_acc`, `official_FP`, `official_FN`, `count_acc_4`, `count_acc_5`,
+and `count_confusion` `4->5` / `5->4`.
+
 ## 2026-06-27: Add Default-Off Count-Aware Top-K Decode Ablation
 
 Decision:
