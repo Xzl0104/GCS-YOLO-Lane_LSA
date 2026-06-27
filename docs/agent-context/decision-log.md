@@ -2,6 +2,44 @@
 
 This file records decisions for branch `codex/5-25-3-k56`.
 
+## 2026-06-27: Add Default-Off Train-Only Hard Sampling
+
+Decision:
+
+Add a default-disabled `gcs_hard_sampling` option that uses
+`WeightedRandomSampler(replacement=True, num_samples=len(train_dataset))` for
+the training dataloader only.
+
+Weights:
+
+```text
+date == 0601: x2.0
+GT4 and min_visible_points <= 10: x4.0
+GT5 and min_visible_points <= 10: x3.0
+GT3 and min_visible_points <= 20: x1.5
+date == 0313-2 and GT4 and min_visible_points <= 10: x4.0
+```
+
+The sampler reads `lanes`, `lane_valid`, `num_lanes`, and optional `raw_file`
+from each train label npz. It parses TuSimple date from `raw_file` first and
+falls back to the image path. It logs hard-group counts plus weight
+min/mean/max at training start.
+
+Scope:
+
+This is a train-dataloader sampling option only. It does not change labels,
+validation/test dataloaders, point loss, smooth loss, curve loss, decode, model
+outputs, or official metrics. It is not the legacy `gcs_gt4_short_boost`
+sampler and it does not globally weight all GT4 samples.
+
+Validation evidence:
+
+Local validation covered Python compilation, CLI/config parsing, model shape,
+a direct sampler unit check for hard-on/hard-off/val-loader behavior, and a
+1-epoch synthetic 544x960 smoke with `gcs_count_boundary=0.2` and
+`gcs_hard_sampling=True`. The smoke completed with finite train/val results and
+logged hard-group statistics.
+
 ## 2026-06-27: Add Default-Off Count Boundary Loss
 
 Decision:

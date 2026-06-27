@@ -311,6 +311,53 @@ def parse_args() -> argparse.Namespace:
         default=50,
         help="Minimum group size used when balancing lane counts, preventing tiny groups from dominating an epoch.",
     )
+    parser.add_argument(
+        "--gcs-hard-sampling",
+        action="store_true",
+        help="Use train-only weighted hard sampling for 0601 and short-visible GT3/GT4/GT5 samples.",
+    )
+    parser.add_argument(
+        "--gcs-hard-date-0601-weight",
+        type=float,
+        default=2.0,
+        help="Hard-sampling multiplier for samples whose TuSimple date is 0601.",
+    )
+    parser.add_argument(
+        "--gcs-hard-gt4-le10-weight",
+        type=float,
+        default=4.0,
+        help="Hard-sampling multiplier for GT4 samples with min_visible_points <= --gcs-hard-visible-thr.",
+    )
+    parser.add_argument(
+        "--gcs-hard-gt5-le10-weight",
+        type=float,
+        default=3.0,
+        help="Hard-sampling multiplier for GT5 samples with min_visible_points <= --gcs-hard-visible-thr.",
+    )
+    parser.add_argument(
+        "--gcs-hard-gt3-le20-weight",
+        type=float,
+        default=1.5,
+        help="Hard-sampling multiplier for GT3 samples with min_visible_points <= --gcs-hard-gt3-visible-thr.",
+    )
+    parser.add_argument(
+        "--gcs-hard-0313-2-gt4-le10-weight",
+        type=float,
+        default=4.0,
+        help="Extra hard-sampling multiplier for 0313-2 GT4 samples with min_visible_points <= --gcs-hard-visible-thr.",
+    )
+    parser.add_argument(
+        "--gcs-hard-visible-thr",
+        type=int,
+        default=10,
+        help="Visible-point threshold for GT4/GT5 hard-sampling groups.",
+    )
+    parser.add_argument(
+        "--gcs-hard-gt3-visible-thr",
+        type=int,
+        default=20,
+        help="Visible-point threshold for GT3 hard-sampling group.",
+    )
     parser.add_argument("--no-val", action="store_true")
     parser.add_argument(
         "--resume",
@@ -437,6 +484,14 @@ def main() -> None:
         "gcs_lane_count_balanced": args.gcs_lane_count_balanced,
         "gcs_lane_count_balance_power": args.gcs_lane_count_balance_power,
         "gcs_lane_count_min_group": args.gcs_lane_count_min_group,
+        "gcs_hard_sampling": args.gcs_hard_sampling,
+        "gcs_hard_date_0601_weight": args.gcs_hard_date_0601_weight,
+        "gcs_hard_gt4_le10_weight": args.gcs_hard_gt4_le10_weight,
+        "gcs_hard_gt5_le10_weight": args.gcs_hard_gt5_le10_weight,
+        "gcs_hard_gt3_le20_weight": args.gcs_hard_gt3_le20_weight,
+        "gcs_hard_0313_2_gt4_le10_weight": args.gcs_hard_0313_2_gt4_le10_weight,
+        "gcs_hard_visible_thr": args.gcs_hard_visible_thr,
+        "gcs_hard_gt3_visible_thr": args.gcs_hard_gt3_visible_thr,
     }
 
     print(f"GCS input shape: {shape_str(gcs_imgsz)} (W x H), stored as H,W={gcs_imgsz}")

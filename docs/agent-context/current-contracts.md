@@ -11,7 +11,9 @@ legacy archive: Q=8, K=32, fixed_y=[0.98, 0.25]
 this branch:    Q=12, K=56, fixed_y=[710/720, 160/720]
 ```
 
-Do not silently import later mainline mechanisms such as Count Head, Quality Head, Survival Head, or near-miss mining into this branch unless a future task explicitly asks for that algorithm change. The branch now includes only the 2026-06-27 user-requested, default-off `count_boundary_loss` for adjacent GT3/GT4/GT5 count-score boundaries; this is not a Count Head or decode change.
+Do not silently import later mainline mechanisms such as Count Head, Quality Head, Survival Head, or near-miss mining into this branch unless a future task explicitly asks for that algorithm change. The branch now includes the 2026-06-27 user-requested, default-off `count_boundary_loss` for adjacent GT3/GT4/GT5 count-score boundaries; this is not a Count Head or decode change.
+
+The branch also includes the 2026-06-27 user-requested, default-off `gcs_hard_sampling` train-only sampler for short-visible GT3/GT4/GT5 and 0601 samples. It changes only the training dataloader sampling frequency through `WeightedRandomSampler`; it does not change labels, validation/test dataloaders, point/smooth/curve losses, decode, or official metrics.
 
 Training-time `official_best` checkpoint preservation is active as an explicit 2026-06-27 selection-protocol change. It preserves the 5-25-3 algorithm body and only changes how formal TuSimple checkpoints are selected.
 
@@ -65,7 +67,7 @@ Historical q12-k56 experiment docs are old records. Preserve them, but do not le
 Active source/config is rolled back to commit `b6535f641` (`Fix GCS training
 progress header alignment`). Its algorithm contract remains the 5-25-3 K56
 mainline: no later Count Head, Q18/Q20/dataref, duplicate/spurious/ranking,
-lane-balanced, valid-repair, side-aux, GT4 short-lane sampling,
+lane-balanced, valid-repair, side-aux, legacy `gcs_gt4_short_boost` sampling,
 `extra_exist_loss`, short matched existence floor, or count-confusion
 diagnostic tooling is active. Later commits and notes are preserved only as
 legacy experiment conclusions in the docs. They are not active CLI, loss,

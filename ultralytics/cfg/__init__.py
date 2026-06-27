@@ -222,6 +222,11 @@ CFG_FLOAT_KEYS = frozenset(
         "gcs_official_score_fp_weight",
         "gcs_official_score_fn_weight",
         "gcs_lane_count_balance_power",
+        "gcs_hard_date_0601_weight",
+        "gcs_hard_gt4_le10_weight",
+        "gcs_hard_gt5_le10_weight",
+        "gcs_hard_gt3_le20_weight",
+        "gcs_hard_0313_2_gt4_le10_weight",
     }
 )
 CFG_FRACTION_KEYS = frozenset(
@@ -277,6 +282,8 @@ CFG_INT_KEYS = frozenset(
         "gcs_eval_min_overlap",
         "gcs_lane_count_min_group",
         "gcs_count_under5_min_lanes",
+        "gcs_hard_visible_thr",
+        "gcs_hard_gt3_visible_thr",
     }
 )
 CFG_BOOL_KEYS = frozenset(
@@ -317,6 +324,7 @@ CFG_BOOL_KEYS = frozenset(
         "gcs_official_best",
         "gcs_official_half",
         "gcs_lane_count_balanced",
+        "gcs_hard_sampling",
     }
 )
 

@@ -173,6 +173,14 @@ gcs_official_half: False # (bool) use FP16 inference for training-time official 
 gcs_lane_count_balanced: True # (bool) sample GCS training images with inverse-frequency lane-count weights
 gcs_lane_count_balance_power: 1.0 # (float) lane-count sampler exponent; 1.0 gives equal lane-count groups
 gcs_lane_count_min_group: 50 # (int) minimum group size used to smooth lane-count sampler weights
+gcs_hard_sampling: False # (bool) train-only hard sampling for 0601 and short-visible GT3/GT4/GT5 samples
+gcs_hard_date_0601_weight: 2.0 # (float) multiplier for TuSimple 0601 samples
+gcs_hard_gt4_le10_weight: 4.0 # (float) multiplier for GT4 samples with min_visible_points <= gcs_hard_visible_thr
+gcs_hard_gt5_le10_weight: 3.0 # (float) multiplier for GT5 samples with min_visible_points <= gcs_hard_visible_thr
+gcs_hard_gt3_le20_weight: 1.5 # (float) multiplier for GT3 samples with min_visible_points <= gcs_hard_gt3_visible_thr
+gcs_hard_0313_2_gt4_le10_weight: 4.0 # (float) extra multiplier for 0313-2 GT4 short-visible samples
+gcs_hard_visible_thr: 10 # (int) visible-point threshold for GT4/GT5 hard-sampling groups
+gcs_hard_gt3_visible_thr: 20 # (int) visible-point threshold for GT3 hard-sampling group
 nbs: 64 # (int) nominal batch size used for loss normalization
 hsv_h: 0.015 # (float) HSV hue augmentation fraction
 hsv_s: 0.7 # (float) HSV saturation augmentation fraction

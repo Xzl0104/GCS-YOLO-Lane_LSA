@@ -220,6 +220,54 @@ class GCSLaneTrainer(BaseTrainer):
                 return int((data["lane_valid"].sum(axis=1) >= 2).sum())
             return int(data["lanes"].shape[0])
 
+    @staticmethod
+    def _array_scalar_str(value: np.ndarray) -> str:
+        """Convert a scalar-like npz array to a Python string."""
+        value = np.asarray(value)
+        if value.shape == ():
+            return str(value.item())
+        if value.size == 1:
+            return str(value.reshape(-1)[0])
+        return str(value)
+
+    @staticmethod
+    def _parse_tusimple_date(raw_file: str, image_file: Path) -> str:
+        """Parse TuSimple date id from raw_file first, then converted image paths."""
+        raw = str(raw_file or "").lstrip("/").replace("\\", "/")
+        parts = Path(raw).parts
+        if len(parts) >= 2 and parts[0] == "clips":
+            return parts[1]
+
+        image_text = str(image_file).replace("\\", "/")
+        for text in (raw, image_text):
+            for part in Path(text).parts:
+                if part in {"0313-1", "0313-2", "0531", "0601"}:
+                    return part
+            match = re.search(r"(0313-[12]|0531|0601)", text)
+            if match:
+                return match.group(1)
+        return "unknown"
+
+    @classmethod
+    def _hard_sampling_meta(cls, label_file: Path, image_file: Path) -> tuple[int, float, str]:
+        """Read GT lane count, shortest visible lane length, and TuSimple date for one sample."""
+        with np.load(label_file, allow_pickle=False) as data:
+            if "lanes" not in data:
+                raise KeyError(f"{label_file} is missing required hard-sampling array 'lanes'.")
+            if "lane_valid" not in data:
+                raise KeyError(f"{label_file} is missing required hard-sampling array 'lane_valid'.")
+            lanes = np.asarray(data["lanes"])
+            lane_valid = np.asarray(data["lane_valid"], dtype=np.float32)
+            if lane_valid.ndim != 2 or lanes.ndim < 1 or lane_valid.shape[0] != lanes.shape[0]:
+                raise ValueError(f"{label_file}: hard-sampling lanes/lane_valid shape mismatch.")
+            if "num_lanes" in data:
+                gt_lanes = int(np.asarray(data["num_lanes"]).reshape(-1)[0])
+            else:
+                gt_lanes = int(lane_valid.shape[0])
+            min_visible = float(lane_valid.sum(axis=1).min()) if lane_valid.shape[0] else 0.0
+            raw_file = cls._array_scalar_str(data["raw_file"]) if "raw_file" in data else ""
+        return gt_lanes, min_visible, cls._parse_tusimple_date(raw_file, image_file)
+
     def _lane_count_sampler(self, dataset: GCSLaneDataset) -> WeightedRandomSampler:
         """Build a replacement sampler that balances samples by GT lane count."""
         counts = [self._label_lane_count(Path(p)) for p in dataset.label_files]
@@ -234,6 +282,67 @@ class GCSLaneTrainer(BaseTrainer):
         )
         return WeightedRandomSampler(weights=weights, num_samples=len(weights), replacement=True)
 
+    def _hard_sampling_sampler(self, dataset: GCSLaneDataset) -> WeightedRandomSampler:
+        """Build a train-only sampler for short visible side-lane and 0601 samples."""
+        date_0601_weight = float(getattr(self.args, "gcs_hard_date_0601_weight", 2.0))
+        gt4_weight = float(getattr(self.args, "gcs_hard_gt4_le10_weight", 4.0))
+        gt5_weight = float(getattr(self.args, "gcs_hard_gt5_le10_weight", 3.0))
+        gt3_weight = float(getattr(self.args, "gcs_hard_gt3_le20_weight", 1.5))
+        gt4_0313_2_weight = float(getattr(self.args, "gcs_hard_0313_2_gt4_le10_weight", 4.0))
+        visible_thr = int(getattr(self.args, "gcs_hard_visible_thr", 10))
+        gt3_visible_thr = int(getattr(self.args, "gcs_hard_gt3_visible_thr", 20))
+
+        weights_cfg = {
+            "gcs_hard_date_0601_weight": date_0601_weight,
+            "gcs_hard_gt4_le10_weight": gt4_weight,
+            "gcs_hard_gt5_le10_weight": gt5_weight,
+            "gcs_hard_gt3_le20_weight": gt3_weight,
+            "gcs_hard_0313_2_gt4_le10_weight": gt4_0313_2_weight,
+        }
+        bad_weights = {k: v for k, v in weights_cfg.items() if v <= 0.0 or not math.isfinite(v)}
+        if bad_weights:
+            raise ValueError(f"GCS hard sampling weights must be positive finite values, got {bad_weights}.")
+        if visible_thr < 0 or gt3_visible_thr < 0:
+            raise ValueError(
+                f"gcs_hard_visible_thr and gcs_hard_gt3_visible_thr must be >= 0, "
+                f"got {visible_thr} and {gt3_visible_thr}."
+            )
+
+        stats = Counter()
+        sample_weights: list[float] = []
+        for label_file, image_file in zip(dataset.label_files, dataset.im_files):
+            gt_lanes, min_visible, date = self._hard_sampling_meta(Path(label_file), Path(image_file))
+            weight = 1.0
+            if date == "0601":
+                weight *= date_0601_weight
+                stats["date_0601"] += 1
+            if gt_lanes == 4 and min_visible <= visible_thr:
+                weight *= gt4_weight
+                stats[f"gt4_le{visible_thr}"] += 1
+            if gt_lanes == 5 and min_visible <= visible_thr:
+                weight *= gt5_weight
+                stats[f"gt5_le{visible_thr}"] += 1
+            if gt_lanes == 3 and min_visible <= gt3_visible_thr:
+                weight *= gt3_weight
+                stats[f"gt3_le{gt3_visible_thr}"] += 1
+            if date == "0313-2" and gt_lanes == 4 and min_visible <= visible_thr:
+                weight *= gt4_0313_2_weight
+                stats[f"0313-2_gt4_le{visible_thr}"] += 1
+            sample_weights.append(weight)
+
+        weights = torch.as_tensor(sample_weights, dtype=torch.double)
+        LOGGER.info(
+            "GCS hard_sampling enabled: "
+            f"num_date_0601={stats['date_0601']}, "
+            f"num_gt4_le{visible_thr}={stats[f'gt4_le{visible_thr}']}, "
+            f"num_gt5_le{visible_thr}={stats[f'gt5_le{visible_thr}']}, "
+            f"num_gt3_le{gt3_visible_thr}={stats[f'gt3_le{gt3_visible_thr}']}, "
+            f"num_0313-2_gt4_le{visible_thr}={stats[f'0313-2_gt4_le{visible_thr}']}, "
+            f"weight_min={float(weights.min()):.6g}, weight_mean={float(weights.mean()):.6g}, "
+            f"weight_max={float(weights.max()):.6g}, samples_per_epoch={len(weights)}"
+        )
+        return WeightedRandomSampler(weights=weights, num_samples=len(weights), replacement=True)
+
     def get_dataloader(self, dataset_path: str, batch_size: int = 16, rank: int = 0, mode: str = "train"):
         """Create a dataloader for variable-lane GCS labels."""
         assert mode in {"train", "val"}, f"Mode must be 'train' or 'val', not {mode}."
@@ -243,7 +352,15 @@ class GCSLaneTrainer(BaseTrainer):
             dataset = self.build_dataset(dataset_path, mode, batch_size)
         sampler = None
         shuffle = mode == "train"
-        if mode == "train" and bool(getattr(self.args, "gcs_lane_count_balanced", False)):
+        if mode == "train" and bool(getattr(self.args, "gcs_hard_sampling", False)):
+            if rank != -1:
+                LOGGER.warning("GCS hard sampling is only enabled for single-process training.")
+            else:
+                if bool(getattr(self.args, "gcs_lane_count_balanced", False)):
+                    LOGGER.info("GCS hard sampling overrides gcs_lane_count_balanced for this train dataloader.")
+                sampler = self._hard_sampling_sampler(dataset)
+                shuffle = False
+        elif mode == "train" and bool(getattr(self.args, "gcs_lane_count_balanced", False)):
             if rank != -1:
                 LOGGER.warning("GCS lane-count balanced sampling is only enabled for single-process training.")
             else:

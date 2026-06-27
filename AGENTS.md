@@ -9,7 +9,7 @@
 
 This branch is the current GCS-YOLO-Lane mainline, imported from the historical `5-25-3.zip` algorithm.
 
-The branch keeps the historical 5-25-3 algorithm body, the TuSimple fixed-y contract, and the explicit default-off `count_boundary_loss` requested on 2026-06-27.
+The branch keeps the historical 5-25-3 algorithm body, the TuSimple fixed-y contract, the explicit default-off `count_boundary_loss`, and the explicit default-off train-only `gcs_hard_sampling` requested on 2026-06-27.
 
 It is not the current mainline Count Head / Quality Head branch. Current behavior is governed by `docs/agent-context/current-contracts.md`.
 
@@ -109,7 +109,7 @@ The active source/config is rolled back to commit `b6535f641` (`Fix GCS training
 
 ## Branch Scope
 
-Do not silently import later mainline mechanisms into this branch. In particular, do not add Count Head, Quality Head, Survival Head, near-miss mining, or mainline K56 candidate scripts unless a future task explicitly asks for that algorithm change. The only active Count Boundary mechanism is the 2026-06-27 user-requested, default-off `count_boundary_loss`.
+Do not silently import later mainline mechanisms into this branch. In particular, do not add Count Head, Quality Head, Survival Head, near-miss mining, or mainline K56 candidate scripts unless a future task explicitly asks for that algorithm change. The only active Count Boundary mechanism is the 2026-06-27 user-requested, default-off `count_boundary_loss`. The only active hard sampler is the 2026-06-27 user-requested, default-off train-only `gcs_hard_sampling`.
 
 Training-time `official_best` checkpoint preservation is now an explicit protocol change requested on 2026-06-27. It is selection/evaluation tooling only, not an algorithm-body change.
 
