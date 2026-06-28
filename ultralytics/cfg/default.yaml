@@ -137,6 +137,11 @@ gcs_spurious_disable_gt5: False # (bool) disable spurious-negative loss on GT5-o
 gcs_spurious_max_points: 12 # (int) maximum visible anchors for short spurious duplicate candidates
 gcs_spurious_close_px: 30.0 # (float) maximum mean x distance in pixels to a matched query
 gcs_spurious_min_overlap: 3 # (int) minimum overlapping visible anchors with a matched query
+gcs_spurious_gt_protect: False # (bool) protect duplicate-like candidates that are close to a GT lane
+gcs_spurious_gt_protect_px: 25.0 # (float) maximum mean x distance in pixels for GT-aware protection
+gcs_spurious_gt_protect_min_overlap: 3 # (int) minimum overlapping anchors with a GT lane for protection
+gcs_spurious_gt_protect_margin_px: 5.0 # (float) better-matched protection margin in pixels
+gcs_spurious_gt_protect_mode: better_matched # (str) GT-aware protection policy
 gcs_gt5_short_visible_thr: 0 # (int) matched GT5 lanes with visible_count <= this get point-valid positive rescue; 0 disables
 gcs_gt5_short_point_valid_weight: 1.0 # (float) point-valid BCE multiplier for visible anchors of rescued short GT5 lanes
 gcs_exist_pos_weight: 1.0 # (float) positive query weight for GCS lane existence BCE

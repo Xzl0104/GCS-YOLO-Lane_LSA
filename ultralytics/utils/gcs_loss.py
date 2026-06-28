@@ -27,6 +27,10 @@ class GCSLoss(nn.Module):
         "count_boundary_loss",
         "spurious_neg_loss",
         "spurious_negative_count",
+        "spur_cand",
+        "spur_prot",
+        "spur_final",
+        "spur_neg",
         "spur_cnt_gt3",
         "spur_cnt_gt4",
         "spur_cnt_gt5",
@@ -69,6 +73,11 @@ class GCSLoss(nn.Module):
         spurious_max_points: int | None = None,
         spurious_close_px: float | None = None,
         spurious_min_overlap: int | None = None,
+        spurious_gt_protect: bool | None = None,
+        spurious_gt_protect_px: float | None = None,
+        spurious_gt_protect_min_overlap: int | None = None,
+        spurious_gt_protect_margin_px: float | None = None,
+        spurious_gt_protect_mode: str | None = None,
         eval_point_valid_thr: float | None = None,
         gt5_short_visible_thr: int | None = None,
         gt5_short_point_valid_weight: float | None = None,
@@ -179,6 +188,31 @@ class GCSLoss(nn.Module):
             if spurious_min_overlap is not None
             else self._arg(args, "gcs_spurious_min_overlap", 3)
         )
+        self.spurious_gt_protect = self._bool_arg(
+            spurious_gt_protect
+            if spurious_gt_protect is not None
+            else self._arg(args, "gcs_spurious_gt_protect", False)
+        )
+        self.spurious_gt_protect_px = float(
+            spurious_gt_protect_px
+            if spurious_gt_protect_px is not None
+            else self._arg(args, "gcs_spurious_gt_protect_px", 25.0)
+        )
+        self.spurious_gt_protect_min_overlap = int(
+            spurious_gt_protect_min_overlap
+            if spurious_gt_protect_min_overlap is not None
+            else self._arg(args, "gcs_spurious_gt_protect_min_overlap", 3)
+        )
+        self.spurious_gt_protect_margin_px = float(
+            spurious_gt_protect_margin_px
+            if spurious_gt_protect_margin_px is not None
+            else self._arg(args, "gcs_spurious_gt_protect_margin_px", 5.0)
+        )
+        self.spurious_gt_protect_mode = str(
+            spurious_gt_protect_mode
+            if spurious_gt_protect_mode is not None
+            else self._arg(args, "gcs_spurious_gt_protect_mode", "better_matched")
+        )
         self.eval_point_valid_thr = float(
             eval_point_valid_thr
             if eval_point_valid_thr is not None
@@ -221,6 +255,25 @@ class GCSLoss(nn.Module):
             raise ValueError(f"gcs_spurious_close_px must be >= 0, got {self.spurious_close_px}.")
         if self.spurious_min_overlap < 1:
             raise ValueError(f"gcs_spurious_min_overlap must be >= 1, got {self.spurious_min_overlap}.")
+        if self.spurious_gt_protect_px < 0.0:
+            raise ValueError(
+                f"gcs_spurious_gt_protect_px must be >= 0, got {self.spurious_gt_protect_px}."
+            )
+        if self.spurious_gt_protect_min_overlap < 1:
+            raise ValueError(
+                "gcs_spurious_gt_protect_min_overlap must be >= 1, "
+                f"got {self.spurious_gt_protect_min_overlap}."
+            )
+        if self.spurious_gt_protect_margin_px < 0.0:
+            raise ValueError(
+                "gcs_spurious_gt_protect_margin_px must be >= 0, "
+                f"got {self.spurious_gt_protect_margin_px}."
+            )
+        if self.spurious_gt_protect_mode != "better_matched":
+            raise ValueError(
+                "Only gcs_spurious_gt_protect_mode='better_matched' is supported, "
+                f"got {self.spurious_gt_protect_mode!r}."
+            )
         if not 0.0 <= self.eval_point_valid_thr <= 1.0:
             raise ValueError(f"gcs_eval_point_valid_thr must be in [0, 1], got {self.eval_point_valid_thr}.")
         if self.gt5_short_visible_thr < 0:
@@ -720,6 +773,62 @@ class GCSLoss(nn.Module):
             return 4, float(self.spurious_gt4_weight)
         return 5, float(self.spurious_gt5_weight)
 
+    def _spurious_candidate_gt_protected(
+        self,
+        points_b: torch.Tensor,
+        valid_prob_b: torch.Tensor,
+        uq: torch.Tensor,
+        src_idx: torch.Tensor,
+        tgt_idx: torch.Tensor,
+        gt_points_b: torch.Tensor,
+        gt_valid_b: torch.Tensor,
+        x_scale: torch.Tensor,
+        valid_thr: float,
+    ) -> bool:
+        """Return whether an unmatched duplicate-like candidate is close enough to GT to protect."""
+        if not self.spurious_gt_protect or gt_points_b.numel() == 0:
+            return False
+        if gt_points_b.ndim != 3 or gt_points_b.shape[-1] != 2:
+            raise ValueError(f"Each GT lane tensor must have shape N x K x 2, got {tuple(gt_points_b.shape)}.")
+        if gt_valid_b.shape != gt_points_b.shape[:2]:
+            raise ValueError(
+                f"GT valid mask must match GT lane first two dims, got {tuple(gt_valid_b.shape)} vs {tuple(gt_points_b.shape[:2])}."
+            )
+
+        candidate_valid = valid_prob_b[uq] >= valid_thr
+        min_overlap = int(self.spurious_gt_protect_min_overlap)
+        protect_px = float(self.spurious_gt_protect_px)
+        margin_px = float(self.spurious_gt_protect_margin_px)
+
+        for gt_i in range(gt_points_b.shape[0]):
+            lane_valid = gt_valid_b[gt_i] > 0.5
+            candidate_overlap = candidate_valid & lane_valid
+            if int(candidate_overlap.sum().item()) < min_overlap:
+                continue
+            candidate_dx = (points_b[uq, candidate_overlap, 0] - gt_points_b[gt_i, candidate_overlap, 0]).abs()
+            candidate_dx = candidate_dx * x_scale
+            candidate_dx_mean = float(candidate_dx.mean().item())
+            if candidate_dx_mean > protect_px:
+                continue
+
+            matched_pos = (tgt_idx == int(gt_i)).nonzero(as_tuple=False).reshape(-1)
+            if matched_pos.numel() == 0:
+                return True
+
+            mq = src_idx[matched_pos[0]]
+            matched_valid = valid_prob_b[mq] >= valid_thr
+            matched_overlap = matched_valid & lane_valid
+            if int(matched_overlap.sum().item()) < min_overlap:
+                return True
+
+            matched_dx = (points_b[mq, matched_overlap, 0] - gt_points_b[gt_i, matched_overlap, 0]).abs()
+            matched_dx = matched_dx * x_scale
+            matched_dx_mean = float(matched_dx.mean().item())
+            if candidate_dx_mean + margin_px < matched_dx_mean:
+                return True
+
+        return False
+
     def spurious_negative_loss(
         self,
         pred_points: torch.Tensor,
@@ -727,11 +836,13 @@ class GCSLoss(nn.Module):
         pred_valid_logits: torch.Tensor | None,
         indices: list[tuple[torch.Tensor, torch.Tensor]],
         gt_lanes: torch.Tensor,
+        gt_points: list[torch.Tensor],
+        gt_valid: list[torch.Tensor],
     ) -> tuple[torch.Tensor, ...]:
         """Extra BCE negative loss for short unmatched queries duplicating matched lanes."""
         zero = pred_logits.new_zeros(())
         if self.spurious_neg_gain == 0.0:
-            return self._zero_like(pred_points), zero, zero, zero, zero, zero, zero, zero
+            return self._zero_like(pred_points), zero, zero, zero, zero, zero, zero, zero, zero, zero, zero, zero
         if pred_valid_logits is None:
             raise ValueError(
                 "gcs_spurious_neg requires preds['pred_valid_logits'] with shape B x Q x K; "
@@ -748,7 +859,9 @@ class GCSLoss(nn.Module):
         points = pred_points.detach()
         x_scale = self._spurious_x_scale(pred_points)
         selected_losses = []
-        spurious_count = 0
+        candidate_count = 0
+        protected_count = 0
+        final_count = 0
         group_counts = {3: 0, 4: 0, 5: 0}
         group_losses = {3: [], 4: [], 5: []}
 
@@ -758,15 +871,18 @@ class GCSLoss(nn.Module):
             if is_gt5 and self.spurious_disable_gt5:
                 continue
             group_key, image_weight = self._spurious_gt_group_and_weight(gt_count)
-            src_idx, _ = indices[b]
+            src_idx, tgt_idx = indices[b]
             if src_idx.numel() == 0:
                 continue
             src_idx = src_idx.to(device=device, dtype=torch.long)
+            tgt_idx = tgt_idx.to(device=device, dtype=torch.long)
             matched_mask = torch.zeros(num_queries, dtype=torch.bool, device=device)
             matched_mask[src_idx] = True
             unmatched_idx = torch.arange(num_queries, device=device)[~matched_mask]
             if unmatched_idx.numel() == 0:
                 continue
+            gt_points_b = gt_points[b].detach().to(device=device, dtype=points.dtype)
+            gt_valid_b = gt_valid[b].detach().to(device=device)
 
             for uq in unmatched_idx:
                 uq_valid = valid_prob[b, uq] >= valid_thr
@@ -786,12 +902,26 @@ class GCSLoss(nn.Module):
                         break
 
                 if is_duplicate:
+                    candidate_count += 1
+                    if self._spurious_candidate_gt_protected(
+                        points[b],
+                        valid_prob[b],
+                        uq,
+                        src_idx,
+                        tgt_idx,
+                        gt_points_b,
+                        gt_valid_b,
+                        x_scale,
+                        valid_thr,
+                    ):
+                        protected_count += 1
+                        continue
                     raw_loss = F.binary_cross_entropy_with_logits(
                         pred_logits[b, uq], pred_logits.new_zeros(()), reduction="none"
                     )
                     weighted_loss = raw_loss * image_weight
                     selected_losses.append(weighted_loss)
-                    spurious_count += 1
+                    final_count += 1
                     group_counts[group_key] += 1
                     group_losses[group_key].append(weighted_loss)
 
@@ -801,7 +931,11 @@ class GCSLoss(nn.Module):
         loss = torch.stack(selected_losses).mean() if selected_losses else self._zero_like(pred_points)
         return (
             loss,
-            pred_logits.new_tensor(float(spurious_count)),
+            pred_logits.new_tensor(float(final_count)),
+            pred_logits.new_tensor(float(candidate_count)),
+            pred_logits.new_tensor(float(protected_count)),
+            pred_logits.new_tensor(float(final_count)),
+            loss.detach(),
             pred_logits.new_tensor(float(group_counts[3])),
             pred_logits.new_tensor(float(group_counts[4])),
             pred_logits.new_tensor(float(group_counts[5])),
@@ -926,6 +1060,10 @@ class GCSLoss(nn.Module):
         (
             spurious_neg_loss,
             spurious_negative_count,
+            spur_cand,
+            spur_prot,
+            spur_final,
+            spur_neg,
             spur_cnt_gt3,
             spur_cnt_gt4,
             spur_cnt_gt5,
@@ -933,7 +1071,7 @@ class GCSLoss(nn.Module):
             spur_neg_gt4,
             spur_neg_gt5,
         ) = self.spurious_negative_loss(
-            pred_points, pred_logits, pred_valid_logits, indices, gt_lanes
+            pred_points, pred_logits, pred_valid_logits, indices, gt_lanes, gt_points, gt_valid
         )
 
         mask_loss = self._zero_like(pred_points)
@@ -975,6 +1113,10 @@ class GCSLoss(nn.Module):
                 count_boundary_loss.detach(),
                 spurious_neg_loss.detach(),
                 spurious_negative_count.detach(),
+                spur_cand.detach(),
+                spur_prot.detach(),
+                spur_final.detach(),
+                spur_neg.detach(),
                 spur_cnt_gt3.detach(),
                 spur_cnt_gt4.detach(),
                 spur_cnt_gt5.detach(),

@@ -15,7 +15,7 @@ Do not silently import later mainline mechanisms such as Count Head, Quality Hea
 
 The branch also includes the 2026-06-27 user-requested, default-off `gcs_hard_sampling` train-only sampler for short-visible GT3/GT4/GT5 and 0601 samples. It changes only the training dataloader sampling frequency through `WeightedRandomSampler`; it does not change labels, validation/test dataloaders, point/smooth/curve losses, decode, or official metrics.
 
-The branch also includes the 2026-06-27 user-requested, default-off `gcs_spurious_neg` loss for E3-lite. It uses the training Hungarian matcher indices only to select unmatched short duplicate-like queries near matched queries, then adds an extra target-zero BCE on their `pred_logits`. The GT-count weighting extension keeps the old default behavior with `gcs_spurious_gt3_weight=1.0`, `gcs_spurious_gt4_weight=1.0`, `gcs_spurious_gt5_weight=1.0`, and `gcs_spurious_disable_gt5=False`, while allowing GT3-or-sparser, GT4, and GT5-or-denser samples to carry different spurious-negative weights. It does not change data sampling, dataset labels, matcher logic, point/smooth/curve losses, decode, NMS, or official metrics.
+The branch also includes the 2026-06-27 user-requested, default-off `gcs_spurious_neg` loss for E3-lite. It uses the training Hungarian matcher indices only to select unmatched short duplicate-like queries near matched queries, then adds an extra target-zero BCE on their `pred_logits`. The GT-count weighting extension keeps the old default behavior with `gcs_spurious_gt3_weight=1.0`, `gcs_spurious_gt4_weight=1.0`, `gcs_spurious_gt5_weight=1.0`, and `gcs_spurious_disable_gt5=False`, while allowing GT3-or-sparser, GT4, and GT5-or-denser samples to carry different spurious-negative weights. The 2026-06-28 `gcs_spurious_gt_protect` extension is also default-off and only removes GT-close candidate queries from this extra negative BCE. It does not change data sampling, dataset labels, matcher logic, point/smooth/curve losses, decode, NMS, or official metrics.
 
 Training-time `official_best` checkpoint preservation is active as an explicit 2026-06-27 selection-protocol change. It preserves the 5-25-3 algorithm body and only changes how formal TuSimple checkpoints are selected.
 
@@ -142,6 +142,10 @@ count_under5_loss
 count_boundary_loss
 spurious_neg_loss
 spurious_negative_count
+spur_cand
+spur_prot
+spur_final
+spur_neg
 spur_cnt_gt3
 spur_cnt_gt4
 spur_cnt_gt5
@@ -191,6 +195,19 @@ setting preserves old E3-lite behavior. `spurious_negative_count`,
 `spur_neg_gt4`, `spur_neg_gt5`, `count_score_mean`, `cnt_bound_5under`, and
 `cnt_score` are log-only diagnostics and are not directly part of the weighted
 training objective.
+
+`gcs_spurious_gt_protect=False` preserves the old E3-lite spurious-negative
+selection. When enabled, each duplicate-like spurious candidate is compared
+against all GT lanes. If the candidate overlaps a GT lane by at least
+`gcs_spurious_gt_protect_min_overlap` anchors and has mean x distance at most
+`gcs_spurious_gt_protect_px` pixels, `better_matched` mode protects it when the
+GT lane has no matched query, the matched query has insufficient GT overlap, or
+the candidate mean GT x distance plus `gcs_spurious_gt_protect_margin_px` is
+lower than the matched query mean GT x distance. Protected candidates are
+excluded only from the extra spurious target-zero BCE. `spur_cand` logs the
+pre-protect candidate count, `spur_prot` logs protected candidates,
+`spur_final` and `spurious_negative_count` log final selected negatives, and
+`spur_neg` mirrors `spurious_neg_loss` for compact progress logging.
 
 ## Decode And Evaluation Contract
 

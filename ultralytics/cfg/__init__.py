@@ -204,6 +204,8 @@ CFG_FLOAT_KEYS = frozenset(
         "gcs_spurious_gt4_weight",
         "gcs_spurious_gt5_weight",
         "gcs_spurious_close_px",
+        "gcs_spurious_gt_protect_px",
+        "gcs_spurious_gt_protect_margin_px",
         "gcs_gt5_short_point_valid_weight",
         "gcs_exist_pos_weight",
         "gcs_exist_focal_gamma",
@@ -292,6 +294,7 @@ CFG_INT_KEYS = frozenset(
         "gcs_count_under5_min_lanes",
         "gcs_spurious_max_points",
         "gcs_spurious_min_overlap",
+        "gcs_spurious_gt_protect_min_overlap",
         "gcs_gt5_short_visible_thr",
         "gcs_hard_visible_thr",
         "gcs_hard_gt3_visible_thr",
@@ -337,6 +340,7 @@ CFG_BOOL_KEYS = frozenset(
         "gcs_lane_count_balanced",
         "gcs_hard_sampling",
         "gcs_spurious_disable_gt5",
+        "gcs_spurious_gt_protect",
     }
 )
 

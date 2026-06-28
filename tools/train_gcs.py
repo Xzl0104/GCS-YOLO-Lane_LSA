@@ -243,6 +243,36 @@ def parse_args() -> argparse.Namespace:
         help="Minimum overlapping visible anchors with a matched query for spurious duplicate detection.",
     )
     parser.add_argument(
+        "--gcs-spurious-gt-protect",
+        action="store_true",
+        help="Protect duplicate-like spurious candidates that are close to a GT lane.",
+    )
+    parser.add_argument(
+        "--gcs-spurious-gt-protect-px",
+        type=float,
+        default=25.0,
+        help="Maximum mean x distance in pixels for GT-aware spurious candidate protection.",
+    )
+    parser.add_argument(
+        "--gcs-spurious-gt-protect-min-overlap",
+        type=int,
+        default=3,
+        help="Minimum overlapping anchors with a GT lane for GT-aware spurious candidate protection.",
+    )
+    parser.add_argument(
+        "--gcs-spurious-gt-protect-margin-px",
+        type=float,
+        default=5.0,
+        help="Protect if candidate mean GT dx plus this margin is below the matched query mean GT dx.",
+    )
+    parser.add_argument(
+        "--gcs-spurious-gt-protect-mode",
+        type=str,
+        default="better_matched",
+        choices=("better_matched",),
+        help="GT-aware spurious protection policy.",
+    )
+    parser.add_argument(
         "--gcs-gt5-short-visible-thr",
         type=int,
         default=0,
@@ -521,6 +551,11 @@ def main() -> None:
         "gcs_spurious_max_points": args.gcs_spurious_max_points,
         "gcs_spurious_close_px": args.gcs_spurious_close_px,
         "gcs_spurious_min_overlap": args.gcs_spurious_min_overlap,
+        "gcs_spurious_gt_protect": args.gcs_spurious_gt_protect,
+        "gcs_spurious_gt_protect_px": args.gcs_spurious_gt_protect_px,
+        "gcs_spurious_gt_protect_min_overlap": args.gcs_spurious_gt_protect_min_overlap,
+        "gcs_spurious_gt_protect_margin_px": args.gcs_spurious_gt_protect_margin_px,
+        "gcs_spurious_gt_protect_mode": args.gcs_spurious_gt_protect_mode,
         "gcs_gt5_short_visible_thr": args.gcs_gt5_short_visible_thr,
         "gcs_gt5_short_point_valid_weight": args.gcs_gt5_short_point_valid_weight,
         "gcs_exist_pos_weight": args.gcs_exist_pos_weight,
