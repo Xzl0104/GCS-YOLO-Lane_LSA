@@ -2,7 +2,7 @@
 
 This is the current GCS-YOLO-Lane mainline branch. It imports the historical `5-25-3.zip` algorithm and adapts only the TuSimple fixed-y contract.
 
-Active source/config is rolled back to commit `b6535f641` (`Fix GCS training progress header alignment`). Its active algorithm contract remains the 5-25-3 K56 mainline with no later Count Head, Q18/Q20/dataref, duplicate/spurious/ranking, lane-balanced, valid-repair, side-aux, or GT4-hard diagnostic mechanisms active. Results and mechanisms from later commits are retained below as legacy experiment conclusions only; they do not describe currently available CLI flags, loss items, diagnostic scripts, model outputs, configs, or selected candidates.
+Active source/config is rolled back to commit `b6535f641` (`Fix GCS training progress header alignment`). Its active algorithm contract remains the 5-25-3 K56 mainline with no later Count Head, Q18/Q20/dataref, lane-balanced, valid-repair, side-aux, or GT4-hard diagnostic mechanisms active. The explicit 2026-06-27 branch-local additions are exceptions: default-off `count_boundary_loss`, default-off train-only `gcs_hard_sampling`, default-off E3-lite `gcs_spurious_neg`, and training-time `official_best` checkpoint selection. Results and mechanisms from later commits are retained below as legacy experiment conclusions only; they do not describe currently available CLI flags, loss items, diagnostic scripts, model outputs, configs, or selected candidates unless explicitly listed as branch-local additions here.
 
 ## Contract
 
@@ -23,7 +23,7 @@ The 56 fixed-y anchors are TuSimple official h-samples `710, 700, 690, ..., 160`
 
 Compatibility paths `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml` and `data/tusimple_gcs_fixed_y_k56_960x544.yaml` keep the same K56 contract for old run records. New training commands should use the mainline paths above.
 
-The 5-25-3 algorithm body is intentionally not upgraded to later mainline Count Head, Count Boundary, Quality Head, Survival Head, near-miss, or official-best checkpoint machinery.
+The 5-25-3 algorithm body is intentionally not upgraded to later mainline Count Head, Quality Head, Survival Head, or near-miss machinery. The only active Count Boundary, hard-sampling, spurious-negative, and official-best behavior is the explicit branch-local default-off/protocol work recorded in `docs/agent-context/current-contracts.md`.
 
 ## Legacy Post-b653 Official-Val Evidence
 

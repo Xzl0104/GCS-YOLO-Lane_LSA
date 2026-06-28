@@ -90,11 +90,15 @@ If `batch=32` OOMs on the target machine, reduce batch only for OOM/instability 
 
 `--no-amp` is included because the current remote run hit an Ultralytics AMP self-check failure while loading `yolo26n.pt`. If that server cache/checkpoint issue is fixed, AMP may be re-enabled only with a run note.
 
-## E3-Lite Spurious Negative From E1
+## E3-Lite GT4-Strong + GT5-Safe Spurious Negative From E1
 
-The E3-lite experiment must initialize from the E1 count-boundary checkpoint,
-not from E2 hard sampling or count-aware top-k results. Keep hard sampling
-disabled.
+E3-lite GT-count-weighted spurious-negative experiments must initialize from
+the E1 count-boundary checkpoint, not from E2 hard sampling or count-aware
+top-k results. Keep hard sampling disabled.
+
+For new formal runs, use the training-time official-best protocol below. If a
+run was trained without `--gcs-official-best`, record it explicitly as a
+post-hoc official-val sweep over that run's checkpoint.
 
 ```bash
 python tools/train_gcs.py \
@@ -131,6 +135,8 @@ python tools/train_gcs.py \
   --gcs-count-boundary 0.2 \
   --gcs-spurious-neg 0.1 \
   --gcs-spurious-neg-weight 1.0 \
+  --gcs-spurious-gt3-weight 1.0 \
+  --gcs-spurious-gt4-weight 1.5 \
   --gcs-spurious-gt5-weight 0.25 \
   --gcs-spurious-max-points 12 \
   --gcs-spurious-close-px 30.0 \
@@ -141,18 +147,65 @@ python tools/train_gcs.py \
   --gcs-official-gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
   --gcs-official-half \
   --project runs/gcs_lane \
-  --name gcs_yolo_lane_s_q12_k56_count03_under5_boundary02_spuriousneg01_v1
+  --name gcs_yolo_lane_s_q12_k56_boundary02_spurious_gt4strong_gt5safe_v1
 ```
 
 Select only on official-val. Compare against E1 on `official_acc`,
 `official_FP`, `official_FN`, `count_acc_4`, `count_acc_5`, and count-confusion
 `4->5` / `5->4`.
 
-The default `gcs_spurious_gt5_weight=1.0` preserves the original spurious-lite
-behavior. Use `--gcs-spurious-gt5-weight 0.25` for the GT5-safe follow-up that
-keeps spurious-negative suppression on GT3/GT4 while reducing pressure on true
-short fifth lanes. `--gcs-spurious-disable-gt5` is the harder ablation that
-skips the spurious-negative loss entirely on `gt_lanes >= 5` samples.
+The default `gcs_spurious_gt3_weight=1.0`,
+`gcs_spurious_gt4_weight=1.0`, and `gcs_spurious_gt5_weight=1.0` settings preserve the
+original spurious-lite behavior. Use `--gcs-spurious-gt4-weight 1.5` and
+`--gcs-spurious-gt5-weight 0.25` for the GT4-strong + GT5-safe follow-up that
+presses GT4 false fifth lanes harder while reducing pressure on true short
+fifth lanes. `--gcs-spurious-disable-gt5` is the harder ablation that skips the
+spurious-negative loss entirely on `gt_lanes >= 5` samples.
+
+Completed diagnostic result:
+
+```text
+run = gcs_yolo_lane_s_q12_k56_boundary02_spurious_lite_v1
+pretrained = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_count03_under5_boundary02_v1/weights/best.pt
+gcs_spurious_neg = 0.1
+gcs_hard_sampling = false
+gcs_official_best = false
+sweep = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_boundary02_spurious_lite_v1_official_val_sweep/tusimple_official_sweep_summary.json
+best decode = conf=0.005, point_valid_thr=0.45, nms_dist_px=0.0, max_det=5, min_points=2
+official-val ACC = 0.971721
+official-val FP = 0.013866
+official-val FN = 0.015611
+official-val count_acc_4 = 0.924242
+official-val count_acc_5 = 0.878378
+count_confusion = 3->3=220, 3->4=3, 4->3=1, 4->4=61, 4->5=4, 5->4=9, 5->5=65
+```
+
+Against E1
+`gcs_yolo_lane_s_q12_k56_count03_under5_boundary02_v1`, spurious-lite improves
+official-val ACC by `+0.000513`, lowers FP by `0.009091`, and reduces GT4
+`4->5` from `9` to `4`. It also worsens GT5 retention: `5->4` increases from
+`2` to `9`, and `count_acc_5` falls from `0.972973` to `0.878378`.
+
+Decision: do not promote `spurious_lite_v1` and do not run final test for it.
+Use it as diagnostic evidence that the loss suppresses false fifth lanes but
+needs GT5-safe weighting before selection.
+
+Current GT5-safe artifact status:
+
+```text
+run = gcs_yolo_lane_s_q12_k56_boundary02_spurious_gt5safe_v1
+pretrained = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_count03_under5_boundary02_v1/weights/best.pt
+gcs_spurious_neg = 0.1
+gcs_spurious_gt5_weight = 0.25
+gcs_hard_sampling = false
+results.csv rows = 8 epochs plus header
+official-val sweep = not found
+```
+
+This GT5-safe artifact is not eligible for selection until a valid 363-image
+official-val sweep exists. Its promotion gate is: official-val ACC not below
+E1, most of the FP / `4->5` benefit retained, and `5->4` materially below the
+spurious-lite value of `9`.
 
 ## Training-Time Official-Best Selection
 

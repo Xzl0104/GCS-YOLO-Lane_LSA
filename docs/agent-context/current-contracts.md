@@ -15,7 +15,7 @@ Do not silently import later mainline mechanisms such as Count Head, Quality Hea
 
 The branch also includes the 2026-06-27 user-requested, default-off `gcs_hard_sampling` train-only sampler for short-visible GT3/GT4/GT5 and 0601 samples. It changes only the training dataloader sampling frequency through `WeightedRandomSampler`; it does not change labels, validation/test dataloaders, point/smooth/curve losses, decode, or official metrics.
 
-The branch also includes the 2026-06-27 user-requested, default-off `gcs_spurious_neg` loss for E3-lite. It uses the training Hungarian matcher indices only to select unmatched short duplicate-like queries near matched queries, then adds an extra target-zero BCE on their `pred_logits`. The GT5-safe extension keeps the old default behavior with `gcs_spurious_gt5_weight=1.0` and `gcs_spurious_disable_gt5=False`, while allowing GT5-or-denser samples to be downweighted or skipped. It does not change data sampling, dataset labels, matcher logic, point/smooth/curve losses, decode, NMS, or official metrics.
+The branch also includes the 2026-06-27 user-requested, default-off `gcs_spurious_neg` loss for E3-lite. It uses the training Hungarian matcher indices only to select unmatched short duplicate-like queries near matched queries, then adds an extra target-zero BCE on their `pred_logits`. The GT-count weighting extension keeps the old default behavior with `gcs_spurious_gt3_weight=1.0`, `gcs_spurious_gt4_weight=1.0`, `gcs_spurious_gt5_weight=1.0`, and `gcs_spurious_disable_gt5=False`, while allowing GT3-or-sparser, GT4, and GT5-or-denser samples to carry different spurious-negative weights. It does not change data sampling, dataset labels, matcher logic, point/smooth/curve losses, decode, NMS, or official metrics.
 
 Training-time `official_best` checkpoint preservation is active as an explicit 2026-06-27 selection-protocol change. It preserves the 5-25-3 algorithm body and only changes how formal TuSimple checkpoints are selected.
 
@@ -161,12 +161,16 @@ queries with visible-anchor count in `[2, gcs_spurious_max_points]`, at least
 `gcs_spurious_min_overlap` overlapping predicted-valid anchors with any matched
 query, and mean overlapping x distance at most `gcs_spurious_close_px` pixels.
 For images with `gt_lanes >= 5`, `gcs_spurious_disable_gt5=True` skips this loss
-for the image. Otherwise the image's selected spurious-negative terms are
-multiplied by `gcs_spurious_gt5_weight`; the default `1.0` preserves old
-E3-lite behavior. `spurious_negative_count`, `spur_cnt_gt3`, `spur_cnt_gt4`,
-`spur_cnt_gt5`, `spur_neg_gt3`, `spur_neg_gt4`, `spur_neg_gt5`, and
-`count_score_mean` are log-only diagnostics and are not directly part of the
-weighted training objective.
+for the image and takes priority over `gcs_spurious_gt5_weight`. Otherwise the
+image's selected spurious-negative terms are multiplied by
+`gcs_spurious_gt3_weight` when `gt_lanes <= 3`, `gcs_spurious_gt4_weight` when
+`gt_lanes == 4`, and `gcs_spurious_gt5_weight` when `gt_lanes >= 5`. The loss is
+normalized by selected spurious-query count, not by weight sum, so weights above
+or below `1.0` strengthen or weaken that GT group. The default all-`1.0`
+setting preserves old E3-lite behavior. `spurious_negative_count`,
+`spur_cnt_gt3`, `spur_cnt_gt4`, `spur_cnt_gt5`, `spur_neg_gt3`,
+`spur_neg_gt4`, `spur_neg_gt5`, and `count_score_mean` are log-only diagnostics
+and are not directly part of the weighted training objective.
 
 ## Decode And Evaluation Contract
 

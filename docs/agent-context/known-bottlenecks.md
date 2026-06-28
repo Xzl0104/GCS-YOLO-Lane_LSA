@@ -35,6 +35,56 @@ diagnostic scripts, configs, model outputs, or active selected candidates.
 - It includes explicit training-time `official_best` checkpoint preservation for official-val selection.
 - It still does not include later mainline `diagnose_gcs_gt5.py`, Count/Quality/Boundary diagnostics, Survival, or near-miss machinery.
 
+## 2026-06-28 E3-Lite Spurious-Negative Tradeoff
+
+The completed E3-lite spurious-negative official-val sweep is diagnostic-only,
+not a promoted candidate.
+
+```text
+E1 baseline:
+run = gcs_yolo_lane_s_q12_k56_count03_under5_boundary02_v1
+sweep = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_count03_under5_boundary02_v1_official_val_sweep/tusimple_official_sweep_summary.json
+official_acc = 0.971208
+official_FP = 0.022957
+official_FN = 0.014004
+count_acc_4 = 0.848485
+count_acc_5 = 0.972973
+4->5 = 9
+5->4 = 2
+
+E3-lite spurious:
+run = gcs_yolo_lane_s_q12_k56_boundary02_spurious_lite_v1
+sweep = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_boundary02_spurious_lite_v1_official_val_sweep/tusimple_official_sweep_summary.json
+official_acc = 0.971721
+official_FP = 0.013866
+official_FN = 0.015611
+count_acc_4 = 0.924242
+count_acc_5 = 0.878378
+4->5 = 4
+5->4 = 9
+```
+
+Supported interpretation:
+
+- The spurious-negative loss suppresses the intended false-fifth pattern:
+  `4->5` drops by `5`, `count_acc_4` improves by `0.075757`, and FP drops by
+  `0.009091`.
+- The cost is true GT5 retention: `5->4` increases by `7`, and
+  `count_acc_5` drops by `0.094595`.
+- This means short unmatched duplicate-like query suppression is useful, but
+  the selection rule is not GT5-safe enough when true fifth lanes are short.
+
+The next bottleneck is no longer whether spurious-negative suppression can
+reduce GT4 over-count. It can. The bottleneck is preserving true GT5 short
+side lanes while retaining the FP / `4->5` benefit. Do not run final test for
+`spurious_lite_v1`; finish a GT4-strong + GT5-safe official-val ablation first
+using `--gcs-spurious-gt4-weight 1.5` and `--gcs-spurious-gt5-weight 0.25`.
+
+The existing `gcs_yolo_lane_s_q12_k56_boundary02_spurious_gt5safe_v1` artifact
+has only `gcs_spurious_gt5_weight=0.25`, starts from E1 `best.pt`, and keeps
+`gcs_hard_sampling=false`, but it did not apply the GT4-strong weight. It is
+not the current GT4-strong + GT5-safe candidate.
+
 ## Legacy Post-b653 Official-Val Selection State
 
 The 2026-06-21 `gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_count03_under5_03`

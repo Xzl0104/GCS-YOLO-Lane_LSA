@@ -56,6 +56,8 @@ class GCSLoss(nn.Module):
         count_boundary_margin34: float | None = None,
         count_boundary_margin45: float | None = None,
         spurious_neg_weight: float | None = None,
+        spurious_gt3_weight: float | None = None,
+        spurious_gt4_weight: float | None = None,
         spurious_gt5_weight: float | None = None,
         spurious_disable_gt5: bool | None = None,
         spurious_max_points: int | None = None,
@@ -132,6 +134,16 @@ class GCSLoss(nn.Module):
         self.spurious_neg_weight = float(
             spurious_neg_weight if spurious_neg_weight is not None else self._arg(args, "gcs_spurious_neg_weight", 1.0)
         )
+        self.spurious_gt3_weight = float(
+            spurious_gt3_weight
+            if spurious_gt3_weight is not None
+            else self._arg(args, "gcs_spurious_gt3_weight", 1.0)
+        )
+        self.spurious_gt4_weight = float(
+            spurious_gt4_weight
+            if spurious_gt4_weight is not None
+            else self._arg(args, "gcs_spurious_gt4_weight", 1.0)
+        )
         self.spurious_gt5_weight = float(
             spurious_gt5_weight
             if spurious_gt5_weight is not None
@@ -173,6 +185,10 @@ class GCSLoss(nn.Module):
             raise ValueError(f"gcs_spurious_neg must be >= 0, got {self.spurious_neg_gain}.")
         if self.spurious_neg_weight < 0.0:
             raise ValueError(f"gcs_spurious_neg_weight must be >= 0, got {self.spurious_neg_weight}.")
+        if self.spurious_gt3_weight < 0.0:
+            raise ValueError(f"gcs_spurious_gt3_weight must be >= 0, got {self.spurious_gt3_weight}.")
+        if self.spurious_gt4_weight < 0.0:
+            raise ValueError(f"gcs_spurious_gt4_weight must be >= 0, got {self.spurious_gt4_weight}.")
         if self.spurious_gt5_weight < 0.0:
             raise ValueError(f"gcs_spurious_gt5_weight must be >= 0, got {self.spurious_gt5_weight}.")
         if self.spurious_max_points < 2:
@@ -614,6 +630,14 @@ class GCSLoss(nn.Module):
             return pred_points.new_tensor(1.0)
         return self._pixel_scale_for(pred_points).reshape(-1)[0]
 
+    def _spurious_gt_group_and_weight(self, gt_count: int) -> tuple[int, float]:
+        """Map GT lane count to diagnostic group and per-image spurious-negative weight."""
+        if gt_count <= 3:
+            return 3, float(self.spurious_gt3_weight)
+        if gt_count == 4:
+            return 4, float(self.spurious_gt4_weight)
+        return 5, float(self.spurious_gt5_weight)
+
     def spurious_negative_loss(
         self,
         pred_points: torch.Tensor,
@@ -651,7 +675,7 @@ class GCSLoss(nn.Module):
             is_gt5 = gt_count >= 5
             if is_gt5 and self.spurious_disable_gt5:
                 continue
-            image_weight = float(self.spurious_gt5_weight) if is_gt5 else 1.0
+            group_key, image_weight = self._spurious_gt_group_and_weight(gt_count)
             src_idx, _ = indices[b]
             if src_idx.numel() == 0:
                 continue
@@ -686,10 +710,8 @@ class GCSLoss(nn.Module):
                     weighted_loss = raw_loss * image_weight
                     selected_losses.append(weighted_loss)
                     spurious_count += 1
-                    group_key = gt_count if gt_count in (3, 4) else 5 if gt_count >= 5 else None
-                    if group_key is not None:
-                        group_counts[group_key] += 1
-                        group_losses[group_key].append(weighted_loss)
+                    group_counts[group_key] += 1
+                    group_losses[group_key].append(weighted_loss)
 
         def mean_or_zero(values: list[torch.Tensor]) -> torch.Tensor:
             return torch.stack(values).mean() if values else zero

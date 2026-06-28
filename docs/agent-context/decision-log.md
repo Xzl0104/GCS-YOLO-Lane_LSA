@@ -2,6 +2,154 @@
 
 This file records decisions for branch `codex/5-25-3-k56`.
 
+## 2026-06-28: Add GT4-Strong + GT5-Safe Spurious Weighting
+
+Decision:
+
+Extend the default-off E3-lite `gcs_spurious_neg` loss from GT5-only weighting
+to GT-count weighting:
+
+```text
+gcs_spurious_gt3_weight = 1.0
+gcs_spurious_gt4_weight = 1.0
+gcs_spurious_gt5_weight = 1.0
+```
+
+When `gcs_spurious_neg` is enabled, each image derives `gt_lanes` from
+`batch["num_lanes"]` or from `lane_valid` without changing the dataloader. If
+`gt_lanes >= 5` and `gcs_spurious_disable_gt5=true`, the image is skipped for
+spurious-negative loss. Otherwise selected unmatched duplicate-like queries use
+per-image weights:
+
+```text
+gt_lanes <= 3: gcs_spurious_gt3_weight
+gt_lanes == 4: gcs_spurious_gt4_weight
+gt_lanes >= 5: gcs_spurious_gt5_weight
+```
+
+The selected target-zero BCE terms are normalized by selected spurious-query
+count, not by weight sum, so `gcs_spurious_gt4_weight=1.5` strengthens GT4
+pressure and `gcs_spurious_gt5_weight=0.25` weakens GT5 pressure. Defaults all
+remain `1.0`, preserving old spurious-lite behavior.
+
+Why:
+
+The completed spurious-lite run reduced FP and `4->5`, but misclassified true
+GT5 short lanes as spurious (`5->4=9`). The later GT5-safe setting recovered
+GT5 but let GT4 over-count rebound. The next experiment should keep the
+existing unmatched-query selection logic while applying stronger GT4 negative
+pressure and weaker GT5 negative pressure:
+
+```text
+--gcs-spurious-neg 0.1
+--gcs-spurious-gt3-weight 1.0
+--gcs-spurious-gt4-weight 1.5
+--gcs-spurious-gt5-weight 0.25
+```
+
+Scope:
+
+This is a loss-weighting and logging extension only. It does not change data
+sampling, dataset labels, Hungarian matcher behavior, point/smooth/curve
+losses, decode, NMS, or official metrics.
+
+Selection target:
+
+Select only on official-val. Compare `official_acc`, `official_FP`,
+`official_FN`, `count_acc_4`, `count_acc_5`, `4->5`, and `5->4` against E1,
+spurious-lite, and GT5-safe.
+
+## 2026-06-28: Treat E3-Lite Spurious Negative as Diagnostic-Only
+
+Decision:
+
+Do not promote the completed E3-lite spurious-negative run
+`gcs_yolo_lane_s_q12_k56_boundary02_spurious_lite_v1`. Continue the ablation
+with the GT5-safe variant instead of running final test for the spurious-lite
+checkpoint.
+
+Official-val evidence:
+
+```text
+E1 baseline run:
+  gcs_yolo_lane_s_q12_k56_count03_under5_boundary02_v1
+  sweep = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_count03_under5_boundary02_v1_official_val_sweep/tusimple_official_sweep_summary.json
+  decode = conf=0.005, point_valid_thr=0.5, nms_dist_px=0.0, max_det=6, min_points=2
+  official_acc = 0.971208
+  official_score = 0.970469
+  official_FP = 0.022957
+  official_FN = 0.014004
+  count_acc = 0.947658
+  count_acc_4 = 0.848485
+  count_acc_5 = 0.972973
+  count_confusion = 4->3=1, 4->4=56, 4->5=9, 5->4=2, 5->5=72
+
+E3-lite spurious run:
+  gcs_yolo_lane_s_q12_k56_boundary02_spurious_lite_v1
+  sweep = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_boundary02_spurious_lite_v1_official_val_sweep/tusimple_official_sweep_summary.json
+  decode = conf=0.005, point_valid_thr=0.45, nms_dist_px=0.0, max_det=5, min_points=2
+  official_acc = 0.971721
+  official_score = 0.971131
+  official_FP = 0.013866
+  official_FN = 0.015611
+  count_acc = 0.953168
+  count_acc_4 = 0.924242
+  count_acc_5 = 0.878378
+  count_confusion = 3->3=220, 3->4=3, 4->3=1, 4->4=61, 4->5=4, 5->4=9, 5->5=65
+```
+
+Integrated conclusion:
+
+- Supported fact: spurious-lite improves official-val ACC by `+0.000513`,
+  official score by `+0.000662`, and reduces official FP by `-0.009091`.
+- Supported fact: it directly improves the target false-fifth pattern:
+  `4->5` drops from `9` to `4`, and `count_acc_4` rises from `0.848485` to
+  `0.924242`.
+- Supported fact: the collateral GT5 regression is large: `5->4` rises from
+  `2` to `9`, and `count_acc_5` drops from `0.972973` to `0.878378`.
+- Supported fact: the run started from E1
+  `runs/gcs_lane/gcs_yolo_lane_s_q12_k56_count03_under5_boundary02_v1/weights/best.pt`
+  and kept `gcs_hard_sampling=false`.
+- Caveat: this completed run used a post-hoc official-val sweep over
+  `weights/best.pt`; its `args.yaml` records `gcs_official_best=false`, and no
+  `official_best.pt` / `official_best_decode.yaml` artifact was found.
+
+Why:
+
+The E3-lite mechanism validates the hypothesis that unmatched short
+duplicate-like suppression can reduce GT4 false fifth lanes and FP. It also
+shows that the same selection rule can treat a true short fifth lane as
+spurious. The GT5 collateral cost is too large for promotion even though the
+primary official-val ACC improves.
+
+Next action:
+
+Keep final test closed for `spurious_lite_v1`. Complete or relaunch the
+GT5-safe follow-up from E1 `weights/best.pt` with:
+
+```text
+--gcs-spurious-neg 0.1
+--gcs-spurious-gt5-weight 0.25
+```
+
+Then run the same 363-image official-val sweep. Promotion should require
+official-val ACC not below E1, most of the FP / `4->5` benefit retained, and
+`5->4` materially below the spurious-lite value of `9`.
+
+Current GT5-safe artifact status:
+
+```text
+run = gcs_yolo_lane_s_q12_k56_boundary02_spurious_gt5safe_v1
+pretrained = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_count03_under5_boundary02_v1/weights/best.pt
+gcs_spurious_gt5_weight = 0.25
+gcs_hard_sampling = false
+results.csv rows = 8 epochs plus header
+official-val sweep = not found
+```
+
+This artifact is not eligible for selection until a valid official-val sweep
+exists.
+
 ## 2026-06-27: Add GT5-Safe Spurious Negative Control
 
 Decision:

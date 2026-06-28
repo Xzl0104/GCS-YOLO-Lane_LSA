@@ -199,6 +199,8 @@ CFG_FLOAT_KEYS = frozenset(
         "gcs_count_boundary_margin45",
         "gcs_spurious_neg",
         "gcs_spurious_neg_weight",
+        "gcs_spurious_gt3_weight",
+        "gcs_spurious_gt4_weight",
         "gcs_spurious_gt5_weight",
         "gcs_spurious_close_px",
         "gcs_exist_pos_weight",
