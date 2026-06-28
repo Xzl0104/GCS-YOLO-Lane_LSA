@@ -35,6 +35,56 @@ diagnostic scripts, configs, model outputs, or active selected candidates.
 - It includes explicit training-time `official_best` checkpoint preservation for official-val selection.
 - It still does not include later mainline `diagnose_gcs_gt5.py`, Count/Quality/Boundary diagnostics, Survival, or near-miss machinery.
 
+## 2026-06-28 Hard-Sampling Short0601 Tradeoff
+
+The completed E2 hard-sampling run is diagnostic-only, not a promoted
+candidate.
+
+```text
+E1 baseline:
+run = gcs_yolo_lane_s_q12_k56_count03_under5_boundary02_v1
+sweep = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_count03_under5_boundary02_v1_official_val_sweep/tusimple_official_sweep_summary.json
+official_acc = 0.971208
+official_FP = 0.022957
+official_FN = 0.014004
+count_acc_4 = 0.848485
+count_acc_5 = 0.972973
+4->5 = 9
+5->4 = 2
+
+E2 short0601 hard sampling:
+run = gcs_yolo_lane_s_q12_k56_boundary02_short0601_v1
+gcs_hard_sampling = true
+gcs_official_best = false
+sweep = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_boundary02_short0601_v1_official_val_sweep/tusimple_official_sweep_summary.json
+best decode = conf=0.15, point_valid_thr=0.5, nms_dist_px=0.0, max_det=6, min_points=2
+official_acc = 0.969988
+official_FP = 0.022544
+official_FN = 0.018825
+count_acc_4 = 0.969697
+count_acc_5 = 0.959459
+4->5 = 1
+5->4 = 3
+```
+
+Supported interpretation:
+
+- Hard sampling cleanly attacks the GT4 false-fifth pattern:
+  `4->5` drops by `8`, and `count_acc_4` improves by `0.121212`.
+- The official-val tradeoff is not acceptable for promotion:
+  `official_acc` drops by `0.001220` and `official_FN` rises by `0.004821`.
+- GT5 does not collapse (`5->4` rises only from `2` to `3`), so the remaining
+  issue is mainly recall/geometry or score calibration rather than the
+  spurious-lite GT5-safe problem.
+- The run used a post-hoc official-val sweep over `weights/best.pt`
+  (`gcs_official_best=false`), so it is weaker than a formal
+  training-time-official-best run even before the metric rejection.
+
+Decision: do not run final test for `boundary02_short0601_v1`. Keep later
+E3-lite spurious-negative ablations initialized from E1, not from this E2
+hard-sampling checkpoint. If revisited, diagnose the added FN before changing
+sampling weights again.
+
 ## 2026-06-28 E3-Lite Spurious-Negative Tradeoff
 
 The completed E3-lite spurious-negative official-val sweep is diagnostic-only,

@@ -90,6 +90,34 @@ If `batch=32` OOMs on the target machine, reduce batch only for OOM/instability 
 
 `--no-amp` is included because the current remote run hit an Ultralytics AMP self-check failure while loading `yolo26n.pt`. If that server cache/checkpoint issue is fixed, AMP may be re-enabled only with a run note.
 
+## Completed E2 Short0601 Hard-Sampling Result
+
+The E2 hard-sampling run from the E1 count-boundary checkpoint is rejected for
+promotion. It is useful only as diagnostic evidence.
+
+```text
+run = gcs_yolo_lane_s_q12_k56_boundary02_short0601_v1
+pretrained = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_count03_under5_boundary02_v1/weights/best.pt
+gcs_count_boundary = 0.2
+gcs_hard_sampling = true
+gcs_official_best = false
+results.csv rows = 64 epochs
+sweep = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_boundary02_short0601_v1_official_val_sweep/tusimple_official_sweep_summary.json
+best decode = conf=0.15, point_valid_thr=0.5, nms_dist_px=0.0, max_det=6, min_points=2
+official-val ACC = 0.969988
+official-val FP = 0.022544
+official-val FN = 0.018825
+official-val count_acc_4 = 0.969697
+official-val count_acc_5 = 0.959459
+count_confusion = 3->3=216, 3->4=7, 4->3=1, 4->4=64, 4->5=1, 5->4=3, 5->5=71
+```
+
+Against E1, `4->5` improves from `9` to `1` and `count_acc_4` improves from
+`0.848485` to `0.969697`, but official ACC drops from `0.971208` to
+`0.969988` because FN rises from `0.014004` to `0.018825`. Do not run final
+test for this checkpoint and do not use it as the starting point for E3-lite
+spurious-negative ablations.
+
 ## E3-Lite GT4-Strong + GT5-Safe Spurious Negative From E1
 
 E3-lite GT-count-weighted spurious-negative experiments must initialize from

@@ -2,6 +2,73 @@
 
 This file records decisions for branch `codex/5-25-3-k56`.
 
+## 2026-06-28: Reject E2 Short0601 Hard-Sampling Run
+
+Decision:
+
+Do not promote `gcs_yolo_lane_s_q12_k56_boundary02_short0601_v1` and do not
+run final test for it. Treat it as diagnostic evidence that the branch-local
+train-only hard sampler can reduce GT4 false-fifth over-count, but with too
+large an FN / official-ACC cost.
+
+Official-val evidence:
+
+```text
+run = gcs_yolo_lane_s_q12_k56_boundary02_short0601_v1
+pretrained = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_count03_under5_boundary02_v1/weights/best.pt
+gcs_count_boundary = 0.2
+gcs_hard_sampling = true
+gcs_official_best = false
+results.csv rows = 64 epochs
+sweep = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_boundary02_short0601_v1_official_val_sweep/tusimple_official_sweep_summary.json
+sweep rows = 3360
+best decode = conf=0.15, point_valid_thr=0.5, nms_dist_px=0.0, max_det=6, min_points=2
+official_acc = 0.969988
+official_score = 0.969161
+official_FP = 0.022544
+official_FN = 0.018825
+count_acc = 0.966942
+count_acc_3 = 0.968610
+count_acc_4 = 0.969697
+count_acc_5 = 0.959459
+count_confusion = 3->3=216, 3->4=7, 4->3=1, 4->4=64, 4->5=1, 5->4=3, 5->5=71
+```
+
+Compared with E1
+`gcs_yolo_lane_s_q12_k56_count03_under5_boundary02_v1`:
+
+```text
+official_acc: 0.971208 -> 0.969988 (-0.001220)
+official_score: 0.970469 -> 0.969161 (-0.001308)
+official_FP: 0.022957 -> 0.022544 (-0.000413)
+official_FN: 0.014004 -> 0.018825 (+0.004821)
+count_acc_4: 0.848485 -> 0.969697 (+0.121212)
+count_acc_5: 0.972973 -> 0.959459 (-0.013514)
+4->5: 9 -> 1
+5->4: 2 -> 3
+```
+
+Integrated conclusion:
+
+- Supported fact: the hard sampler strongly improves the intended GT4 count
+  shape: `4->5` drops from `9` to `1`, and `count_acc_4` rises from
+  `0.848485` to `0.969697`.
+- Supported fact: the primary official-val surface rejects the run:
+  `official_acc` falls by `0.001220`, mostly because `official_FN` rises by
+  `0.004821`.
+- Supported fact: GT5 retention is only mildly worse than E1 (`5->4: 2 -> 3`),
+  so this is not the same failure mode as spurious-lite's GT5 collapse.
+- Caveat: this artifact used a post-hoc official-val sweep over
+  `weights/best.pt`; `args.yaml` records `gcs_official_best=false`, so no
+  training-time `official_best.pt` / `official_best_decode.yaml` was selected.
+
+Smallest safe next action:
+
+Do not tune thresholds or run final test from this checkpoint. Keep E3-lite
+spurious-negative experiments initialized from E1, not from this E2 hard
+sampling run. If the hard-sampling line is revisited, first diagnose why the
+FN increase appears despite the cleaner GT4 count shape.
+
 ## 2026-06-28: Reject GT4-Strong + GT5-Safe Spurious Run
 
 Decision:
