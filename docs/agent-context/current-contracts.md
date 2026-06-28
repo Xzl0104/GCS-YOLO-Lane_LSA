@@ -149,11 +149,30 @@ spur_neg_gt3
 spur_neg_gt4
 spur_neg_gt5
 count_score_mean
+gt5_short_pos_count
+gt5_short_pos_anchor_count
+gt5_short_point_valid_loss
+cnt_bound_5under
+cnt_score
 ```
 
 `count_boundary_loss` is disabled by default through `gcs_count_boundary=0.0`.
 When enabled, it applies to `sum(sigmoid(pred_logits))` with GT3 upper, GT4
-lower/upper, and GT5 lower boundaries.
+lower/upper, and GT5 lower boundaries. `gcs_count_boundary_gt5_under_weight`
+defaults to `None`, which follows `gcs_count_boundary_gt5_weight`; setting it
+allows only the GT5 undercount boundary weight to be changed. `cnt_bound_5under`
+logs the unweighted GT5 undercount boundary term.
+
+`gcs_gt5_short_visible_thr=0` and
+`gcs_gt5_short_point_valid_weight=1.0` keep GT5 short point-valid rescue
+effectively disabled by default. When enabled, the point-valid BCE keeps the
+same global target structure, applies only on images with `GT lane count == 5`,
+only on Hungarian-matched GT lanes whose visible anchor count is at or below
+the threshold, and only multiplies the BCE weight for visible
+`target_valid == 1` anchors. It does not change point regression, smooth,
+curve, mask, edge, dataset, dataloader, matcher, decode, NMS, or official
+metrics. `gt5_short_pos_count`, `gt5_short_pos_anchor_count`, and
+`gt5_short_point_valid_loss` are diagnostics for the rescued anchors.
 
 `spurious_neg_loss` is disabled by default through `gcs_spurious_neg=0.0`.
 When enabled, it requires `pred_valid_logits` and applies only to unmatched
@@ -169,8 +188,9 @@ normalized by selected spurious-query count, not by weight sum, so weights above
 or below `1.0` strengthen or weaken that GT group. The default all-`1.0`
 setting preserves old E3-lite behavior. `spurious_negative_count`,
 `spur_cnt_gt3`, `spur_cnt_gt4`, `spur_cnt_gt5`, `spur_neg_gt3`,
-`spur_neg_gt4`, `spur_neg_gt5`, and `count_score_mean` are log-only diagnostics
-and are not directly part of the weighted training objective.
+`spur_neg_gt4`, `spur_neg_gt5`, `count_score_mean`, `cnt_bound_5under`, and
+`cnt_score` are log-only diagnostics and are not directly part of the weighted
+training objective.
 
 ## Decode And Evaluation Contract
 

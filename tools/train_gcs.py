@@ -172,6 +172,12 @@ def parse_args() -> argparse.Namespace:
         help="Weight for the GT5 undercount boundary term.",
     )
     parser.add_argument(
+        "--gcs-count-boundary-gt5-under-weight",
+        type=float,
+        default=None,
+        help="Optional separate weight for the GT5 undercount boundary term. Defaults to --gcs-count-boundary-gt5-weight.",
+    )
+    parser.add_argument(
         "--gcs-count-boundary-margin34",
         type=float,
         default=0.35,
@@ -235,6 +241,18 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=3,
         help="Minimum overlapping visible anchors with a matched query for spurious duplicate detection.",
+    )
+    parser.add_argument(
+        "--gcs-gt5-short-visible-thr",
+        type=int,
+        default=0,
+        help="Boost matched GT5 lane point-valid positives when visible_count <= this threshold. 0 disables.",
+    )
+    parser.add_argument(
+        "--gcs-gt5-short-point-valid-weight",
+        type=float,
+        default=1.0,
+        help="Extra point-valid BCE multiplier for visible anchors of matched short GT5 lanes.",
     )
     parser.add_argument("--gcs-exist-pos-weight", type=float, default=1.0)
     parser.add_argument("--gcs-exist-focal-gamma", type=float, default=0.0, help="Optional focal gamma for existence BCE. 0 disables focal weighting.")
@@ -491,6 +509,7 @@ def main() -> None:
         "gcs_count_boundary": args.gcs_count_boundary,
         "gcs_count_boundary_gt4_weight": args.gcs_count_boundary_gt4_weight,
         "gcs_count_boundary_gt5_weight": args.gcs_count_boundary_gt5_weight,
+        "gcs_count_boundary_gt5_under_weight": args.gcs_count_boundary_gt5_under_weight,
         "gcs_count_boundary_margin34": args.gcs_count_boundary_margin34,
         "gcs_count_boundary_margin45": args.gcs_count_boundary_margin45,
         "gcs_spurious_neg": args.gcs_spurious_neg,
@@ -502,6 +521,8 @@ def main() -> None:
         "gcs_spurious_max_points": args.gcs_spurious_max_points,
         "gcs_spurious_close_px": args.gcs_spurious_close_px,
         "gcs_spurious_min_overlap": args.gcs_spurious_min_overlap,
+        "gcs_gt5_short_visible_thr": args.gcs_gt5_short_visible_thr,
+        "gcs_gt5_short_point_valid_weight": args.gcs_gt5_short_point_valid_weight,
         "gcs_exist_pos_weight": args.gcs_exist_pos_weight,
         "gcs_exist_focal_gamma": args.gcs_exist_focal_gamma,
         "gcs_exist_focal_alpha": args.gcs_exist_focal_alpha,

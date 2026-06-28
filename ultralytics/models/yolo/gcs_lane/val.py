@@ -40,6 +40,11 @@ LOSS_NAMES = (
     "spur_neg_gt4",
     "spur_neg_gt5",
     "count_score_mean",
+    "gt5_short_pos_count",
+    "gt5_short_pos_anchor_count",
+    "gt5_short_point_valid_loss",
+    "cnt_bound_5under",
+    "cnt_score",
 )
 LOSS_GAIN_ARGS = (
     "gcs_exist",
@@ -61,6 +66,11 @@ LOSS_GAIN_ARGS = (
     None,
     None,
     None,
+    None,
+    None,
+    None,
+    None,
+    None,
 )
 DEFAULT_LOSS_GAINS = (
     2.0,
@@ -70,6 +80,11 @@ DEFAULT_LOSS_GAINS = (
     0.1,
     0.2,
     0.2,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
     0.0,
     0.0,
     0.0,

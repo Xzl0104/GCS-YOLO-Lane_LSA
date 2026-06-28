@@ -34,6 +34,11 @@ class GCSLoss(nn.Module):
         "spur_neg_gt4",
         "spur_neg_gt5",
         "count_score_mean",
+        "gt5_short_pos_count",
+        "gt5_short_pos_anchor_count",
+        "gt5_short_point_valid_loss",
+        "cnt_bound_5under",
+        "cnt_score",
     )
 
     def __init__(
@@ -53,6 +58,7 @@ class GCSLoss(nn.Module):
         count_under5_min_lanes: int | None = None,
         count_boundary_gt4_weight: float | None = None,
         count_boundary_gt5_weight: float | None = None,
+        count_boundary_gt5_under_weight: float | None = None,
         count_boundary_margin34: float | None = None,
         count_boundary_margin45: float | None = None,
         spurious_neg_weight: float | None = None,
@@ -64,6 +70,8 @@ class GCSLoss(nn.Module):
         spurious_close_px: float | None = None,
         spurious_min_overlap: int | None = None,
         eval_point_valid_thr: float | None = None,
+        gt5_short_visible_thr: int | None = None,
+        gt5_short_point_valid_weight: float | None = None,
         curve_alpha: float | None = None,
         curve_weight_max: float | None = None,
         exist_pos_weight: float | None = None,
@@ -121,6 +129,12 @@ class GCSLoss(nn.Module):
             if count_boundary_gt5_weight is not None
             else self._arg(args, "gcs_count_boundary_gt5_weight", 1.5)
         )
+        gt5_under_weight_arg = self._arg(args, "gcs_count_boundary_gt5_under_weight", None)
+        self.count_boundary_gt5_under_weight = float(
+            count_boundary_gt5_under_weight
+            if count_boundary_gt5_under_weight is not None
+            else (gt5_under_weight_arg if gt5_under_weight_arg is not None else self.count_boundary_gt5_weight)
+        )
         self.count_boundary_margin34 = float(
             count_boundary_margin34
             if count_boundary_margin34 is not None
@@ -170,6 +184,16 @@ class GCSLoss(nn.Module):
             if eval_point_valid_thr is not None
             else self._arg(args, "gcs_eval_point_valid_thr", 0.5)
         )
+        self.gt5_short_visible_thr = int(
+            gt5_short_visible_thr
+            if gt5_short_visible_thr is not None
+            else self._arg(args, "gcs_gt5_short_visible_thr", 0)
+        )
+        self.gt5_short_point_valid_weight = float(
+            gt5_short_point_valid_weight
+            if gt5_short_point_valid_weight is not None
+            else self._arg(args, "gcs_gt5_short_point_valid_weight", 1.0)
+        )
         self.count_under5_min_lanes = int(
             count_under5_min_lanes
             if count_under5_min_lanes is not None
@@ -199,6 +223,13 @@ class GCSLoss(nn.Module):
             raise ValueError(f"gcs_spurious_min_overlap must be >= 1, got {self.spurious_min_overlap}.")
         if not 0.0 <= self.eval_point_valid_thr <= 1.0:
             raise ValueError(f"gcs_eval_point_valid_thr must be in [0, 1], got {self.eval_point_valid_thr}.")
+        if self.gt5_short_visible_thr < 0:
+            raise ValueError(f"gcs_gt5_short_visible_thr must be >= 0, got {self.gt5_short_visible_thr}.")
+        if self.gt5_short_point_valid_weight < 0.0:
+            raise ValueError(
+                "gcs_gt5_short_point_valid_weight must be >= 0, "
+                f"got {self.gt5_short_point_valid_weight}."
+            )
         self.curve_alpha = float(curve_alpha if curve_alpha is not None else self._arg(args, "gcs_curve_alpha", 5.0))
         self.curve_weight_max = float(
             curve_weight_max if curve_weight_max is not None else self._arg(args, "gcs_curve_weight_max", 5.0)
@@ -479,21 +510,68 @@ class GCSLoss(nn.Module):
         pred_points: torch.Tensor,
         gt_valid: list[torch.Tensor],
         indices: list[tuple[torch.Tensor, torch.Tensor]],
-    ) -> torch.Tensor:
+        gt_lanes: torch.Tensor | None = None,
+        return_details: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """BCE supervision for visible fixed-y anchors on matched lanes and zero target for unmatched queries."""
         if pred_valid_logits is None:
-            return self._zero_like(pred_points)
+            loss = self._zero_like(pred_points)
+            zero = pred_points.new_zeros(())
+            return (loss, zero, zero, zero) if return_details else loss
 
         target = torch.zeros_like(pred_valid_logits)
+        extra_weight = torch.ones_like(pred_valid_logits)
+        gt5_short_boost_mask = torch.zeros_like(pred_valid_logits, dtype=torch.bool)
+        gt5_short_pos_count = 0
+        gt5_short_pos_anchor_count = 0
+        if gt_lanes is not None:
+            gt_lanes = torch.as_tensor(gt_lanes, device=pred_valid_logits.device, dtype=pred_valid_logits.dtype).reshape(-1)
+            if gt_lanes.numel() != pred_valid_logits.shape[0]:
+                raise ValueError(
+                    f"gt_lanes must have one value per image, got {gt_lanes.numel()} vs B={pred_valid_logits.shape[0]}."
+                )
+        rescue_enabled = gt_lanes is not None and self.gt5_short_visible_thr > 0
         for b, (src_idx, tgt_idx) in enumerate(indices):
             if src_idx.numel() == 0:
                 continue
-            target[b, src_idx] = gt_valid[b].to(device=target.device, dtype=target.dtype)[tgt_idx]
+            src_idx = src_idx.to(device=target.device, dtype=torch.long)
+            tgt_idx = tgt_idx.to(device=target.device, dtype=torch.long)
+            target_valid = gt_valid[b].to(device=target.device, dtype=target.dtype)[tgt_idx]
+            target[b, src_idx] = target_valid
+            if not rescue_enabled or int(round(float(gt_lanes[b].detach().item()))) != 5:
+                continue
+
+            visible_counts = target_valid.sum(dim=1)
+            short_mask = visible_counts <= float(self.gt5_short_visible_thr)
+            if not bool(short_mask.any()):
+                continue
+            boost_mask = short_mask[:, None] & target_valid.bool()
+            gt5_short_pos_count += int(short_mask.sum().item())
+            gt5_short_pos_anchor_count += int(boost_mask.sum().item())
+            if bool(boost_mask.any()):
+                local_weight = torch.ones_like(target_valid)
+                local_weight[boost_mask] = float(self.gt5_short_point_valid_weight)
+                local_boost_mask = torch.zeros_like(target_valid, dtype=torch.bool)
+                local_boost_mask[boost_mask] = True
+                extra_weight[b, src_idx] = local_weight
+                gt5_short_boost_mask[b, src_idx] = local_boost_mask
 
         pos = target.sum().clamp_min(1.0)
         neg = (target.numel() - target.sum()).clamp_min(1.0)
         pos_weight = (neg / pos).clamp(min=1.0, max=float(self.point_valid_pos_weight_max)).to(pred_valid_logits)
-        return F.binary_cross_entropy_with_logits(pred_valid_logits, target, pos_weight=pos_weight)
+        bce = F.binary_cross_entropy_with_logits(pred_valid_logits, target, pos_weight=pos_weight, reduction="none")
+        loss = (bce * extra_weight).sum() / extra_weight.sum().clamp_min(1.0)
+        if not return_details:
+            return loss
+        gt5_short_point_valid_loss = (
+            bce[gt5_short_boost_mask].mean() if bool(gt5_short_boost_mask.any()) else self._zero_like(pred_points)
+        )
+        return (
+            loss,
+            pred_valid_logits.new_tensor(float(gt5_short_pos_count)),
+            pred_valid_logits.new_tensor(float(gt5_short_pos_anchor_count)),
+            gt5_short_point_valid_loss,
+        )
 
     def smooth_loss(
         self,
@@ -580,7 +658,7 @@ class GCSLoss(nn.Module):
 
     def count_losses(
         self, pred_logits: torch.Tensor, batch: dict, gt_valid: list[torch.Tensor], target: torch.Tensor | None = None
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Return cardinality losses and count-score diagnostics."""
         pred_count = pred_logits.sigmoid().sum(dim=1)
         if target is None:
@@ -590,15 +668,17 @@ class GCSLoss(nn.Module):
         under_gap = torch.relu(target - pred_count)
         mask = (target >= float(self.count_under5_min_lanes)).to(dtype=pred_logits.dtype)
         count_under5_loss = (mask * under_gap.pow(2)).sum() / mask.sum().clamp_min(1.0)
-        count_boundary_loss = self.count_boundary_loss(pred_count, target)
+        count_boundary_loss, cnt_bound_5under = self.count_boundary_loss(pred_count, target, return_details=True)
         count_score_mean = pred_count.mean()
-        return count_loss, count_under5_loss, count_boundary_loss, count_score_mean
+        return count_loss, count_under5_loss, count_boundary_loss, count_score_mean, cnt_bound_5under, count_score_mean
 
     def count_loss(self, pred_logits: torch.Tensor, batch: dict, gt_valid: list[torch.Tensor]) -> torch.Tensor:
         """Cardinality loss that aligns summed existence probability with GT lane count."""
         return self.count_losses(pred_logits, batch, gt_valid)[0]
 
-    def count_boundary_loss(self, count_score: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    def count_boundary_loss(
+        self, count_score: torch.Tensor, target: torch.Tensor, return_details: bool = False
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         """Penalize adjacent-count boundary drift for GT3/GT4/GT5 lane counts."""
 
         def masked_mean(values: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
@@ -616,11 +696,13 @@ class GCSLoss(nn.Module):
         gt4_under = torch.relu((4.0 - margin34) - count_score).pow(2)
         gt4_over = torch.relu(count_score - (4.0 + margin45)).pow(2)
         gt5_under = torch.relu((5.0 - margin45) - count_score).pow(2)
-        return (
+        loss_5_under = masked_mean(gt5_under, gt5)
+        loss = (
             masked_mean(gt3_over, gt3)
             + float(self.count_boundary_gt4_weight) * masked_mean(gt4_under + gt4_over, gt4)
-            + float(self.count_boundary_gt5_weight) * masked_mean(gt5_under, gt5)
+            + float(self.count_boundary_gt5_under_weight) * loss_5_under
         )
+        return (loss, loss_5_under) if return_details else loss
 
     def _spurious_x_scale(self, pred_points: torch.Tensor) -> torch.Tensor:
         """Return x-coordinate scale, avoiding double scaling if points are already pixel coordinates."""
@@ -822,11 +904,23 @@ class GCSLoss(nn.Module):
         indices = self.matcher(pred_points, pred_logits, gt_points, gt_valid)
         exist_loss = self.exist_loss(pred_logits, pred_points, pred_valid_logits, gt_points, gt_valid, indices)
         point_loss = self.point_loss(pred_points, gt_points, gt_valid, indices)
-        point_valid_loss = self.point_valid_loss(pred_valid_logits, pred_points, gt_valid, indices)
+        gt_lanes = self.target_lane_count(pred_logits, batch, gt_valid)
+        (
+            point_valid_loss,
+            gt5_short_pos_count,
+            gt5_short_pos_anchor_count,
+            gt5_short_point_valid_loss,
+        ) = self.point_valid_loss(pred_valid_logits, pred_points, gt_valid, indices, gt_lanes=gt_lanes, return_details=True)
         smooth_loss = self.smooth_loss(pred_points, gt_valid, indices)
         curve_loss = self.curve_loss(pred_points, gt_points, gt_valid, indices)
-        gt_lanes = self.target_lane_count(pred_logits, batch, gt_valid)
-        count_loss, count_under5_loss, count_boundary_loss, count_score_mean = self.count_losses(
+        (
+            count_loss,
+            count_under5_loss,
+            count_boundary_loss,
+            count_score_mean,
+            cnt_bound_5under,
+            cnt_score,
+        ) = self.count_losses(
             pred_logits, batch, gt_valid, target=gt_lanes
         )
         (
@@ -888,6 +982,11 @@ class GCSLoss(nn.Module):
                 spur_neg_gt4.detach(),
                 spur_neg_gt5.detach(),
                 count_score_mean.detach(),
+                gt5_short_pos_count.detach(),
+                gt5_short_pos_anchor_count.detach(),
+                gt5_short_point_valid_loss.detach(),
+                cnt_bound_5under.detach(),
+                cnt_score.detach(),
             )
         )
         return total, loss_items

@@ -195,6 +195,7 @@ CFG_FLOAT_KEYS = frozenset(
         "gcs_count_boundary",
         "gcs_count_boundary_gt4_weight",
         "gcs_count_boundary_gt5_weight",
+        "gcs_count_boundary_gt5_under_weight",
         "gcs_count_boundary_margin34",
         "gcs_count_boundary_margin45",
         "gcs_spurious_neg",
@@ -203,6 +204,7 @@ CFG_FLOAT_KEYS = frozenset(
         "gcs_spurious_gt4_weight",
         "gcs_spurious_gt5_weight",
         "gcs_spurious_close_px",
+        "gcs_gt5_short_point_valid_weight",
         "gcs_exist_pos_weight",
         "gcs_exist_focal_gamma",
         "gcs_exist_focal_alpha",
@@ -290,6 +292,7 @@ CFG_INT_KEYS = frozenset(
         "gcs_count_under5_min_lanes",
         "gcs_spurious_max_points",
         "gcs_spurious_min_overlap",
+        "gcs_gt5_short_visible_thr",
         "gcs_hard_visible_thr",
         "gcs_hard_gt3_visible_thr",
     }

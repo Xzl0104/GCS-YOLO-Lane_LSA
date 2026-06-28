@@ -125,6 +125,7 @@ gcs_count_under5_min_lanes: 5 # (int) minimum GT lane count that enables gcs_cou
 gcs_count_boundary: 0.0 # (float) GT3/GT4/GT5 adjacent count-boundary loss gain; 0 disables
 gcs_count_boundary_gt4_weight: 2.0 # (float) weight for GT4 lower/upper count-boundary terms
 gcs_count_boundary_gt5_weight: 1.5 # (float) weight for GT5 undercount boundary term
+gcs_count_boundary_gt5_under_weight: null # (float|None) optional separate GT5 undercount boundary weight; null follows gcs_count_boundary_gt5_weight
 gcs_count_boundary_margin34: 0.35 # (float) margin for GT3 upper and GT4 lower count-score boundaries
 gcs_count_boundary_margin45: 0.35 # (float) margin for GT4 upper and GT5 lower count-score boundaries
 gcs_spurious_neg: 0.0 # (float) extra BCE negative loss gain for short unmatched duplicate lane queries; 0 disables
@@ -136,6 +137,8 @@ gcs_spurious_disable_gt5: False # (bool) disable spurious-negative loss on GT5-o
 gcs_spurious_max_points: 12 # (int) maximum visible anchors for short spurious duplicate candidates
 gcs_spurious_close_px: 30.0 # (float) maximum mean x distance in pixels to a matched query
 gcs_spurious_min_overlap: 3 # (int) minimum overlapping visible anchors with a matched query
+gcs_gt5_short_visible_thr: 0 # (int) matched GT5 lanes with visible_count <= this get point-valid positive rescue; 0 disables
+gcs_gt5_short_point_valid_weight: 1.0 # (float) point-valid BCE multiplier for visible anchors of rescued short GT5 lanes
 gcs_exist_pos_weight: 1.0 # (float) positive query weight for GCS lane existence BCE
 gcs_exist_focal_gamma: 0.0 # (float) optional focal gamma for GCS existence BCE; 0 disables focal weighting
 gcs_exist_focal_alpha: -1.0 # (float) optional focal alpha for GCS existence BCE; set 0..1 to enable alpha weighting
