@@ -2,6 +2,80 @@
 
 This file records decisions for branch `codex/5-25-3-k56`.
 
+## 2026-06-28: Reject GT4-Strong + GT5-Safe Spurious Run
+
+Decision:
+
+Do not promote `gcs_yolo_lane_s_q12_k56_boundary02_spurious_gt4strong_gt5safe_v1`
+and do not run final test for it. Classify it as a rejected experimental
+candidate, with limited diagnostic value for GT5 retention only.
+
+Official-val evidence:
+
+```text
+run = gcs_yolo_lane_s_q12_k56_boundary02_spurious_gt4strong_gt5safe_v1
+pretrained = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_count03_under5_boundary02_v1/weights/best.pt
+gcs_spurious_neg = 0.1
+gcs_spurious_gt3_weight = 1.0
+gcs_spurious_gt4_weight = 1.5
+gcs_spurious_gt5_weight = 0.25
+gcs_spurious_disable_gt5 = false
+gcs_hard_sampling = false
+gcs_official_best = false
+results.csv rows = 43 epochs
+nonfinite_count = 0
+sweep = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_boundary02_spurious_gt4strong_gt5safe_v1_official_val_sweep/tusimple_official_sweep_summary.json
+best decode = conf=0.003, point_valid_thr=0.5, nms_dist_px=18.0, max_det=6, min_points=2
+official_acc = 0.970530
+official_score = 0.969686
+official_FP = 0.025666
+official_FN = 0.016529
+count_acc = 0.950413
+count_acc_4 = 0.848485
+count_acc_5 = 0.986486
+count_confusion = 3->3=216, 3->4=7, 4->3=1, 4->4=56, 4->5=9, 5->4=1, 5->5=73
+```
+
+Gate result:
+
+Across 1512 official-val sweep rows, no row satisfies the requested gate:
+
+```text
+required official_acc >= 0.9717; observed max = 0.970530
+required official_FP <= 0.018; observed min = 0.020707
+required count_acc_4 >= 0.90; observed max = 0.893939
+required count_acc_5 >= 0.94; observed max = 0.986486
+required 4->5 <= 5; observed min = 6
+required 5->4 <= 4; observed min = 1
+```
+
+Integrated conclusion:
+
+- Supported fact: the GT5-safe side is preserved: the selected row has
+  `count_acc_5=0.986486` and `5->4=1`.
+- Supported fact: the GT4-strong side did not transfer to official-val:
+  selected `4->5=9`, matching E1 and worse than spurious-lite's `4->5=4`.
+- Supported fact: the primary official metrics regress versus E1
+  (`official_acc 0.971208 -> 0.970530`, `FP 0.022957 -> 0.025666`,
+  `FN 0.014004 -> 0.016529`).
+- Supported fact: the sweep cannot be rescued by threshold/NMS selection under
+  the recorded search grid because even the best individual limits miss ACC,
+  FP, `count_acc_4`, and `4->5` gates.
+- Caveat: this artifact used a post-hoc sweep over `weights/best.pt`
+  (`gcs_official_best=false`) and stopped with 43 result rows despite
+  `epochs=60`. That weakens it as a formal run but does not change the reject
+  decision, because official-val is already below all promotion gates.
+
+Smallest safe next action:
+
+Do not tune on test and do not run final test for this checkpoint. Run a
+read-only official-val failure trace for `GT4 4->5` and `GT3 3->4` extra lanes
+to check whether GT4 spurious candidates are being selected too rarely. The
+training logs show low late GT4 candidate density
+(`train/spur_cnt_gt4` around `0.03` to `0.04` per logged batch near the end),
+so increasing only the GT4 weight may not help if candidate selection has too
+little GT4 coverage.
+
 ## 2026-06-28: Add GT4-Strong + GT5-Safe Spurious Weighting
 
 Decision:
@@ -87,6 +161,8 @@ E1 baseline run:
 E3-lite spurious run:
   gcs_yolo_lane_s_q12_k56_boundary02_spurious_lite_v1
   sweep = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_boundary02_spurious_lite_v1_official_val_sweep/tusimple_official_sweep_summary.json
+  training log = 59 logged epochs in results.csv; gcs_official_best=false
+  sweep rows = 3360, count_aware_topk=false
   decode = conf=0.005, point_valid_thr=0.45, nms_dist_px=0.0, max_det=5, min_points=2
   official_acc = 0.971721
   official_score = 0.971131
@@ -113,6 +189,11 @@ Integrated conclusion:
 - Caveat: this completed run used a post-hoc official-val sweep over
   `weights/best.pt`; its `args.yaml` records `gcs_official_best=false`, and no
   `official_best.pt` / `official_best_decode.yaml` artifact was found.
+- Caveat: the best metrics have a 36-row tie under the branch selection
+  priority across `conf in {0.005, 0.01, 0.02}`, all swept NMS values, and all
+  swept `max_det` values, with `point_valid_thr=0.45` and `min_points=2`.
+  Treat the recorded decode as a representative selected row, not a unique
+  postprocess preference.
 
 Why:
 
@@ -136,19 +217,31 @@ Then run the same 363-image official-val sweep. Promotion should require
 official-val ACC not below E1, most of the FP / `4->5` benefit retained, and
 `5->4` materially below the spurious-lite value of `9`.
 
-Current GT5-safe artifact status:
+Completed GT5-safe follow-up evidence:
 
 ```text
 run = gcs_yolo_lane_s_q12_k56_boundary02_spurious_gt5safe_v1
 pretrained = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_count03_under5_boundary02_v1/weights/best.pt
 gcs_spurious_gt5_weight = 0.25
 gcs_hard_sampling = false
-results.csv rows = 8 epochs plus header
-official-val sweep = not found
+results.csv rows = 52 epochs plus header
+sweep = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_boundary02_spurious_gt5safe_v1_official_val_sweep/tusimple_official_sweep_summary.json
+best decode = conf=0.005, point_valid_thr=0.55, nms_dist_px=18.0, max_det=5, min_points=2
+official_acc = 0.971777
+official_score = 0.971006
+official_FP = 0.022957
+official_FN = 0.015611
+count_acc = 0.958678
+count_acc_4 = 0.863636
+count_acc_5 = 0.986486
+count_confusion = 3->3=218, 3->4=5, 4->3=1, 4->4=57, 4->5=8, 5->4=1, 5->5=73
 ```
 
-This artifact is not eligible for selection until a valid official-val sweep
-exists.
+This run recovers GT5 retention (`5->4=1`) but loses most of the spurious-lite
+GT4 / FP benefit: `4->5` rebounds to `8`, `count_acc_4` is only `0.863636`,
+and `official_FP` returns to the E1 value `0.022957`. Across the sweep there is
+no row with both `4->5 <= 4` and `5->4 <= 2`. Treat it as diagnostic evidence
+for GT-count weighting, not as a clean promotion.
 
 ## 2026-06-27: Add GT5-Safe Spurious Negative Control
 

@@ -4,9 +4,9 @@ This file applies to branch `codex/5-25-3-k56`.
 
 ## Branch Scope
 
-The current mainline imports the historical `5-25-3.zip` algorithm and changes the TuSimple fixed-y contract to Q=12/K=56 with official h-sample anchors. It also includes the 2026-06-27 user-requested default-off `count_boundary_loss` for GT3/GT4/GT5 adjacent count-score boundaries, default-off train-only `gcs_hard_sampling` for 0601 and short-visible GT3/GT4/GT5 samples, and default-off E3-lite `gcs_spurious_neg` loss for short unmatched duplicate-like queries.
+The current mainline imports the historical `5-25-3.zip` algorithm and changes the TuSimple fixed-y contract to Q=12/K=56 with official h-sample anchors. It also includes the 2026-06-27 user-requested default-off `count_boundary_loss` for GT3/GT4/GT5 adjacent count-score boundaries, default-off train-only `gcs_hard_sampling` for 0601 and short-visible GT3/GT4/GT5 samples, and default-off E3-lite `gcs_spurious_neg` loss for short unmatched duplicate-like queries. Follow-up code keeps the old default behavior while adding default-preserving GT-count spurious weights, default-off GT spurious candidate protection, and default-effectively-off GT5 short point-valid rescue controls.
 
-Do not read mainline Count Head, Quality Head, Survival Head, near-miss, or old mainline official-best bottlenecks as active branch behavior. Those algorithm mechanisms are not part of this 5-25-3 branch. The only active Count Boundary behavior is the branch-local default-off `count_boundary_loss`, the only active hard sampler is the branch-local default-off train-only `gcs_hard_sampling`, the only active E3-lite spurious negative behavior is the branch-local default-off `gcs_spurious_neg`, and the only active official-best behavior is the explicit 2026-06-27 training-time official-val selection hook.
+Do not read mainline Count Head, Quality Head, Survival Head, near-miss, or old mainline official-best bottlenecks as active branch behavior. Those algorithm mechanisms are not part of this 5-25-3 branch. The only active Count Boundary behavior is the branch-local default-off `count_boundary_loss`, the only active hard sampler is the branch-local default-off train-only `gcs_hard_sampling`, the only active E3-lite spurious negative behavior is the branch-local default-off `gcs_spurious_neg` family described in `current-contracts.md`, and the only active official-best behavior is the explicit 2026-06-27 training-time official-val selection hook.
 
 Active source/config is rolled back to commit `b6535f641` (`Fix GCS training
 progress header alignment`). Bottleneck notes below that depend on
@@ -54,7 +54,12 @@ count_acc_5 = 0.972973
 
 E3-lite spurious:
 run = gcs_yolo_lane_s_q12_k56_boundary02_spurious_lite_v1
+gcs_spurious_neg = 0.1
+gcs_hard_sampling = false
+gcs_official_best = false
+results.csv rows = 59 logged epochs
 sweep = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_boundary02_spurious_lite_v1_official_val_sweep/tusimple_official_sweep_summary.json
+sweep rows = 3360, count_aware_topk = false
 official_acc = 0.971721
 official_FP = 0.013866
 official_FN = 0.015611
@@ -73,6 +78,12 @@ Supported interpretation:
   `count_acc_5` drops by `0.094595`.
 - This means short unmatched duplicate-like query suppression is useful, but
   the selection rule is not GT5-safe enough when true fifth lanes are short.
+- Caveat: this run used a post-hoc official-val sweep over `weights/best.pt`;
+  `args.yaml` has `gcs_official_best=false`, so it did not preserve a
+  training-time `official_best.pt` / `official_best_decode.yaml`.
+- Caveat: the selected metrics are tied across 36 sweep rows under the branch
+  selection priority. Treat the recorded decode as a representative selected
+  row, not a unique postprocess preference.
 
 The next bottleneck is no longer whether spurious-negative suppression can
 reduce GT4 over-count. It can. The bottleneck is preserving true GT5 short
@@ -84,6 +95,59 @@ The existing `gcs_yolo_lane_s_q12_k56_boundary02_spurious_gt5safe_v1` artifact
 has only `gcs_spurious_gt5_weight=0.25`, starts from E1 `best.pt`, and keeps
 `gcs_hard_sampling=false`, but it did not apply the GT4-strong weight. It is
 not the current GT4-strong + GT5-safe candidate.
+
+GT5-safe official-val result:
+
+```text
+sweep = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_boundary02_spurious_gt5safe_v1_official_val_sweep/tusimple_official_sweep_summary.json
+best decode = conf=0.005, point_valid_thr=0.55, nms_dist_px=18.0, max_det=5, min_points=2
+official_acc = 0.971777
+official_FP = 0.022957
+official_FN = 0.015611
+count_acc_4 = 0.863636
+count_acc_5 = 0.986486
+count_confusion = 3->3=218, 3->4=5, 4->3=1, 4->4=57, 4->5=8, 5->4=1, 5->5=73
+```
+
+This run fixes the spurious-lite GT5 undercount (`5->4: 9 -> 1`) but gives
+back most of the intended GT4 false-fifth suppression (`4->5: 4 -> 8`) and FP
+benefit (`0.013866 -> 0.022957`). The sweep has no row that simultaneously
+keeps `4->5 <= 4` and `5->4 <= 2`. This motivated the GT-count-weighted
+follow-up below: keep the GT5-safe reduction, but add stronger GT4
+spurious-negative pressure.
+
+GT4-strong + GT5-safe official-val result:
+
+```text
+run = gcs_yolo_lane_s_q12_k56_boundary02_spurious_gt4strong_gt5safe_v1
+sweep = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_boundary02_spurious_gt4strong_gt5safe_v1_official_val_sweep/tusimple_official_sweep_summary.json
+weights = gt3 1.0, gt4 1.5, gt5 0.25
+gcs_spurious_neg = 0.1
+gcs_hard_sampling = false
+gcs_official_best = false
+results.csv rows = 43 epochs, nonfinite_count = 0
+best decode = conf=0.003, point_valid_thr=0.5, nms_dist_px=18.0, max_det=6, min_points=2
+official_acc = 0.970530
+official_FP = 0.025666
+official_FN = 0.016529
+count_acc_4 = 0.848485
+count_acc_5 = 0.986486
+count_confusion = 3->3=216, 3->4=7, 4->3=1, 4->4=56, 4->5=9, 5->4=1, 5->5=73
+```
+
+This rejects the simple "GT4 weight 1.5 + GT5 weight 0.25" fix. GT5 remains
+safe, but GT4 false-fifth suppression disappears: selected `4->5=9`, equal to
+E1 and worse than both `spurious_lite_v1` (`4`) and `spurious_gt5safe_v1` (`8`).
+The full 1512-row official-val sweep has zero rows that meet the requested
+gate; even the best individual limits miss `official_acc`, FP, `count_acc_4`,
+and `4->5` (`max_acc=0.970530`, `min_FP=0.020707`,
+`max_count_acc_4=0.893939`, `min_4->5=6`).
+
+The active bottleneck is therefore not solved by scalar GT4 spurious-negative
+weighting alone. Before adding another train-side loss or changing decode,
+inspect official-val `GT4 4->5` and `GT3 3->4` failures per image and verify
+whether the GT4 unmatched-query spurious candidate set has enough coverage; the
+late training logs show very sparse GT4 spurious candidates compared with GT5.
 
 ## Legacy Post-b653 Official-Val Selection State
 
