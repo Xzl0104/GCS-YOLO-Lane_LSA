@@ -194,6 +194,7 @@ gcs_official_best: False # (bool) run periodic TuSimple official-val sweeps and 
 gcs_official_interval: 5 # (int) epoch interval for periodic official-val checkpoint selection
 gcs_official_archive_root: archive # (str) path to archive/ or archive/TUSimple for official-val selection
 gcs_official_gt_json: # (str, optional) explicit official-val GT json-lines file
+gcs_official_allow_noncanonical_gt: False # (bool) allow noncanonical official-val GT only for diagnostics
 gcs_official_max_images: 0 # (int) limit official-val images per hook; 0 means all
 gcs_official_warmup: 5 # (int) warmup forwards for training-time official sweeps
 gcs_official_confs: [0.005, 0.01, 0.02, 0.05, 0.1] # (list[float]) official-val sweep existence thresholds

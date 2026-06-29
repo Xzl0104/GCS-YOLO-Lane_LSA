@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import csv
 import inspect
 import importlib
@@ -1614,6 +1615,27 @@ def test_required_ordered_slot_imports_available() -> None:
         importlib.import_module(module_name)
 
 
+def test_train_gcs_override_keys_are_registered_in_default_yaml() -> None:
+    source = (ROOT / "tools/train_gcs.py").read_text(encoding="utf-8")
+    module = ast.parse(source)
+    override_keys: set[str] = set()
+
+    class OverrideVisitor(ast.NodeVisitor):
+        def visit_Assign(self, node: ast.Assign) -> None:
+            if not isinstance(node.value, ast.Dict):
+                return
+            if not any(isinstance(target, ast.Name) and target.id == "overrides" for target in node.targets):
+                return
+            for key in node.value.keys:
+                if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                    override_keys.add(key.value)
+
+    OverrideVisitor().visit(module)
+    cfg = yaml.safe_load((ROOT / "ultralytics/cfg/default.yaml").read_text(encoding="utf-8"))
+    missing = sorted(key for key in override_keys if key not in cfg)
+    assert not missing, f"tools/train_gcs.py passes unregistered YOLO override keys: {missing}"
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Check ordered-slot GCS contract fixes.")
     parser.add_argument("--tmp-dir", default=str(TMP_DIR), help="Workspace-local directory for temporary checkpoints.")
@@ -1699,6 +1721,7 @@ def main() -> None:
         test_overfit20_skips_absent_per_class_count_acc,
         test_standalone_validator_syncs_ordered_mode,
         test_required_ordered_slot_imports_available,
+        test_train_gcs_override_keys_are_registered_in_default_yaml,
     ]
     if not args.skip_git:
         tests.append(test_git_tracking_and_idea_ignore)
