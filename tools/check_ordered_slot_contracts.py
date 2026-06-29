@@ -407,6 +407,7 @@ def test_ordered_slot_decode_order_check_error() -> None:
     preds["pred_count_logits"][0, 0] = 10.0
     preds["pred_points"][0, 0, :, 0] = 0.8
     preds["pred_points"][0, 1, :, 0] = 0.3
+    preds["pred_logits"] = preds["pred_exist_logits"]
     try:
         decode_ordered_slot_predictions(
             preds,
@@ -832,6 +833,16 @@ def test_ordered_slot_runtime_config_contexts() -> None:
         assert ordered_slot_decode_runtime_config(context=context) == {
             **sorted_expected,
         }
+    internal_val_expected = {
+        "order_check": "none",
+        "output_order": "slot",
+        "uses_runtime_sort": False,
+        "order_violation_policy": "diagnostic_only",
+        "result_type": "internal_training_val",
+        "not_for_main_ordered_slot_claim": True,
+    }
+    for context in ("training_val", "internal_val"):
+        assert ordered_slot_decode_runtime_config(context=context) == internal_val_expected
     assert ordered_slot_decode_runtime_config(context="overfit") == strict_expected
     try:
         ordered_slot_decode_runtime_config(context="unknown")
@@ -1590,6 +1601,33 @@ def test_standalone_validator_syncs_ordered_mode() -> None:
     assert validator._loss_names()[0].startswith("slot_")
 
 
+def test_training_validator_order_violation_is_diagnostic_not_fatal() -> None:
+    validator = GCSLaneValidator(args=SimpleNamespace(gcs_mode="ordered_slot"))
+    validator.model = DummyOrderedModel()
+    preds = _base_preds(batch=1)
+    preds["pred_count_logits"][0, 0] = 10.0
+    preds["pred_points"][0, 0, :, 0] = 0.8
+    preds["pred_points"][0, 1, :, 0] = 0.3
+    preds["pred_logits"] = preds["pred_exist_logits"]
+    points, valid = _fixed_y_points(2)
+    batch = {
+        "img": torch.zeros(1, 3, 544, 960),
+        "lanes": [points],
+        "lane_valid": [valid],
+    }
+    state = validator._empty_metric_state()
+
+    validator._update_metric_state(state, preds, batch)
+
+    assert state["images"] == 1
+    assert state["ordered_slot_order_violations"] == 1
+    assert state["ordered_slot_order_violation_images"] == 1
+    metrics = validator._metric_results(state)
+    assert metrics["val/ordered_slot_order_violations"] == 1.0
+    assert metrics["val/ordered_slot_order_violation_images"] == 1.0
+    assert metrics["val/ordered_slot_order_violation_rate"] == 1.0
+
+
 def test_git_tracking_and_idea_ignore() -> None:
     ignored = subprocess.run(
         ["git", "check-ignore", "-q", ".idea/GCS-YOLO-Lane_LSA_5-25-3-k56.iml"],
@@ -1720,6 +1758,7 @@ def main() -> None:
         test_overfit20_failure_metrics_raise,
         test_overfit20_skips_absent_per_class_count_acc,
         test_standalone_validator_syncs_ordered_mode,
+        test_training_validator_order_violation_is_diagnostic_not_fatal,
         test_required_ordered_slot_imports_available,
         test_train_gcs_override_keys_are_registered_in_default_yaml,
     ]

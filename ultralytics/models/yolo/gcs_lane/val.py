@@ -130,6 +130,9 @@ METRIC_NAMES = (
     "tp",
     "fp",
     "fn",
+    "ordered_slot_order_violations",
+    "ordered_slot_order_violation_images",
+    "ordered_slot_order_violation_rate",
 )
 
 
@@ -420,6 +423,8 @@ class GCSLaneValidator:
             "apes_matched_all": [],
             "apes_fp_matched": [],
             "lane_count_abs_error": 0.0,
+            "ordered_slot_order_violations": 0,
+            "ordered_slot_order_violation_images": 0,
         }
 
     @staticmethod
@@ -556,17 +561,20 @@ class GCSLaneValidator:
         point_valid_thr = self._eval_point_valid_thr()
         max_det = self._eval_max_det()
         ordered_slot = self._gcs_mode() == "ordered_slot"
-        ordered_slot_runtime_cfg = ordered_slot_decode_runtime_config(context="val") if ordered_slot else None
+        ordered_slot_runtime_cfg = ordered_slot_decode_runtime_config(context="training_val") if ordered_slot else None
 
         for i, (gt_lanes_t, gt_valid_t) in enumerate(zip(batch["lanes"], batch["lane_valid"])):
             if ordered_slot:
-                pred_lanes = decode_ordered_slot_predictions(
+                pred_lanes, order_diag = decode_ordered_slot_predictions(
                     preds,
                     batch_index=i,
                     image_shape=(h, w),
                     order_check=ordered_slot_runtime_cfg["order_check"],
                     output_order=ordered_slot_runtime_cfg["output_order"],
+                    return_diagnostics=True,
                 )
+                state["ordered_slot_order_violations"] += int(order_diag["order_violation_count"])
+                state["ordered_slot_order_violation_images"] += int(order_diag["has_order_violation"])
             else:
                 pred_lanes = decode_gcs_predictions(
                     pred_points[i],
@@ -626,6 +634,12 @@ class GCSLaneValidator:
             "val/tp": float(tp),
             "val/fp": float(fp),
             "val/fn": float(fn),
+            "val/ordered_slot_order_violations": float(state.get("ordered_slot_order_violations", 0)),
+            "val/ordered_slot_order_violation_images": float(state.get("ordered_slot_order_violation_images", 0)),
+            "val/ordered_slot_order_violation_rate": round(
+                float(state.get("ordered_slot_order_violation_images", 0)) / images,
+                6,
+            ),
         }
 
     @staticmethod

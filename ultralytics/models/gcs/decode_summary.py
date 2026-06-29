@@ -53,6 +53,7 @@ def ordered_slot_decode_runtime_config(context: str) -> dict[str, Any]:
         "overfit",
         "contract",
     }
+    internal_val_contexts = {"training_val", "internal_val"}
     sorted_export_contexts = {"debug_sorted_export", "debug", "visualize"}
     if normalized in strict_contexts:
         return {
@@ -62,6 +63,15 @@ def ordered_slot_decode_runtime_config(context: str) -> dict[str, Any]:
             "order_violation_policy": "fail_fast",
             "result_type": "strict_ordered_slot",
             "not_for_main_ordered_slot_claim": False,
+        }
+    if normalized in internal_val_contexts:
+        return {
+            "order_check": "none",
+            "output_order": "slot",
+            "uses_runtime_sort": False,
+            "order_violation_policy": "diagnostic_only",
+            "result_type": "internal_training_val",
+            "not_for_main_ordered_slot_claim": True,
         }
     if normalized in sorted_export_contexts:
         return {
