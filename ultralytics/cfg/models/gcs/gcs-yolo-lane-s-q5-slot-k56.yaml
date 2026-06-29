@@ -1,0 +1,45 @@
+# GCS-YOLO-Lane v2 ordered-slot mode with the current TuSimple K56 fixed-y contract.
+
+nc: 1 # lane class placeholder required by Ultralytics model construction
+imgsz: [544, 960] # H, W default for TuSimple
+gcs_mode: ordered_slot
+gcs_num_slots: 5
+
+# ordered_slot_v2 count contract:
+# class 0 -> 2 lanes
+# class 1 -> 3 lanes
+# class 2 -> 4 lanes
+# class 3 -> 5 lanes
+gcs_min_lanes: 2
+gcs_max_lanes: 5
+gcs_count_classes: 4
+gcs_contiguity_policy: strict
+gcs_k: 56
+depth_multiple: 0.50 # YOLO11s depth
+width_multiple: 0.50 # YOLO11s width
+
+# Head args:
+# num_queries and gcs_num_slots must both be exactly 5 for ordered_slot.
+# num_points=56, decoder_layers=3, nhead=8, aux=False,
+# point_mode=fixed_y, fixed_y_start=710/720, fixed_y_end=160/720,
+# gcs_mode=ordered_slot, num_slots=5, min_lanes=2, max_lanes=5,
+# count_classes=4
+
+backbone:
+  - [-1, 1, Conv, [64, 3, 2]]
+  - [-1, 1, Conv, [128, 3, 2]]
+  - [-1, 2, C3k2, [256, False, 0.25]]
+  - [-1, 1, Conv, [256, 3, 2]]
+  - [-1, 2, C3k2, [512, False, 0.25]]
+  - [-1, 1, LSEM, []]
+  - [-1, 1, Conv, [512, 3, 2]]
+  - [-1, 2, C3k2, [512, True]]
+  - [-1, 1, LSEM, []]
+  - [-1, 1, Conv, [1024, 3, 2]]
+  - [-1, 2, C3k2, [1024, True]]
+  - [-1, 1, SPPF, [1024, 5]]
+  - [-1, 2, C2PSA, [1024]]
+
+head:
+  - [[2, 5, 8, 12], 1, LaneBiFPN, [128]]
+  - [-1, 1, GCSLaneHead, [5, 56, 3, 8, False, fixed_y, 0.9861111111111112, 0.2222222222222222, ordered_slot, 5, 2, 5, 4]]

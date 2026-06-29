@@ -21,16 +21,30 @@ from gcs_tools.tusimple_official_eval import (  # noqa: E402
     DEFAULT_OFFICIAL_SCORE_FN_WEIGHT,
     DEFAULT_OFFICIAL_SCORE_FP_WEIGHT,
     TuSimpleOfficialLaneEval,
-    default_tusimple_gt_json,
     find_tusimple_archive_root,
     gcs_lanes_to_tusimple_lanes,
+    official_gt_contract_summary,
     official_metric_score,
     read_tusimple_json_lines,
+    resolve_tusimple_gt_json,
     tusimple_image_path,
 )
+from gcs_tools.official_selection import sweep_selection_policy, sweep_sort_key  # noqa: E402
 from gcs_tools.tusimple_split_guard import reject_tusimple_test_search_gt_json  # noqa: E402
 from tools.eval_tusimple_official import _count_diagnostics  # noqa: E402
 from tools.infer_gcs import load_gcs_model, preprocess_image, warn_max_det_mismatch  # noqa: E402
+from ultralytics.models.gcs.decode_summary import (  # noqa: E402
+    ORDERED_SLOT_DECODE_SCHEMA,
+    QUERY_DECODE_SCHEMA,
+    build_ordered_slot_decode_summary,
+    load_decode_yaml,
+    ordered_slot_decode_runtime_config,
+    ordered_slot_order_diagnostics_summary,
+    raise_for_ordered_slot_query_args,
+    validate_decode_yaml_for_model,
+)
+from ultralytics.models.gcs.decode_ordered_slot import decode_ordered_slot_predictions  # noqa: E402
+from ultralytics.models.gcs.mode_utils import resolve_decode_mode  # noqa: E402
 from ultralytics.utils.gcs_postprocess import decode_gcs_predictions  # noqa: E402
 from ultralytics.utils.gcs_shape import normalize_imgsz, shape_str  # noqa: E402
 from ultralytics.utils.torch_utils import select_device  # noqa: E402
@@ -38,6 +52,28 @@ from ultralytics.utils.torch_utils import select_device  # noqa: E402
 
 DEFAULT_ARCHIVE = ROOT / "archive"
 DEFAULT_WEIGHTS = ROOT / "runs" / "gcs_lane" / "gcs_yolo_lane_s_tusimple_fixed_y_visible_iou_count03_under5_03" / "weights" / "best.pt"
+ORDERED_SLOT_QUERY_ONLY_DEFAULTS = {
+    "confs": [0.005, 0.01, 0.02, 0.03, 0.05, 0.08, 0.10, 0.15, 0.20, 0.25],
+    "point_valid_thrs": [0.30, 0.35, 0.40, 0.45, 0.50],
+    "nms_dist_pxs": [18.0],
+    "max_dets": [8],
+    "min_points": [6],
+    "count_aware_topk": False,
+    "count_aware_min_k": 3,
+    "count_aware_max_k": 5,
+    "count_aware_length_norm": 12.0,
+}
+QUERY_ONLY_ROW_KEYS = (
+    "conf",
+    "point_valid_thr",
+    "nms_dist_px",
+    "max_det",
+    "min_points",
+    "count_aware_topk",
+    "count_aware_min_k",
+    "count_aware_max_k",
+    "count_aware_length_norm",
+)
 
 
 def validate_search_split(split: str) -> str:
@@ -58,7 +94,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--archive-root", default=str(DEFAULT_ARCHIVE), help="Path to archive/ or archive/TUSimple.")
     parser.add_argument("--split", default="val", choices=("train", "val", "test"), help="TuSimple archive split for search.")
     parser.add_argument("--gt-json", default=None, help="Official TuSimple GT json-lines file for the search split.")
+    parser.add_argument(
+        "--allow-noncanonical-gt",
+        action="store_true",
+        help="Allow non-363 split=val GT for diagnostics; summary marks it incomparable with E1/spurious.",
+    )
     parser.add_argument("--weights", default=str(DEFAULT_WEIGHTS), help="GCS checkpoint .pt.")
+    parser.add_argument("--decode-mode", choices=("auto", "query", "ordered_slot"), default="auto", help="Decode path for official sweep.")
+    parser.add_argument("--decode-yaml", default=None, help="Schema-validated official_best_decode.yaml to reproduce a decode.")
     parser.add_argument(
         "--imgsz",
         nargs="+",
@@ -126,10 +169,19 @@ def _weight_run_dir(weights: str | Path) -> Path | None:
     return None
 
 
-def resolve_save_dir(save_dir: str | Path | None, weights: str | Path, split: str, count_aware_topk: bool = False) -> Path:
+def resolve_save_dir(
+    save_dir: str | Path | None,
+    weights: str | Path,
+    split: str,
+    count_aware_topk: bool = False,
+    decode_mode: str = "auto",
+) -> Path:
     if save_dir is not None and str(save_dir).strip():
         return Path(save_dir)
-    suffix = "_count_aware_topk" if count_aware_topk else ""
+    if str(decode_mode) == "ordered_slot":
+        suffix = "_ordered_slot"
+    else:
+        suffix = "_count_aware_topk" if count_aware_topk else ""
     run_dir = _weight_run_dir(weights)
     if run_dir is not None:
         return run_dir / f"official_sweep_{split}{suffix}"
@@ -142,7 +194,9 @@ def _limit_records(records: list[dict], max_images: int) -> list[dict]:
     return records
 
 
-def _combo_key(combo: dict) -> tuple[float, float, float, int, int]:
+def _combo_key(combo: dict) -> tuple:
+    if combo.get("decode_mode") == "ordered_slot":
+        return ("ordered_slot",)
     return (
         float(combo["conf"]),
         float(combo["point_valid_thr"]),
@@ -154,6 +208,25 @@ def _combo_key(combo: dict) -> tuple[float, float, float, int, int]:
 
 def build_combos(args: argparse.Namespace) -> list[dict]:
     combos: list[dict] = []
+    decode_mode = str(getattr(args, "decode_mode", "query"))
+    if decode_mode == "ordered_slot":
+        runtime_cfg = ordered_slot_decode_runtime_config(context="official_sweep")
+        effective_decode = build_ordered_slot_decode_summary(
+            min_lanes=int(getattr(args, "gcs_min_lanes", 2)),
+            max_lanes=int(getattr(args, "gcs_max_lanes", 5)),
+            num_slots=int(getattr(args, "gcs_num_slots", 5)),
+            min_interval_points=int(getattr(args, "gcs_min_interval_points", 2)),
+            output_order=runtime_cfg["output_order"],
+            order_check=runtime_cfg["order_check"],
+        )
+        return [
+            {
+                "decode_mode": "ordered_slot",
+                "decode_schema": effective_decode["schema"],
+                "effective_decode": effective_decode,
+                "query_decode_args": effective_decode["query_decode_args"],
+            }
+        ]
     count_aware_topk = bool(getattr(args, "count_aware_topk", False))
     count_aware_min_k = int(getattr(args, "count_aware_min_k", 3))
     count_aware_max_k = int(getattr(args, "count_aware_max_k", 5))
@@ -181,6 +254,8 @@ def build_combos(args: argparse.Namespace) -> list[dict]:
             raise ValueError(f"max_det and min_points must be positive, got max_det={max_det}, min_points={min_points}.")
         combos.append(
             {
+                "decode_mode": "query",
+                "decode_schema": QUERY_DECODE_SCHEMA,
                 "conf": conf,
                 "point_valid_thr": point_valid_thr,
                 "nms_dist_px": nms_dist_px,
@@ -199,29 +274,21 @@ def build_combos(args: argparse.Namespace) -> list[dict]:
 
 def select_best(rows: list[dict]) -> dict:
     """Pick the official-Accuracy best row with the project checkpoint-selection tie-breakers."""
-    return dict(
-        max(
-            rows,
-            key=lambda r: (
-                float(r["official_acc"]),
-                float(r["official_score"]),
-                -float(r["official_FP"]),
-                -float(r["official_FN"]),
-                float(r.get("count_acc_4", 0.0)),
-                float(r.get("count_acc", 0.0)),
-                float(r.get("count_acc_5", 0.0)),
-                -float(r["conf"]),
-                -float(r["nms_dist_px"]),
-                -float(r["point_valid_thr"]),
-                -int(r["max_det"]),
-                -int(r["min_points"]),
-            ),
-        )
-    )
+    return dict(max(rows, key=sweep_sort_key))
+
+
+def _row_sort_key(row: dict) -> tuple:
+    if row.get("decode_mode") == "ordered_slot":
+        return ("ordered_slot", 0.0, 0.0, 0, 0)
+    return (float(row["conf"]), float(row["point_valid_thr"]), float(row["nms_dist_px"]), int(row["max_det"]), int(row["min_points"]))
 
 
 def write_csv(path: Path, rows: list[dict]) -> None:
     fields = [
+        "decode_mode",
+        "decode_schema",
+        "effective_decode",
+        "query_decode_args",
         "conf",
         "point_valid_thr",
         "nms_dist_px",
@@ -251,8 +318,15 @@ def write_csv(path: Path, rows: list[dict]) -> None:
         writer.writeheader()
         for row in rows:
             out = dict(row)
+            if out.get("decode_mode") == "ordered_slot":
+                out["decode_schema"] = ORDERED_SLOT_DECODE_SCHEMA
+                out["query_decode_args"] = "not_applicable"
+                for key in QUERY_ONLY_ROW_KEYS:
+                    out[key] = ""
             for key in ("pred_lanes_hist", "gt_lanes_hist", "count_confusion"):
                 out[key] = json.dumps(out.get(key, {}), sort_keys=True, separators=(",", ":"))
+            if isinstance(out.get("effective_decode"), dict):
+                out["effective_decode"] = json.dumps(out["effective_decode"], sort_keys=True, separators=(",", ":"))
             writer.writerow(out)
 
 
@@ -261,18 +335,43 @@ def sweep(args: argparse.Namespace) -> dict:
     args.split = validate_search_split(args.split)
     reject_tusimple_test_search_gt_json(args.gt_json, context="TuSimple official sweep")
     archive_root = find_tusimple_archive_root(args.archive_root)
-    gt_path = Path(args.gt_json) if args.gt_json else default_tusimple_gt_json(archive_root, split=args.split)
+    gt_path = resolve_tusimple_gt_json(archive_root, split=args.split, gt_json=args.gt_json)
     gt_records = _limit_records(read_tusimple_json_lines(gt_path), args.max_images)
     if not gt_records:
         raise ValueError(f"No TuSimple GT records found in {gt_path}")
+    gt_contract = official_gt_contract_summary(
+        split=args.split,
+        gt_json=gt_path,
+        gt_records=gt_records,
+        allow_noncanonical_gt=bool(getattr(args, "allow_noncanonical_gt", False)),
+    )
 
     imgsz = normalize_imgsz(args.imgsz, dataset=args.dataset)
-    combos = build_combos(args)
-    for max_det in sorted({int(c["max_det"]) for c in combos}):
-        warn_max_det_mismatch(args.weights, max_det=max_det, context="TuSimple official sweep")
-
     device_obj = select_device(args.device)
     model = load_gcs_model(args.weights, device=device_obj, half=args.half, gcs_imgsz=imgsz)
+    decode_yaml_cfg = None
+    if getattr(args, "decode_yaml", None):
+        _, decode_yaml_cfg = load_decode_yaml(args.decode_yaml)
+        args.decode_mode = resolve_decode_mode(decode_yaml_cfg.get("decode_mode"), model)
+        validate_decode_yaml_for_model(decode_yaml_cfg, model_mode=args.decode_mode)
+        if args.decode_mode == "query":
+            args.confs = [float(decode_yaml_cfg["conf"])]
+            args.point_valid_thrs = [float(decode_yaml_cfg["point_valid_thr"])]
+            args.nms_dist_pxs = [float(decode_yaml_cfg["nms_dist_px"])]
+            args.max_dets = [int(decode_yaml_cfg["max_det"])]
+            args.min_points = [int(decode_yaml_cfg["min_points"])]
+            args.count_aware_topk = bool(decode_yaml_cfg["count_aware_topk"])
+            args.count_aware_min_k = int(decode_yaml_cfg["count_aware_min_k"])
+            args.count_aware_max_k = int(decode_yaml_cfg["count_aware_max_k"])
+            args.count_aware_length_norm = float(decode_yaml_cfg["count_aware_length_norm"])
+    else:
+        args.decode_mode = resolve_decode_mode(getattr(args, "decode_mode", "auto"), model)
+    if str(getattr(args, "decode_mode", "query")) == "ordered_slot":
+        raise_for_ordered_slot_query_args(args, ORDERED_SLOT_QUERY_ONLY_DEFAULTS, context="TuSimple official sweep")
+    combos = build_combos(args)
+    if str(getattr(args, "decode_mode", "query")) != "ordered_slot":
+        for max_det in sorted({int(c["max_det"]) for c in combos}):
+            warn_max_det_mismatch(args.weights, max_det=max_det, context="TuSimple official sweep")
     if args.warmup > 0 and gt_records:
         warm_path = tusimple_image_path(archive_root, str(gt_records[0]["raw_file"]), split=args.split)
         warm_img = cv2.imread(str(warm_path), cv2.IMREAD_COLOR)
@@ -284,6 +383,11 @@ def sweep(args: argparse.Namespace) -> dict:
         _sync_if_cuda(device_obj)
 
     combo_records = {_combo_key(combo): [] for combo in combos}
+    combo_order_stats = {
+        _combo_key(combo): {"ordered_slot_order_violations": 0, "ordered_slot_order_violation_images": 0}
+        for combo in combos
+    }
+    ordered_slot_runtime_cfg = ordered_slot_decode_runtime_config(context="official_sweep")
     infer_time_s = 0.0
     post_time_s = 0.0
     for record in gt_records:
@@ -301,23 +405,39 @@ def sweep(args: argparse.Namespace) -> dict:
         _sync_if_cuda(device_obj)
         t1 = time.perf_counter()
 
-        pred_valid = preds.get("pred_valid_logits")
         for combo in combos:
-            lanes = decode_gcs_predictions(
-                preds["pred_points"][0],
-                preds["pred_logits"][0],
-                pred_valid_logits=pred_valid[0] if pred_valid is not None else None,
-                image_shape=original_shape,
-                score_thr=combo["conf"],
-                point_valid_thr=combo["point_valid_thr"],
-                min_points=combo["min_points"],
-                max_det=combo["max_det"],
-                nms_dist_px=combo["nms_dist_px"],
-                count_aware_topk=combo["count_aware_topk"],
-                count_aware_min_k=combo["count_aware_min_k"],
-                count_aware_max_k=combo["count_aware_max_k"],
-                count_aware_length_norm=combo["count_aware_length_norm"],
-            )
+            if combo["decode_mode"] == "ordered_slot":
+                lanes, order_diag = decode_ordered_slot_predictions(
+                    preds,
+                    batch_index=0,
+                    image_shape=original_shape,
+                    min_lanes=int((decode_yaml_cfg or {}).get("gcs_min_lanes", 2)),
+                    max_lanes=int((decode_yaml_cfg or {}).get("gcs_max_lanes", 5)),
+                    min_interval_points=int((decode_yaml_cfg or {}).get("min_interval_points", 2)),
+                    order_check=ordered_slot_runtime_cfg["order_check"],
+                    output_order=ordered_slot_runtime_cfg["output_order"],
+                    return_diagnostics=True,
+                )
+                stats = combo_order_stats[_combo_key(combo)]
+                stats["ordered_slot_order_violations"] += int(order_diag["order_violation_count"])
+                stats["ordered_slot_order_violation_images"] += int(order_diag["has_order_violation"])
+            else:
+                pred_valid = preds.get("pred_valid_logits")
+                lanes = decode_gcs_predictions(
+                    preds["pred_points"][0],
+                    preds["pred_logits"][0],
+                    pred_valid_logits=pred_valid[0] if pred_valid is not None else None,
+                    image_shape=original_shape,
+                    score_thr=combo["conf"],
+                    point_valid_thr=combo["point_valid_thr"],
+                    min_points=combo["min_points"],
+                    max_det=combo["max_det"],
+                    nms_dist_px=combo["nms_dist_px"],
+                    count_aware_topk=combo["count_aware_topk"],
+                    count_aware_min_k=combo["count_aware_min_k"],
+                    count_aware_max_k=combo["count_aware_max_k"],
+                    count_aware_length_norm=combo["count_aware_length_norm"],
+                )
             tusimple_lanes = gcs_lanes_to_tusimple_lanes(lanes, record["h_samples"], image_shape=original_shape)
             combo_records[_combo_key(combo)].append(
                 {
@@ -353,59 +473,105 @@ def sweep(args: argparse.Namespace) -> dict:
             6,
         )
         row.update(_count_diagnostics(pred_records, gt_records))
+        if combo["decode_mode"] == "ordered_slot":
+            row.update(combo_order_stats[_combo_key(combo)])
         rows.append(row)
 
-    rows = sorted(rows, key=lambda r: (r["conf"], r["point_valid_thr"], r["nms_dist_px"], r["max_det"], r["min_points"]))
+    rows = sorted(rows, key=_row_sort_key)
     best = select_best(rows)
     save_dir = resolve_save_dir(
         args.save_dir,
         args.weights,
         args.split,
         count_aware_topk=bool(getattr(args, "count_aware_topk", False)),
+        decode_mode=str(getattr(args, "decode_mode", "query")),
     )
     save_dir.mkdir(parents=True, exist_ok=True)
     write_csv(save_dir / "tusimple_official_sweep.csv", rows)
 
     n = max(len(gt_records), 1)
+    config = {
+        "weights": str(Path(args.weights).resolve()),
+        "archive_root": str(archive_root.resolve()),
+        "split": args.split,
+        "gt_json": str(gt_path.resolve()),
+        "save_dir": str(save_dir.resolve()),
+        "imgsz": [int(imgsz[0]), int(imgsz[1])],
+        "decode_mode": str(getattr(args, "decode_mode", "query")),
+        "runtime_ms": float(args.runtime_ms),
+        "max_images": int(args.max_images),
+        "device": str(args.device),
+        "half": bool(args.half),
+        "best_metric": "official_acc",
+        "selection_policy": sweep_selection_policy(),
+        "score_fp_weight": float(args.score_fp_weight),
+        "score_fn_weight": float(args.score_fn_weight),
+        **gt_contract,
+    }
+    if str(getattr(args, "decode_mode", "query")) == "ordered_slot":
+        ordered_slot_runtime_cfg = ordered_slot_decode_runtime_config(context="official_sweep")
+        effective_decode = build_ordered_slot_decode_summary(
+            min_lanes=int((decode_yaml_cfg or {}).get("gcs_min_lanes", 2)),
+            max_lanes=int((decode_yaml_cfg or {}).get("gcs_max_lanes", 5)),
+            num_slots=int((decode_yaml_cfg or {}).get("gcs_num_slots", 5)),
+            min_interval_points=int((decode_yaml_cfg or {}).get("min_interval_points", 2)),
+            output_order=ordered_slot_runtime_cfg["output_order"],
+            order_check=ordered_slot_runtime_cfg["order_check"],
+        )
+        config.update(
+            {
+                "schema": effective_decode["schema"],
+                "gcs_min_lanes": effective_decode["gcs_min_lanes"],
+                "gcs_max_lanes": effective_decode["gcs_max_lanes"],
+                "gcs_num_slots": effective_decode["gcs_num_slots"],
+                "min_interval_points": effective_decode["min_interval_points"],
+                "interval_repair": effective_decode["interval_repair"],
+                "output_order": effective_decode["output_order"],
+                "order_check": effective_decode["order_check"],
+                "uses_runtime_sort": effective_decode["uses_runtime_sort"],
+                "order_violation_policy": effective_decode["order_violation_policy"],
+                "result_type": effective_decode["result_type"],
+                "not_for_main_ordered_slot_claim": effective_decode["not_for_main_ordered_slot_claim"],
+                "effective_decode": effective_decode,
+                "query_decode_args": effective_decode["query_decode_args"],
+            }
+        )
+    else:
+        config.update(
+            {
+                "schema": "query_decode_v1",
+                "confs": [float(x) for x in sorted({float(x) for x in args.confs})],
+                "point_valid_thrs": [float(x) for x in sorted({float(x) for x in args.point_valid_thrs})],
+                "nms_dist_pxs": [float(x) for x in sorted({float(x) for x in args.nms_dist_pxs})],
+                "max_dets": [int(x) for x in sorted({int(x) for x in args.max_dets})],
+                "min_points": [int(x) for x in sorted({int(x) for x in args.min_points})],
+                "count_aware_topk": bool(getattr(args, "count_aware_topk", False)),
+                "count_aware_min_k": int(getattr(args, "count_aware_min_k", 3)),
+                "count_aware_max_k": int(getattr(args, "count_aware_max_k", 5)),
+                "count_aware_length_norm": float(getattr(args, "count_aware_length_norm", 12.0)),
+            }
+        )
+
     output = {
         "best": best,
         "results": rows,
-        "config": {
-            "weights": str(Path(args.weights).resolve()),
-            "archive_root": str(archive_root.resolve()),
-            "split": args.split,
-            "gt_json": str(gt_path.resolve()),
-            "save_dir": str(save_dir.resolve()),
-            "imgsz": [int(imgsz[0]), int(imgsz[1])],
-            "confs": [float(x) for x in sorted({float(x) for x in args.confs})],
-            "point_valid_thrs": [float(x) for x in sorted({float(x) for x in args.point_valid_thrs})],
-            "nms_dist_pxs": [float(x) for x in sorted({float(x) for x in args.nms_dist_pxs})],
-            "max_dets": [int(x) for x in sorted({int(x) for x in args.max_dets})],
-            "min_points": [int(x) for x in sorted({int(x) for x in args.min_points})],
-            "count_aware_topk": bool(getattr(args, "count_aware_topk", False)),
-            "count_aware_min_k": int(getattr(args, "count_aware_min_k", 3)),
-            "count_aware_max_k": int(getattr(args, "count_aware_max_k", 5)),
-            "count_aware_length_norm": float(getattr(args, "count_aware_length_norm", 12.0)),
-            "runtime_ms": float(args.runtime_ms),
-            "max_images": int(args.max_images),
-            "device": str(args.device),
-            "half": bool(args.half),
-            "best_metric": "official_acc",
-            "selection_policy": [
-                "max official_acc",
-                "then max official_score",
-                "then lower official_FP",
-                "then lower official_FN",
-                "then max count_acc_4",
-            ],
-            "score_fp_weight": float(args.score_fp_weight),
-            "score_fn_weight": float(args.score_fn_weight),
-        },
+        "selection_policy": sweep_selection_policy(),
+        "config": config,
+        **gt_contract,
         "timing": {
             "avg_inference_ms": round(infer_time_s * 1000.0 / n, 4),
             "avg_sweep_postprocess_ms": round(post_time_s * 1000.0 / n, 4),
         },
     }
+    if str(getattr(args, "decode_mode", "query")) == "ordered_slot":
+        output["effective_decode"] = config["effective_decode"]
+        output["query_decode_args"] = "not_applicable"
+        output.update(
+            ordered_slot_order_diagnostics_summary(
+                pred_json_mode=False,
+                decode_stats=best,
+            )
+        )
     (save_dir / "tusimple_official_sweep_summary.json").write_text(json.dumps(output, indent=2), encoding="utf-8")
     print(json.dumps(best, indent=2))
     print(f"GCS input shape: {shape_str(imgsz)} (W x H), stored as H,W={imgsz}")

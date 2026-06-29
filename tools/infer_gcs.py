@@ -17,6 +17,9 @@ if str(ROOT) not in sys.path:
 os.chdir(ROOT)
 
 from ultralytics.data.utils import IMG_FORMATS
+from ultralytics.models.gcs.decode_ordered_slot import decode_ordered_slot_predictions
+from ultralytics.models.gcs.decode_summary import ordered_slot_decode_runtime_config
+from ultralytics.models.gcs.mode_utils import resolve_decode_mode
 from ultralytics.nn.modules import GCSLaneHead
 from ultralytics.nn.tasks import GCSLaneModel, load_checkpoint
 from ultralytics.utils.gcs_shape import DATASET_IMAGE_SHAPES, assert_gcs_image_tensor, normalize_imgsz, shape_str
@@ -87,6 +90,7 @@ def parse_args() -> argparse.Namespace:
         help="GCS inference shape as H W. Defaults: TuSimple 544 960, CULane 384 960.",
     )
     parser.add_argument("--conf", type=float, default=0.2, help="Lane existence confidence threshold.")
+    parser.add_argument("--decode-mode", choices=("auto", "query", "ordered_slot"), default="auto", help="Decode path.")
     parser.add_argument(
         "--point-valid-thr",
         type=float,
@@ -213,6 +217,14 @@ def _sync_if_cuda(device: torch.device) -> None:
         torch.cuda.synchronize(device)
 
 
+def _model_gcs_mode(model: torch.nn.Module) -> str:
+    """Return the GCS head mode, falling back to model metadata."""
+    for module in model.modules():
+        if isinstance(module, GCSLaneHead):
+            return str(getattr(module, "gcs_mode", "query"))
+    return str(getattr(model, "gcs_mode", "query"))
+
+
 def _json_lane(lane: dict) -> dict:
     item = {
         "query": int(lane["query"]),
@@ -249,6 +261,7 @@ def run_inference(
     count_aware_min_k: int = 3,
     count_aware_max_k: int = 5,
     count_aware_length_norm: float = 12.0,
+    decode_mode: str = "auto",
     max_images: int = 0,
     save_img: bool = True,
     save_txt: bool = False,
@@ -259,6 +272,10 @@ def run_inference(
     imgsz = normalize_imgsz(imgsz)
     device_obj = select_device(device, verbose=False)
     model = load_gcs_model(weights, device=device_obj, half=half, gcs_imgsz=imgsz)
+    active_decode_mode = resolve_decode_mode(decode_mode, model)
+    ordered_slot_runtime_cfg = (
+        ordered_slot_decode_runtime_config(context="infer") if active_decode_mode == "ordered_slot" else None
+    )
     images = collect_images(source, max_images=max_images)
     print(f"GCS input shape: {shape_str(imgsz)} (W x H), stored as H,W={imgsz}")
 
@@ -291,21 +308,30 @@ def run_inference(
             raise ValueError("GCS inference expects model outputs with pred_points and pred_logits.")
 
         t1 = time.perf_counter()
-        pred_valid = preds.get("pred_valid_logits")
-        lanes = decode_gcs_predictions(
-            preds["pred_points"][0],
-            preds["pred_logits"][0],
-            pred_valid_logits=pred_valid[0] if pred_valid is not None else None,
-            image_shape=img.shape[:2],
-            score_thr=conf,
-            point_valid_thr=point_valid_thr,
-            max_det=max_det,
-            nms_dist_px=nms_dist_px,
-            count_aware_topk=count_aware_topk,
-            count_aware_min_k=count_aware_min_k,
-            count_aware_max_k=count_aware_max_k,
-            count_aware_length_norm=count_aware_length_norm,
-        )
+        if active_decode_mode == "ordered_slot":
+            lanes = decode_ordered_slot_predictions(
+                preds,
+                batch_index=0,
+                image_shape=img.shape[:2],
+                order_check=ordered_slot_runtime_cfg["order_check"],
+                output_order=ordered_slot_runtime_cfg["output_order"],
+            )
+        else:
+            pred_valid = preds.get("pred_valid_logits")
+            lanes = decode_gcs_predictions(
+                preds["pred_points"][0],
+                preds["pred_logits"][0],
+                pred_valid_logits=pred_valid[0] if pred_valid is not None else None,
+                image_shape=img.shape[:2],
+                score_thr=conf,
+                point_valid_thr=point_valid_thr,
+                max_det=max_det,
+                nms_dist_px=nms_dist_px,
+                count_aware_topk=count_aware_topk,
+                count_aware_min_k=count_aware_min_k,
+                count_aware_max_k=count_aware_max_k,
+                count_aware_length_norm=count_aware_length_norm,
+            )
         post_s = time.perf_counter() - t1
         total_infer += infer_s
         total_post += post_s
@@ -360,6 +386,7 @@ def main() -> None:
         count_aware_min_k=args.count_aware_min_k,
         count_aware_max_k=args.count_aware_max_k,
         count_aware_length_norm=args.count_aware_length_norm,
+        decode_mode=args.decode_mode,
         max_images=args.max_images,
         save_img=not args.no_save_img,
         save_txt=args.save_txt,

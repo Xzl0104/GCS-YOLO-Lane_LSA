@@ -209,6 +209,11 @@ class GCSLaneHead(nn.Module):
         point_mode="free",
         fixed_y_start=0.9861111111111112,
         fixed_y_end=0.2222222222222222,
+        gcs_mode="query",
+        num_slots=5,
+        min_lanes=2,
+        max_lanes=5,
+        count_classes=None,
     ):
         """Initialize the GCS lane query decoder and training-only auxiliary heads."""
         super().__init__()
@@ -224,8 +229,39 @@ class GCSLaneHead(nn.Module):
             raise ValueError(f"GCSLaneHead channel count {c1} must be divisible by nhead={nhead}.")
 
         self.c1 = c1
-        self.num_queries = num_queries
-        self.num_points = num_points
+        self.gcs_mode = str(gcs_mode).lower()
+        if self.gcs_mode in {"ordered-slot", "orderedslot"}:
+            self.gcs_mode = "ordered_slot"
+        if self.gcs_mode not in {"query", "ordered_slot"}:
+            raise ValueError(f"GCSLaneHead gcs_mode must be 'query' or 'ordered_slot', got {gcs_mode!r}.")
+        if self.gcs_mode == "ordered_slot":
+            self.num_slots = int(num_slots)
+            if self.num_slots <= 0:
+                raise ValueError(f"GCSLaneHead num_slots must be positive, got {num_slots}.")
+            self.min_lanes = int(min_lanes)
+            self.max_lanes = int(max_lanes)
+            if self.min_lanes <= 0 or self.max_lanes < self.min_lanes:
+                raise ValueError(f"GCSLaneHead lane bounds must satisfy 0 < min_lanes <= max_lanes, got {min_lanes}/{max_lanes}.")
+            if self.max_lanes > self.num_slots:
+                raise ValueError(f"GCSLaneHead max_lanes={self.max_lanes} exceeds num_slots={self.num_slots}.")
+            expected_count_classes = self.max_lanes - self.min_lanes + 1
+            self.count_classes = int(count_classes) if count_classes is not None else expected_count_classes
+            if self.count_classes != expected_count_classes:
+                raise ValueError(
+                    f"GCSLaneHead count_classes must be max_lanes-min_lanes+1={expected_count_classes}, "
+                    f"got {self.count_classes}."
+                )
+            if self.num_slots != 5:
+                raise ValueError(f"GCSLaneHead ordered_slot requires num_slots=5, got {self.num_slots}.")
+            if int(num_queries) != 5:
+                raise ValueError(f"GCSLaneHead ordered_slot requires num_queries=5, got {num_queries}.")
+        else:
+            self.num_slots = 5
+            self.min_lanes = 2
+            self.max_lanes = 5
+            self.count_classes = 4
+        self.num_queries = int(num_queries)
+        self.num_points = int(num_points)
         self.aux = aux
         self.point_mode = str(point_mode).lower()
         if self.point_mode in {"fixed-y", "fixedy"}:
@@ -239,6 +275,8 @@ class GCSLaneHead(nn.Module):
                 f"Expected 0 <= fixed_y_end < fixed_y_start <= 1, got "
                 f"{self.fixed_y_end} < {self.fixed_y_start}."
             )
+        if self.point_mode == "fixed_y":
+            self._validate_fixed_y_anchors()
         self.point_dims = 1 if self.point_mode == "fixed_y" else 2
         self.return_aux = False
         self.min_spatial_tokens = 1024
@@ -293,6 +331,22 @@ class GCSLaneHead(nn.Module):
             nn.ReLU(inplace=True),
             nn.Linear(c1, 1),
         )
+        if self.gcs_mode == "ordered_slot":
+            self.start_mlp = nn.Sequential(
+                nn.Linear(c1, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, num_points),
+            )
+            self.end_mlp = nn.Sequential(
+                nn.Linear(c1, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, num_points),
+            )
+            self.count_mlp = nn.Sequential(
+                nn.Linear(c1, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, self.count_classes),
+            )
 
         self.aux_mask = nn.Sequential(
             ConvBNAct(c1, c1, k=3),
@@ -308,10 +362,24 @@ class GCSLaneHead(nn.Module):
         self._init_point_valid_head()
         self._init_point_refine_head()
         self._init_point_valid_refine_head()
+        if self.gcs_mode == "ordered_slot":
+            self._init_interval_heads()
 
     def _build_fixed_y_anchors(self):
         """Build shared bottom-to-top y anchors for fixed-y x-only prediction."""
         return torch.linspace(float(self.fixed_y_start), float(self.fixed_y_end), self.num_points)
+
+    def _validate_fixed_y_anchors(self) -> None:
+        """Fail fast unless fixed-y anchors match the TuSimple K56 contract."""
+        anchors = self._build_fixed_y_anchors().detach().float().reshape(-1)
+        if anchors.numel() != 56:
+            raise ValueError(f"GCSLaneHead fixed_y_anchors: K mismatch, got {anchors.numel()}, expected 56.")
+        anchors_px = anchors * 720.0
+        expected_desc = torch.arange(710.0, 150.0, -10.0, dtype=anchors_px.dtype, device=anchors_px.device)
+        if not torch.allclose(anchors_px, expected_desc, atol=1e-3):
+            raise ValueError(
+                "GCSLaneHead fixed_y_anchors mismatch; expected desc 710..160 step -10."
+            )
 
     def _build_point_references(self):
         """Build query-specific bottom-to-top lane reference logits.
@@ -355,6 +423,13 @@ class GCSLaneHead(nn.Module):
         final = self.point_valid_refine_mlp[-1]
         nn.init.normal_(final.weight, mean=0.0, std=5e-3)
         nn.init.zeros_(final.bias)
+
+    def _init_interval_heads(self):
+        """Initialize ordered-slot interval/count logits near neutral."""
+        for mlp in (self.start_mlp, self.end_mlp, self.count_mlp):
+            final = mlp[-1]
+            nn.init.normal_(final.weight, mean=0.0, std=1e-3)
+            nn.init.zeros_(final.bias)
 
     def _sample_point_features(self, xs, points):
         """Sample high-resolution image features at normalized point coordinates.
@@ -550,6 +625,11 @@ class GCSLaneHead(nn.Module):
             "pred_logits": pred_logits,
             "pred_valid_logits": pred_valid_logits,
         }
+        if self.gcs_mode == "ordered_slot":
+            out["pred_exist_logits"] = pred_logits
+            out["pred_start_logits"] = self.start_mlp(hs).view(b, self.num_queries, self.num_points)
+            out["pred_end_logits"] = self.end_mlp(hs).view(b, self.num_queries, self.num_points)
+            out["pred_count_logits"] = self.count_mlp(hs.mean(dim=1))
 
         if self.aux and (self.training or self.return_aux):
             aux_size = self.aux_output_size(orig_size=orig_size)

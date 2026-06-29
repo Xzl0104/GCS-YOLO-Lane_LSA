@@ -288,6 +288,14 @@ weights/official_best_decode.yaml
 official_sweeps/epoch*/tusimple_official_sweep_summary.json
 ```
 
+`official_best_decode.yaml` is schema-specific. Query checkpoints write
+`query_decode_v1` with query decode arguments. Ordered-slot checkpoints write
+`ordered_slot_decode_v1` only, with the 2/3/4/5 count contract and
+`effective_decode`; ordered-slot official-best decode uses `output_order=slot`,
+`uses_runtime_sort=false`, and `order_violation_policy=fail_fast`.
+Ordered-slot decode yaml must not contain `conf`, `point_valid_thr`,
+`nms_dist_px`, `max_det`, `min_points`, or `count_aware_topk`.
+
 Selection priority:
 
 1. maximum `official_acc`
@@ -1645,16 +1653,23 @@ python tools/eval_gcs.py \
 
 ## TuSimple Official-Val Sweep
 
-Use `val` for threshold and postprocess selection:
+Use `val` for threshold and postprocess selection. The comparable official-val
+surface is the canonical 363-image GT JSON; do not use `train_val.json` or
+`label_data_0313.json` as replacement validation GT:
 
 ```bash
 python tools/sweep_tusimple_official.py \
   --archive-root archive/TUSimple \
   --split val \
+  --gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
   --weights <weights.pt> \
   --imgsz 544 960 \
   --device 0
 ```
+
+If a noncanonical validation GT is intentionally used, pass
+`--allow-noncanonical-gt` and treat the summary as
+`comparable_to_e1_spurious=false`.
 
 Default-off count-aware top-k postprocess ablation uses the same official-val
 surface and must be selected on validation only:

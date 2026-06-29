@@ -12,6 +12,9 @@ from scipy.optimize import linear_sum_assignment
 from ultralytics.data import build_dataloader
 from ultralytics.data.dataset_gcs import GCSLaneDataset
 from ultralytics.data.utils import check_det_dataset
+from ultralytics.models.gcs.decode_ordered_slot import decode_ordered_slot_predictions
+from ultralytics.models.gcs.decode_summary import ordered_slot_decode_runtime_config
+from ultralytics.models.gcs.loss_ordered_slot import OrderedSlotGCSLoss
 from ultralytics.nn.modules import GCSLaneHead
 from ultralytics.nn.tasks import load_checkpoint
 from ultralytics.utils import ROOT
@@ -199,6 +202,53 @@ class GCSLaneValidator:
         text = str(value).strip()
         return None if text == "" or text.lower() in {"none", "false"} else text
 
+    @staticmethod
+    def _normalize_gcs_mode(mode) -> str:
+        """Normalize GCS mode spelling."""
+        mode = str(mode or "query").lower()
+        if mode in {"ordered-slot", "orderedslot"}:
+            mode = "ordered_slot"
+        if mode not in {"query", "ordered_slot"}:
+            raise ValueError(f"gcs_mode must be 'query' or 'ordered_slot', got {mode!r}.")
+        return mode
+
+    def _set_arg(self, name: str, value) -> None:
+        """Write an argument value to namespace-like args when available."""
+        if self.args is None:
+            return
+        if isinstance(self.args, dict):
+            self.args[name] = value
+        else:
+            setattr(self.args, name, value)
+
+    @classmethod
+    def _infer_model_gcs_mode(cls, model) -> str | None:
+        """Infer GCS mode from loaded model heads and attributes."""
+        if model is None:
+            return None
+        modes = []
+        for module in model.modules():
+            if isinstance(module, GCSLaneHead):
+                modes.append(cls._normalize_gcs_mode(getattr(module, "gcs_mode", "query")))
+        unique = sorted(set(modes))
+        if len(unique) == 1:
+            return unique[0]
+        if len(unique) > 1:
+            raise RuntimeError(f"Multiple GCS modes found in model: {unique}.")
+        for module in model.modules():
+            if all(hasattr(module, name) for name in ("count_mlp", "start_mlp", "end_mlp")):
+                return "ordered_slot"
+        mode = getattr(model, "gcs_mode", None)
+        return cls._normalize_gcs_mode(mode) if mode is not None else None
+
+    def _sync_gcs_mode_from_model(self, model) -> str:
+        """Prefer loaded model mode and persist it to validator args."""
+        mode = self._infer_model_gcs_mode(model)
+        if mode is None:
+            mode = self._normalize_gcs_mode(self._arg(self.args, "gcs_mode", "query"))
+        self._set_arg("gcs_mode", mode)
+        return mode
+
     def _build_dataloader(self):
         """Build a validation dataloader for standalone YOLO(...).val() calls."""
         if self.args is None:
@@ -274,13 +324,38 @@ class GCSLaneValidator:
         )
         return batch
 
-    @staticmethod
-    def _label_loss_items(loss_items: torch.Tensor, prefix: str = "val") -> dict[str, float]:
+    def _gcs_mode(self) -> str:
+        """Return normalized GCS validation mode."""
+        mode = self._infer_model_gcs_mode(getattr(self, "model", None))
+        if mode is None:
+            mode = self._normalize_gcs_mode(self._arg(self.args, "gcs_mode", "query"))
+        self._set_arg("gcs_mode", mode)
+        return mode
+
+    def _loss_names(self) -> tuple[str, ...]:
+        """Return loss item names for the active mode."""
+        return OrderedSlotGCSLoss.loss_names if self._gcs_mode() == "ordered_slot" else LOSS_NAMES
+
+    def _label_loss_items(self, loss_items: torch.Tensor, prefix: str = "val") -> dict[str, float]:
         """Return named GCS loss items for validation logging."""
-        return dict(zip((f"{prefix}/{x}" for x in LOSS_NAMES), (round(float(x), 5) for x in loss_items)))
+        if self._gcs_mode() == "ordered_slot":
+            return OrderedSlotGCSLoss.label_loss_items(loss_items, prefix=prefix)
+        return dict(zip((f"{prefix}/{x}" for x in self._loss_names()), (round(float(x), 5) for x in loss_items)))
 
     def _loss_gains(self, device: torch.device) -> torch.Tensor:
         """Return validation loss gains matching the training objective."""
+        if self._gcs_mode() == "ordered_slot":
+            gains = [
+                float(self._arg(self.args, "gcs_point", 15.0)),
+                float(self._arg(self.args, "gcs_exist", 2.0)),
+                float(self._arg(self.args, "gcs_count_ce", 1.0)),
+                float(self._arg(self.args, "gcs_interval", 1.0)),
+                float(self._arg(self.args, "gcs_point_valid", 1.0)),
+                float(self._arg(self.args, "gcs_order", 0.1)),
+            ]
+            gains.extend([0.0] * (len(OrderedSlotGCSLoss.loss_names) - len(gains)))
+            return torch.tensor(gains, device=device, dtype=torch.float32)
+
         gains = []
         for name, default in zip(LOSS_GAIN_ARGS, DEFAULT_LOSS_GAINS):
             if name is None:
@@ -480,18 +555,29 @@ class GCSLaneValidator:
         nms_dist_px = self._eval_nms_dist_px()
         point_valid_thr = self._eval_point_valid_thr()
         max_det = self._eval_max_det()
+        ordered_slot = self._gcs_mode() == "ordered_slot"
+        ordered_slot_runtime_cfg = ordered_slot_decode_runtime_config(context="val") if ordered_slot else None
 
         for i, (gt_lanes_t, gt_valid_t) in enumerate(zip(batch["lanes"], batch["lane_valid"])):
-            pred_lanes = decode_gcs_predictions(
-                pred_points[i],
-                pred_logits[i],
-                pred_valid_logits=pred_valid_logits[i] if pred_valid_logits is not None else None,
-                image_shape=(h, w),
-                score_thr=conf,
-                point_valid_thr=point_valid_thr,
-                max_det=max_det,
-                nms_dist_px=nms_dist_px,
-            )
+            if ordered_slot:
+                pred_lanes = decode_ordered_slot_predictions(
+                    preds,
+                    batch_index=i,
+                    image_shape=(h, w),
+                    order_check=ordered_slot_runtime_cfg["order_check"],
+                    output_order=ordered_slot_runtime_cfg["output_order"],
+                )
+            else:
+                pred_lanes = decode_gcs_predictions(
+                    pred_points[i],
+                    pred_logits[i],
+                    pred_valid_logits=pred_valid_logits[i] if pred_valid_logits is not None else None,
+                    image_shape=(h, w),
+                    score_thr=conf,
+                    point_valid_thr=point_valid_thr,
+                    max_det=max_det,
+                    nms_dist_px=nms_dist_px,
+                )
             gt_lanes, gt_valid = self._valid_gt_lanes(gt_lanes_t, gt_valid_t)
             tp, fp, fn, apes_tp, apes_all, apes_fp = self._match_lanes(
                 pred_lanes,
@@ -572,15 +658,19 @@ class GCSLaneValidator:
         image_size = tuple(getattr(getattr(self.dataloader, "dataset", None), "imgsz", None) or self._arg(self.args, "gcs_imgsz", None))
         image_size = normalize_imgsz(image_size)
         model.gcs_imgsz = image_size
+        self.model = model
+        self._sync_gcs_mode_from_model(model)
         if getattr(model, "args", None) is not None:
             if isinstance(model.args, dict):
                 model.args["gcs_imgsz"] = [int(image_size[0]), int(image_size[1])]
+                model.args["gcs_mode"] = self._gcs_mode()
             else:
                 model.args.gcs_imgsz = [int(image_size[0]), int(image_size[1])]
+                model.args.gcs_mode = self._gcs_mode()
         aux_states = self._set_aux_return(model, True)
         model.eval()
 
-        loss_sum = torch.zeros(len(LOSS_NAMES), device=device)
+        loss_sum = torch.zeros(len(self._loss_names()), device=device)
         metric_state = self._empty_metric_state()
         batches = 0
         try:
@@ -588,6 +678,11 @@ class GCSLaneValidator:
                 batch = self._preprocess_batch(batch, device, image_size)
                 preds = model(batch["img"])
                 _, items = model.loss(batch, preds)
+                if int(items.numel()) != len(self._loss_names()):
+                    raise RuntimeError(
+                        f"GCS validation loss item mismatch for mode={self._gcs_mode()!r}: "
+                        f"criterion returned {int(items.numel())} items, expected {len(self._loss_names())}."
+                    )
                 loss_sum += items.detach()
                 self._update_metric_state(metric_state, preds, batch)
                 batches += 1
@@ -597,7 +692,9 @@ class GCSLaneValidator:
                 model.train()
 
         mean_loss = loss_sum / max(batches, 1)
-        weighted_loss = (mean_loss * self._loss_gains(device)).sum()
+        loss_gains = self._loss_gains(device)
+        weighted_terms = torch.where(loss_gains != 0.0, mean_loss * loss_gains, torch.zeros_like(mean_loss))
+        weighted_loss = weighted_terms.sum()
         results = self._label_loss_items(mean_loss.cpu(), prefix="val")
         results.update(self._metric_results(metric_state))
         results["val/total_loss"] = round(float(weighted_loss.cpu()), 5)

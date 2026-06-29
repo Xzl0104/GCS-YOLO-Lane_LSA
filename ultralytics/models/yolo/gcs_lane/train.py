@@ -20,13 +20,21 @@ import torch
 import torch.nn as nn
 from torch.utils.data import WeightedRandomSampler
 
+from gcs_tools.official_selection import OFFICIAL_SELECTION_POLICY, official_best_sort_key
 from ultralytics.data import build_dataloader
 from ultralytics.data.dataset_gcs import GCSLaneDataset, resize_gcs_masks
 from ultralytics.data.utils import check_det_dataset
 from ultralytics.engine.trainer import BaseTrainer
 from ultralytics.models.yolo.gcs_lane.val import GCSLaneValidator
+from ultralytics.models.gcs.decode_summary import build_official_best_decode_cfg, raise_for_ordered_slot_query_args
+from ultralytics.models.gcs.loss_ordered_slot import OrderedSlotGCSLoss
+from ultralytics.models.gcs.mode_utils import (
+    assert_ordered_slot_scale_contract,
+    infer_gcs_mode_from_ckpt,
+    infer_gcs_mode_from_model,
+)
 from ultralytics.nn.modules import GCSLaneHead, LaneBiFPN, LSEM
-from ultralytics.nn.tasks import GCSLaneModel, load_checkpoint
+from ultralytics.nn.tasks import GCSLaneModel, load_checkpoint, torch_safe_load
 from ultralytics.utils import DEFAULT_CFG, LOCAL_RANK, LOGGER, RANK, ROOT, YAML
 from ultralytics.utils.gcs_shape import assert_gcs_image_tensor, assert_gcs_shape, normalize_imgsz
 from ultralytics.utils.torch_utils import strip_optimizer, torch_distributed_zero_first
@@ -112,12 +120,22 @@ class GCSLaneTrainer(BaseTrainer):
         10: 12,
     }
 
+    @staticmethod
+    def _normalize_gcs_mode(mode: Any) -> str:
+        """Normalize GCS mode spelling used by CLI, YAML, and head modules."""
+        mode = str(mode or "query").lower()
+        if mode in {"ordered-slot", "orderedslot"}:
+            mode = "ordered_slot"
+        if mode not in {"query", "ordered_slot"}:
+            raise ValueError(f"gcs_mode must be 'query' or 'ordered_slot', got {mode!r}.")
+        return mode
+
     def __init__(self, cfg=DEFAULT_CFG, overrides: dict[str, Any] | None = None, _callbacks: dict | None = None):
         """Initialize the GCS lane trainer."""
         overrides = dict(overrides or {})
         overrides["task"] = "gcs_lane"
-        overrides.setdefault("model", str(ROOT / "cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml"))
-        overrides.setdefault("data", str(ROOT.parent / "data/tusimple_gcs_fixed_y_k56_960x544.yaml"))
+        overrides.setdefault("model", str(ROOT / "cfg/models/gcs/gcs-yolo-lane-s.yaml"))
+        overrides.setdefault("data", str(ROOT.parent / "data/tusimple_gcs_fixed_y_960x544.yaml"))
         # GCSLaneHead defaults to 8 lane queries. Four-image mosaic can raise TuSimple GT lanes to ~16,
         # leaving unmatched GT lanes outside the structured point loss, so keep mosaic off unless requested.
         overrides.setdefault("mosaic", 0.0)
@@ -125,11 +143,122 @@ class GCSLaneTrainer(BaseTrainer):
         overrides.setdefault("scale", 0.0)
         overrides.setdefault("erasing", 0.0)
         super().__init__(cfg, overrides, _callbacks)
+        assert_ordered_slot_scale_contract(self._gcs_mode(), getattr(self.args, "scale", 0.0))
         self.official_best = self.wdir / "official_best.pt"
         self.official_best_sweep = self.wdir / "official_best_sweep.json"
         self.official_best_decode = self.wdir / "official_best_decode.yaml"
         self._official_best_state = self._load_official_best_state()
         self._lock_gcs_shape_contract()
+        self._set_loss_names_for_mode()
+
+    def _gcs_mode(self) -> str:
+        """Return normalized GCS training mode."""
+        head = None
+        model = getattr(self, "model", None)
+        if model is not None and getattr(model, "model", None) is not None and len(model.model):
+            head = model.model[-1]
+        if isinstance(head, GCSLaneHead):
+            return self._normalize_gcs_mode(getattr(head, "gcs_mode", "query"))
+        return self._normalize_gcs_mode(getattr(self.args, "gcs_mode", "query"))
+
+    def _set_args_gcs_mode(self, mode: str) -> None:
+        """Persist normalized mode into args so loss, val, and official hooks agree."""
+        if isinstance(self.args, dict):
+            self.args["gcs_mode"] = mode
+        else:
+            self.args.gcs_mode = mode
+
+    def _set_arg_value(self, name: str, value: Any) -> None:
+        """Persist one derived metadata value into trainer args."""
+        if isinstance(self.args, dict):
+            self.args[name] = value
+        else:
+            setattr(self.args, name, value)
+
+    def _get_arg_value(self, name: str, default: Any = None) -> Any:
+        """Read one trainer arg from a dict or namespace."""
+        return self.args.get(name, default) if isinstance(self.args, dict) else getattr(self.args, name, default)
+
+    def _ordered_slot_loss_contract_from_args(self) -> dict[str, Any]:
+        """Return and validate the effective ordered-slot loss supervision contract."""
+        count_ce = float(self._get_arg_value("gcs_count_ce", 1.0))
+        interval = float(self._get_arg_value("gcs_interval", 1.0))
+        order = float(self._get_arg_value("gcs_order", 0.1))
+        allow_disable_order = bool(self._get_arg_value("gcs_allow_disable_order_loss", False))
+        if count_ce <= 0.0:
+            raise RuntimeError(
+                "ordered_slot requires gcs_count_ce > 0. "
+                "Count-class supervision cannot be disabled silently."
+            )
+        if interval <= 0.0:
+            raise RuntimeError(
+                "ordered_slot requires gcs_interval > 0. "
+                "Visibility interval supervision cannot be disabled silently."
+            )
+        if order <= 0.0 and not allow_disable_order:
+            raise RuntimeError(
+                "ordered_slot order loss is disabled. "
+                "Pass --gcs-allow-disable-order-loss only for an explicit ablation."
+            )
+        return {
+            "gcs_point": float(self._get_arg_value("gcs_point", 15.0)),
+            "gcs_exist": float(self._get_arg_value("gcs_exist", 2.0)),
+            "gcs_point_valid": float(self._get_arg_value("gcs_point_valid", 1.0)),
+            "gcs_count_ce": count_ce,
+            "gcs_interval": interval,
+            "gcs_order": order,
+            "gcs_allow_disable_order_loss": allow_disable_order,
+            "count_supervision_enabled": count_ce > 0.0,
+            "interval_supervision_enabled": interval > 0.0,
+            "order_supervision_enabled": order > 0.0,
+            "slot4_exist_bce_weight": float(self._get_arg_value("gcs_slot_exist_w4", 1.0)),
+            "slot5_exist_bce_weight": float(self._get_arg_value("gcs_slot_exist_w5", 1.0)),
+            "slot_exist_weight_semantics": "BCE element weight applied to positive and negative targets",
+        }
+
+    def _record_ordered_slot_loss_contract(self) -> None:
+        """Record effective ordered-slot supervision in args.yaml and checkpoints."""
+        if self._gcs_mode() != "ordered_slot":
+            return
+        contract = self._ordered_slot_loss_contract_from_args()
+        self._set_arg_value("ordered_slot_loss_contract", contract)
+        self._set_arg_value(
+            "ordered_slot_effective_loss_weights",
+            {k: contract[k] for k in ("gcs_point", "gcs_exist", "gcs_point_valid", "gcs_count_ce", "gcs_interval", "gcs_order")},
+        )
+
+    def _assert_model_gcs_mode(self, model: nn.Module) -> None:
+        """Fail fast when CLI/YAML/head GCS modes disagree."""
+        head = model.model[-1] if getattr(model, "model", None) is not None and len(model.model) else None
+        if not isinstance(head, GCSLaneHead):
+            return
+        head_mode = self._normalize_gcs_mode(getattr(head, "gcs_mode", "query"))
+        yaml_mode = self._normalize_gcs_mode(getattr(model, "yaml", {}).get("gcs_mode", head_mode))
+        arg_mode = self._normalize_gcs_mode(getattr(self.args, "gcs_mode", yaml_mode))
+        if yaml_mode != head_mode:
+            raise ValueError(f"GCS YAML gcs_mode={yaml_mode!r} but GCSLaneHead.gcs_mode={head_mode!r}.")
+        if arg_mode == "query" and yaml_mode == "ordered_slot":
+            arg_mode = "ordered_slot"
+            self._set_args_gcs_mode(arg_mode)
+        if arg_mode != head_mode:
+            raise ValueError(
+                f"Requested gcs_mode={arg_mode!r} but model head is {head_mode!r}. "
+                "The generic YOLO entrypoint uses TASK2MODEL['gcs_lane'] query YAML by default and does not "
+                "auto-switch ordered_slot models. Use tools/train_gcs.py for auto-switching, or pass "
+                "model=ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q5-slot-k56.yaml when using "
+                "yolo task=gcs_lane gcs_mode=ordered_slot."
+            )
+        model.gcs_mode = head_mode
+        assert_ordered_slot_scale_contract(head_mode, getattr(self.args, "scale", 0.0))
+
+    def _set_loss_names_for_mode(self) -> None:
+        """Select the loss vector labels that match the active GCS criterion."""
+        if self._gcs_mode() == "ordered_slot":
+            self.loss_names = OrderedSlotGCSLoss.loss_names
+            self.progress_loss_names = OrderedSlotGCSLoss.progress_loss_names
+        else:
+            self.loss_names = self.__class__.loss_names
+            self.progress_loss_names = self.__class__.progress_loss_names
 
     def get_dataset(self) -> dict[str, Any]:
         """Load a standard YAML but pair images with labels_gcs/*.npz at dataset time."""
@@ -172,6 +301,12 @@ class GCSLaneTrainer(BaseTrainer):
         if args_dict.get("augmentations") is not None:
             args_dict["augmentations"] = [repr(t) for t in args_dict["augmentations"]]
         YAML.save(self.save_dir / "args.yaml", args_dict)
+
+    def _rewrite_args_yaml_after_gcs_mode_sync(self) -> None:
+        """Rewrite args.yaml after the constructed head synchronizes args.gcs_mode."""
+        self._save_shape_locked_args()
+        if RANK in {-1, 0}:
+            LOGGER.info(f"Rewrote args.yaml after GCS mode sync: gcs_mode={self._gcs_mode()}.")
 
     def _lock_gcs_shape_contract(self) -> None:
         """Store the rectangular GCS H,W contract on trainer args and fail on square-only configs."""
@@ -386,15 +521,20 @@ class GCSLaneTrainer(BaseTrainer):
             dataset = self.build_dataset(dataset_path, mode, batch_size)
         sampler = None
         shuffle = mode == "train"
-        if mode == "train" and bool(getattr(self.args, "gcs_hard_sampling", False)):
+        hard_sampling = mode == "train" and bool(getattr(self.args, "gcs_hard_sampling", False))
+        count_balanced = mode == "train" and bool(getattr(self.args, "gcs_lane_count_balanced", False))
+        use_count_balanced = count_balanced and not hard_sampling and rank == -1
+        if mode == "train":
+            LOGGER.info(f"GCS lane-count-balanced sampling: {str(use_count_balanced).lower()}")
+        if hard_sampling:
             if rank != -1:
                 LOGGER.warning("GCS hard sampling is only enabled for single-process training.")
             else:
-                if bool(getattr(self.args, "gcs_lane_count_balanced", False)):
+                if count_balanced:
                     LOGGER.info("GCS hard sampling overrides gcs_lane_count_balanced for this train dataloader.")
                 sampler = self._hard_sampling_sampler(dataset)
                 shuffle = False
-        elif mode == "train" and bool(getattr(self.args, "gcs_lane_count_balanced", False)):
+        elif count_balanced:
             if rank != -1:
                 LOGGER.warning("GCS lane-count balanced sampling is only enabled for single-process training.")
             else:
@@ -469,27 +609,62 @@ class GCSLaneTrainer(BaseTrainer):
     def get_model(self, cfg: str | None = None, weights: str | None = None, verbose: bool = True):
         """Return a GCS lane model with GCSLoss wiring."""
         model = GCSLaneModel(cfg, nc=self.data["nc"], ch=self.data.get("channels", 3), verbose=verbose and RANK == -1)
+        self._assert_model_gcs_mode(model)
+        self._record_ordered_slot_loss_contract()
+        self._rewrite_args_yaml_after_gcs_mode_sync()
+        self._set_loss_names_for_mode()
         if weights is not None:
             self.load_gcs_pretrained(model, weights)
         return model
 
     @staticmethod
-    def _state_dict_from_weights(weights: str | Path | dict | nn.Module) -> dict[str, torch.Tensor]:
-        """Extract a plain state_dict from a checkpoint path, checkpoint dict, or loaded module."""
+    def _checkpoint_payload(weights: str | Path | dict | nn.Module):
+        """Load a checkpoint payload without requiring ckpt['model'] for state_dict-only files."""
         if isinstance(weights, (str, Path)):
-            weights, _ = load_checkpoint(weights)
+            weights, _ = torch_safe_load(weights)
+        return weights
 
+    @classmethod
+    def _state_dict_and_meta_from_weights(cls, weights: str | Path | dict | nn.Module) -> tuple[dict[str, torch.Tensor], dict[str, Any]]:
+        """Extract a plain state_dict plus metadata from a path, checkpoint dict, raw state_dict, or module."""
+        weights = cls._checkpoint_payload(weights)
+        meta: dict[str, Any] = {}
         if isinstance(weights, dict):
+            if isinstance(weights.get("meta"), dict):
+                meta.update(weights["meta"])
+            if isinstance(weights.get("train_args"), dict):
+                meta.update({f"train_args_{k}": v for k, v in weights["train_args"].items()})
+                if weights["train_args"].get("gcs_mode") is not None:
+                    meta.setdefault("gcs_mode", weights["train_args"]["gcs_mode"])
             weights = weights.get("ema") or weights.get("model") or weights.get("state_dict") or weights
 
         if isinstance(weights, nn.Module):
+            if getattr(weights, "gcs_mode", None) is not None:
+                meta.setdefault("gcs_mode", getattr(weights, "gcs_mode"))
+            if isinstance(getattr(weights, "yaml", None), dict) and weights.yaml.get("gcs_mode") is not None:
+                meta.setdefault("gcs_mode", weights.yaml.get("gcs_mode"))
+            args = getattr(weights, "args", None)
+            if isinstance(args, dict) and args.get("gcs_mode") is not None:
+                meta.setdefault("gcs_mode", args.get("gcs_mode"))
+            elif getattr(args, "gcs_mode", None) is not None:
+                meta.setdefault("gcs_mode", getattr(args, "gcs_mode"))
+            for module in weights.modules():
+                if isinstance(module, GCSLaneHead):
+                    meta.setdefault("gcs_mode", getattr(module, "gcs_mode", None))
+                    break
             state = weights.float().state_dict()
         elif isinstance(weights, dict):
             state = weights
         else:
             raise TypeError(f"Unsupported pretrained weights type for GCSLaneTrainer: {type(weights).__name__}")
 
-        return {k[7:] if k.startswith("module.") else k: v for k, v in state.items() if isinstance(v, torch.Tensor)}
+        state = {k[7:] if k.startswith("module.") else k: v for k, v in state.items() if isinstance(v, torch.Tensor)}
+        return state, meta
+
+    @classmethod
+    def _state_dict_from_weights(cls, weights: str | Path | dict | nn.Module) -> dict[str, torch.Tensor]:
+        """Extract a plain state_dict from a checkpoint path, checkpoint dict, or loaded module."""
+        return cls._state_dict_and_meta_from_weights(weights)[0]
 
     @staticmethod
     def _gcs_module_prefixes(model: nn.Module) -> tuple[str, ...]:
@@ -499,6 +674,11 @@ class GCSLaneTrainer(BaseTrainer):
             if name and isinstance(module, (LSEM, LaneBiFPN, GCSLaneHead)):
                 prefixes.append(f"{name}.")
         return tuple(prefixes)
+
+    @staticmethod
+    def _gcs_head_prefixes(model: nn.Module) -> tuple[str, ...]:
+        """Return parameter prefixes for the GCS lane head only."""
+        return tuple(f"{name}." for name, module in model.named_modules() if name and isinstance(module, GCSLaneHead))
 
     @staticmethod
     def _state_dict_has_gcs_modules(state: dict[str, torch.Tensor]) -> bool:
@@ -519,6 +699,25 @@ class GCSLaneTrainer(BaseTrainer):
             ".fuse_p",
         )
         return any(any(marker in key for marker in markers) for key in state)
+
+    @classmethod
+    def _infer_source_gcs_mode(cls, state: dict[str, torch.Tensor], meta: dict[str, Any] | None = None) -> str:
+        """Infer source checkpoint GCS mode from metadata or ordered-slot head keys."""
+        meta = meta or {}
+        for key in ("gcs_mode", "source_gcs_mode"):
+            if meta.get(key) is not None:
+                return cls._normalize_gcs_mode(meta[key])
+        ordered_markers = (
+            ".start_mlp.",
+            ".end_mlp.",
+            ".count_mlp.",
+            ".start_head.",
+            ".end_head.",
+            ".count_head.",
+        )
+        if any(any(marker in key for marker in ordered_markers) for key in state):
+            return "ordered_slot"
+        return "query"
 
     @classmethod
     def remap_yolo11_backbone_to_gcs(cls, state: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
@@ -549,11 +748,16 @@ class GCSLaneTrainer(BaseTrainer):
         old 0-4 -> new 0-4, old 5-6 -> new 6-7, old 7-10 -> new 9-12.
         GCS-specific modules are never copied from an ordinary YOLO checkpoint.
         """
-        source_state = self._state_dict_from_weights(weights)
+        source_state, source_meta = self._state_dict_and_meta_from_weights(weights)
         target_state = model.state_dict()
         source_is_gcs = self._state_dict_has_gcs_modules(source_state)
         candidate_state = source_state if source_is_gcs else self.remap_yolo11_backbone_to_gcs(source_state)
-        gcs_prefixes = () if source_is_gcs else self._gcs_module_prefixes(model)
+        target_head = model.model[-1] if getattr(model, "model", None) is not None and len(model.model) else None
+        target_mode = self._normalize_gcs_mode(getattr(target_head, "gcs_mode", getattr(model, "gcs_mode", "query")))
+        source_mode = self._infer_source_gcs_mode(source_state, source_meta) if source_is_gcs else "query"
+        gcs_prefixes = self._gcs_head_prefixes(model) if source_is_gcs and source_mode != target_mode else (
+            () if source_is_gcs else self._gcs_module_prefixes(model)
+        )
 
         loadable = {}
         skipped_gcs = 0
@@ -572,7 +776,11 @@ class GCSLaneTrainer(BaseTrainer):
             loadable[key] = value.to(dtype=target_state[key].dtype)
 
         model.load_state_dict(loadable, strict=False)
-        source_kind = "GCS" if source_is_gcs else "YOLO11-backbone-remap"
+        source_kind = (
+            f"GCS-{source_mode}-to-{target_mode}"
+            if source_is_gcs
+            else "YOLO11-backbone-remap"
+        )
         LOGGER.info(
             f"GCS pretrained transfer ({source_kind}): loaded {len(loadable)}/{len(target_state)} tensors "
             f"(candidates={len(candidate_state)}, skipped_missing={skipped_missing}, "
@@ -581,12 +789,54 @@ class GCSLaneTrainer(BaseTrainer):
         if not loadable:
             LOGGER.warning(
                 "No pretrained tensors were transferred. Check that the weight file is a YOLO11/YOLO11-seg "
-                "checkpoint with the same scale as the GCS YAML, e.g. yolo11s-seg.pt for gcs-yolo-lane-s-q12-k56.yaml."
+                "checkpoint with the same scale as the GCS YAML, e.g. yolo11s-seg.pt for gcs-yolo-lane-s.yaml."
             )
+
+    def setup_model(self):
+        """Build the GCS model before applying flexible pretrained transfer."""
+        if isinstance(self.model, torch.nn.Module):
+            return
+
+        cfg, weights = self.model, None
+        ckpt = None
+        if self.resume:
+            resume_path = Path(getattr(self.args, "resume", self.model))
+            weights, ckpt = load_checkpoint(resume_path)
+            cfg = weights.yaml
+            self.args.pretrained = False
+            model = self.get_model(cfg=cfg, weights=None, verbose=RANK in {-1, 0})
+            ckpt_mode = infer_gcs_mode_from_ckpt(ckpt)
+            source_mode = infer_gcs_mode_from_model(weights)
+            target_mode = infer_gcs_mode_from_model(model)
+            if ckpt_mode != source_mode:
+                raise RuntimeError(
+                    f"Resume checkpoint mode metadata mismatch: ckpt={ckpt_mode!r}, model={source_mode!r}."
+                )
+            if source_mode != target_mode:
+                raise RuntimeError(
+                    f"Resume checkpoint mode {source_mode!r} does not match target model mode {target_mode!r}."
+                )
+            source_model = ckpt.get("ema") or ckpt.get("model")
+            if source_model is None:
+                raise RuntimeError(f"Resume checkpoint {resume_path} has no model or ema weights.")
+            model.load_state_dict(source_model.float().state_dict(), strict=True)
+            self.model = model
+            self._set_args_gcs_mode(target_mode)
+            LOGGER.info(f"Resume enabled: loaded model weights from {resume_path} and disabled args.pretrained.")
+            return ckpt
+        if str(self.model).endswith(".pt"):
+            weights, ckpt = load_checkpoint(self.model)
+            cfg = weights.yaml
+        if isinstance(self.args.pretrained, (str, Path)):
+            weights = self.args.pretrained
+        elif self.args.pretrained is False and not self.resume:
+            weights = None
+        self.model = self.get_model(cfg=cfg, weights=weights, verbose=RANK in {-1, 0})
+        return ckpt
 
     def get_validator(self):
         """Return a loss-based validator for structured lane training."""
-        self.loss_names = self.__class__.loss_names
+        self._set_loss_names_for_mode()
         return GCSLaneValidator(self.test_loader, save_dir=self.save_dir, args=copy(self.args), _callbacks=self.callbacks)
 
     def validate(self):
@@ -641,21 +891,7 @@ class GCSLaneTrainer(BaseTrainer):
     @staticmethod
     def _official_best_key(best: dict[str, Any], epoch: int) -> tuple[float, float, float, float, float, float, float, int]:
         """Order official-val candidates by the project checkpoint-selection contract."""
-
-        def f(name: str, default: float = 0.0) -> float:
-            value = best.get(name, default)
-            return float(default if value is None else value)
-
-        return (
-            f("official_acc"),
-            f("official_score"),
-            -f("official_FP"),
-            -f("official_FN"),
-            f("count_acc_4"),
-            f("count_acc"),
-            f("count_acc_5"),
-            -int(epoch),
-        )
+        return official_best_sort_key(best, epoch)
 
     def _load_official_best_state(self) -> dict[str, Any] | None:
         """Restore official-best comparison state when resuming a run."""
@@ -694,18 +930,61 @@ class GCSLaneTrainer(BaseTrainer):
     def _official_sweep_args(self, save_dir: Path) -> SimpleNamespace:
         """Build the in-process official-val sweep args for the current checkpoint."""
         shape = self._resolve_gcs_imgsz()
+        ordered_slot = self._gcs_mode() == "ordered_slot"
+        official_query_defaults = {
+            "gcs_official_confs": [0.005, 0.01, 0.02, 0.05, 0.1],
+            "gcs_official_point_valid_thrs": [0.45, 0.5],
+            "gcs_official_nms_dist_pxs": [0.0, 18.0, 30.0, 50.0],
+            "gcs_official_max_dets": [5, 6, 8],
+            "gcs_official_min_points": [4, 5, 6],
+        }
+        if ordered_slot:
+            sweep_arg_values = {
+                name: getattr(self.args, name, default)
+                for name, default in official_query_defaults.items()
+            }
+            raise_for_ordered_slot_query_args(
+                sweep_arg_values,
+                official_query_defaults,
+                context="training-time official_best sweep",
+            )
+            confs = [0.005, 0.01, 0.02, 0.03, 0.05, 0.08, 0.10, 0.15, 0.20, 0.25]
+            point_valid_thrs = [0.30, 0.35, 0.40, 0.45, 0.50]
+            nms_dist_pxs = [18.0]
+            max_dets = [8]
+            min_points = [6]
+        else:
+            confs = self._official_float_list(
+                getattr(self.args, "gcs_official_confs", None), official_query_defaults["gcs_official_confs"]
+            )
+            point_valid_thrs = self._official_float_list(
+                getattr(self.args, "gcs_official_point_valid_thrs", None),
+                official_query_defaults["gcs_official_point_valid_thrs"],
+            )
+            nms_dist_pxs = self._official_float_list(
+                getattr(self.args, "gcs_official_nms_dist_pxs", None),
+                official_query_defaults["gcs_official_nms_dist_pxs"],
+            )
+            max_dets = self._official_int_list(
+                getattr(self.args, "gcs_official_max_dets", None), official_query_defaults["gcs_official_max_dets"]
+            )
+            min_points = self._official_int_list(
+                getattr(self.args, "gcs_official_min_points", None), official_query_defaults["gcs_official_min_points"]
+            )
         return SimpleNamespace(
             dataset="tusimple",
             archive_root=str(getattr(self.args, "gcs_official_archive_root", "archive") or "archive"),
             split="val",
             gt_json=getattr(self.args, "gcs_official_gt_json", None),
+            allow_noncanonical_gt=bool(getattr(self.args, "gcs_official_allow_noncanonical_gt", False)),
             weights=str(self.last),
             imgsz=[int(shape[0]), int(shape[1])],
-            confs=self._official_float_list(getattr(self.args, "gcs_official_confs", None), (0.005, 0.01, 0.02, 0.05, 0.1)),
-            point_valid_thrs=self._official_float_list(getattr(self.args, "gcs_official_point_valid_thrs", None), (0.45, 0.5)),
-            nms_dist_pxs=self._official_float_list(getattr(self.args, "gcs_official_nms_dist_pxs", None), (0.0, 18.0, 30.0, 50.0)),
-            max_dets=self._official_int_list(getattr(self.args, "gcs_official_max_dets", None), (5, 6, 8)),
-            min_points=self._official_int_list(getattr(self.args, "gcs_official_min_points", None), (4, 5, 6)),
+            decode_mode="auto",
+            confs=confs,
+            point_valid_thrs=point_valid_thrs,
+            nms_dist_pxs=nms_dist_pxs,
+            max_dets=max_dets,
+            min_points=min_points,
             max_images=int(getattr(self.args, "gcs_official_max_images", 0) or 0),
             warmup=int(getattr(self.args, "gcs_official_warmup", 5) or 0),
             device=self._official_device_arg(),
@@ -725,18 +1004,18 @@ class GCSLaneTrainer(BaseTrainer):
             "checkpoint": str(self.official_best.resolve()),
             "source_checkpoint": str(self.last.resolve()),
             "sweep_dir": str(sweep_dir.resolve()),
-            "selection_policy": [
-                "max official_acc",
-                "then max official_score",
-                "then lower official_FP",
-                "then lower official_FN",
-                "then max count_acc_4",
-            ],
+            "selection_policy": OFFICIAL_SELECTION_POLICY,
+            "sweep_selection_policy": output.get("selection_policy") or output.get("config", {}).get("selection_policy"),
             "best": best,
         }
         summary["official_best"] = meta
+        summary["selection_policy"] = OFFICIAL_SELECTION_POLICY
+        summary["official_selection_policy"] = OFFICIAL_SELECTION_POLICY
+        summary["sweep_selection_policy"] = meta["sweep_selection_policy"]
         shutil.copy2(self.last, self.official_best)
         self.official_best_sweep.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        model_mode = str(best.get("decode_mode", self._gcs_mode()))
+        decode_cfg = build_official_best_decode_cfg(best, model_mode=model_mode, args=self.args)
         YAML.save(
             self.official_best_decode,
             {
@@ -744,19 +1023,16 @@ class GCSLaneTrainer(BaseTrainer):
                 "source_epoch": int(epoch_num),
                 "sweep_summary": str(self.official_best_sweep.resolve()),
                 "selection_policy": meta["selection_policy"],
-                "decode": {
-                    "conf": float(best["conf"]),
-                    "point_valid_thr": float(best["point_valid_thr"]),
-                    "nms_dist_px": float(best["nms_dist_px"]),
-                    "max_det": int(best["max_det"]),
-                    "min_points": int(best["min_points"]),
-                },
+                "sweep_selection_policy": meta["sweep_selection_policy"],
+                "decode": decode_cfg,
                 "official_metrics": {
                     "official_acc": float(best["official_acc"]),
                     "official_score": float(best["official_score"]),
                     "official_FP": float(best["official_FP"]),
                     "official_FN": float(best["official_FN"]),
                     "count_acc": float(best.get("count_acc", 0.0)),
+                    "count_acc_2": float(best.get("count_acc_2", 0.0)),
+                    "count_acc_3": float(best.get("count_acc_3", 0.0)),
                     "count_acc_4": float(best.get("count_acc_4", 0.0)),
                     "count_acc_5": float(best.get("count_acc_5", 0.0)),
                 },
@@ -815,6 +1091,8 @@ class GCSLaneTrainer(BaseTrainer):
 
     def label_loss_items(self, loss_items: list[float] | torch.Tensor | None = None, prefix: str = "train"):
         """Return named GCS loss items for logging."""
+        if tuple(self.loss_names) == tuple(OrderedSlotGCSLoss.loss_names):
+            return OrderedSlotGCSLoss.label_loss_items(loss_items, prefix=prefix)
         keys = [f"{prefix}/{x}" for x in self.loss_names]
         if loss_items is None:
             return keys

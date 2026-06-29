@@ -562,9 +562,23 @@ class GCSLaneModel(DetectionModel):
         super().__init__(cfg=cfg, ch=ch, nc=nc, verbose=verbose)
         self.task = "gcs_lane"
         self.gcs_imgsz = self.yaml.get("gcs_imgsz") or self.yaml.get("image_shape") or self.yaml.get("imgsz")
+        self.gcs_mode = str(self.yaml.get("gcs_mode", "query")).lower()
 
     def init_criterion(self):
         """Initialize the structured lane loss instead of the YOLO detection loss."""
+        head_mode = None
+        if getattr(self, "model", None) is not None and len(self.model) and isinstance(self.model[-1], GCSLaneHead):
+            head_mode = getattr(self.model[-1], "gcs_mode", None)
+        args_mode = getattr(getattr(self, "args", None), "gcs_mode", None)
+        if isinstance(getattr(self, "args", None), dict):
+            args_mode = self.args.get("gcs_mode", args_mode)
+        mode = str(head_mode or args_mode or self.yaml.get("gcs_mode", getattr(self, "gcs_mode", "query"))).lower()
+        if mode in {"ordered-slot", "orderedslot"}:
+            mode = "ordered_slot"
+        if mode == "ordered_slot":
+            from ultralytics.models.gcs.loss_ordered_slot import OrderedSlotGCSLoss
+
+            return OrderedSlotGCSLoss(self)
         from ultralytics.utils.gcs_loss import GCSLoss
 
         return GCSLoss(self)
@@ -1862,6 +1876,20 @@ def parse_model(d, ch, verbose=True):
             c2 = [out_channels, out_channels, out_channels, out_channels]
         elif m is GCSLaneHead:
             c1 = ch[f] if isinstance(f, int) else [ch[x] for x in f]
+            head_gcs_mode = str(d.get("gcs_mode", "query")).lower()
+            if head_gcs_mode in {"ordered-slot", "orderedslot"}:
+                head_gcs_mode = "ordered_slot"
+            if len(args) <= 8:
+                args = [*args, head_gcs_mode]
+                if head_gcs_mode == "ordered_slot":
+                    args = [*args, d.get("gcs_num_slots", 5)]
+            if head_gcs_mode == "ordered_slot" and len(args) <= 10:
+                args = [
+                    *args,
+                    d.get("gcs_min_lanes", 2),
+                    d.get("gcs_max_lanes", d.get("gcs_num_slots", 5)),
+                    d.get("gcs_count_classes"),
+                ]
             args = [c1, *args]
             c2 = None
         else:

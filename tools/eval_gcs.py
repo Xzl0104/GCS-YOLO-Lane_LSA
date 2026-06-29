@@ -19,6 +19,9 @@ if str(ROOT) not in sys.path:
 os.chdir(ROOT)
 
 from tools.infer_gcs import collect_images, load_gcs_model, preprocess_image
+from ultralytics.models.gcs.decode_ordered_slot import decode_ordered_slot_predictions
+from ultralytics.models.gcs.decode_summary import build_ordered_slot_decode_summary, ordered_slot_decode_runtime_config
+from ultralytics.models.gcs.mode_utils import resolve_decode_mode
 from ultralytics.utils.gcs_shape import DATASET_IMAGE_SHAPES, assert_gcs_shape, normalize_imgsz, shape_str
 from ultralytics.utils.gcs_postprocess import decode_gcs_predictions, draw_gcs_lanes, save_gcs_lanes_txt
 from ultralytics.utils.torch_utils import select_device
@@ -52,6 +55,7 @@ def parse_args() -> argparse.Namespace:
         help="GCS inference shape as H W. Defaults: TuSimple 544 960, CULane 384 960.",
     )
     parser.add_argument("--conf", type=float, default=0.2, help="Lane existence confidence threshold.")
+    parser.add_argument("--decode-mode", choices=("auto", "query", "ordered_slot"), default="auto", help="Decode path.")
     parser.add_argument(
         "--point-valid-thr",
         type=float,
@@ -443,6 +447,70 @@ def _sync_if_cuda(device: torch.device) -> None:
         torch.cuda.synchronize(device)
 
 
+def build_eval_config(
+    *,
+    weights: str | Path,
+    source: str | Path,
+    label_dir: Path | None,
+    imgsz: tuple[int, int],
+    decode_mode: str,
+    conf: float,
+    point_valid_thr: float,
+    ape_thr: float,
+    match_gate_px: float | None,
+    max_x_dist: float,
+    min_overlap: int,
+    nms_dist_px: float,
+    max_det: int,
+    count_aware_topk: bool,
+    count_aware_min_k: int,
+    count_aware_max_k: int,
+    count_aware_length_norm: float,
+    warmup: int,
+    device: str,
+    half: bool,
+) -> dict:
+    """Build the eval_summary.json config block for query or ordered-slot decode."""
+    config = {
+        "weights": str(Path(weights).resolve()) if not isinstance(weights, Path) else str(weights.resolve()),
+        "source": str(Path(source).resolve()),
+        "labels": None if label_dir is None else str(label_dir.resolve()),
+        "imgsz": [int(imgsz[0]), int(imgsz[1])],
+        "decode_mode": str(decode_mode),
+        "ape_threshold_px": float(ape_thr),
+        "match_gate_px": float(ape_thr if match_gate_px is None else match_gate_px),
+        "max_x_dist": float(max_x_dist),
+        "min_overlap": int(min_overlap),
+        "warmup": int(warmup),
+        "device": str(device),
+        "half": bool(half),
+    }
+    if decode_mode == "ordered_slot":
+        runtime_cfg = ordered_slot_decode_runtime_config(context="eval_gcs")
+        effective_decode = build_ordered_slot_decode_summary(
+            output_order=runtime_cfg["output_order"],
+            order_check=runtime_cfg["order_check"],
+        )
+        config.update(effective_decode)
+        config["effective_decode"] = effective_decode
+        return config
+    if decode_mode != "query":
+        raise RuntimeError(f"Unsupported eval_gcs decode_mode={decode_mode!r}.")
+    config.update(
+        {
+            "conf": float(conf),
+            "point_valid_thr": float(point_valid_thr),
+            "nms_dist_px": float(nms_dist_px),
+            "max_det": int(max_det),
+            "count_aware_topk": bool(count_aware_topk),
+            "count_aware_min_k": int(count_aware_min_k),
+            "count_aware_max_k": int(count_aware_max_k),
+            "count_aware_length_norm": float(count_aware_length_norm),
+        }
+    )
+    return config
+
+
 @torch.inference_mode()
 def evaluate(
     weights: str | Path,
@@ -461,6 +529,7 @@ def evaluate(
     count_aware_min_k: int = 3,
     count_aware_max_k: int = 5,
     count_aware_length_norm: float = 12.0,
+    decode_mode: str = "auto",
     max_images: int = 0,
     warmup: int = 20,
     device: str = "0",
@@ -475,6 +544,7 @@ def evaluate(
     imgsz = normalize_imgsz(imgsz)
     device_obj = select_device(device, verbose=False)
     model = load_gcs_model(weights, device=device_obj, half=half, gcs_imgsz=imgsz)
+    active_decode_mode = resolve_decode_mode(decode_mode, model)
     images = collect_images(source, max_images=max_images)
     print(f"GCS input shape: {shape_str(imgsz)} (W x H), stored as H,W={imgsz}")
 
@@ -528,21 +598,31 @@ def evaluate(
         infer_s = time.perf_counter() - t0
 
         t1 = time.perf_counter()
-        pred_valid = preds.get("pred_valid_logits")
-        lanes = decode_gcs_predictions(
-            preds["pred_points"][0],
-            preds["pred_logits"][0],
-            pred_valid_logits=pred_valid[0] if pred_valid is not None else None,
-            image_shape=img.shape[:2],
-            score_thr=conf,
-            point_valid_thr=point_valid_thr,
-            max_det=max_det,
-            nms_dist_px=nms_dist_px,
-            count_aware_topk=count_aware_topk,
-            count_aware_min_k=count_aware_min_k,
-            count_aware_max_k=count_aware_max_k,
-            count_aware_length_norm=count_aware_length_norm,
-        )
+        if active_decode_mode == "ordered_slot":
+            runtime_cfg = ordered_slot_decode_runtime_config(context="eval_gcs")
+            lanes = decode_ordered_slot_predictions(
+                preds,
+                batch_index=0,
+                image_shape=img.shape[:2],
+                order_check=runtime_cfg["order_check"],
+                output_order=runtime_cfg["output_order"],
+            )
+        else:
+            pred_valid = preds.get("pred_valid_logits")
+            lanes = decode_gcs_predictions(
+                preds["pred_points"][0],
+                preds["pred_logits"][0],
+                pred_valid_logits=pred_valid[0] if pred_valid is not None else None,
+                image_shape=img.shape[:2],
+                score_thr=conf,
+                point_valid_thr=point_valid_thr,
+                max_det=max_det,
+                nms_dist_px=nms_dist_px,
+                count_aware_topk=count_aware_topk,
+                count_aware_min_k=count_aware_min_k,
+                count_aware_max_k=count_aware_max_k,
+                count_aware_length_norm=count_aware_length_norm,
+            )
         metrics, matches = match_lanes(
             lanes,
             gt_lanes,
@@ -580,28 +660,32 @@ def evaluate(
     summary = summarize(records, total_infer=total_infer, total_post=total_post, ape_thr=ape_thr)
     output = {
         "summary": summary,
-        "config": {
-            "weights": str(Path(weights).resolve()) if not isinstance(weights, Path) else str(weights.resolve()),
-            "source": str(Path(source).resolve()),
-            "labels": None if label_dir is None else str(label_dir.resolve()),
-            "imgsz": [int(imgsz[0]), int(imgsz[1])],
-            "conf": float(conf),
-            "point_valid_thr": float(point_valid_thr),
-            "ape_threshold_px": float(ape_thr),
-            "match_gate_px": float(ape_thr if match_gate_px is None else match_gate_px),
-            "max_x_dist": float(max_x_dist),
-            "min_overlap": int(min_overlap),
-            "nms_dist_px": float(nms_dist_px),
-            "max_det": int(max_det),
-            "count_aware_topk": bool(count_aware_topk),
-            "count_aware_min_k": int(count_aware_min_k),
-            "count_aware_max_k": int(count_aware_max_k),
-            "count_aware_length_norm": float(count_aware_length_norm),
-            "warmup": int(warmup),
-            "device": str(device),
-            "half": bool(half),
-        },
+        "config": build_eval_config(
+            weights=weights,
+            source=source,
+            label_dir=label_dir,
+            imgsz=imgsz,
+            decode_mode=str(active_decode_mode),
+            conf=conf,
+            point_valid_thr=point_valid_thr,
+            ape_thr=ape_thr,
+            match_gate_px=match_gate_px,
+            max_x_dist=max_x_dist,
+            min_overlap=min_overlap,
+            nms_dist_px=nms_dist_px,
+            max_det=max_det,
+            count_aware_topk=count_aware_topk,
+            count_aware_min_k=count_aware_min_k,
+            count_aware_max_k=count_aware_max_k,
+            count_aware_length_norm=count_aware_length_norm,
+            warmup=warmup,
+            device=device,
+            half=half,
+        ),
     }
+    if active_decode_mode == "ordered_slot":
+        output["effective_decode"] = output["config"]["effective_decode"]
+        output["query_decode_args"] = "not_applicable"
     if save_json:
         output["records"] = records
     (save_dir / "eval_summary.json").write_text(json.dumps(output, indent=2), encoding="utf-8")
@@ -636,6 +720,7 @@ def main() -> None:
         count_aware_min_k=args.count_aware_min_k,
         count_aware_max_k=args.count_aware_max_k,
         count_aware_length_norm=args.count_aware_length_norm,
+        decode_mode=args.decode_mode,
         max_images=args.max_images,
         warmup=args.warmup,
         device=args.device,

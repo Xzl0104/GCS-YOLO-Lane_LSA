@@ -19,6 +19,180 @@ The branch also includes the 2026-06-27 user-requested, default-off `gcs_spuriou
 
 Training-time `official_best` checkpoint preservation is active as an explicit 2026-06-27 selection-protocol change. It preserves the 5-25-3 algorithm body and only changes how formal TuSimple checkpoints are selected.
 
+The 2026-06-29 `ordered_slot_training_protocol_fix_v1` change is a protocol
+cleanup only. It does not change model structure, loss definitions, or decode:
+
+- `gcs_lane_count_balanced` is default-off in `default.yaml` and
+  `tools/train_gcs.py`; enable it only with explicit
+  `--gcs-lane-count-balanced` for count-balanced training ablations.
+- `--gcs-mode ordered_slot` auto-switches any non-slot GCS model YAML to
+  `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q5-slot-k56.yaml` unless
+  `--gcs-disable-auto-model-switch` is set, in which case a non-slot model YAML
+  fails fast.
+- `tools/eval_gcs.py` writes an `ordered_slot_decode_v1` summary for
+  ordered-slot decode and does not record query-only decode keys such as
+  `conf`, `point_valid_thr`, `nms_dist_px`, `max_det`, `min_points`, or
+  `count_aware_topk`.
+- `gcs_ordered_point_loss` defaults to `normalized_smooth_l1`, preserving the
+  old ordered-slot training objective. `aspect_l1` remains available only via
+  explicit `--gcs-ordered-point-loss aspect_l1` for a separate point-loss
+  ablation.
+- Training-time ordered-slot `official_best` rejects non-default query-only
+  sweep args (`gcs_official_confs`, `gcs_official_point_valid_thrs`,
+  `gcs_official_nms_dist_pxs`, `gcs_official_max_dets`, and
+  `gcs_official_min_points`) instead of silently replacing them with
+  ordered-slot defaults.
+- `tools/train_gcs.py` defaults to canonical current-contract paths
+  `ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml` and
+  `data/tusimple_gcs_fixed_y_960x544.yaml`; q12-k56-named paths remain
+  compatibility aliases only.
+
+The 2026-06-29 `ordered_slot_contract_fix_v3` change tightens ordered-slot
+training/evaluation contracts without changing the algorithm direction:
+
+- ordered-slot point regression supports explicit
+  `gcs_ordered_point_loss=aspect_l1`, sharing the query loss scale and avoiding
+  normalized SmoothL1 beta compression. It is not the protocol default;
+  protocol-only training keeps `normalized_smooth_l1` unless a separate
+  point-loss ablation explicitly opts in.
+- training fixed-y labels and ordered-slot targets must validate against
+  descending `710,700,...,160`; official TuSimple `h_samples` validate
+  separately against ascending `160,170,...,710`.
+- ordered-slot target construction removes padded/invalid lanes before fixed-y
+  validation.
+- official sweep/training-time selection summaries must record the full
+  ordered selection keys, not only the primary metrics.
+- ordered-slot official eval/sweep summaries must record the effective decode
+  and `query_decode_args=not_applicable`; non-default query-only decode
+  arguments are rejected for ordered-slot official evaluation.
+- ordered-slot v2 lane-count classification is the formal 2/3/4/5 contract:
+  `gcs_min_lanes=2`, `gcs_max_lanes=5`, `gcs_count_classes=4`,
+  `pred_count_logits` is `B x 4`, `count_label = num_lanes - 2`, and decode
+  uses `argmax(pred_count_logits) + 2`. A 2-lane target must be
+  `slot_exist=[1,1,0,0,0]` and `count_label=0`.
+- `official_best_decode.yaml` is schema-specific. Query models use
+  `query_decode_v1` and may record query decode arguments. Ordered-slot models
+  use `ordered_slot_decode_v1` and must not record `conf`,
+  `point_valid_thr`, `nms_dist_px`, `max_det`, `min_points`, or
+  `count_aware_topk` as effective decode arguments.
+
+The 2026-06-29 `ordered_slot_runtime_stability_fix_v1` change is a runtime
+stability fix only. It does not change ordered-slot loss targets, loss gains,
+decoder behavior, official metrics, or the 2/3/4/5 count contract:
+
+- Ordered-slot target construction keeps GT lanes as float32 through padding
+  removal, fixed-y validation, canonical fixed-y snapping, and slot target
+  construction. Ordered-slot loss calculations use float32 logits/points under
+  AMP so half prediction tensors do not half-quantize GT fixed-y anchors.
+- Shared fixed-y validation helpers live under
+  `ultralytics/utils/gcs_fixed_y.py`; dataset and standalone tools must not
+  depend on `ultralytics.models` for fixed-y contract checks.
+- `tools/visualize_ordered_slot_targets.py --help` must run standalone without
+  importing `GCSLaneDataset` at module import time.
+- `--gcs-mode ordered_slot --scale > 0` fails fast until a count-preserving
+  fixed-y scale augmentation path is explicitly implemented. Center scale
+  resampling can drop ordered-slot targets to unsupported 0/1 lane counts,
+  violating the formal 2/3/4/5 count contract. Query-mode scale behavior is
+  unchanged.
+
+The 2026-06-29 `ordered_slot_output_and_legacy_tool_contract_fix_v1` change
+introduced schema-specific ordered-slot decode metadata and protected legacy
+query sweep tools. Its earlier warning-and-sort official policy is superseded
+by `ordered_slot_eval_contract_hardening_v1` below:
+
+- ordered-slot decode supports `output_order=slot|left_to_right`; only
+  diagnostic/debug exports may use `left_to_right` postprocessing.
+- `tools/sweep_gcs_conf.py` is a legacy query-threshold sweep tool and fails
+  fast for ordered-slot checkpoints. Ordered-slot checkpoints must use
+  `tools/sweep_tusimple_official.py` or `tools/eval_tusimple_official.py` with
+  auto decode.
+- ordered-slot official sweep JSON rows must not contain query-only keys such
+  as `conf`, `point_valid_thr`, `nms_dist_px`, `max_det`, `min_points`, or
+  `count_aware_*`. CSV output may keep fixed query-only columns, but
+  ordered-slot rows must leave those columns empty and write
+  `decode_schema=ordered_slot_decode_v1` plus
+  `query_decode_args=not_applicable`.
+
+The 2026-06-29 `ordered_slot_order_diagnostics_summary_fix_v1` change remains
+an evidence-consistency rule:
+
+- `tools/eval_tusimple_official.py --pred-json --decode-mode ordered_slot`
+  cannot re-run `decode_ordered_slot`, so it records
+  `ordered_slot_order_checked=false`,
+  `ordered_slot_order_violations=null`,
+  `ordered_slot_order_violation_images=null`, and
+  `ordered_slot_order_diagnostics=not_available_from_pred_json`.
+- Ordered-slot model-forward official eval/sweep paths record
+  `ordered_slot_order_checked=true` and write violation counts only from
+  decoder diagnostics.
+
+The 2026-06-29 `ordered_slot_eval_contract_hardening_v1` change is the active
+ordered-slot official/eval contract. It changes protocol safety only; it does
+not change model structure, loss gains, labels, checkpoint selection metrics,
+or official metric formulas:
+
+- ordered-slot `official_eval`, `official_sweep`, `official_best`, and
+  `eval_gcs` use `output_order=slot`, `order_check=error`,
+  `uses_runtime_sort=false`, and `order_violation_policy=fail_fast`.
+- Ordered-slot main official results must prove that slots `0..num_lanes-1`
+  directly represent lanes from left to right. A slot-order violation fails
+  fast instead of being repaired at export time.
+- Debug or visualization exports may request `output_order=left_to_right`, but
+  their summaries must write `result_type=postprocessed_sorted_export` and
+  `not_for_main_ordered_slot_claim=true`.
+- `official_best_decode.yaml` and official summaries for ordered-slot decode
+  must record `decode_schema=ordered_slot_decode_v1`,
+  `output_order=slot`, `uses_runtime_sort=false`, and
+  `order_violation_policy=fail_fast`.
+- For `split=val`, official evaluation must use the canonical 363-image
+  official-val GT JSON. It must not fall back to `train_val.json` or
+  `label_data_0313.json` as comparable official-val evidence.
+- Noncanonical val GT requires the explicit `--allow-noncanonical-gt` escape
+  hatch, and summaries must write `gt_contract=noncanonical` and
+  `comparable_to_e1_spurious=false`.
+- Query-mode model construction ignores ordered-slot-only overrides such as
+  slot lane bounds and count-class settings. Ordered-slot-only arguments are
+  passed to `parse_model` only when `gcs_mode=ordered_slot`.
+
+The 2026-06-29 `ordered_slot_metrics_and_shape_contract_fix_v1` change is a
+logging, input-validation, and entrypoint-guidance fix only. It does not change
+model structure, training targets, loss definitions, count logits, decoder
+lane-count selection, runtime sorting, or official metrics:
+
+- ordered-slot per-class count logs record
+  `slot_count_correct_2/3/4/5` and `slot_count_total_2/3/4/5`. Per-class
+  `slot_count_acc_2/3/4/5` is derived as accumulated `sum(correct)/sum(total)`;
+  when a class is absent (`total=0`), the class accuracy is `nan`/NA and must
+  be skipped by overfit-style gates instead of treated as zero.
+- ordered-slot decode validates `pred_points`, `pred_start_logits`,
+  `pred_end_logits`, `pred_count_logits`, and optional `pred_exist_logits`
+  shapes before decoding, and fails fast with `ValueError` on shape mismatch.
+- ordered-slot target construction keeps the direct contract that GT lanes are
+  assigned to slots left-to-right by bottom-most visible x under the training
+  fixed-y desc `710,700,...,160` order.
+- `tools/train_gcs.py --gcs-mode ordered_slot` supports automatic switching to
+  `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q5-slot-k56.yaml` unless
+  `--gcs-disable-auto-model-switch` is set. The generic Ultralytics entrypoint
+  (`yolo task=gcs_lane gcs_mode=ordered_slot`) uses `TASK2MODEL["gcs_lane"]`
+  and does not guarantee this auto-switch; pass
+  `model=ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q5-slot-k56.yaml`
+  explicitly for ordered-slot runs through the generic entrypoint.
+
+The 2026-06-29 `ordered_slot_boundary_and_legacy_safety_fix_v1` change is a
+contract and tooling-safety fix only. It does not change training objectives,
+loss terms, ordered-slot lane-count selection, runtime sorting, or official
+metrics:
+
+- `GCSLaneHead` requires ordered-slot `num_queries=5` and `num_slots=5`.
+- ordered-slot decode requires prediction slot dimension `S == max_lanes`;
+  malformed `pred_count_logits` must fail with a clear `ValueError`.
+- `--pred-json` ordered-slot official eval rejects non-default query-only
+  decode args and keeps `query_decode_args=not_applicable` in summaries.
+- legacy `tools/sweep_gcs_conf.py` rejects `--split test`; it is a
+  validation-only threshold search tool.
+- `tools/strip_gcs_head_ckpt.py` strips raw top-level GCS head keys, and
+  `tools/visualize_ordered_slot_targets.py` raises when image writing fails.
+
 ## Input Contract
 
 TuSimple uses:
@@ -160,6 +334,24 @@ cnt_bound_5under
 cnt_score
 ```
 
+For ordered-slot mode, standalone `OrderedSlotGCSLoss` defaults must match
+`ultralytics/cfg/default.yaml`: `gcs_count_ce=1.0`,
+`gcs_interval=1.0`, and `gcs_order=0.1`. Constructing the loss with
+`gcs_count_ce <= 0` or `gcs_interval <= 0` is a contract error. Disabling the
+order loss requires an explicit ablation flag; it must not happen through a
+silent fallback default. Training summaries must record
+`ordered_slot_loss_contract` and the effective ordered-slot loss weights.
+
+`gcs_slot_exist_w4` and `gcs_slot_exist_w5` are BCE element weights for
+slot-existence targets. They weight both positive and negative BCE elements for
+the affected slots; they are not recall-only `pos_weight` controls. Any
+recall-oriented positive-only weighting is a separate future ablation.
+
+Per-class ordered-slot count accuracy logs may use `nan`/null internally when
+`slot_count_total_N == 0`, but user-facing progress and `results.csv` must show
+`NA`. Aggregation uses accumulated `correct/total`; absent classes are skipped
+instead of being logged as `0` or raw `nan`.
+
 `count_boundary_loss` is disabled by default through `gcs_count_boundary=0.0`.
 When enabled, it applies to `sum(sigmoid(pred_logits))` with GT3 upper, GT4
 lower/upper, and GT5 lower boundaries. `gcs_count_boundary_gt5_under_weight`
@@ -211,7 +403,11 @@ pre-protect candidate count, `spur_prot` logs protected candidates,
 
 ## Decode And Evaluation Contract
 
-Decode must use real query predictions only, must not use GT during inference, and must not fabricate lanes. Final output should be sorted from left to right by bottom visible x.
+Decode must use real predictions only, must not use GT during inference, and
+must not fabricate lanes. Query-mode TuSimple exports sort final lanes from
+left to right by bottom visible x. Ordered-slot official/eval exports preserve
+slot order and fail fast on slot-order violations; only diagnostic sorted
+exports may postprocess ordered-slot lanes left-to-right.
 
 The branch includes a default-off count-aware top-k postprocess ablation for
 inference/evaluation only. When explicitly enabled with `--count-aware-topk`,
@@ -220,6 +416,27 @@ and keeps the quality-best post-conf, post-NMS lanes. This does not change
 training, labels, losses, model outputs, official metrics, Count Head, Quality
 Head, Survival Head, or default decode behavior.
 
-This branch includes `tools/eval_tusimple_official.py`, `tools/sweep_tusimple_official.py`, `gcs_tools/tusimple_official_eval.py`, and explicit training-time `official_best` checkpoint preservation. It does not include `tools/diagnose_tusimple_count_confusion.py`, `tools/diagnose_gcs_gt5.py`, or later mainline Count/Quality/Boundary diagnostics unless a future task explicitly ports them. Use official-val for selection and test only once for final evaluation.
+This branch includes `tools/eval_tusimple_official.py`,
+`tools/sweep_tusimple_official.py`, `gcs_tools/tusimple_official_eval.py`, and
+explicit training-time `official_best` checkpoint preservation. It does not
+include `tools/diagnose_tusimple_count_confusion.py`,
+`tools/diagnose_gcs_gt5.py`, or later mainline Count/Quality/Boundary
+diagnostics unless a future task explicitly ports them. Use the canonical
+363-image official-val GT for selection and test only once for final
+evaluation.
 
-Formal TuSimple checkpoint selection must use `official_acc` first, then `official_score`, then lower `official_FP`, lower `official_FN`, and higher `count_acc_4`. Do not select the final checkpoint only by `val/total_loss`, internal `val/f1`, or generic `best.pt`.
+Formal TuSimple checkpoint selection uses the `OFFICIAL_SELECTION_POLICY`
+defined in `gcs_tools/official_selection.py` (`official_best_v3`). The
+training-time `official_best` tie-break order is:
+
+1. `official_acc`: higher is better
+2. `official_score`: higher is better
+3. `official_FP`: lower is better
+4. `official_FN`: lower is better
+5. `count_acc_4`: higher is better
+6. `count_acc`: higher is better
+7. `count_acc_5`: higher is better
+8. `epoch`: earliest wins when all metrics above tie
+
+Do not select the final checkpoint only by `val/total_loss`, internal
+`val/f1`, or generic `best.pt`.

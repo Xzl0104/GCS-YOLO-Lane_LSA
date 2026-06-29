@@ -21,12 +21,37 @@ os.chdir(ROOT)
 from tools.eval_gcs import label_path_for_image, load_gcs_label, match_lanes
 from tools.infer_gcs import collect_images, load_gcs_model, preprocess_image
 from ultralytics.data.utils import check_det_dataset
+from ultralytics.models.gcs.mode_utils import infer_gcs_mode_from_model
 from ultralytics.utils.gcs_shape import DATASET_IMAGE_SHAPES, assert_gcs_shape, normalize_imgsz, shape_str
 from ultralytics.utils.gcs_postprocess import decode_gcs_predictions
 from ultralytics.utils.torch_utils import select_device
 
 
 DEFAULT_WEIGHTS = ROOT / "runs" / "gcs_lane" / "gcs_yolo_lane_s_tusimple_refquery_e220" / "weights" / "best.pt"
+
+
+def assert_legacy_query_conf_sweep_model(model: torch.nn.Module) -> str:
+    """Reject ordered-slot models before this legacy query-threshold sweep runs."""
+    model_mode = infer_gcs_mode_from_model(model)
+    if model_mode == "ordered_slot":
+        raise RuntimeError(
+            "tools/sweep_gcs_conf.py is a legacy query-threshold sweep tool. "
+            "It must not be used with ordered_slot checkpoints because ordered_slot does not use "
+            "conf/NMS/topk decoding. Use tools/sweep_tusimple_official.py or "
+            "tools/eval_tusimple_official.py with --decode-mode auto instead."
+        )
+    return model_mode
+
+
+def assert_legacy_query_conf_sweep_split(split: str) -> str:
+    """Reject test-set threshold search in this legacy query sweep tool."""
+    normalized = str(split or "").strip().lower()
+    if normalized == "test":
+        raise RuntimeError(
+            "tools/sweep_gcs_conf.py is a threshold search tool and must only sweep validation data. "
+            "Use --split val for threshold selection; test may only be evaluated once with a fixed decode config."
+        )
+    return normalized
 
 
 def parse_args() -> argparse.Namespace:
@@ -473,6 +498,7 @@ def print_rows(rows: list[dict]) -> None:
 
 def main() -> None:
     args = parse_args()
+    args.split = assert_legacy_query_conf_sweep_split(args.split)
     data = resolve_dataset(args)
     imgsz = normalize_imgsz(args.imgsz or data.get("gcs_imgsz") or data.get("image_shape"), dataset=args.dataset)
     confs = conf_values(args)
@@ -485,6 +511,7 @@ def main() -> None:
 
     device = select_device(args.device, verbose=False)
     model = load_gcs_model(args.weights, device=device, half=args.half, gcs_imgsz=imgsz)
+    assert_legacy_query_conf_sweep_model(model)
 
     if args.warmup > 0:
         warm_images = collect_images(source, max_images=1)

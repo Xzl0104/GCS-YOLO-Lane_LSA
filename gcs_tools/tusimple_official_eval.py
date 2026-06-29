@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -7,8 +8,12 @@ from typing import Iterable
 
 import numpy as np
 
+from ultralytics.utils.gcs_fixed_y import validate_official_h_samples_asc
+
 
 TUSIMPLE_ORIGINAL_SHAPE = (720, 1280)
+CANONICAL_TUSIMPLE_VAL_IMAGES = 363
+DEFAULT_CANONICAL_TUSIMPLE_VAL_MANIFEST = Path(__file__).with_name("canonical_tusimple_val_363_manifest.json")
 DEFAULT_OFFICIAL_SCORE_FP_WEIGHT = 0.02
 DEFAULT_OFFICIAL_SCORE_FN_WEIGHT = 0.02
 
@@ -56,6 +61,68 @@ def read_tusimple_json_lines(path: str | Path) -> list[dict]:
             except json.JSONDecodeError as exc:
                 raise ValueError(f"{path}:{line_no}: invalid JSON line: {exc}") from exc
     return records
+
+
+def stable_raw_file_hash(gt_records: Iterable[dict]) -> str:
+    """Return the stable hash of the raw_file set used by a TuSimple GT surface."""
+    raw_files = sorted({str(record["raw_file"]).replace("\\", "/") for record in gt_records})
+    payload = "\n".join(raw_files).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def load_canonical_val_manifest(path: str | Path = DEFAULT_CANONICAL_TUSIMPLE_VAL_MANIFEST) -> dict:
+    """Load the canonical 363-image TuSimple val manifest."""
+    manifest_path = Path(path)
+    with manifest_path.open("r", encoding="utf-8") as f:
+        manifest = json.load(f)
+    if not isinstance(manifest, dict):
+        raise RuntimeError(f"Canonical TuSimple val manifest must be a JSON object: {manifest_path}")
+    return manifest
+
+
+def validate_canonical_val_gt(
+    gt_records: list[dict],
+    *,
+    manifest_path: str | Path = DEFAULT_CANONICAL_TUSIMPLE_VAL_MANIFEST,
+    allow_noncanonical_gt: bool = False,
+) -> dict[str, object]:
+    """Validate that split=val GT matches the canonical 363-image raw_file set."""
+    manifest = load_canonical_val_manifest(manifest_path)
+    gt_images = int(len(gt_records))
+    gt_raw_hash = stable_raw_file_hash(gt_records)
+    expected_images = int(manifest["num_images"])
+    expected_hash = str(manifest["raw_file_sha256"])
+
+    summary: dict[str, object] = {
+        "gt_images": gt_images,
+        "gt_raw_file_sha256": gt_raw_hash,
+        "canonical_raw_file_sha256": expected_hash,
+    }
+    if gt_images == expected_images and gt_raw_hash == expected_hash:
+        summary.update(
+            {
+                "gt_contract": "canonical_official_val_363",
+                "comparable_to_e1_spurious": True,
+            }
+        )
+        return summary
+
+    if allow_noncanonical_gt:
+        summary.update(
+            {
+                "gt_contract": "noncanonical",
+                "comparable_to_e1_spurious": False,
+            }
+        )
+        return summary
+
+    raise RuntimeError(
+        "Official val GT is not the canonical 363-image validation set. "
+        f"got images={gt_images}, raw_file_sha256={gt_raw_hash}; "
+        f"expected images={expected_images}, raw_file_sha256={expected_hash}. "
+        "Pass the canonical --gt-json or use --allow-noncanonical-gt, but noncanonical results "
+        "are not comparable to E1/spurious baselines."
+    )
 
 
 def is_valid_tusimple_lane(lane: Iterable[float]) -> bool:
@@ -225,17 +292,65 @@ def default_tusimple_gt_json(archive_root: str | Path, split: str = "test") -> P
             root.parent / "test_label_new.json",
             root / "train_set" / "seg_label" / "test.json",
         ]
-    elif split in {"train", "val"}:
+    elif split == "train":
         candidates = [
             root / "train_set" / "seg_label" / "train_val.json",
             root / "train_set" / "label_data_0313.json",
         ]
+    elif split == "val":
+        raise RuntimeError(
+            "Official TuSimple val evaluation requires an explicit canonical 363-image --gt-json. "
+            "Do not fallback to train_val.json or label_data_0313.json because that makes official_acc "
+            "incomparable with E1/spurious/ordered-slot official-val results."
+        )
     else:
         raise ValueError(f"Unsupported TuSimple split: {split!r}")
     for path in candidates:
         if path.exists():
             return path
     raise FileNotFoundError(f"No TuSimple {split} GT json found under {root}")
+
+
+def resolve_tusimple_gt_json(archive_root: str | Path, split: str, gt_json: str | Path | None = None) -> Path:
+    """Resolve the official GT json without allowing val to fall back to train files."""
+    if gt_json is not None and str(gt_json).strip():
+        return Path(gt_json)
+    return default_tusimple_gt_json(archive_root, split=split)
+
+
+def official_gt_contract_summary(
+    *,
+    split: str,
+    gt_json: str | Path,
+    gt_records: list[dict],
+    allow_noncanonical_gt: bool = False,
+    manifest_path: str | Path = DEFAULT_CANONICAL_TUSIMPLE_VAL_MANIFEST,
+) -> dict[str, object]:
+    """Validate and summarize the GT surface used for official evaluation."""
+    split = str(split).strip().lower()
+    gt_path = Path(gt_json)
+    gt_images = int(len(gt_records))
+    summary: dict[str, object] = {
+        "gt_json": str(gt_path.resolve()),
+        "gt_images": gt_images,
+    }
+    if split == "val":
+        summary.update(
+            validate_canonical_val_gt(
+                gt_records,
+                manifest_path=manifest_path,
+                allow_noncanonical_gt=allow_noncanonical_gt,
+            )
+        )
+        return summary
+
+    summary.update(
+        {
+            "gt_contract": f"tusimple_{split}",
+            "comparable_to_e1_spurious": False,
+        }
+    )
+    return summary
 
 
 def tusimple_image_path(archive_root: str | Path, raw_file: str, split: str = "test") -> Path:
@@ -291,6 +406,7 @@ def gcs_lanes_to_tusimple_lanes(
 ) -> list[list[int]]:
     """Convert decoded GCS lanes to TuSimple official x-at-h_samples lanes."""
     h, w = int(image_shape[0]), int(image_shape[1])
+    validate_official_h_samples_asc(h_samples, name="TuSimple official h_samples")
     sample_y = np.asarray(h_samples, dtype=np.float32)
     tusimple_lanes: list[list[int]] = []
 

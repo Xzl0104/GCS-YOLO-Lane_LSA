@@ -10,6 +10,9 @@ paper/
 pytest_tmp*/
 pytest-cache-files-*/
 
+.idea/
+*.iml
+
 datasets/
 runs/
 archive/

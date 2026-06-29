@@ -11,6 +11,13 @@ This branch is the current mainline source import of `5-25-3.zip` with a K56 TuS
 - The active train-only hard-sampling mechanism is the 2026-06-27 user-requested, default-off `gcs_hard_sampling`; keep it limited to the training dataloader and do not change labels, validation/test dataloaders, point loss, smooth loss, curve loss, decode, or official metrics.
 - The active E3-lite spurious negative mechanism is the 2026-06-27 user-requested, default-off `gcs_spurious_neg`; keep it limited to an extra `GCSLoss` BCE term on selected unmatched short duplicate-like queries and do not change data sampling, matcher logic, point loss, smooth loss, curve loss, decode, or official metrics.
 - Keep the explicit 2026-06-27 `official_best` hook limited to official-val checkpoint/decode selection; it must not change model outputs, loss terms, training labels, or official metrics.
+- Keep shared fixed-y contract helpers in `ultralytics/utils/gcs_fixed_y.py` so dataset and standalone tools do not depend on `ultralytics.models`.
+- Keep ordered-slot target construction in float32 under AMP. Do not cast GT points to prediction dtype before fixed-y validation or slot construction.
+- Do not use `--scale > 0` with `gcs_mode=ordered_slot` until a count-preserving fixed-y scale augmentation fallback exists. Query-mode scale behavior is unchanged.
+- Ordered-slot official/eval/main `official_best` decode must use slot order with `order_check=error`; runtime sorting is allowed only for debug/visualization exports marked as not usable for main ordered-slot claims.
+- `OrderedSlotGCSLoss` standalone defaults must keep `gcs_count_ce=1.0`, `gcs_interval=1.0`, and `gcs_order=0.1`. Do not let missing args silently disable count, interval, or order supervision.
+- For `split=val`, official evaluation must use the canonical 363-image GT JSON by default. Noncanonical GT requires an explicit flag and must be marked not comparable to E1/spurious official-val evidence.
+- Pass ordered-slot-only model args to `parse_model` only when `gcs_mode=ordered_slot`; query-mode construction must ignore those overrides.
 - Do not track `datasets/`, generated runs, checkpoints, caches, or converted labels in Git.
 
 Active source/config is rolled back to commit `b6535f641` (`Fix GCS training
@@ -49,6 +56,7 @@ tools/train_gcs.py
 tools/eval_tusimple_official.py
 tools/sweep_tusimple_official.py
 tools/check_model.py
+ultralytics/utils/gcs_fixed_y.py
 ultralytics/nn/modules/gcs_lane.py
 ultralytics/models/yolo/gcs_lane/train.py
 ultralytics/engine/trainer.py
@@ -63,6 +71,19 @@ pred_valid_logits: B x 12 x 56
 aux_mask_logits: B x 2 x H x W
 aux_edge_logits: B x 1 x H x W
 ```
+
+Ordered-slot v2 adds the ordered deterministic slot outputs:
+
+```text
+pred_count_logits: B x 4
+pred_start_logits: B x 5 x 56
+pred_end_logits: B x 5 x 56
+pred_exist_logits: B x 5
+```
+
+The ordered-slot count classes are formal 2/3/4/5 classes:
+`count_label = num_lanes - 2`, and decode uses
+`argmax(pred_count_logits) + 2`.
 
 ## Validation Order
 

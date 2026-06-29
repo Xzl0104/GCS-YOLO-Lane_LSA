@@ -485,15 +485,14 @@ class BaseTrainer:
                 # Log
                 if RANK in {-1, 0}:
                     loss_length = self.tloss.shape[0] if len(self.tloss.shape) else 1
+                    raw_losses = self.tloss if loss_length > 1 else torch.unsqueeze(self.tloss, 0)
+                    loss_values = self.format_progress_loss_items(raw_losses)
                     pbar.set_description(
-                        ("%11s" * 2 + "%11.4g" * (2 + loss_length))
-                        % (
-                            f"{epoch + 1}/{self.epochs}",
-                            f"{self._get_memory():.3g}G",  # (GB) GPU memory util
-                            *(self.tloss if loss_length > 1 else torch.unsqueeze(self.tloss, 0)),  # losses
-                            batch["cls"].shape[0],  # batch size, i.e. 8
-                            batch["img"].shape[-1],  # imgsz, i.e 640
-                        )
+                        f"{f'{epoch + 1}/{self.epochs}':>11s}"
+                        f"{f'{self._get_memory():.3g}G':>11s}"
+                        + "".join(self._format_progress_cell(x) for x in loss_values)
+                        + self._format_progress_cell(batch["cls"].shape[0])
+                        + self._format_progress_cell(batch["img"].shape[-1])
                     )
                     self.run_callbacks("on_batch_end")
                     if self.args.plots and ni in self.plot_idx:
@@ -785,6 +784,25 @@ class BaseTrainer:
         """
         return {"loss": loss_items} if loss_items is not None else ["loss"]
 
+    def format_progress_loss_items(self, loss_items):
+        """Return loss values formatted by the task trainer before tqdm rendering."""
+        return list(loss_items)
+
+    @staticmethod
+    def _format_progress_cell(value) -> str:
+        """Format one tqdm progress cell, hiding non-finite numeric values as NA."""
+        if isinstance(value, str):
+            return f"{value:>11s}"
+        if isinstance(value, torch.Tensor):
+            value = float(value.detach().cpu())
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            return f"{str(value):>11s}"
+        if not math.isfinite(value):
+            return f"{'NA':>11s}"
+        return f"{value:11.4g}"
+
     def set_model_attributes(self):
         """Set or update model parameters before training."""
         self.model.names = self.data["names"]
@@ -818,7 +836,25 @@ class BaseTrainer:
         self.csv.parent.mkdir(parents=True, exist_ok=True)  # ensure parent directory exists
         s = "" if self.csv.exists() else ("%s," * n % ("epoch", "time", *keys)).rstrip(",") + "\n"
         with open(self.csv, "a", encoding="utf-8") as f:
-            f.write(s + ("%.6g," * n % (self.epoch + 1, t, *vals)).rstrip(",") + "\n")
+            row = [self._format_metric_csv_value(x) for x in (self.epoch + 1, t, *vals)]
+            f.write(s + ",".join(row) + "\n")
+
+    @staticmethod
+    def _format_metric_csv_value(value) -> str:
+        """Format one CSV metric value, writing NA instead of raw nan/inf."""
+        if value is None:
+            return "NA"
+        if isinstance(value, str):
+            return value
+        if isinstance(value, torch.Tensor):
+            value = float(value.detach().cpu())
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            return str(value)
+        if not math.isfinite(value):
+            return "NA"
+        return f"{value:.6g}"
 
     def plot_metrics(self):
         """Plot metrics from a CSV file."""
@@ -874,6 +910,10 @@ class BaseTrainer:
                     "freeze",
                     "val",
                     "plots",
+                    "gcs_ordered_point_loss",
+                    "gcs_point_y_weight",
+                    "gcs_point_x_only",
+                    "gcs_pixel_smoothl1_beta",
                     "gcs_official_best",
                     "gcs_official_interval",
                     "gcs_official_archive_root",

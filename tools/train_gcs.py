@@ -11,10 +11,14 @@ if str(ROOT) not in sys.path:
 os.chdir(ROOT)
 
 from ultralytics.models.yolo.gcs_lane.train import GCSLaneTrainer
+from ultralytics.models.gcs.mode_utils import assert_ordered_slot_scale_contract
 from ultralytics.utils.gcs_shape import DATASET_IMAGE_SHAPES, normalize_imgsz, shape_str, trainer_imgsz
 
 
-DEFAULT_MODEL = ROOT / "ultralytics" / "cfg" / "models" / "gcs" / "gcs-yolo-lane-s-q12-k56.yaml"
+DEFAULT_MODEL = "ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml"
+DEFAULT_DATA = "data/tusimple_gcs_fixed_y_960x544.yaml"
+ORDERED_SLOT_DEFAULT_MODEL = "ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q5-slot-k56.yaml"
+ORDERED_SLOT_MODEL = ROOT / ORDERED_SLOT_DEFAULT_MODEL
 
 
 def str2bool(value: str | bool) -> bool:
@@ -34,7 +38,7 @@ def dataset_defaults(dataset: str) -> dict[str, Path]:
     name = dataset.lower()
     if name == "tusimple":
         fixed_root = ROOT / "datasets" / "tusimple_fixed_y_k56_960x544"
-        fixed_data = ROOT / "data" / "tusimple_gcs_fixed_y_k56_960x544.yaml"
+        fixed_data = Path(DEFAULT_DATA)
         if fixed_data.exists():
             return {
                 "data": fixed_data,
@@ -53,10 +57,34 @@ def dataset_defaults(dataset: str) -> dict[str, Path]:
     }
 
 
-def parse_args() -> argparse.Namespace:
+def is_ordered_slot_model_yaml(model_path: str | Path) -> bool:
+    """Return whether a model yaml path names an ordered-slot config."""
+    name = Path(str(model_path)).name.lower()
+    return "q5-slot" in name or "ordered_slot" in name or "ordered-slot" in name
+
+
+def maybe_switch_ordered_slot_model(args: argparse.Namespace) -> argparse.Namespace:
+    """Switch ordered-slot runs onto the ordered-slot default model yaml unless disabled."""
+    assert_ordered_slot_scale_contract(getattr(args, "gcs_mode", "query"), getattr(args, "scale", 0.0))
+    if getattr(args, "gcs_mode", "query") != "ordered_slot":
+        return args
+    if is_ordered_slot_model_yaml(getattr(args, "model", "")):
+        return args
+    if bool(getattr(args, "gcs_disable_auto_model_switch", False)):
+        raise RuntimeError(
+            f"--gcs-mode ordered_slot requires an ordered_slot model yaml, but got {args.model}. "
+            f"Please use {ORDERED_SLOT_DEFAULT_MODEL}."
+        )
+    old_model = args.model
+    args.model = ORDERED_SLOT_DEFAULT_MODEL
+    print(f"[GCS] --gcs-mode ordered_slot detected. Auto-switch model yaml: {old_model} -> {args.model}")
+    return args
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train GCS-YOLO-Lane on structured lane labels.")
     parser.add_argument("--dataset", default="tusimple", choices=sorted(DATASET_IMAGE_SHAPES))
-    parser.add_argument("--model", default=str(DEFAULT_MODEL))
+    parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--data", default=None)
     parser.add_argument("--pretrained", default="yolo11s-seg.pt")
     parser.add_argument(
@@ -128,6 +156,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--train-gcs-labels", default=None)
     parser.add_argument("--val-images", default=None)
     parser.add_argument("--val-gcs-labels", default=None)
+    parser.add_argument("--gcs-mode", choices=("query", "ordered_slot"), default="query")
+    parser.add_argument(
+        "--gcs-disable-auto-model-switch",
+        action="store_true",
+        help="Disable automatic ordered_slot model YAML switching and fail on non-slot model YAMLs.",
+    )
+    parser.add_argument("--gcs-num-slots", type=int, default=5)
+    parser.add_argument("--gcs-min-lanes", type=int, default=2, help="ordered_slot minimum supported lane count.")
+    parser.add_argument("--gcs-max-lanes", type=int, default=5, help="ordered_slot maximum supported lane count.")
+    parser.add_argument("--gcs-count-classes", type=int, default=4, help="ordered_slot count classes for 2/3/4/5 lanes.")
+    parser.add_argument(
+        "--gcs-contiguity-policy",
+        choices=("strict", "repair_interp"),
+        default="strict",
+        help="ordered_slot fixed-y valid-mask policy.",
+    )
     parser.add_argument("--gcs-exist", type=float, default=2.0)
     parser.add_argument("--gcs-point", type=float, default=15.0)
     parser.add_argument("--gcs-point-valid", type=float, default=1.0)
@@ -188,6 +232,52 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.35,
         help="Margin around the 4/5 boundary: GT4 upper=4+margin, GT5 lower=5-margin.",
+    )
+    parser.add_argument(
+        "--gcs-count-ce",
+        nargs="?",
+        const=1.0,
+        type=float,
+        default=1.0,
+        help="ordered_slot count CE gain for 2/3/4/5 classification. Use without a value for 1.0.",
+    )
+    parser.add_argument(
+        "--gcs-interval",
+        nargs="?",
+        const=1.0,
+        type=float,
+        default=1.0,
+        help="ordered_slot start/end interval CE gain. Use without a value for 1.0.",
+    )
+    parser.add_argument(
+        "--gcs-order",
+        nargs="?",
+        const=1.0,
+        type=float,
+        default=0.1,
+        help="ordered_slot adjacent-slot order loss gain. Use without a value for 1.0.",
+    )
+    parser.add_argument(
+        "--gcs-allow-disable-order-loss",
+        action="store_true",
+        help="Allow --gcs-order <= 0 only for explicit ordered_slot order-loss ablations.",
+    )
+    parser.add_argument("--gcs-slot-exist-w4", type=float, default=1.0, help="ordered_slot BCE weight for slot 4.")
+    parser.add_argument("--gcs-slot-exist-w5", type=float, default=1.0, help="ordered_slot BCE weight for slot 5.")
+    parser.add_argument("--gcs-order-margin-px", type=float, default=5.0, help="ordered_slot left-to-right margin in pixels.")
+    parser.add_argument(
+        "--gcs-ordered-point-loss",
+        choices=("aspect_l1", "pixel_smooth_l1", "normalized_smooth_l1"),
+        default="normalized_smooth_l1",
+        help="ordered_slot point regression loss. Use aspect_l1 only for an explicit point-loss ablation.",
+    )
+    parser.add_argument("--gcs-point-y-weight", type=float, default=0.25, help="ordered_slot y-coordinate point-loss weight.")
+    parser.add_argument("--gcs-point-x-only", action="store_true", help="Train ordered_slot point regression on x only.")
+    parser.add_argument(
+        "--gcs-pixel-smoothl1-beta",
+        type=float,
+        default=1.0,
+        help="Pixel-space SmoothL1 beta when --gcs-ordered-point-loss pixel_smooth_l1 is selected.",
     )
     parser.add_argument(
         "--gcs-spurious-neg",
@@ -370,7 +460,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--gcs-official-gt-json",
         default=None,
-        help="Optional explicit official-val GT json-lines file for training-time official selection.",
+        help="Explicit canonical 363-image official-val GT json-lines file for training-time official selection.",
+    )
+    parser.add_argument(
+        "--gcs-official-allow-noncanonical-gt",
+        action="store_true",
+        help="Allow non-363 official-val GT only for diagnostics; summary marks it incomparable with E1/spurious.",
     )
     parser.add_argument("--gcs-official-max-images", type=int, default=0, help="Limit official-val images per hook. 0 means all.")
     parser.add_argument("--gcs-official-warmup", type=int, default=5, help="Warmup forwards for each training-time official sweep.")
@@ -386,25 +481,17 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Use FP16 inference during training-time official-val sweeps.",
     )
-    balance_group = parser.add_mutually_exclusive_group()
-    balance_group.add_argument(
+    parser.add_argument(
         "--gcs-lane-count-balanced",
-        dest="gcs_lane_count_balanced",
         action="store_true",
-        help="Use inverse-frequency sampling by GT lane count to expose rare 2/5-lane cases more often.",
+        default=False,
+        help="Enable lane-count-balanced sampling. Disabled by default for fair query/ordered_slot comparison.",
     )
-    balance_group.add_argument(
-        "--no-gcs-lane-count-balanced",
-        dest="gcs_lane_count_balanced",
-        action="store_false",
-        help="Disable lane-count balanced sampling.",
-    )
-    parser.set_defaults(gcs_lane_count_balanced=True)
     parser.add_argument(
         "--gcs-lane-count-balance-power",
         type=float,
         default=1.0,
-        help="Exponent for lane-count balancing. With min-group smoothing, 1.0 strongly balances common 3/4/5-lane modes.",
+        help="Exponent for lane-count balancing. With min-group smoothing, 1.0 strongly balances 2/3/4/5-lane modes.",
     )
     parser.add_argument(
         "--gcs-lane-count-min-group",
@@ -468,7 +555,7 @@ def parse_args() -> argparse.Namespace:
         help="Resume from the latest run when used alone, or from an explicit checkpoint path.",
     )
     parser.add_argument("--exist-ok", action="store_true")
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def parse_pretrained(value: str) -> str | bool:
@@ -486,13 +573,14 @@ def resolve_project(value: str) -> str:
 
 
 def main() -> None:
-    args = parse_args()
+    args = maybe_switch_ordered_slot_model(parse_args())
     defaults = dataset_defaults(args.dataset)
     gcs_imgsz = normalize_imgsz(args.imgsz, dataset=args.dataset)
+    model_path = args.model
 
     overrides = {
         "task": "gcs_lane",
-        "model": args.model,
+        "model": model_path,
         "data": args.data or str(defaults["data"]),
         "pretrained": parse_pretrained(args.pretrained),
         "imgsz": trainer_imgsz(gcs_imgsz),
@@ -526,6 +614,12 @@ def main() -> None:
         "train_gcs_labels": args.train_gcs_labels,
         "val_images": args.val_images,
         "val_gcs_labels": args.val_gcs_labels,
+        "gcs_mode": args.gcs_mode,
+        "gcs_num_slots": args.gcs_num_slots,
+        "gcs_min_lanes": args.gcs_min_lanes,
+        "gcs_max_lanes": args.gcs_max_lanes,
+        "gcs_count_classes": args.gcs_count_classes,
+        "gcs_contiguity_policy": args.gcs_contiguity_policy,
         "gcs_exist": args.gcs_exist,
         "gcs_point": args.gcs_point,
         "gcs_point_valid": args.gcs_point_valid,
@@ -542,6 +636,17 @@ def main() -> None:
         "gcs_count_boundary_gt5_under_weight": args.gcs_count_boundary_gt5_under_weight,
         "gcs_count_boundary_margin34": args.gcs_count_boundary_margin34,
         "gcs_count_boundary_margin45": args.gcs_count_boundary_margin45,
+        "gcs_count_ce": args.gcs_count_ce,
+        "gcs_interval": args.gcs_interval,
+        "gcs_order": args.gcs_order,
+        "gcs_allow_disable_order_loss": args.gcs_allow_disable_order_loss,
+        "gcs_slot_exist_w4": args.gcs_slot_exist_w4,
+        "gcs_slot_exist_w5": args.gcs_slot_exist_w5,
+        "gcs_order_margin_px": args.gcs_order_margin_px,
+        "gcs_ordered_point_loss": args.gcs_ordered_point_loss,
+        "gcs_point_y_weight": args.gcs_point_y_weight,
+        "gcs_point_x_only": args.gcs_point_x_only,
+        "gcs_pixel_smoothl1_beta": args.gcs_pixel_smoothl1_beta,
         "gcs_spurious_neg": args.gcs_spurious_neg,
         "gcs_spurious_neg_weight": args.gcs_spurious_neg_weight,
         "gcs_spurious_gt3_weight": args.gcs_spurious_gt3_weight,
@@ -589,6 +694,7 @@ def main() -> None:
         "gcs_official_interval": args.gcs_official_interval,
         "gcs_official_archive_root": args.gcs_official_archive_root,
         "gcs_official_gt_json": args.gcs_official_gt_json,
+        "gcs_official_allow_noncanonical_gt": args.gcs_official_allow_noncanonical_gt,
         "gcs_official_max_images": args.gcs_official_max_images,
         "gcs_official_warmup": args.gcs_official_warmup,
         "gcs_official_confs": args.gcs_official_confs,

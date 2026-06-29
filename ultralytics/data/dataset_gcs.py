@@ -14,6 +14,7 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset
 
 from ultralytics.data.utils import IMG_FORMATS
+from ultralytics.utils.gcs_fixed_y import validate_training_fixed_y_desc
 from ultralytics.utils.gcs_shape import assert_gcs_shape, normalize_imgsz
 
 __all__ = ("GCSLaneDataset", "gcs_collate_fn", "resize_gcs_masks")
@@ -226,13 +227,21 @@ class GCSLaneDataset(Dataset):
                 if "fixed_y" in data:
                     anchors = np.asarray(data["fixed_y"], dtype=np.float32).reshape(-1)
                 elif "lanes" in data and data["lanes"].ndim == 3 and data["lanes"].shape[0] > 0:
-                    anchors = np.asarray(data["lanes"][0, :, 1], dtype=np.float32).reshape(-1)
+                    lanes = np.asarray(data["lanes"], dtype=np.float32)
+                    lane_valid = np.asarray(data["lane_valid"], dtype=np.float32) if "lane_valid" in data else None
+                    if lane_valid is not None and lane_valid.ndim == 2 and lane_valid.shape == lanes.shape[:2]:
+                        counts = (lane_valid > 0.5).sum(axis=1)
+                        kept = np.where(counts >= 2)[0]
+                        if kept.size == 0:
+                            continue
+                        anchors = lanes[int(kept[0]), :, 1].reshape(-1)
+                    else:
+                        anchors = lanes[0, :, 1].reshape(-1)
                 else:
                     continue
             if anchors.size < 2:
                 raise ValueError(f"{label_file}: fixed_y anchors must contain at least two points.")
-            if not np.all(np.diff(anchors) < 0.0):
-                raise ValueError(f"{label_file}: fixed_y anchors must be strictly descending from bottom to top.")
+            validate_training_fixed_y_desc(anchors, name=f"{label_file}: fixed_y")
             if anchors.min() < -1e-4 or anchors.max() > 1.0 + 1e-4:
                 raise ValueError(f"{label_file}: fixed_y anchors must be normalized to [0, 1].")
             return np.clip(anchors, 0.0, 1.0).astype(np.float32)
@@ -322,9 +331,12 @@ class GCSLaneDataset(Dataset):
 
         if point_mode == "fixed_y":
             for i, (lane, valid) in enumerate(zip(lanes, lane_valid)):
+                validate_training_fixed_y_desc(lane[:, 1], name=f"{label_file}: fixed_y lane {i}")
                 ys = lane[valid > 0.5, 1]
-                if ys.shape[0] >= 2 and not np.all(np.diff(ys) <= 1e-6):
-                    raise ValueError(f"{label_file}: fixed_y lane {i} valid y anchors must be bottom-to-top.")
+                if ys.shape[0] >= 2:
+                    diffs = np.diff(ys)
+                    if not (np.all(diffs <= 1e-6) or np.all(diffs >= -1e-6)):
+                        raise ValueError(f"{label_file}: fixed_y lane {i} valid y anchors must be monotonic.")
             return lanes.astype(np.float32), lane_valid.astype(np.float32)
 
         ordered_lanes = np.zeros_like(lanes, dtype=np.float32)

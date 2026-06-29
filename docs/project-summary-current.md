@@ -122,7 +122,7 @@ python tools/convert_tusimple_to_gcs.py \
 - `_check_point_mode_contract()` 校验模型 head 与标签 `point_mode` 一致
 - `get_model()` 构建 `GCSLaneModel`
 - `load_gcs_pretrained()` 从普通 YOLO11 checkpoint 只迁移 backbone 权重；由于 GCS backbone 插入了 LSEM，YOLO11 layer index 会显式 remap；`LSEM`、`LaneBiFPN` 和 `GCSLaneHead` 保持 GCS 初始化
-- `--gcs-lane-count-balanced` 默认启用，按 GT lane count 做 inverse-frequency replacement sampling
+- `--gcs-lane-count-balanced` 默认关闭；需要 count-balanced 训练分布时显式开启，按 GT lane count 做 inverse-frequency replacement sampling
 
 正式 TuSimple 训练的主配置口径：
 

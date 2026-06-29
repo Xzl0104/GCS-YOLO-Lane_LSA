@@ -8,6 +8,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from ultralytics.utils.gcs_matcher import GCSHungarianMatcher
+from ultralytics.utils.gcs_point_loss import aspect_weighted_l1_point_loss
 from ultralytics.utils.gcs_shape import assert_gcs_image_tensor, assert_gcs_shape, normalize_imgsz
 
 
@@ -543,7 +544,6 @@ class GCSLoss(nn.Module):
         """Aspect-weighted L1 point loss on Hungarian-matched lane point sequences."""
         losses = []
         device, dtype = pred_points.device, pred_points.dtype
-        scale = self._scale_for(pred_points)
         for b, (src_idx, tgt_idx) in enumerate(indices):
             if src_idx.numel() == 0:
                 continue
@@ -551,9 +551,16 @@ class GCSLoss(nn.Module):
             target = gt_points[b].to(device=device, dtype=dtype)[tgt_idx]
             valid = gt_valid[b].to(device=device, dtype=dtype)[tgt_idx]
 
-            loss = ((pred - target).abs() * scale).sum(dim=-1)
-            loss = loss * valid
-            losses.append(loss.sum() / valid.sum().clamp_min(1.0))
+            losses.append(
+                aspect_weighted_l1_point_loss(
+                    pred,
+                    target,
+                    valid > 0.5,
+                    image_size=self.image_size,
+                    y_weight=1.0,
+                    x_only=False,
+                )
+            )
 
         return torch.stack(losses).mean() if losses else self._zero_like(pred_points)
 

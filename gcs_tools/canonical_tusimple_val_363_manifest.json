@@ -1,0 +1,8 @@
+{
+  "name": "tusimple_official_val_363_folder_aware_seed20260602",
+  "num_images": 363,
+  "raw_file_sha256": "cd577e0219cba4da19e08a2d925e7e373e679509da4cd5d4533e382c0d07b4a8",
+  "raw_file_hash_algorithm": "sha256(sorted_unique_raw_file_joined_by_newline_utf8)",
+  "source_gt_json_sha256": "3e7c1a2f05776d2b21909881e9a2737a615dc22c8519b88eceb5b7f13802e43d",
+  "source_gt_json": "runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json"
+}

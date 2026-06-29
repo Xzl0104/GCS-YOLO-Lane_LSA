@@ -2,6 +2,283 @@
 
 This file records decisions for branch `codex/5-25-3-k56`.
 
+## 2026-06-29: Implement ordered_slot_eval_contract_hardening_v1
+
+Decision:
+
+Harden ordered-slot official/eval protocol, standalone loss defaults, canonical
+official-val GT handling, and low-risk logging/model-construction boundaries
+without changing model structure, loss gain values, labels, or running a new
+algorithm experiment.
+
+Implementation scope:
+
+- Ordered-slot `official_eval`, `official_sweep`, `official_best`, and
+  `eval_gcs` now use `output_order=slot`, `order_check=error`,
+  `uses_runtime_sort=false`, and `order_violation_policy=fail_fast`.
+- Debug/visualization sorted exports remain available, but summaries must mark
+  `result_type=postprocessed_sorted_export` and
+  `not_for_main_ordered_slot_claim=true`.
+- `OrderedSlotGCSLoss` standalone defaults now match `default.yaml`:
+  `gcs_count_ce=1.0`, `gcs_interval=1.0`, and `gcs_order=0.1`.
+  Nonpositive count/interval gains fail fast, and disabling order loss requires
+  an explicit ablation flag.
+- Ordered-slot training metadata records `ordered_slot_loss_contract` and the
+  effective loss weights, including the fact that slot4/slot5 exist weights are
+  BCE element weights for both positive and negative targets.
+- For `split=val`, official eval requires canonical 363-image GT by default
+  and refuses `train_val.json` / `label_data_0313.json` fallback as comparable
+  official-val evidence. `--allow-noncanonical-gt` is explicit and marks the
+  summary as not comparable to E1/spurious official-val.
+- Query-mode model construction ignores ordered-slot-only overrides; those args
+  are passed into `parse_model` only under `gcs_mode=ordered_slot`.
+- Absent per-class `slot_count_acc_N` values display as `NA` and are skipped in
+  aggregate progress/logging instead of appearing as `0` or raw `nan`.
+
+Validation:
+
+Local Python compile checks passed for changed Python files.
+`tools/check_ordered_slot_contracts.py --skip-git` passed, covering strict
+official runtime config, reverse-slot fail-fast, debug sorted-export marking,
+loss defaults and ablation guard, canonical/noncanonical val GT handling,
+query-mode construction isolation, and absent-class `NA` logging. CPU model
+shape checks passed for both the default query YAML and ordered-slot Q5/K56
+YAML with `--imgsz 544 960`.
+
+## 2026-06-29: Implement ordered_slot_boundary_and_legacy_safety_fix_v1
+
+Decision:
+
+Harden ordered-slot boundary contracts and legacy tool safety without changing
+training targets, loss terms, decoder strategy, runtime sorting, or official
+metrics.
+
+Implementation scope:
+
+- `GCSLaneHead` now rejects ordered-slot configs unless both `num_queries` and
+  `num_slots` are exactly `5`.
+- `decode_ordered_slot.validate_ordered_slot_pred_shapes` requires
+  `S == max_lanes` and keeps the `pred_count_logits` shape tied to
+  `max_lanes - min_lanes + 1`.
+- ordered-slot `--pred-json` official eval uses the shared query-only decode
+  guard, so replay evidence cannot include non-default query thresholds.
+- `tools/sweep_gcs_conf.py` rejects `--split test` because it is a legacy
+  validation threshold-search tool.
+- `tools/strip_gcs_head_ckpt.py` strips raw top-level head keys, and
+  `tools/visualize_ordered_slot_targets.py` fails fast when `cv2.imwrite`
+  fails.
+
+Validation:
+
+Targeted contract tests were added for `S=6`, non-5 head config,
+pred-json query-arg pollution, test split sweep rejection, raw head key
+stripping, and visualization write failure.
+
+## 2026-06-29: Implement ordered_slot_order_diagnostics_summary_fix_v1
+
+Decision:
+
+Fix ordered-slot order diagnostics summary consistency without changing model
+forward, loss terms, decode geometry, runtime sorting behavior, or official
+metric calculation.
+
+Implementation scope:
+
+- In `tools/eval_tusimple_official.py`, `--pred-json` with
+  `decode_mode=ordered_slot` now records
+  `ordered_slot_order_checked=false`,
+  `ordered_slot_order_violations=null`,
+  `ordered_slot_order_violation_images=null`, and
+  `ordered_slot_order_diagnostics=not_available_from_pred_json` because the
+  existing prediction JSON cannot prove original slot order.
+- Model-forward ordered-slot official eval/sweep paths record
+  `ordered_slot_order_checked=true` and write violation counts only from
+  `decode_ordered_slot_predictions(..., return_diagnostics=True)`.
+- The runtime order policy recorded in this older entry was superseded by
+  `ordered_slot_eval_contract_hardening_v1`; active ordered-slot official/eval
+  now preserves slot order and fails fast on order violations.
+
+Validation:
+
+Targeted contract tests were added for pred-json unavailable diagnostics,
+model decode diagnostics, and `eval_gcs` summary/runtime-config consistency.
+
+## 2026-06-29: Implement ordered_slot_output_and_legacy_tool_contract_fix_v1
+
+Decision:
+
+Fix ordered-slot final output order, legacy query-sweep misuse protection, and
+official sweep evidence schema without changing training, loss terms, Count
+Head, count logits, or official metrics.
+
+Implementation scope:
+
+- Add configurable ordered-slot output ordering and keep each returned lane's
+  original `slot` id. The earlier sorted official-export policy recorded here
+  was superseded by `ordered_slot_eval_contract_hardening_v1`; sorted exports
+  are now diagnostic/debug only.
+- Accumulate ordered-slot order diagnostics in official eval/sweep summaries:
+  `ordered_slot_order_violations` and
+  `ordered_slot_order_violation_images`.
+- Record ordered-slot effective decode as `ordered_slot_decode_v1`; the active
+  effective decode contract is now slot order with no runtime sort.
+- Make `tools/sweep_gcs_conf.py` fail fast on ordered-slot models because it is
+  a legacy query conf/NMS/topk sweep tool.
+- Remove query-only keys from ordered-slot official sweep JSON rows. CSV keeps
+  fixed query-only columns only as empty cells and writes
+  `decode_schema=ordered_slot_decode_v1` plus
+  `query_decode_args=not_applicable`.
+
+Validation:
+
+Local Python compile checks passed for changed Python files.
+`tools/check_ordered_slot_contracts.py --skip-git` passed, including synthetic
+reverse-slot runtime sorting, `output_order=slot` plus `order_check=error`,
+legacy conf-sweep rejection for ordered-slot models, ordered-slot JSON row key
+cleanup, and ordered-slot CSV empty query-only columns.
+
+## 2026-06-29: Implement ordered_slot_runtime_stability_fix_v1
+
+Decision:
+
+Fix ordered-slot runtime stability issues without changing algorithm targets,
+loss gains, decoder behavior, official metrics, or the 2/3/4/5 count contract.
+
+Implementation scope:
+
+- Keep ordered-slot GT target construction in float32 before padding removal,
+  fixed-y validation, canonical y-anchor snapping, and slot target creation.
+- Compute ordered-slot losses and diagnostics with float32 logits/points so AMP
+  half prediction tensors do not force GT fixed-y anchors through half
+  precision.
+- Move shared fixed-y contract utilities to
+  `ultralytics/utils/gcs_fixed_y.py`, keep
+  `ultralytics/models/gcs/fixed_y.py` only as a compatibility re-export, and
+  update dataset, target, audit, model-check, and official-eval imports.
+- Delay `GCSLaneDataset` import inside `tools/visualize_ordered_slot_targets.py`
+  so `--help` works without loading the full training/model package chain.
+- Fail fast for `--gcs-mode ordered_slot --scale > 0` because fixed-y scale
+  resampling can reduce targets to unsupported 0/1 lanes. Query-mode scale
+  behavior remains unchanged; count-preserving scale fallback is a separate
+  future experiment.
+
+Validation:
+
+Local Python compile checks passed for changed Python files.
+`tools/visualize_ordered_slot_targets.py --help` passed standalone.
+`tools/check_ordered_slot_contracts.py --skip-git` passed, including AMP
+half-pred/float32-GT target construction, half-quantized fixed-y tolerance,
+standalone visualization help, ordered-slot scale fail-fast, and query-mode
+scale preservation tests.
+
+## 2026-06-29: Implement ordered_slot_training_protocol_fix_v1
+
+Decision:
+
+Fix ordered-slot/query comparability and eval-summary protocol issues without
+changing model structure, loss definitions, or decoder behavior.
+
+Implementation scope:
+
+- Set `gcs_lane_count_balanced` default to `False` in `default.yaml` and
+  `tools/train_gcs.py`; count-balanced sampling now requires explicit
+  `--gcs-lane-count-balanced`.
+- Keep Trainer sampling driven only by the explicit flag, log
+  `GCS lane-count-balanced sampling: true/false`, and do not auto-enable it
+  for ordered-slot mode.
+- Add `maybe_switch_ordered_slot_model(args)` so `--gcs-mode ordered_slot`
+  switches any non-slot GCS YAML to
+  `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q5-slot-k56.yaml` unless
+  `--gcs-disable-auto-model-switch` requests fail-fast behavior.
+- Make `tools/eval_gcs.py` use `ordered_slot_decode_v1` summary fields for
+  ordered-slot decode and omit query-only keys such as `conf`,
+  `point_valid_thr`, `nms_dist_px`, `max_det`, `min_points`, and
+  `count_aware_topk`.
+- Keep ordered-slot point regression default at
+  `gcs_ordered_point_loss=normalized_smooth_l1`; `aspect_l1` is available only
+  through explicit `--gcs-ordered-point-loss aspect_l1` for a separate
+  point-loss ablation.
+- Make training-time ordered-slot `official_best` fail fast when non-default
+  query-only sweep args are supplied, instead of silently replacing them with
+  ordered-slot defaults.
+- Align `tools/train_gcs.py` and direct trainer defaults with the canonical
+  current-contract paths `ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml` and
+  `data/tusimple_gcs_fixed_y_960x544.yaml`.
+
+Validation:
+
+Local Python compile checks passed for changed Python files. The ordered-slot
+contract script passed with `--skip-git`, including tests for count-balanced
+defaults, parser behavior, ordered-slot auto-switch/fail-fast behavior,
+ordered-slot eval summary key filtering, ordered-slot point-loss default
+preservation, training-time official-sweep fail-fast behavior, canonical
+train defaults, and query-mode summary/grid preservation.
+
+## 2026-06-29: Formalize ordered_slot_v2 2/3/4/5 Count Contract
+
+Decision:
+
+Keep ordered-slot v2 as a 2/3/4/5 four-class count contract because TuSimple
+contains 2-lane samples. Do not roll the head or decoder back to 3/4/5.
+
+Implementation scope:
+
+- `gcs_min_lanes=2`, `gcs_max_lanes=5`, and `gcs_count_classes=4` define
+  ordered-slot count classification.
+- `pred_count_logits` is `B x 4`; `count_label = num_lanes - 2`; decoder
+  lane count is `argmax(pred_count_logits) + 2`.
+- A 2-lane target is `slot_exist=[1,1,0,0,0]` with `count_label=0`.
+- Ordered-slot logging reports `slot_count_acc_2`, `slot_count_acc_3`,
+  `slot_count_acc_4`, and `slot_count_acc_5`.
+- Training-time `official_best_decode.yaml` now writes a schema-specific
+  `ordered_slot_decode_v1` decode block without query-only keys such as
+  `conf`, `nms_dist_px`, `max_det`, or `min_points`.
+- Official eval/sweep decode-yaml loading validates schema and rejects polluted
+  ordered-slot yaml files with query-only keys.
+
+Validation target:
+
+Run `tools/check_ordered_slot_contracts.py --skip-git`, Python compile checks
+for changed Python files, and `tools/audit_fixed_y_labels.py --data ...` when
+the fixed-y dataset is locally available.
+
+## 2026-06-29: Implement ordered_slot_contract_fix_v3
+
+Decision:
+
+Fix the ordered-slot third-batch high-risk contract issues without continuing
+the spurious/gtprotect line and without changing the algorithm direction.
+
+Implementation scope:
+
+- Add explicit ordered-slot aspect-weighted L1 support via a shared point-loss
+  helper. This must be enabled with
+  `--gcs-ordered-point-loss aspect_l1`; the protocol default remains
+  `normalized_smooth_l1` so ordered-slot training objective comparisons stay
+  comparable.
+- Split fixed-y validation into training desc `710..160` and official
+  h-samples asc `160..710` APIs. Training dataset labels, ordered-slot targets,
+  model checks, and label audit use the desc API; official TuSimple conversion
+  uses the asc API.
+- Build ordered-slot targets by removing padded/invalid lanes before fixed-y
+  validation, so leading all-zero padding lanes do not trigger false contract
+  failures.
+- Centralize official sweep and training-time official-best selection key
+  definitions, and write the full `selection_policy.ordered_keys` into
+  summaries/artifacts.
+- Write ordered-slot `effective_decode` and `query_decode_args=not_applicable`
+  into official eval/sweep summaries, and reject non-default query-only decode
+  args for ordered-slot official eval/sweep.
+
+Validation:
+
+Local compile checks passed for changed Python files. The ordered-slot contract
+script passed with `--skip-git`, including tests for explicit aspect_l1 10px
+point-loss gradient, ascending training fixed-y rejection, ascending official
+h-samples acceptance, padding-before-fixed-y validation,
+selection-policy/sort-key consistency,
+ordered-slot summary helpers, and official eval query-arg rejection.
+
 ## 2026-06-28: Reject E2 Short0601 Hard-Sampling Run
 
 Decision:

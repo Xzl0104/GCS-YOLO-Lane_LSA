@@ -112,6 +112,12 @@ train_gcs_labels: # (str, optional) explicit GCS-YOLO-Lane train labels_gcs dire
 val_images: # (str, optional) explicit GCS-YOLO-Lane val image directory/list
 val_gcs_labels: # (str, optional) explicit GCS-YOLO-Lane val labels_gcs directory
 gcs_imgsz: # (list[int], optional) real GCS input shape as [height, width], e.g. [544, 960]
+gcs_mode: query # (str) GCS head/loss/decode mode: query or ordered_slot
+gcs_num_slots: 5 # (int) ordered_slot lane slots, fixed to 5 for TuSimple 2/3/4/5 lanes
+gcs_min_lanes: 2 # (int) ordered_slot minimum representable TuSimple lane count
+gcs_max_lanes: 5 # (int) ordered_slot maximum representable TuSimple lane count
+gcs_count_classes: 4 # (int) ordered_slot count classes for 2/3/4/5 lanes
+gcs_contiguity_policy: strict # (str) ordered_slot fixed-y valid-mask policy: strict or repair_interp
 gcs_exist: 2.0 # (float) GCS lane existence loss gain
 gcs_point: 15.0 # (float) GCS normalized point L1 loss gain
 gcs_point_valid: 1.0 # (float) GCS per-point visibility BCE loss gain for fixed-y lane anchors
@@ -128,6 +134,17 @@ gcs_count_boundary_gt5_weight: 1.5 # (float) weight for GT5 undercount boundary 
 gcs_count_boundary_gt5_under_weight: null # (float|None) optional separate GT5 undercount boundary weight; null follows gcs_count_boundary_gt5_weight
 gcs_count_boundary_margin34: 0.35 # (float) margin for GT3 upper and GT4 lower count-score boundaries
 gcs_count_boundary_margin45: 0.35 # (float) margin for GT4 upper and GT5 lower count-score boundaries
+gcs_count_ce: 1.0 # (float) ordered_slot 2/3/4/5 count cross-entropy gain
+gcs_interval: 1.0 # (float) ordered_slot start/end interval cross-entropy gain
+gcs_order: 0.1 # (float) ordered_slot left-to-right order loss gain
+gcs_allow_disable_order_loss: False # (bool) allow gcs_order <= 0 only for an explicit ordered_slot ablation
+gcs_slot_exist_w4: 1.0 # (float) ordered_slot slot4 existence BCE element weight; weights positive and negative targets
+gcs_slot_exist_w5: 1.0 # (float) ordered_slot slot5 existence BCE element weight; weights positive and negative targets
+gcs_order_margin_px: 5.0 # (float) ordered_slot adjacent-slot x-order margin in pixels
+gcs_ordered_point_loss: normalized_smooth_l1 # (str) ordered_slot point loss: normalized_smooth_l1, pixel_smooth_l1, or explicit aspect_l1 ablation
+gcs_point_y_weight: 0.25 # (float) ordered_slot y-coordinate weight inside point loss
+gcs_point_x_only: False # (bool) train ordered_slot point regression on x only
+gcs_pixel_smoothl1_beta: 1.0 # (float) pixel-space SmoothL1 beta when gcs_ordered_point_loss=pixel_smooth_l1
 gcs_spurious_neg: 0.0 # (float) extra BCE negative loss gain for short unmatched duplicate lane queries; 0 disables
 gcs_spurious_neg_weight: 1.0 # (float) multiplier for the spurious negative loss term
 gcs_spurious_gt3_weight: 1.0 # (float) per-image spurious-negative multiplier for GT3-or-sparser samples
@@ -187,7 +204,9 @@ gcs_official_min_points: [4, 5, 6] # (list[int]) official-val sweep visible-anch
 gcs_official_score_fp_weight: 0.02 # (float) FP penalty for official_score tie-break logging
 gcs_official_score_fn_weight: 0.02 # (float) FN penalty for official_score tie-break logging
 gcs_official_half: False # (bool) use FP16 inference for training-time official sweeps
-gcs_lane_count_balanced: True # (bool) sample GCS training images with inverse-frequency lane-count weights
+# Keep disabled by default to preserve training-distribution comparability.
+# Enable explicitly for count-balanced ordered_slot experiments.
+gcs_lane_count_balanced: False # (bool) sample GCS training images with inverse-frequency lane-count weights
 gcs_lane_count_balance_power: 1.0 # (float) lane-count sampler exponent; 1.0 gives equal lane-count groups
 gcs_lane_count_min_group: 50 # (int) minimum group size used to smooth lane-count sampler weights
 gcs_hard_sampling: False # (bool) train-only hard sampling for 0601 and short-visible GT3/GT4/GT5 samples

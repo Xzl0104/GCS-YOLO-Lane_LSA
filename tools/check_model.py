@@ -14,6 +14,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from ultralytics import YOLO
+from ultralytics.utils.gcs_fixed_y import validate_training_fixed_y_desc
 from ultralytics.nn.modules import GCSLaneHead, LSEM, LaneBiFPN
 from ultralytics.utils.gcs_shape import DATASET_IMAGE_SHAPES, normalize_imgsz, shape_str
 
@@ -64,9 +65,33 @@ def main():
     with torch.no_grad():
         y = model(x)
 
-    expected = {"pred_points", "pred_logits", "pred_valid_logits", "aux_mask_logits", "aux_edge_logits"}
+    expected = {"pred_points", "pred_logits", "pred_valid_logits"}
+    if getattr(head, "aux", False):
+        expected |= {"aux_mask_logits", "aux_edge_logits"}
     if not isinstance(y, dict) or not expected.issubset(y):
         raise RuntimeError("Unexpected GCSLaneHead output keys.")
+    gcs_mode = str(getattr(head, "gcs_mode", "query"))
+    if gcs_mode == "ordered_slot":
+        ordered_expected = {"pred_exist_logits", "pred_start_logits", "pred_end_logits", "pred_count_logits"}
+        if not ordered_expected.issubset(y):
+            raise RuntimeError(f"ordered_slot output is missing keys: {sorted(ordered_expected - set(y))}.")
+        expected_slots = int(getattr(head, "num_slots", 5))
+        expected_k = int(getattr(head, "num_points", 56))
+        if tuple(y["pred_points"].shape[1:3]) != (expected_slots, expected_k):
+            raise RuntimeError(
+                f"ordered_slot pred_points must be B x {expected_slots} x {expected_k} x 2, "
+                f"got {tuple(y['pred_points'].shape)}."
+            )
+        if y["pred_start_logits"].shape != y["pred_points"].shape[:3]:
+            raise RuntimeError("ordered_slot pred_start_logits must have shape B x 5 x K.")
+        if y["pred_end_logits"].shape != y["pred_points"].shape[:3]:
+            raise RuntimeError("ordered_slot pred_end_logits must have shape B x 5 x K.")
+        expected_count_classes = int(getattr(head, "count_classes", 4))
+        if tuple(y["pred_count_logits"].shape) != (args.batch, expected_count_classes):
+            raise RuntimeError(
+                f"ordered_slot pred_count_logits must have shape B x {expected_count_classes}, "
+                f"got {tuple(y['pred_count_logits'].shape)}."
+            )
     if y["pred_valid_logits"].shape != y["pred_points"].shape[:3]:
         raise RuntimeError(
             "pred_valid_logits must have shape B x Q x K matching pred_points, "
@@ -76,6 +101,7 @@ def main():
         if int(getattr(head, "point_dims", 2)) != 1:
             raise RuntimeError("fixed_y GCSLaneHead must use point_dims=1 for x-only prediction.")
         anchors = head.fixed_y_anchors.to(device=y["pred_points"].device, dtype=y["pred_points"].dtype)
+        validate_training_fixed_y_desc(anchors.detach().cpu().numpy(), name="check_model fixed_y anchors")
         y_pred = y["pred_points"][..., 1]
         max_y_err = float((y_pred - anchors.view(1, 1, -1)).abs().max().cpu().item())
         if max_y_err > 1e-6:
@@ -94,6 +120,7 @@ def main():
         print(f"registered LaneBiFPN: {has_bifpn}")
         print(f"registered GCSLaneHead: {has_head}")
         print(f"GCSLaneHead point_mode: {getattr(head, 'point_mode', None)}")
+        print(f"GCSLaneHead gcs_mode: {getattr(head, 'gcs_mode', None)}")
         print(f"GCSLaneHead point_dims: {getattr(head, 'point_dims', None)}")
 
     print(type(y))

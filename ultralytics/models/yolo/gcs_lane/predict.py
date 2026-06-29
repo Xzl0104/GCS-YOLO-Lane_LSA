@@ -12,6 +12,8 @@ import torch
 
 from ultralytics.engine.predictor import BasePredictor
 from ultralytics.engine.results import Results
+from ultralytics.models.gcs.decode_ordered_slot import decode_ordered_slot_predictions
+from ultralytics.models.gcs.decode_summary import ordered_slot_decode_runtime_config
 from ultralytics.utils import ops
 from ultralytics.utils.gcs_shape import assert_gcs_image_tensor, assert_gcs_shape, normalize_imgsz
 from ultralytics.utils.gcs_postprocess import decode_gcs_predictions, draw_gcs_lanes, save_gcs_lanes_txt
@@ -156,19 +158,30 @@ class GCSLanePredictor(BasePredictor):
         else:
             valid_iter = list(valid_logits)
 
-        for lane_points, lane_logits, lane_valid_logits, orig_img, img_path in zip(
-            points, logits, valid_iter, orig_imgs, self.batch[0]
+        ordered_slot = "pred_count_logits" in preds and "pred_start_logits" in preds and "pred_end_logits" in preds
+        ordered_slot_runtime_cfg = ordered_slot_decode_runtime_config(context="predict") if ordered_slot else None
+        for batch_i, (lane_points, lane_logits, lane_valid_logits, orig_img, img_path) in enumerate(
+            zip(points, logits, valid_iter, orig_imgs, self.batch[0])
         ):
-            lanes = decode_gcs_predictions(
-                lane_points,
-                lane_logits,
-                pred_valid_logits=lane_valid_logits,
-                image_shape=orig_img.shape[:2],
-                score_thr=conf,
-                point_valid_thr=point_valid_thr,
-                max_det=max_det,
-                nms_dist_px=nms_dist_px,
-            )
+            if ordered_slot:
+                lanes = decode_ordered_slot_predictions(
+                    preds,
+                    batch_index=batch_i,
+                    image_shape=orig_img.shape[:2],
+                    order_check=ordered_slot_runtime_cfg["order_check"],
+                    output_order=ordered_slot_runtime_cfg["output_order"],
+                )
+            else:
+                lanes = decode_gcs_predictions(
+                    lane_points,
+                    lane_logits,
+                    pred_valid_logits=lane_valid_logits,
+                    image_shape=orig_img.shape[:2],
+                    score_thr=conf,
+                    point_valid_thr=point_valid_thr,
+                    max_det=max_det,
+                    nms_dist_px=nms_dist_px,
+                )
             result = GCSLaneResults(orig_img, path=img_path, names=self.model.names, lanes=lanes)
             if not lanes:
                 k = int(lane_points.shape[1])
