@@ -63,10 +63,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gcs-point-valid", type=float, default=1.0)
     parser.add_argument("--gcs-count-ce", type=float, default=1.0)
     parser.add_argument("--gcs-interval", type=float, default=1.0)
-    parser.add_argument("--gcs-order", type=float, default=1.0)
+    parser.add_argument("--gcs-order", type=float, default=0.2)
+    parser.add_argument("--gcs-gt-bottom-order", type=float, default=1.0)
+    parser.add_argument("--gcs-decoded-bottom-order", type=float, default=1.0)
     parser.add_argument("--gcs-slot-exist-w4", type=float, default=2.0)
     parser.add_argument("--gcs-slot-exist-w5", type=float, default=2.0)
     parser.add_argument("--gcs-order-margin-px", type=float, default=5.0)
+    parser.add_argument("--gcs-bottom-order-margin-px", type=float, default=2.0)
     parser.add_argument("--target-count-acc", type=float, default=1.0)
     parser.add_argument("--target-exist-acc", type=float, default=1.0)
     parser.add_argument("--max-interval-mae", type=float, default=0.5)
@@ -258,9 +261,12 @@ def main() -> None:
         "gcs_count_ce": args.gcs_count_ce,
         "gcs_interval": args.gcs_interval,
         "gcs_order": args.gcs_order,
+        "gcs_gt_bottom_order": args.gcs_gt_bottom_order,
+        "gcs_decoded_bottom_order": args.gcs_decoded_bottom_order,
         "gcs_slot_exist_w4": args.gcs_slot_exist_w4,
         "gcs_slot_exist_w5": args.gcs_slot_exist_w5,
         "gcs_order_margin_px": args.gcs_order_margin_px,
+        "gcs_bottom_order_margin_px": args.gcs_bottom_order_margin_px,
         "gcs_eval_nms_dist_px": 0.0,
         "gcs_eval_point_valid_thr": 0.5,
         "gcs_eval_max_det": 5,

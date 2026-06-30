@@ -41,6 +41,7 @@ from gcs_tools.official_selection import (  # noqa: E402
     OFFICIAL_BEST_SELECTION_KEYS,
     OFFICIAL_SELECTION_POLICY,
     SWEEP_SELECTION_KEYS,
+    official_best_sort_key,
     official_best_selection_policy,
     sweep_selection_policy,
     sweep_sort_key,
@@ -292,13 +293,21 @@ def test_ordered_slot_loss_defaults_match_default_yaml_and_do_not_silent_disable
 
     assert cfg["gcs_count_ce"] == 1.0
     assert cfg["gcs_interval"] == 1.0
-    assert cfg["gcs_order"] == 0.1
+    assert cfg["gcs_order"] == 0.2
+    assert cfg["gcs_gt_bottom_order"] == 1.0
+    assert cfg["gcs_decoded_bottom_order"] == 1.0
+    assert cfg["gcs_bottom_order_margin_px"] == 2.0
     assert criterion.count_ce_gain == cfg["gcs_count_ce"]
     assert criterion.interval_gain == cfg["gcs_interval"]
     assert criterion.order_gain == cfg["gcs_order"]
+    assert criterion.gt_bottom_order_gain == cfg["gcs_gt_bottom_order"]
+    assert criterion.decoded_bottom_order_gain == cfg["gcs_decoded_bottom_order"]
+    assert criterion.bottom_order_margin_px == cfg["gcs_bottom_order_margin_px"]
     assert criterion.count_ce_gain > 0.0
     assert criterion.interval_gain > 0.0
     assert criterion.order_gain > 0.0
+    assert criterion.gt_bottom_order_gain > 0.0
+    assert criterion.decoded_bottom_order_gain > 0.0
 
 
 def test_ordered_slot_loss_core_supervision_requires_explicit_ablation() -> None:
@@ -322,6 +331,44 @@ def test_ordered_slot_loss_core_supervision_requires_explicit_ablation() -> None
     )
     assert criterion.order_gain == 0.0
     assert criterion.loss_contract_summary()["order_supervision_enabled"] is False
+
+
+def test_bottom_order_loss_catches_no_common_anchor_violation() -> None:
+    k = 56
+    y = torch.linspace(710.0 / 720.0, 160.0 / 720.0, k)
+    points = torch.zeros(2, k, 2)
+    valid = torch.zeros(2, k)
+    points[:, :, 1] = y
+    points[0, :, 0] = 0.2
+    points[1, :, 0] = 0.7
+    valid[0, 0:3] = 1.0
+    valid[1, 10:13] = 1.0
+
+    preds = _base_preds()
+    preds["pred_count_logits"][0, 0] = 10.0
+    preds["pred_points"][0, :, :, 1] = y.view(1, k)
+    preds["pred_points"][0, 0, 0, 0] = 0.8
+    preds["pred_points"][0, 1, 10, 0] = 0.3
+    preds["pred_start_logits"].fill_(-10.0)
+    preds["pred_end_logits"].fill_(-10.0)
+    preds["pred_start_logits"][0, 0, 0] = 10.0
+    preds["pred_end_logits"][0, 0, 2] = 10.0
+    preds["pred_start_logits"][0, 1, 10] = 10.0
+    preds["pred_end_logits"][0, 1, 12] = 10.0
+
+    criterion = OrderedSlotGCSLoss({"gcs_imgsz": [544, 960]})
+    batch = {"lanes": [points], "lane_valid": [valid], "img": torch.zeros(1, 3, 544, 960)}
+    _, loss_items = criterion(preds, batch)
+    names = OrderedSlotGCSLoss.loss_names
+
+    assert float(loss_items[names.index("slot_order_loss")].item()) == 0.0
+    assert float(loss_items[names.index("slot_gt_bottom_order_loss")].item()) > 0.0
+    assert float(loss_items[names.index("slot_decoded_bottom_order_loss")].item()) > 0.0
+    assert float(loss_items[names.index("slot_order_common_violation_rate")].item()) == 0.0
+    assert float(loss_items[names.index("slot_order_gt_bottom_violation_rate")].item()) == 1.0
+    assert float(loss_items[names.index("slot_order_decoded_bottom_violation_rate")].item()) == 1.0
+    assert float(loss_items[names.index("slot_order_decoded_bottom_pair_total")].item()) == 1.0
+    assert float(loss_items[names.index("slot_order_decoded_bottom_violation_pairs")].item()) == 1.0
 
 
 def test_decode_count_two_lanes() -> None:
@@ -736,9 +783,11 @@ def test_selection_policy_matches_sweep_sort_key() -> None:
 
 def test_official_selection_policy_matches_code_source() -> None:
     assert official_best_selection_policy() == OFFICIAL_SELECTION_POLICY
-    assert OFFICIAL_SELECTION_POLICY["name"] == "official_best_v3"
+    assert OFFICIAL_SELECTION_POLICY["name"] == "official_best_v4"
     assert OFFICIAL_SELECTION_POLICY["ordered_keys"] == [dict(item) for item in OFFICIAL_BEST_SELECTION_KEYS]
     assert [item["key"] for item in OFFICIAL_SELECTION_POLICY["ordered_keys"]] == [
+        "strict_order_valid",
+        "ordered_slot_order_violations",
         "official_acc",
         "official_score",
         "official_FP",
@@ -750,6 +799,8 @@ def test_official_selection_policy_matches_code_source() -> None:
     ]
     assert [item["direction"] for item in OFFICIAL_SELECTION_POLICY["ordered_keys"]] == [
         "max",
+        "min",
+        "max",
         "max",
         "min",
         "min",
@@ -758,6 +809,33 @@ def test_official_selection_policy_matches_code_source() -> None:
         "max",
         "earliest",
     ]
+
+
+def _official_best_row(*, strict_order_valid: bool, violations: int, official_acc: float) -> dict:
+    return {
+        "strict_order_valid": strict_order_valid,
+        "ordered_slot_order_violations": violations,
+        "official_acc": official_acc,
+        "official_score": official_acc,
+        "official_FP": 0.02,
+        "official_FN": 0.02,
+        "count_acc_4": 0.9,
+        "count_acc": 0.9,
+        "count_acc_5": 0.9,
+    }
+
+
+def test_official_best_selection_prefers_strict_order_before_acc() -> None:
+    valid_lower_acc = _official_best_row(strict_order_valid=True, violations=0, official_acc=0.90)
+    invalid_higher_acc = _official_best_row(strict_order_valid=False, violations=0, official_acc=0.99)
+    assert official_best_sort_key(valid_lower_acc, epoch=10) > official_best_sort_key(invalid_higher_acc, epoch=1)
+
+    invalid_fewer_violations = _official_best_row(strict_order_valid=False, violations=2, official_acc=0.90)
+    invalid_more_violations = _official_best_row(strict_order_valid=False, violations=3, official_acc=0.99)
+    assert official_best_sort_key(invalid_fewer_violations, epoch=10) > official_best_sort_key(
+        invalid_more_violations,
+        epoch=1,
+    )
 
 
 def test_ordered_slot_summary_helpers_expose_schema_specific_decode() -> None:
@@ -807,6 +885,12 @@ def test_ordered_slot_summary_helpers_expose_schema_specific_decode() -> None:
     assert sorted_debug["result_type"] == "postprocessed_sorted_export"
     assert sorted_debug["not_for_main_ordered_slot_claim"] is True
 
+    warn_slot = build_ordered_slot_decode_summary(output_order="slot", order_check="warn")
+    assert warn_slot["uses_runtime_sort"] is False
+    assert warn_slot["order_violation_policy"] == "warn_only"
+    assert warn_slot["result_type"] == "diagnostic_ordered_slot"
+    assert warn_slot["not_for_main_ordered_slot_claim"] is True
+
 
 def test_ordered_slot_runtime_config_contexts() -> None:
     strict_expected = {
@@ -820,6 +904,16 @@ def test_ordered_slot_runtime_config_contexts() -> None:
     for context in ("official_eval", "official_sweep", "official_best", "eval_gcs", "val", "predict", "infer"):
         cfg = ordered_slot_decode_runtime_config(context=context)
         assert cfg == strict_expected
+
+    training_official_expected = {
+        "order_check": "warn",
+        "output_order": "slot",
+        "uses_runtime_sort": False,
+        "order_violation_policy": "warn_only",
+        "result_type": "training_official_best_candidate",
+        "not_for_main_ordered_slot_claim": True,
+    }
+    assert ordered_slot_decode_runtime_config(context="training_official_best") == training_official_expected
 
     sorted_expected = {
         "order_check": "warn",
@@ -918,6 +1012,12 @@ def test_ordered_slot_training_official_sweep_rejects_query_only_args() -> None:
     assert args.nms_dist_pxs == [18.0]
     assert args.max_dets == [8]
     assert args.min_points == [6]
+    assert args.ordered_slot_runtime_context == "training_official_best"
+    row = build_combos(args)[0]
+    assert row["effective_decode"]["output_order"] == "slot"
+    assert row["effective_decode"]["order_check"] == "warn"
+    assert row["effective_decode"]["uses_runtime_sort"] is False
+    assert row["effective_decode"]["not_for_main_ordered_slot_claim"] is True
 
 
 def test_query_training_official_sweep_keeps_user_grid() -> None:
@@ -1694,6 +1794,7 @@ def main() -> None:
         test_slot_count_acc_aggregates_from_correct_total_and_skips_absent,
         test_ordered_slot_loss_defaults_match_default_yaml_and_do_not_silent_disable,
         test_ordered_slot_loss_core_supervision_requires_explicit_ablation,
+        test_bottom_order_loss_catches_no_common_anchor_violation,
         test_decode_count_two_lanes,
         test_ordered_slot_head_requires_five_slots_and_queries,
         test_ordered_slot_decode_shape_guard_rejects_bad_count_logits,
@@ -1719,6 +1820,7 @@ def main() -> None:
         test_slot_target_training_fixed_y_ascending_fails,
         test_selection_policy_matches_sweep_sort_key,
         test_official_selection_policy_matches_code_source,
+        test_official_best_selection_prefers_strict_order_before_acc,
         test_ordered_slot_summary_helpers_expose_schema_specific_decode,
         test_ordered_slot_runtime_config_contexts,
         test_ordered_slot_order_diag_pred_json_not_available,

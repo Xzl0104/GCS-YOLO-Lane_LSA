@@ -54,6 +54,7 @@ def ordered_slot_decode_runtime_config(context: str) -> dict[str, Any]:
         "contract",
     }
     internal_val_contexts = {"training_val", "internal_val"}
+    training_candidate_contexts = {"training_official_best", "official_best_candidate"}
     sorted_export_contexts = {"debug_sorted_export", "debug", "visualize"}
     if normalized in strict_contexts:
         return {
@@ -71,6 +72,15 @@ def ordered_slot_decode_runtime_config(context: str) -> dict[str, Any]:
             "uses_runtime_sort": False,
             "order_violation_policy": "diagnostic_only",
             "result_type": "internal_training_val",
+            "not_for_main_ordered_slot_claim": True,
+        }
+    if normalized in training_candidate_contexts:
+        return {
+            "order_check": "warn",
+            "output_order": "slot",
+            "uses_runtime_sort": False,
+            "order_violation_policy": "warn_only",
+            "result_type": "training_official_best_candidate",
             "not_for_main_ordered_slot_claim": True,
         }
     if normalized in sorted_export_contexts:
@@ -165,9 +175,12 @@ def build_ordered_slot_decode_summary(
     if uses_runtime_sort:
         summary["result_type"] = "postprocessed_sorted_export"
         summary["not_for_main_ordered_slot_claim"] = True
-    else:
+    elif order_check == "error":
         summary["result_type"] = "strict_ordered_slot"
         summary["not_for_main_ordered_slot_claim"] = False
+    else:
+        summary["result_type"] = "diagnostic_ordered_slot"
+        summary["not_for_main_ordered_slot_claim"] = True
     return summary
 
 

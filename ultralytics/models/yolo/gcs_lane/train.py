@@ -183,7 +183,10 @@ class GCSLaneTrainer(BaseTrainer):
         """Return and validate the effective ordered-slot loss supervision contract."""
         count_ce = float(self._get_arg_value("gcs_count_ce", 1.0))
         interval = float(self._get_arg_value("gcs_interval", 1.0))
-        order = float(self._get_arg_value("gcs_order", 0.1))
+        order = float(self._get_arg_value("gcs_order", 0.2))
+        gt_bottom_order = float(self._get_arg_value("gcs_gt_bottom_order", 1.0))
+        decoded_bottom_order = float(self._get_arg_value("gcs_decoded_bottom_order", 1.0))
+        bottom_order_margin_px = float(self._get_arg_value("gcs_bottom_order_margin_px", 2.0))
         allow_disable_order = bool(self._get_arg_value("gcs_allow_disable_order_loss", False))
         if count_ce <= 0.0:
             raise RuntimeError(
@@ -207,10 +210,15 @@ class GCSLaneTrainer(BaseTrainer):
             "gcs_count_ce": count_ce,
             "gcs_interval": interval,
             "gcs_order": order,
+            "gcs_gt_bottom_order": gt_bottom_order,
+            "gcs_decoded_bottom_order": decoded_bottom_order,
+            "gcs_bottom_order_margin_px": bottom_order_margin_px,
             "gcs_allow_disable_order_loss": allow_disable_order,
             "count_supervision_enabled": count_ce > 0.0,
             "interval_supervision_enabled": interval > 0.0,
             "order_supervision_enabled": order > 0.0,
+            "gt_bottom_order_supervision_enabled": gt_bottom_order > 0.0,
+            "decoded_bottom_order_supervision_enabled": decoded_bottom_order > 0.0,
             "slot4_exist_bce_weight": float(self._get_arg_value("gcs_slot_exist_w4", 1.0)),
             "slot5_exist_bce_weight": float(self._get_arg_value("gcs_slot_exist_w5", 1.0)),
             "slot_exist_weight_semantics": "BCE element weight applied to positive and negative targets",
@@ -224,7 +232,19 @@ class GCSLaneTrainer(BaseTrainer):
         self._set_arg_value("ordered_slot_loss_contract", contract)
         self._set_arg_value(
             "ordered_slot_effective_loss_weights",
-            {k: contract[k] for k in ("gcs_point", "gcs_exist", "gcs_point_valid", "gcs_count_ce", "gcs_interval", "gcs_order")},
+            {
+                k: contract[k]
+                for k in (
+                    "gcs_point",
+                    "gcs_exist",
+                    "gcs_point_valid",
+                    "gcs_count_ce",
+                    "gcs_interval",
+                    "gcs_order",
+                    "gcs_gt_bottom_order",
+                    "gcs_decoded_bottom_order",
+                )
+            },
         )
 
     def _assert_model_gcs_mode(self, model: nn.Module) -> None:
@@ -889,7 +909,7 @@ class GCSLaneTrainer(BaseTrainer):
         return [int(x) for x in value]
 
     @staticmethod
-    def _official_best_key(best: dict[str, Any], epoch: int) -> tuple[float, float, float, float, float, float, float, int]:
+    def _official_best_key(best: dict[str, Any], epoch: int) -> tuple:
         """Order official-val candidates by the project checkpoint-selection contract."""
         return official_best_sort_key(best, epoch)
 
@@ -979,7 +999,7 @@ class GCSLaneTrainer(BaseTrainer):
             allow_noncanonical_gt=bool(getattr(self.args, "gcs_official_allow_noncanonical_gt", False)),
             weights=str(self.last),
             imgsz=[int(shape[0]), int(shape[1])],
-            decode_mode="auto",
+            decode_mode="ordered_slot" if ordered_slot else "query",
             confs=confs,
             point_valid_thrs=point_valid_thrs,
             nms_dist_pxs=nms_dist_pxs,
@@ -991,6 +1011,7 @@ class GCSLaneTrainer(BaseTrainer):
             half=bool(getattr(self.args, "gcs_official_half", False)),
             runtime_ms=1.0,
             save_dir=str(save_dir),
+            ordered_slot_runtime_context="training_official_best" if ordered_slot else "official_sweep",
             score_fp_weight=float(getattr(self.args, "gcs_official_score_fp_weight", 0.02) or 0.02),
             score_fn_weight=float(getattr(self.args, "gcs_official_score_fn_weight", 0.02) or 0.02),
         )
@@ -1030,6 +1051,8 @@ class GCSLaneTrainer(BaseTrainer):
                     "official_score": float(best["official_score"]),
                     "official_FP": float(best["official_FP"]),
                     "official_FN": float(best["official_FN"]),
+                    "strict_order_valid": bool(best.get("strict_order_valid", True)),
+                    "ordered_slot_order_violations": int(best.get("ordered_slot_order_violations", 0)),
                     "count_acc": float(best.get("count_acc", 0.0)),
                     "count_acc_2": float(best.get("count_acc_2", 0.0)),
                     "count_acc_3": float(best.get("count_acc_3", 0.0)),
@@ -1063,7 +1086,9 @@ class GCSLaneTrainer(BaseTrainer):
                 f"epoch={epoch_num}, official_acc={float(best['official_acc']):.6f}, "
                 f"official_score={float(best['official_score']):.6f}, "
                 f"FP={float(best['official_FP']):.6f}, FN={float(best['official_FN']):.6f}, "
-                f"count_acc_4={float(best.get('count_acc_4', 0.0)):.6f}"
+                f"count_acc_4={float(best.get('count_acc_4', 0.0)):.6f}, "
+                f"strict_order_valid={bool(best.get('strict_order_valid', True))}, "
+                f"order_violations={int(best.get('ordered_slot_order_violations', 0))}"
             )
         else:
             current = self._official_best_state["best"]

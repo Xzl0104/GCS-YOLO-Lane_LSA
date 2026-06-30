@@ -254,8 +254,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         nargs="?",
         const=1.0,
         type=float,
-        default=0.1,
-        help="ordered_slot adjacent-slot order loss gain. Use without a value for 1.0.",
+        default=0.2,
+        help="ordered_slot common-anchor adjacent-slot order loss gain. Use without a value for 1.0.",
+    )
+    parser.add_argument(
+        "--gcs-gt-bottom-order",
+        type=float,
+        default=1.0,
+        help="ordered_slot GT-bottom adjacent-slot order loss gain.",
+    )
+    parser.add_argument(
+        "--gcs-decoded-bottom-order",
+        type=float,
+        default=1.0,
+        help="ordered_slot decoded-bottom adjacent-slot order loss gain.",
     )
     parser.add_argument(
         "--gcs-allow-disable-order-loss",
@@ -265,6 +277,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--gcs-slot-exist-w4", type=float, default=1.0, help="ordered_slot BCE weight for slot 4.")
     parser.add_argument("--gcs-slot-exist-w5", type=float, default=1.0, help="ordered_slot BCE weight for slot 5.")
     parser.add_argument("--gcs-order-margin-px", type=float, default=5.0, help="ordered_slot left-to-right margin in pixels.")
+    parser.add_argument(
+        "--gcs-bottom-order-margin-px",
+        type=float,
+        default=2.0,
+        help="ordered_slot bottom-x left-to-right margin in pixels.",
+    )
     parser.add_argument(
         "--gcs-ordered-point-loss",
         choices=("aspect_l1", "pixel_smooth_l1", "normalized_smooth_l1"),
@@ -639,10 +657,13 @@ def main() -> None:
         "gcs_count_ce": args.gcs_count_ce,
         "gcs_interval": args.gcs_interval,
         "gcs_order": args.gcs_order,
+        "gcs_gt_bottom_order": args.gcs_gt_bottom_order,
+        "gcs_decoded_bottom_order": args.gcs_decoded_bottom_order,
         "gcs_allow_disable_order_loss": args.gcs_allow_disable_order_loss,
         "gcs_slot_exist_w4": args.gcs_slot_exist_w4,
         "gcs_slot_exist_w5": args.gcs_slot_exist_w5,
         "gcs_order_margin_px": args.gcs_order_margin_px,
+        "gcs_bottom_order_margin_px": args.gcs_bottom_order_margin_px,
         "gcs_ordered_point_loss": args.gcs_ordered_point_loss,
         "gcs_point_y_weight": args.gcs_point_y_weight,
         "gcs_point_x_only": args.gcs_point_x_only,

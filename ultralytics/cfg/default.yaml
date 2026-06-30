@@ -136,11 +136,14 @@ gcs_count_boundary_margin34: 0.35 # (float) margin for GT3 upper and GT4 lower c
 gcs_count_boundary_margin45: 0.35 # (float) margin for GT4 upper and GT5 lower count-score boundaries
 gcs_count_ce: 1.0 # (float) ordered_slot 2/3/4/5 count cross-entropy gain
 gcs_interval: 1.0 # (float) ordered_slot start/end interval cross-entropy gain
-gcs_order: 0.1 # (float) ordered_slot left-to-right order loss gain
+gcs_order: 0.2 # (float) ordered_slot common-anchor adjacent-slot order loss gain
+gcs_gt_bottom_order: 1.0 # (float) ordered_slot GT-bottom adjacent-slot order loss gain
+gcs_decoded_bottom_order: 1.0 # (float) ordered_slot decoded-bottom adjacent-slot order loss gain
 gcs_allow_disable_order_loss: False # (bool) allow gcs_order <= 0 only for an explicit ordered_slot ablation
 gcs_slot_exist_w4: 1.0 # (float) ordered_slot slot4 existence BCE element weight; weights positive and negative targets
 gcs_slot_exist_w5: 1.0 # (float) ordered_slot slot5 existence BCE element weight; weights positive and negative targets
 gcs_order_margin_px: 5.0 # (float) ordered_slot adjacent-slot x-order margin in pixels
+gcs_bottom_order_margin_px: 2.0 # (float) ordered_slot bottom-x adjacent-slot order margin in pixels
 gcs_ordered_point_loss: normalized_smooth_l1 # (str) ordered_slot point loss: normalized_smooth_l1, pixel_smooth_l1, or explicit aspect_l1 ablation
 gcs_point_y_weight: 0.25 # (float) ordered_slot y-coordinate weight inside point loss
 gcs_point_x_only: False # (bool) train ordered_slot point regression on x only

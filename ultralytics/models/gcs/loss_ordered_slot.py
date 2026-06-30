@@ -27,6 +27,8 @@ class OrderedSlotGCSLoss(nn.Module):
         "slot_interval_loss",
         "slot_valid_loss",
         "slot_order_loss",
+        "slot_gt_bottom_order_loss",
+        "slot_decoded_bottom_order_loss",
         "slot_count_acc",
         "slot_count_acc_2",
         "slot_count_acc_3",
@@ -46,6 +48,11 @@ class OrderedSlotGCSLoss(nn.Module):
         "interval_start_mae",
         "interval_end_mae",
         "order_violation_rate",
+        "slot_order_common_violation_rate",
+        "slot_order_gt_bottom_violation_rate",
+        "slot_order_decoded_bottom_violation_rate",
+        "slot_order_decoded_bottom_pair_total",
+        "slot_order_decoded_bottom_violation_pairs",
         "point_l1_px",
         "repaired_noncontiguous_lanes",
         "repaired_hole_points",
@@ -57,6 +64,8 @@ class OrderedSlotGCSLoss(nn.Module):
         "interval",
         "valid",
         "order",
+        "gt_bot_ord",
+        "dec_bot_ord",
         "cnt_acc",
         "cnt_a2",
         "cnt_a3",
@@ -76,6 +85,11 @@ class OrderedSlotGCSLoss(nn.Module):
         "st_mae",
         "end_mae",
         "ord_bad",
+        "ord_common",
+        "ord_gtbot",
+        "ord_decbot",
+        "dec_pairs",
+        "dec_bad",
         "l1_px",
         "rep_lane",
         "rep_hole",
@@ -128,16 +142,28 @@ class OrderedSlotGCSLoss(nn.Module):
         self.point_valid_gain = float(self._arg(args, "gcs_point_valid", 1.0))
         self.count_ce_gain = float(self._arg(args, "gcs_count_ce", 1.0))
         self.interval_gain = float(self._arg(args, "gcs_interval", 1.0))
-        self.order_gain = float(self._arg(args, "gcs_order", 0.1))
+        self.order_gain = float(self._arg(args, "gcs_order", 0.2))
+        self.gt_bottom_order_gain = float(self._arg(args, "gcs_gt_bottom_order", 1.0))
+        self.decoded_bottom_order_gain = float(self._arg(args, "gcs_decoded_bottom_order", 1.0))
         self.allow_disable_order_loss = self._bool_arg(self._arg(args, "gcs_allow_disable_order_loss", False))
         self.slot_exist_w4 = float(self._arg(args, "gcs_slot_exist_w4", 1.0))
         self.slot_exist_w5 = float(self._arg(args, "gcs_slot_exist_w5", 1.0))
         self.order_margin_px = float(self._arg(args, "gcs_order_margin_px", 5.0))
+        self.bottom_order_margin_px = float(self._arg(args, "gcs_bottom_order_margin_px", 2.0))
         self.ordered_point_loss = str(self._arg(args, "gcs_ordered_point_loss", "normalized_smooth_l1")).strip().lower()
         self.point_y_weight = float(self._arg(args, "gcs_point_y_weight", 0.25))
         self.point_x_only = self._bool_arg(self._arg(args, "gcs_point_x_only", False))
         self.pixel_smoothl1_beta = float(self._arg(args, "gcs_pixel_smoothl1_beta", 1.0))
-        if min(self.point_gain, self.exist_gain, self.point_valid_gain, self.count_ce_gain, self.interval_gain, self.order_gain) < 0:
+        if min(
+            self.point_gain,
+            self.exist_gain,
+            self.point_valid_gain,
+            self.count_ce_gain,
+            self.interval_gain,
+            self.order_gain,
+            self.gt_bottom_order_gain,
+            self.decoded_bottom_order_gain,
+        ) < 0:
             raise ValueError("ordered_slot loss gains must be non-negative.")
         if self.count_ce_gain <= 0.0:
             raise RuntimeError(
@@ -192,10 +218,16 @@ class OrderedSlotGCSLoss(nn.Module):
             "gcs_count_ce": float(self.count_ce_gain),
             "gcs_interval": float(self.interval_gain),
             "gcs_order": float(self.order_gain),
+            "gcs_gt_bottom_order": float(self.gt_bottom_order_gain),
+            "gcs_decoded_bottom_order": float(self.decoded_bottom_order_gain),
+            "gcs_order_margin_px": float(self.order_margin_px),
+            "gcs_bottom_order_margin_px": float(self.bottom_order_margin_px),
             "gcs_allow_disable_order_loss": bool(self.allow_disable_order_loss),
             "count_supervision_enabled": self.count_ce_gain > 0.0,
             "interval_supervision_enabled": self.interval_gain > 0.0,
             "order_supervision_enabled": self.order_gain > 0.0,
+            "gt_bottom_order_supervision_enabled": self.gt_bottom_order_gain > 0.0,
+            "decoded_bottom_order_supervision_enabled": self.decoded_bottom_order_gain > 0.0,
             "slot4_exist_bce_weight": float(self.slot_exist_w4),
             "slot5_exist_bce_weight": float(self.slot_exist_w5),
             "slot_exist_weight_semantics": "BCE element weight applied to positive and negative targets",
@@ -363,6 +395,34 @@ class OrderedSlotGCSLoss(nn.Module):
             losses.append(violation[valid_pair].mean())
         return torch.stack(losses).mean() if losses else self._zero_like(pred_points)
 
+    @staticmethod
+    def _adjacent_exist_pair_mask(slot_exist: torch.Tensor) -> torch.Tensor:
+        return (slot_exist[:, :-1] > 0.5) & (slot_exist[:, 1:] > 0.5)
+
+    @staticmethod
+    def _gather_bottom_x(pred_points: torch.Tensor, bottom_idx: torch.Tensor) -> torch.Tensor:
+        idx = bottom_idx.to(device=pred_points.device, dtype=torch.long).clamp(0, pred_points.shape[2] - 1)
+        return pred_points[..., 0].gather(dim=2, index=idx.unsqueeze(-1)).squeeze(-1)
+
+    def _gt_bottom_order_loss(self, pred_points, slot_exist, start_labels):
+        pair_mask = self._adjacent_exist_pair_mask(slot_exist)
+        if not bool(pair_mask.any()):
+            return self._zero_like(pred_points)
+        margin = float(self.bottom_order_margin_px) / float(self.image_size[1])
+        bottom_x = self._gather_bottom_x(pred_points, start_labels)
+        violation = F.relu(bottom_x[:, :-1] - bottom_x[:, 1:] + margin)
+        return violation[pair_mask].mean()
+
+    def _decoded_bottom_order_loss(self, pred_points, pred_start_logits, slot_exist):
+        pair_mask = self._adjacent_exist_pair_mask(slot_exist)
+        if not bool(pair_mask.any()):
+            return self._zero_like(pred_points)
+        margin = float(self.bottom_order_margin_px) / float(self.image_size[1])
+        decoded_bottom_idx = pred_start_logits.detach().float().argmax(dim=-1)
+        bottom_x = self._gather_bottom_x(pred_points, decoded_bottom_idx)
+        violation = F.relu(bottom_x[:, :-1] - bottom_x[:, 1:] + margin)
+        return violation[pair_mask].mean()
+
     @torch.no_grad()
     def _metrics(
         self,
@@ -425,6 +485,17 @@ class OrderedSlotGCSLoss(nn.Module):
                 order_total = order_total + valid_pair.sum().to(dtype=pred_points.dtype)
                 order_bad = order_bad + ((pred_points[:, s, :, 0] >= pred_points[:, s + 1, :, 0]) & valid_pair).sum().to(dtype=pred_points.dtype)
         order_violation_rate = order_bad / order_total.clamp_min(1.0)
+
+        pair_mask = self._adjacent_exist_pair_mask(slot_exist)
+        pair_total = pair_mask.sum().to(dtype=pred_points.dtype)
+        gt_bottom_x = self._gather_bottom_x(pred_points, start_labels)
+        gt_bottom_bad = ((gt_bottom_x[:, :-1] > gt_bottom_x[:, 1:]) & pair_mask).sum().to(dtype=pred_points.dtype)
+        gt_bottom_violation_rate = gt_bottom_bad / pair_total.clamp_min(1.0)
+
+        decoded_bottom_idx = pred_start_logits.detach().float().argmax(dim=-1)
+        decoded_bottom_x = self._gather_bottom_x(pred_points, decoded_bottom_idx)
+        decoded_bottom_bad = ((decoded_bottom_x[:, :-1] > decoded_bottom_x[:, 1:]) & pair_mask).sum().to(dtype=pred_points.dtype)
+        decoded_bottom_violation_rate = decoded_bottom_bad / pair_total.clamp_min(1.0)
         return (
             slot_count_acc,
             by_count_acc[0],
@@ -445,6 +516,11 @@ class OrderedSlotGCSLoss(nn.Module):
             interval_start_mae,
             interval_end_mae,
             order_violation_rate,
+            order_violation_rate,
+            gt_bottom_violation_rate,
+            decoded_bottom_violation_rate,
+            pair_total,
+            decoded_bottom_bad,
             point_l1_px,
         )
 
@@ -481,6 +557,8 @@ class OrderedSlotGCSLoss(nn.Module):
         interval_loss = 0.5 * (start_loss + end_loss)
         valid_loss = self._valid_aux_loss(pred_valid_logits, slot_valid, slot_exist)
         order_loss = self._order_loss(pred_points, slot_valid, slot_exist)
+        gt_bottom_order_loss = self._gt_bottom_order_loss(pred_points, slot_exist, start_labels)
+        decoded_bottom_order_loss = self._decoded_bottom_order_loss(pred_points, pred_start_logits, slot_exist)
 
         total = (
             self.point_gain * point_loss
@@ -489,6 +567,8 @@ class OrderedSlotGCSLoss(nn.Module):
             + self.interval_gain * interval_loss
             + self.point_valid_gain * valid_loss
             + self.order_gain * order_loss
+            + self.gt_bottom_order_gain * gt_bottom_order_loss
+            + self.decoded_bottom_order_gain * decoded_bottom_order_loss
         )
         metrics = self._metrics(
             pred_points,
@@ -511,6 +591,8 @@ class OrderedSlotGCSLoss(nn.Module):
                 interval_loss.detach(),
                 valid_loss.detach(),
                 order_loss.detach(),
+                gt_bottom_order_loss.detach(),
+                decoded_bottom_order_loss.detach(),
                 *(x.detach() for x in metrics),
                 repaired_noncontiguous_lanes.float().mean().detach(),
                 repaired_hole_points.float().mean().detach(),

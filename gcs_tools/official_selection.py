@@ -21,6 +21,8 @@ SWEEP_SELECTION_KEYS = (
 )
 
 OFFICIAL_BEST_SELECTION_KEYS = (
+    {"key": "strict_order_valid", "direction": "max"},
+    {"key": "ordered_slot_order_violations", "direction": "min"},
     {"key": "official_acc", "direction": "max"},
     {"key": "official_score", "direction": "max"},
     {"key": "official_FP", "direction": "min"},
@@ -38,7 +40,7 @@ def selection_policy(name: str, ordered_keys: tuple[dict[str, str], ...]) -> dic
 
 
 SWEEP_SELECTION_POLICY = selection_policy("official_sweep_v3", SWEEP_SELECTION_KEYS)
-OFFICIAL_SELECTION_POLICY = selection_policy("official_best_v3", OFFICIAL_BEST_SELECTION_KEYS)
+OFFICIAL_SELECTION_POLICY = selection_policy("official_best_v4", OFFICIAL_BEST_SELECTION_KEYS)
 
 
 def _copy_policy(policy: dict[str, Any]) -> dict[str, Any]:

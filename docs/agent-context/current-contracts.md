@@ -154,6 +154,38 @@ or official metric formulas:
   slot lane bounds and count-class settings. Ordered-slot-only arguments are
   passed to `parse_model` only when `gcs_mode=ordered_slot`.
 
+The 2026-06-30 `ordered_slot_bottom_order_loss_fix_v1` change closes the
+training/objective gap between ordered-slot supervision and strict official
+slot-order checking:
+
+- `gcs_order` now means only the old common-anchor adjacent-slot order loss and
+  defaults to `0.2`.
+- `gcs_gt_bottom_order=1.0` adds GT-bottom order supervision. For each GT lane,
+  bottom means its own bottom-most visible anchor under the descending
+  fixed-y order `710,700,...,160`; adjacent lanes do not need common visible
+  anchors.
+- `gcs_decoded_bottom_order=1.0` adds decoded-bottom order supervision. It uses
+  `argmax(pred_start_logits)` per slot to gather the predicted decoded bottom
+  x and applies the adjacent-slot left-to-right margin without requiring common
+  visible anchors.
+- `gcs_bottom_order_margin_px=2.0` is the bottom-x margin for both bottom-order
+  losses.
+- Ordered-slot training logs
+  `slot_order_common_violation_rate`,
+  `slot_order_gt_bottom_violation_rate`,
+  `slot_order_decoded_bottom_violation_rate`,
+  `slot_order_decoded_bottom_pair_total`, and
+  `slot_order_decoded_bottom_violation_pairs`.
+- Training-time ordered-slot official-best candidate sweeps use
+  `output_order=slot`, `order_check=warn`, and `uses_runtime_sort=false`, then
+  record `strict_order_valid` and `ordered_slot_order_violations`. This avoids
+  stopping training early while still selecting strict-order-usable checkpoints
+  first.
+- Final ordered-slot official evaluation remains strict:
+  `output_order=slot`, `order_check=error`, and `uses_runtime_sort=false`.
+  `output_order=left_to_right` remains diagnostic/export-only and must be
+  marked `not_for_main_ordered_slot_claim=true`.
+
 The 2026-06-29 `ordered_slot_metrics_and_shape_contract_fix_v1` change is a
 logging, input-validation, and entrypoint-guidance fix only. It does not change
 model structure, training targets, loss definitions, count logits, decoder
@@ -336,10 +368,14 @@ cnt_score
 
 For ordered-slot mode, standalone `OrderedSlotGCSLoss` defaults must match
 `ultralytics/cfg/default.yaml`: `gcs_count_ce=1.0`,
-`gcs_interval=1.0`, and `gcs_order=0.1`. Constructing the loss with
+`gcs_interval=1.0`, `gcs_order=0.2`,
+`gcs_gt_bottom_order=1.0`, `gcs_decoded_bottom_order=1.0`, and
+`gcs_bottom_order_margin_px=2.0`. `gcs_order` is only the common-anchor order
+loss. The two bottom-order losses are separate ordered-slot loss terms and do
+not require adjacent lanes to share visible anchors. Constructing the loss with
 `gcs_count_ce <= 0` or `gcs_interval <= 0` is a contract error. Disabling the
-order loss requires an explicit ablation flag; it must not happen through a
-silent fallback default. Training summaries must record
+common-anchor order loss requires an explicit ablation flag; it must not happen
+through a silent fallback default. Training summaries must record
 `ordered_slot_loss_contract` and the effective ordered-slot loss weights.
 
 `gcs_slot_exist_w4` and `gcs_slot_exist_w5` are BCE element weights for
@@ -426,17 +462,19 @@ diagnostics unless a future task explicitly ports them. Use the canonical
 evaluation.
 
 Formal TuSimple checkpoint selection uses the `OFFICIAL_SELECTION_POLICY`
-defined in `gcs_tools/official_selection.py` (`official_best_v3`). The
+defined in `gcs_tools/official_selection.py` (`official_best_v4`). The
 training-time `official_best` tie-break order is:
 
-1. `official_acc`: higher is better
-2. `official_score`: higher is better
-3. `official_FP`: lower is better
-4. `official_FN`: lower is better
-5. `count_acc_4`: higher is better
-6. `count_acc`: higher is better
-7. `count_acc_5`: higher is better
-8. `epoch`: earliest wins when all metrics above tie
+1. `strict_order_valid`: true is better
+2. `ordered_slot_order_violations`: lower is better
+3. `official_acc`: higher is better
+4. `official_score`: higher is better
+5. `official_FP`: lower is better
+6. `official_FN`: lower is better
+7. `count_acc_4`: higher is better
+8. `count_acc`: higher is better
+9. `count_acc_5`: higher is better
+10. `epoch`: earliest wins when all metrics above tie
 
 Do not select the final checkpoint only by `val/total_loss`, internal
 `val/f1`, or generic `best.pt`.

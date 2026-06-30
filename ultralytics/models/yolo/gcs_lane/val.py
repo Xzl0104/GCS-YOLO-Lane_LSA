@@ -354,7 +354,9 @@ class GCSLaneValidator:
                 float(self._arg(self.args, "gcs_count_ce", 1.0)),
                 float(self._arg(self.args, "gcs_interval", 1.0)),
                 float(self._arg(self.args, "gcs_point_valid", 1.0)),
-                float(self._arg(self.args, "gcs_order", 0.1)),
+                float(self._arg(self.args, "gcs_order", 0.2)),
+                float(self._arg(self.args, "gcs_gt_bottom_order", 1.0)),
+                float(self._arg(self.args, "gcs_decoded_bottom_order", 1.0)),
             ]
             gains.extend([0.0] * (len(OrderedSlotGCSLoss.loss_names) - len(gains)))
             return torch.tensor(gains, device=device, dtype=torch.float32)

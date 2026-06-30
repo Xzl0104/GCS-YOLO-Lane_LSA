@@ -206,11 +206,15 @@ def _combo_key(combo: dict) -> tuple:
     )
 
 
+def _ordered_slot_runtime_context(args: argparse.Namespace) -> str:
+    return str(getattr(args, "ordered_slot_runtime_context", "official_sweep") or "official_sweep")
+
+
 def build_combos(args: argparse.Namespace) -> list[dict]:
     combos: list[dict] = []
     decode_mode = str(getattr(args, "decode_mode", "query"))
     if decode_mode == "ordered_slot":
-        runtime_cfg = ordered_slot_decode_runtime_config(context="official_sweep")
+        runtime_cfg = ordered_slot_decode_runtime_config(context=_ordered_slot_runtime_context(args))
         effective_decode = build_ordered_slot_decode_summary(
             min_lanes=int(getattr(args, "gcs_min_lanes", 2)),
             max_lanes=int(getattr(args, "gcs_max_lanes", 5)),
@@ -298,6 +302,9 @@ def write_csv(path: Path, rows: list[dict]) -> None:
         "count_aware_min_k",
         "count_aware_max_k",
         "count_aware_length_norm",
+        "strict_order_valid",
+        "ordered_slot_order_violations",
+        "ordered_slot_order_violation_images",
         "official_acc",
         "official_FP",
         "official_FN",
@@ -387,7 +394,7 @@ def sweep(args: argparse.Namespace) -> dict:
         _combo_key(combo): {"ordered_slot_order_violations": 0, "ordered_slot_order_violation_images": 0}
         for combo in combos
     }
-    ordered_slot_runtime_cfg = ordered_slot_decode_runtime_config(context="official_sweep")
+    ordered_slot_runtime_cfg = ordered_slot_decode_runtime_config(context=_ordered_slot_runtime_context(args))
     infer_time_s = 0.0
     post_time_s = 0.0
     for record in gt_records:
@@ -475,6 +482,7 @@ def sweep(args: argparse.Namespace) -> dict:
         row.update(_count_diagnostics(pred_records, gt_records))
         if combo["decode_mode"] == "ordered_slot":
             row.update(combo_order_stats[_combo_key(combo)])
+            row["strict_order_valid"] = int(row["ordered_slot_order_violations"]) == 0
         rows.append(row)
 
     rows = sorted(rows, key=_row_sort_key)
@@ -509,7 +517,7 @@ def sweep(args: argparse.Namespace) -> dict:
         **gt_contract,
     }
     if str(getattr(args, "decode_mode", "query")) == "ordered_slot":
-        ordered_slot_runtime_cfg = ordered_slot_decode_runtime_config(context="official_sweep")
+        ordered_slot_runtime_cfg = ordered_slot_decode_runtime_config(context=_ordered_slot_runtime_context(args))
         effective_decode = build_ordered_slot_decode_summary(
             min_lanes=int((decode_yaml_cfg or {}).get("gcs_min_lanes", 2)),
             max_lanes=int((decode_yaml_cfg or {}).get("gcs_max_lanes", 5)),

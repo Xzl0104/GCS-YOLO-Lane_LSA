@@ -28,11 +28,20 @@ weights/official_best_decode.yaml
 
 Checkpoint/decode selection priority:
 
-1. maximize `official_acc`
-2. if tied, maximize `official_score`
-3. if tied, lower `official_FP`
-4. if tied, lower `official_FN`
-5. if tied, higher `count_acc_4`
+1. prefer `strict_order_valid=true`
+2. if tied, lower `ordered_slot_order_violations`
+3. if tied, maximize `official_acc`
+4. if tied, maximize `official_score`
+5. if tied, lower `official_FP`
+6. if tied, lower `official_FN`
+7. if tied, higher `count_acc_4`
+8. if tied, higher `count_acc`
+9. if tied, higher `count_acc_5`
+
+For ordered-slot training-time official-best candidates, use slot order with
+`order_check=warn` and `uses_runtime_sort=false` so training records order
+violations instead of stopping early. Final ordered-slot official evaluation
+still uses `order_check=error`; runtime sorting is never a main-result path.
 
 Use test only once for final evaluation of a candidate already selected on official-val.
 
