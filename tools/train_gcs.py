@@ -77,7 +77,7 @@ def maybe_switch_ordered_slot_model(args: argparse.Namespace) -> argparse.Namesp
         )
     old_model = args.model
     args.model = ORDERED_SLOT_DEFAULT_MODEL
-    print(f"[GCS] --gcs-mode ordered_slot detected. Auto-switch model yaml: {old_model} -> {args.model}")
+    print(f"[GCS][STRICT] ordered_slot auto-switch: {old_model} -> {args.model}")
     return args
 
 
@@ -471,6 +471,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Every --gcs-official-interval epochs, run a TuSimple official-val sweep and preserve weights/official_best.pt.",
     )
     parser.add_argument(
+        "--gcs-allow-internal-best",
+        action="store_true",
+        help="Allow ordered_slot debug training without --gcs-official-best. Formal runs should not use this.",
+    )
+    parser.add_argument(
         "--gcs-official-interval",
         type=int,
         default=5,
@@ -719,6 +724,7 @@ def main() -> None:
         "gcs_eval_point_valid_thr": args.gcs_eval_point_valid_thr,
         "gcs_eval_max_det": args.gcs_eval_max_det,
         "gcs_official_best": args.gcs_official_best,
+        "gcs_allow_internal_best": args.gcs_allow_internal_best,
         "gcs_official_interval": args.gcs_official_interval,
         "gcs_official_archive_root": args.gcs_official_archive_root,
         "gcs_official_gt_json": args.gcs_official_gt_json,

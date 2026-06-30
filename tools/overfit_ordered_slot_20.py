@@ -250,6 +250,7 @@ def main() -> None:
         "val_images": str(image_list.resolve()),
         "val_gcs_labels": train_gcs_labels,
         "gcs_mode": "ordered_slot",
+        "gcs_allow_internal_best": True,
         "gcs_num_slots": args.gcs_num_slots,
         "gcs_min_lanes": args.gcs_min_lanes,
         "gcs_max_lanes": args.gcs_max_lanes,

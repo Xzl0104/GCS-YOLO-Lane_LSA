@@ -131,6 +131,7 @@ def build_ordered_slot_decode_summary(
     max_lanes: int = 5,
     num_slots: int = 5,
     min_interval_points: int = 2,
+    order_margin_px: float = 2.0,
     output_order: str = "slot",
     order_check: str = "error",
 ) -> dict[str, Any]:
@@ -139,6 +140,7 @@ def build_ordered_slot_decode_summary(
     max_lanes = int(max_lanes)
     num_slots = int(num_slots)
     min_interval_points = int(min_interval_points)
+    order_margin_px = float(order_margin_px)
     output_order = str(output_order or "slot").strip().lower()
     order_check = str(order_check or "error").strip().lower()
     uses_runtime_sort = output_order == "left_to_right"
@@ -157,6 +159,7 @@ def build_ordered_slot_decode_summary(
         "gcs_max_lanes": max_lanes,
         "gcs_num_slots": num_slots,
         "min_interval_points": min_interval_points,
+        "gcs_bottom_order_margin_px": order_margin_px,
         "interval_repair": "clamp_expand",
         "count_source": "argmax(pred_count_logits)+gcs_min_lanes",
         "output_slots": "slot[0:num_lanes]",
@@ -189,6 +192,7 @@ def ordered_slot_effective_decode(
     max_lanes: int = 5,
     num_slots: int = 5,
     min_interval_points: int = 2,
+    order_margin_px: float = 2.0,
     output_order: str = "slot",
     order_check: str = "error",
 ) -> dict[str, Any]:
@@ -198,35 +202,58 @@ def ordered_slot_effective_decode(
         max_lanes=max_lanes,
         num_slots=num_slots,
         min_interval_points=min_interval_points,
+        order_margin_px=order_margin_px,
         output_order=output_order,
         order_check=order_check,
     )
 
 
+def ordered_slot_decode_params(args: Any = None, decode_cfg: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Resolve ordered-slot decode parameters from a decode yaml first, then runtime args."""
+    cfg = decode_cfg or {}
+
+    def value(*cfg_keys: str, arg_name: str, default: Any) -> Any:
+        for key in cfg_keys:
+            if key in cfg:
+                return cfg[key]
+        return _arg(args, arg_name, default)
+
+    return {
+        "min_lanes": int(value("gcs_min_lanes", arg_name="gcs_min_lanes", default=2)),
+        "max_lanes": int(value("gcs_max_lanes", arg_name="gcs_max_lanes", default=5)),
+        "num_slots": int(value("gcs_num_slots", arg_name="gcs_num_slots", default=5)),
+        "min_interval_points": int(
+            value("min_interval_points", "gcs_min_interval_points", arg_name="gcs_min_interval_points", default=2)
+        ),
+        "order_margin_px": float(
+            value("gcs_bottom_order_margin_px", "order_margin_px", arg_name="gcs_bottom_order_margin_px", default=2.0)
+        ),
+    }
+
+
 def ordered_slot_decode_cfg(args: Any = None) -> dict[str, Any]:
     """Build the official ordered-slot decode-yaml schema."""
-    min_lanes = int(_arg(args, "gcs_min_lanes", 2))
-    max_lanes = int(_arg(args, "gcs_max_lanes", 5))
-    num_slots = int(_arg(args, "gcs_num_slots", 5))
-    min_interval_points = int(_arg(args, "gcs_min_interval_points", 2))
+    params = ordered_slot_decode_params(args)
     runtime_cfg = ordered_slot_decode_runtime_config(context="official_best")
     cfg = {
         "schema": ORDERED_SLOT_DECODE_SCHEMA,
         "decode_mode": "ordered_slot",
-        "gcs_min_lanes": min_lanes,
-        "gcs_max_lanes": max_lanes,
-        "gcs_num_slots": num_slots,
-        "min_interval_points": min_interval_points,
+        "gcs_min_lanes": params["min_lanes"],
+        "gcs_max_lanes": params["max_lanes"],
+        "gcs_num_slots": params["num_slots"],
+        "min_interval_points": params["min_interval_points"],
+        "gcs_bottom_order_margin_px": params["order_margin_px"],
         "interval_repair": "clamp_expand",
         "output_order": runtime_cfg["output_order"],
         "order_check": runtime_cfg["order_check"],
         "uses_runtime_sort": runtime_cfg["uses_runtime_sort"],
         "order_violation_policy": runtime_cfg["order_violation_policy"],
         "effective_decode": build_ordered_slot_decode_summary(
-            min_lanes=min_lanes,
-            max_lanes=max_lanes,
-            num_slots=num_slots,
-            min_interval_points=min_interval_points,
+            min_lanes=params["min_lanes"],
+            max_lanes=params["max_lanes"],
+            num_slots=params["num_slots"],
+            min_interval_points=params["min_interval_points"],
+            order_margin_px=params["order_margin_px"],
             output_order=runtime_cfg["output_order"],
             order_check=runtime_cfg["order_check"],
         ),

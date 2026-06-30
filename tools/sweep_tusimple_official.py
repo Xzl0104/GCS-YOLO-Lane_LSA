@@ -38,6 +38,7 @@ from ultralytics.models.gcs.decode_summary import (  # noqa: E402
     QUERY_DECODE_SCHEMA,
     build_ordered_slot_decode_summary,
     load_decode_yaml,
+    ordered_slot_decode_params,
     ordered_slot_decode_runtime_config,
     ordered_slot_order_diagnostics_summary,
     raise_for_ordered_slot_query_args,
@@ -102,6 +103,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--weights", default=str(DEFAULT_WEIGHTS), help="GCS checkpoint .pt.")
     parser.add_argument("--decode-mode", choices=("auto", "query", "ordered_slot"), default="auto", help="Decode path for official sweep.")
     parser.add_argument("--decode-yaml", default=None, help="Schema-validated official_best_decode.yaml to reproduce a decode.")
+    parser.add_argument("--gcs-min-lanes", type=int, default=2, help="ordered_slot minimum supported lane count.")
+    parser.add_argument("--gcs-max-lanes", type=int, default=5, help="ordered_slot maximum supported lane count.")
+    parser.add_argument("--gcs-num-slots", type=int, default=5, help="ordered_slot slot count.")
+    parser.add_argument(
+        "--gcs-min-interval-points",
+        type=int,
+        default=2,
+        help="ordered_slot minimum decoded start/end interval length.",
+    )
+    parser.add_argument(
+        "--gcs-bottom-order-margin-px",
+        type=float,
+        default=2.0,
+        help="ordered_slot bottom-x left-to-right order margin in pixels.",
+    )
     parser.add_argument(
         "--imgsz",
         nargs="+",
@@ -210,16 +226,18 @@ def _ordered_slot_runtime_context(args: argparse.Namespace) -> str:
     return str(getattr(args, "ordered_slot_runtime_context", "official_sweep") or "official_sweep")
 
 
-def build_combos(args: argparse.Namespace) -> list[dict]:
+def build_combos(args: argparse.Namespace, decode_yaml_cfg: dict | None = None) -> list[dict]:
     combos: list[dict] = []
     decode_mode = str(getattr(args, "decode_mode", "query"))
     if decode_mode == "ordered_slot":
         runtime_cfg = ordered_slot_decode_runtime_config(context=_ordered_slot_runtime_context(args))
+        ordered_params = ordered_slot_decode_params(args, decode_yaml_cfg)
         effective_decode = build_ordered_slot_decode_summary(
-            min_lanes=int(getattr(args, "gcs_min_lanes", 2)),
-            max_lanes=int(getattr(args, "gcs_max_lanes", 5)),
-            num_slots=int(getattr(args, "gcs_num_slots", 5)),
-            min_interval_points=int(getattr(args, "gcs_min_interval_points", 2)),
+            min_lanes=ordered_params["min_lanes"],
+            max_lanes=ordered_params["max_lanes"],
+            num_slots=ordered_params["num_slots"],
+            min_interval_points=ordered_params["min_interval_points"],
+            order_margin_px=ordered_params["order_margin_px"],
             output_order=runtime_cfg["output_order"],
             order_check=runtime_cfg["order_check"],
         )
@@ -375,7 +393,7 @@ def sweep(args: argparse.Namespace) -> dict:
         args.decode_mode = resolve_decode_mode(getattr(args, "decode_mode", "auto"), model)
     if str(getattr(args, "decode_mode", "query")) == "ordered_slot":
         raise_for_ordered_slot_query_args(args, ORDERED_SLOT_QUERY_ONLY_DEFAULTS, context="TuSimple official sweep")
-    combos = build_combos(args)
+    combos = build_combos(args, decode_yaml_cfg=decode_yaml_cfg)
     if str(getattr(args, "decode_mode", "query")) != "ordered_slot":
         for max_det in sorted({int(c["max_det"]) for c in combos}):
             warn_max_det_mismatch(args.weights, max_det=max_det, context="TuSimple official sweep")
@@ -414,13 +432,16 @@ def sweep(args: argparse.Namespace) -> dict:
 
         for combo in combos:
             if combo["decode_mode"] == "ordered_slot":
+                ordered_params = ordered_slot_decode_params(args, decode_yaml_cfg)
                 lanes, order_diag = decode_ordered_slot_predictions(
                     preds,
                     batch_index=0,
                     image_shape=original_shape,
-                    min_lanes=int((decode_yaml_cfg or {}).get("gcs_min_lanes", 2)),
-                    max_lanes=int((decode_yaml_cfg or {}).get("gcs_max_lanes", 5)),
-                    min_interval_points=int((decode_yaml_cfg or {}).get("min_interval_points", 2)),
+                    min_lanes=ordered_params["min_lanes"],
+                    max_lanes=ordered_params["max_lanes"],
+                    min_interval_points=ordered_params["min_interval_points"],
+                    order_margin_px=ordered_params["order_margin_px"],
+                    img_w=float(original_shape[1]),
                     order_check=ordered_slot_runtime_cfg["order_check"],
                     output_order=ordered_slot_runtime_cfg["output_order"],
                     return_diagnostics=True,
@@ -518,11 +539,13 @@ def sweep(args: argparse.Namespace) -> dict:
     }
     if str(getattr(args, "decode_mode", "query")) == "ordered_slot":
         ordered_slot_runtime_cfg = ordered_slot_decode_runtime_config(context=_ordered_slot_runtime_context(args))
+        ordered_params = ordered_slot_decode_params(args, decode_yaml_cfg)
         effective_decode = build_ordered_slot_decode_summary(
-            min_lanes=int((decode_yaml_cfg or {}).get("gcs_min_lanes", 2)),
-            max_lanes=int((decode_yaml_cfg or {}).get("gcs_max_lanes", 5)),
-            num_slots=int((decode_yaml_cfg or {}).get("gcs_num_slots", 5)),
-            min_interval_points=int((decode_yaml_cfg or {}).get("min_interval_points", 2)),
+            min_lanes=ordered_params["min_lanes"],
+            max_lanes=ordered_params["max_lanes"],
+            num_slots=ordered_params["num_slots"],
+            min_interval_points=ordered_params["min_interval_points"],
+            order_margin_px=ordered_params["order_margin_px"],
             output_order=ordered_slot_runtime_cfg["output_order"],
             order_check=ordered_slot_runtime_cfg["order_check"],
         )
@@ -533,6 +556,7 @@ def sweep(args: argparse.Namespace) -> dict:
                 "gcs_max_lanes": effective_decode["gcs_max_lanes"],
                 "gcs_num_slots": effective_decode["gcs_num_slots"],
                 "min_interval_points": effective_decode["min_interval_points"],
+                "gcs_bottom_order_margin_px": effective_decode["gcs_bottom_order_margin_px"],
                 "interval_repair": effective_decode["interval_repair"],
                 "output_order": effective_decode["output_order"],
                 "order_check": effective_decode["order_check"],

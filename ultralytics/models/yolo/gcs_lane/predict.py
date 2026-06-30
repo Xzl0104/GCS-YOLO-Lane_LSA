@@ -13,7 +13,7 @@ import torch
 from ultralytics.engine.predictor import BasePredictor
 from ultralytics.engine.results import Results
 from ultralytics.models.gcs.decode_ordered_slot import decode_ordered_slot_predictions
-from ultralytics.models.gcs.decode_summary import ordered_slot_decode_runtime_config
+from ultralytics.models.gcs.decode_summary import ordered_slot_decode_params, ordered_slot_decode_runtime_config
 from ultralytics.utils import ops
 from ultralytics.utils.gcs_shape import assert_gcs_image_tensor, assert_gcs_shape, normalize_imgsz
 from ultralytics.utils.gcs_postprocess import decode_gcs_predictions, draw_gcs_lanes, save_gcs_lanes_txt
@@ -160,6 +160,7 @@ class GCSLanePredictor(BasePredictor):
 
         ordered_slot = "pred_count_logits" in preds and "pred_start_logits" in preds and "pred_end_logits" in preds
         ordered_slot_runtime_cfg = ordered_slot_decode_runtime_config(context="predict") if ordered_slot else None
+        ordered_slot_params = ordered_slot_decode_params(self.args) if ordered_slot else None
         for batch_i, (lane_points, lane_logits, lane_valid_logits, orig_img, img_path) in enumerate(
             zip(points, logits, valid_iter, orig_imgs, self.batch[0])
         ):
@@ -168,6 +169,11 @@ class GCSLanePredictor(BasePredictor):
                     preds,
                     batch_index=batch_i,
                     image_shape=orig_img.shape[:2],
+                    min_lanes=ordered_slot_params["min_lanes"],
+                    max_lanes=ordered_slot_params["max_lanes"],
+                    min_interval_points=ordered_slot_params["min_interval_points"],
+                    order_margin_px=ordered_slot_params["order_margin_px"],
+                    img_w=float(orig_img.shape[1]),
                     order_check=ordered_slot_runtime_cfg["order_check"],
                     output_order=ordered_slot_runtime_cfg["output_order"],
                 )

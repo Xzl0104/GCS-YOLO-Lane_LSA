@@ -352,6 +352,7 @@ CFG_BOOL_KEYS = frozenset(
         "profile",
         "end2end",
         "gcs_official_best",
+        "gcs_allow_internal_best",
         "gcs_official_half",
         "gcs_allow_disable_order_loss",
         "gcs_lane_count_balanced",

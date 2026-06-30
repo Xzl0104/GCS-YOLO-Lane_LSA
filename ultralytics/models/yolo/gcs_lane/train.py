@@ -265,16 +265,40 @@ class GCSLaneTrainer(BaseTrainer):
         )
 
     def _warn_if_ordered_slot_without_official_best(self) -> None:
-        """Warn when ordered-slot training is not selecting checkpoints by strict official-val."""
+        """Fail formal ordered-slot training unless checkpoint selection uses strict official-val."""
         if self._gcs_mode() != "ordered_slot" or bool(getattr(self, "_warned_ordered_slot_without_official_best", False)):
             return
-        if not bool(getattr(self.args, "gcs_official_best", False)):
-            LOGGER.warning(
-                "ordered_slot training is running with gcs_official_best=False. "
-                "weights/best.pt is internal validation best, not strict official order-aware best. "
-                "For formal TuSimple results, enable --gcs-official-best True and pass --gcs-official-gt-json."
+        if not bool(self._get_arg_value("gcs_official_best", False)):
+            if bool(self._get_arg_value("gcs_allow_internal_best", False)):
+                LOGGER.warning(
+                    "ordered_slot debug training is running with gcs_official_best=False because "
+                    "gcs_allow_internal_best=True. weights/best.pt is internal validation best, not strict official best."
+                )
+                self._warned_ordered_slot_without_official_best = True
+                return
+            raise RuntimeError(
+                "ordered_slot formal training requires --gcs-official-best. "
+                "Otherwise weights/best.pt is only internal-val best, not strict official best. "
+                "For debug runs, add --gcs-allow-internal-best."
             )
-            self._warned_ordered_slot_without_official_best = True
+
+    @staticmethod
+    def _log_ordered_slot_model_contract(model: nn.Module) -> None:
+        """Log the model-side ordered-slot contract for reproducibility."""
+        head = model.model[-1] if getattr(model, "model", None) is not None and len(model.model) else None
+        if not isinstance(head, GCSLaneHead) or str(getattr(head, "gcs_mode", "query")) != "ordered_slot":
+            return
+        LOGGER.info(
+            "ordered_slot model contract: "
+            f"gcs_mode={getattr(head, 'gcs_mode', None)}, "
+            f"num_queries={getattr(head, 'num_queries', None)}, "
+            f"num_points={getattr(head, 'num_points', None)}, "
+            f"num_slots={getattr(head, 'num_slots', None)}, "
+            f"min_lanes={getattr(head, 'min_lanes', None)}, "
+            f"max_lanes={getattr(head, 'max_lanes', None)}, "
+            f"count_classes={getattr(head, 'count_classes', None)}, "
+            f"point_mode={getattr(head, 'point_mode', None)}"
+        )
 
     def _assert_model_gcs_mode(self, model: nn.Module) -> None:
         """Fail fast when CLI/YAML/head GCS modes disagree."""
@@ -299,6 +323,7 @@ class GCSLaneTrainer(BaseTrainer):
             )
         model.gcs_mode = head_mode
         assert_ordered_slot_scale_contract(head_mode, getattr(self.args, "scale", 0.0))
+        self._log_ordered_slot_model_contract(model)
 
     def _set_loss_names_for_mode(self) -> None:
         """Select the loss vector labels that match the active GCS criterion."""
@@ -1035,6 +1060,11 @@ class GCSLaneTrainer(BaseTrainer):
             nms_dist_pxs=nms_dist_pxs,
             max_dets=max_dets,
             min_points=min_points,
+            gcs_min_lanes=int(getattr(self.args, "gcs_min_lanes", 2)),
+            gcs_max_lanes=int(getattr(self.args, "gcs_max_lanes", 5)),
+            gcs_num_slots=int(getattr(self.args, "gcs_num_slots", 5)),
+            gcs_min_interval_points=int(getattr(self.args, "gcs_min_interval_points", 2)),
+            gcs_bottom_order_margin_px=float(getattr(self.args, "gcs_bottom_order_margin_px", 2.0)),
             max_images=int(getattr(self.args, "gcs_official_max_images", 0) or 0),
             warmup=int(getattr(self.args, "gcs_official_warmup", 5) or 0),
             device=self._official_device_arg(),

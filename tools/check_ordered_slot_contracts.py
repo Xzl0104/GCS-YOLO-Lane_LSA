@@ -727,6 +727,7 @@ def test_resume_disables_pretrained_and_loads_head_weights() -> None:
         pretrained="yolo11s-seg.pt",
         gcs_mode="ordered_slot",
         gcs_imgsz=[544, 960],
+        gcs_allow_internal_best=True,
         imgsz=960,
         augmentations=None,
     )
@@ -1011,6 +1012,7 @@ def test_ordered_slot_summary_helpers_expose_schema_specific_decode() -> None:
         max_lanes=5,
         num_slots=5,
         min_interval_points=2,
+        order_margin_px=2.0,
         output_order=runtime_cfg["output_order"],
         order_check=runtime_cfg["order_check"],
     )
@@ -1031,10 +1033,12 @@ def test_ordered_slot_summary_helpers_expose_schema_specific_decode() -> None:
     assert decode_cfg["decode_mode"] == "ordered_slot"
     assert decode_cfg["gcs_min_lanes"] == 2
     assert decode_cfg["gcs_max_lanes"] == 5
+    assert decode_cfg["gcs_bottom_order_margin_px"] == 2.0
     assert effective["schema"] == "ordered_slot_decode_v1"
     assert effective["decode_mode"] == "ordered_slot"
     assert effective["count_source"] == "argmax(pred_count_logits)+gcs_min_lanes"
     assert effective["output_slots"] == "slot[0:num_lanes]"
+    assert effective["gcs_bottom_order_margin_px"] == 2.0
     assert effective["output_order"] == "slot"
     assert effective["order_check"] == "error"
     assert effective["uses_runtime_sort"] is False
@@ -1185,6 +1189,17 @@ def test_ordered_slot_training_official_sweep_rejects_query_only_args() -> None:
     assert row["effective_decode"]["uses_runtime_sort"] is False
     assert row["effective_decode"]["not_for_main_ordered_slot_claim"] is True
 
+    args = _training_official_sweep_args(
+        "ordered_slot",
+        gcs_min_interval_points=4,
+        gcs_bottom_order_margin_px=7.5,
+    )
+    assert args.gcs_min_interval_points == 4
+    assert args.gcs_bottom_order_margin_px == 7.5
+    row = build_combos(args)[0]
+    assert row["effective_decode"]["min_interval_points"] == 4
+    assert row["effective_decode"]["gcs_bottom_order_margin_px"] == 7.5
+
 
 def test_query_training_official_sweep_keeps_user_grid() -> None:
     args = _training_official_sweep_args(
@@ -1199,6 +1214,7 @@ def test_query_training_official_sweep_keeps_user_grid() -> None:
 def test_default_yaml_count_balanced_false() -> None:
     cfg = yaml.safe_load((ROOT / "ultralytics/cfg/default.yaml").read_text(encoding="utf-8"))
     assert cfg["gcs_lane_count_balanced"] is False
+    assert cfg["gcs_allow_internal_best"] is False
 
 
 def test_train_gcs_count_balanced_default_false_and_explicit_true() -> None:
@@ -1206,6 +1222,28 @@ def test_train_gcs_count_balanced_default_false_and_explicit_true() -> None:
     assert args.gcs_lane_count_balanced is False
     args = parse_train_gcs_args(["--gcs-lane-count-balanced"])
     assert args.gcs_lane_count_balanced is True
+
+
+def test_ordered_slot_without_official_best_requires_explicit_debug_escape() -> None:
+    trainer = _fresh_trainer()
+    trainer.args = SimpleNamespace(
+        gcs_mode="ordered_slot",
+        gcs_official_best=False,
+        gcs_allow_internal_best=False,
+    )
+    trainer._warned_ordered_slot_without_official_best = False
+    try:
+        trainer._warn_if_ordered_slot_without_official_best()
+    except RuntimeError as exc:
+        assert "--gcs-official-best" in str(exc)
+        assert "--gcs-allow-internal-best" in str(exc)
+    else:
+        raise AssertionError("ordered_slot formal training must require official_best checkpoint selection.")
+
+    trainer.args.gcs_allow_internal_best = True
+    trainer._warned_ordered_slot_without_official_best = False
+    trainer._warn_if_ordered_slot_without_official_best()
+    assert trainer._warned_ordered_slot_without_official_best is True
 
 
 def test_train_gcs_defaults_match_current_contract_paths() -> None:
@@ -1314,6 +1352,8 @@ def test_eval_gcs_ordered_summary_has_no_query_decode_keys() -> None:
         count_aware_min_k=2,
         count_aware_max_k=5,
         count_aware_length_norm=6.0,
+        gcs_min_interval_points=4,
+        gcs_bottom_order_margin_px=7.5,
         warmup=0,
         device="cpu",
         half=False,
@@ -1325,6 +1365,8 @@ def test_eval_gcs_ordered_summary_has_no_query_decode_keys() -> None:
     assert config["uses_nms"] is False
     assert config["uses_conf_threshold"] is False
     assert config["uses_max_det"] is False
+    assert config["min_interval_points"] == 4
+    assert config["gcs_bottom_order_margin_px"] == 7.5
     assert config["order_check"] == runtime_cfg["order_check"]
     assert config["output_order"] == runtime_cfg["output_order"]
     assert config["uses_runtime_sort"] == runtime_cfg["uses_runtime_sort"]
@@ -1756,6 +1798,21 @@ def test_ordered_slot_sweep_row_uses_not_applicable_query_decode_args() -> None:
     assert row["query_decode_args"] == "not_applicable"
     assert not (query_only & set(row))
 
+    row = build_combos(
+        SimpleNamespace(decode_mode="ordered_slot", gcs_min_interval_points=2, gcs_bottom_order_margin_px=2.0),
+        decode_yaml_cfg={
+            "schema": "ordered_slot_decode_v1",
+            "decode_mode": "ordered_slot",
+            "gcs_min_lanes": 2,
+            "gcs_max_lanes": 5,
+            "gcs_num_slots": 5,
+            "min_interval_points": 4,
+            "gcs_bottom_order_margin_px": 7.5,
+        },
+    )[0]
+    assert row["effective_decode"]["min_interval_points"] == 4
+    assert row["effective_decode"]["gcs_bottom_order_margin_px"] == 7.5
+
 
 def test_ordered_slot_sweep_csv_keeps_empty_query_only_columns() -> None:
     tmp = _reset_tmp_subdir("ordered_slot_sweep_csv")
@@ -1936,6 +1993,49 @@ def test_training_validator_order_violation_is_diagnostic_not_fatal() -> None:
     assert metrics["val/ordered_slot_order_violation_rate"] == 1.0
 
 
+def test_training_validator_passes_ordered_decode_contract_args() -> None:
+    validator = GCSLaneValidator(
+        args=SimpleNamespace(
+            gcs_mode="ordered_slot",
+            gcs_min_lanes=2,
+            gcs_max_lanes=5,
+            gcs_min_interval_points=4,
+            gcs_bottom_order_margin_px=7.5,
+        )
+    )
+    validator.model = DummyOrderedModel()
+    preds = _base_preds(batch=1)
+    preds["pred_count_logits"][0, 0] = 10.0
+    preds["pred_logits"] = preds["pred_exist_logits"]
+    points, valid = _fixed_y_points(2)
+    batch = {
+        "img": torch.zeros(1, 3, 544, 960),
+        "lanes": [points],
+        "lane_valid": [valid],
+    }
+    state = validator._empty_metric_state()
+
+    captured: dict = {}
+
+    def fake_decode(*args, **kwargs):
+        captured.update(kwargs)
+        return [], {"order_violation_count": 0, "has_order_violation": False}
+
+    globals_dict = GCSLaneValidator._update_metric_state.__globals__
+    original_decode = globals_dict["decode_ordered_slot_predictions"]
+    globals_dict["decode_ordered_slot_predictions"] = fake_decode
+    try:
+        validator._update_metric_state(state, preds, batch)
+    finally:
+        globals_dict["decode_ordered_slot_predictions"] = original_decode
+
+    assert captured["min_lanes"] == 2
+    assert captured["max_lanes"] == 5
+    assert captured["min_interval_points"] == 4
+    assert captured["order_margin_px"] == 7.5
+    assert captured["img_w"] == 960.0
+
+
 def test_git_tracking_and_idea_ignore() -> None:
     ignored = subprocess.run(
         ["git", "check-ignore", "-q", ".idea/GCS-YOLO-Lane_LSA_5-25-3-k56.iml"],
@@ -2043,6 +2143,7 @@ def main() -> None:
         test_query_training_official_sweep_keeps_user_grid,
         test_default_yaml_count_balanced_false,
         test_train_gcs_count_balanced_default_false_and_explicit_true,
+        test_ordered_slot_without_official_best_requires_explicit_debug_escape,
         test_train_gcs_defaults_match_current_contract_paths,
         test_ordered_slot_scale_positive_fails_fast,
         test_query_mode_scale_behavior_is_unchanged,
@@ -2075,6 +2176,7 @@ def main() -> None:
         test_overfit20_skips_absent_per_class_count_acc,
         test_standalone_validator_syncs_ordered_mode,
         test_training_validator_order_violation_is_diagnostic_not_fatal,
+        test_training_validator_passes_ordered_decode_contract_args,
         test_required_ordered_slot_imports_available,
         test_train_gcs_override_keys_are_registered_in_default_yaml,
     ]

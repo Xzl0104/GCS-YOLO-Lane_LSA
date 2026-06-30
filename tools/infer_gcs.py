@@ -18,7 +18,7 @@ os.chdir(ROOT)
 
 from ultralytics.data.utils import IMG_FORMATS
 from ultralytics.models.gcs.decode_ordered_slot import decode_ordered_slot_predictions
-from ultralytics.models.gcs.decode_summary import ordered_slot_decode_runtime_config
+from ultralytics.models.gcs.decode_summary import ordered_slot_decode_params, ordered_slot_decode_runtime_config
 from ultralytics.models.gcs.mode_utils import resolve_decode_mode
 from ultralytics.nn.modules import GCSLaneHead
 from ultralytics.nn.tasks import GCSLaneModel, load_checkpoint
@@ -91,6 +91,21 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--conf", type=float, default=0.2, help="Lane existence confidence threshold.")
     parser.add_argument("--decode-mode", choices=("auto", "query", "ordered_slot"), default="auto", help="Decode path.")
+    parser.add_argument("--gcs-min-lanes", type=int, default=2, help="ordered_slot minimum supported lane count.")
+    parser.add_argument("--gcs-max-lanes", type=int, default=5, help="ordered_slot maximum supported lane count.")
+    parser.add_argument("--gcs-num-slots", type=int, default=5, help="ordered_slot slot count.")
+    parser.add_argument(
+        "--gcs-min-interval-points",
+        type=int,
+        default=2,
+        help="ordered_slot minimum decoded start/end interval length.",
+    )
+    parser.add_argument(
+        "--gcs-bottom-order-margin-px",
+        type=float,
+        default=2.0,
+        help="ordered_slot bottom-x left-to-right order margin in pixels.",
+    )
     parser.add_argument(
         "--point-valid-thr",
         type=float,
@@ -261,6 +276,11 @@ def run_inference(
     count_aware_min_k: int = 3,
     count_aware_max_k: int = 5,
     count_aware_length_norm: float = 12.0,
+    gcs_min_lanes: int = 2,
+    gcs_max_lanes: int = 5,
+    gcs_num_slots: int = 5,
+    gcs_min_interval_points: int = 2,
+    gcs_bottom_order_margin_px: float = 2.0,
     decode_mode: str = "auto",
     max_images: int = 0,
     save_img: bool = True,
@@ -275,6 +295,19 @@ def run_inference(
     active_decode_mode = resolve_decode_mode(decode_mode, model)
     ordered_slot_runtime_cfg = (
         ordered_slot_decode_runtime_config(context="infer") if active_decode_mode == "ordered_slot" else None
+    )
+    ordered_slot_params = (
+        ordered_slot_decode_params(
+            {
+                "gcs_min_lanes": gcs_min_lanes,
+                "gcs_max_lanes": gcs_max_lanes,
+                "gcs_num_slots": gcs_num_slots,
+                "gcs_min_interval_points": gcs_min_interval_points,
+                "gcs_bottom_order_margin_px": gcs_bottom_order_margin_px,
+            }
+        )
+        if active_decode_mode == "ordered_slot"
+        else None
     )
     images = collect_images(source, max_images=max_images)
     print(f"GCS input shape: {shape_str(imgsz)} (W x H), stored as H,W={imgsz}")
@@ -313,6 +346,11 @@ def run_inference(
                 preds,
                 batch_index=0,
                 image_shape=img.shape[:2],
+                min_lanes=ordered_slot_params["min_lanes"],
+                max_lanes=ordered_slot_params["max_lanes"],
+                min_interval_points=ordered_slot_params["min_interval_points"],
+                order_margin_px=ordered_slot_params["order_margin_px"],
+                img_w=float(img.shape[1]),
                 order_check=ordered_slot_runtime_cfg["order_check"],
                 output_order=ordered_slot_runtime_cfg["output_order"],
             )
@@ -386,6 +424,11 @@ def main() -> None:
         count_aware_min_k=args.count_aware_min_k,
         count_aware_max_k=args.count_aware_max_k,
         count_aware_length_norm=args.count_aware_length_norm,
+        gcs_min_lanes=args.gcs_min_lanes,
+        gcs_max_lanes=args.gcs_max_lanes,
+        gcs_num_slots=args.gcs_num_slots,
+        gcs_min_interval_points=args.gcs_min_interval_points,
+        gcs_bottom_order_margin_px=args.gcs_bottom_order_margin_px,
         decode_mode=args.decode_mode,
         max_images=args.max_images,
         save_img=not args.no_save_img,

@@ -195,6 +195,7 @@ gcs_eval_nms_dist_px: 50.0 # (float) optional lane duplicate suppression distanc
 gcs_eval_point_valid_thr: 0.5 # (float) per-point visibility threshold used when decoding fixed-y lanes for validation
 gcs_eval_max_det: 8 # (int) maximum decoded lane queries kept for GCS validation metrics
 gcs_official_best: False # (bool) run periodic TuSimple official-val sweeps and preserve weights/official_best.pt
+gcs_allow_internal_best: False # (bool) allow ordered_slot debug training without official_best checkpoint selection
 gcs_official_interval: 5 # (int) epoch interval for periodic official-val checkpoint selection
 gcs_official_archive_root: archive # (str) path to archive/ or archive/TUSimple for official-val selection
 gcs_official_gt_json: # (str, optional) explicit official-val GT json-lines file
