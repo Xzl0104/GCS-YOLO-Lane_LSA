@@ -56,8 +56,9 @@ training/evaluation contracts without changing the algorithm direction:
   protocol-only training keeps `normalized_smooth_l1` unless a separate
   point-loss ablation explicitly opts in.
 - training fixed-y labels and ordered-slot targets must validate against
-  descending `710,700,...,160`; official TuSimple `h_samples` validate
-  separately against ascending `160,170,...,710`.
+  descending `710,700,...,160`; official TuSimple record `h_samples` validate
+  separately against ascending contiguous subsets of the canonical K56
+  `160,170,...,710` grid, such as 56-point `160..710` or 48-point `240..710`.
 - ordered-slot target construction removes padded/invalid lanes before fixed-y
   validation.
 - official sweep/training-time selection summaries must record the full

@@ -74,6 +74,32 @@ def validate_official_h_samples_asc(
     return "asc"
 
 
+def validate_tusimple_h_samples_asc(
+    h_samples,
+    k: int = 56,
+    atol: float = 1e-3,
+    name: str = "TuSimple record h_samples",
+) -> str:
+    """Validate one TuSimple record's asc h_samples against a canonical K56 slice."""
+    samples = np.asarray(h_samples, dtype=np.float32).reshape(-1)
+    if int(samples.shape[0]) <= 0:
+        raise ValueError(f"{name}: h_samples must not be empty.")
+    if int(samples.shape[0]) > int(k):
+        raise ValueError(f"{name}: K mismatch, got {samples.shape[0]}, expected at most {k}.")
+    if not np.isfinite(samples).all():
+        raise ValueError(f"{name}: h_samples contain NaN or Inf.")
+
+    expected = expected_tusimple_h_samples(k=k)
+    n = int(samples.shape[0])
+    for start in range(0, int(expected.shape[0]) - n + 1):
+        if _allclose_allowing_fp16_roundoff(samples, expected[start : start + n], atol=atol):
+            return "asc"
+    raise ValueError(
+        f"{name}: h_samples contract violated. Expected an ascending contiguous subset of "
+        f"160..710 step 10, got first/last={samples[0]:.6g}/{samples[-1]:.6g} and K={n}."
+    )
+
+
 def validate_fixed_y_anchors(
     fixed_y,
     original_h: int = 720,

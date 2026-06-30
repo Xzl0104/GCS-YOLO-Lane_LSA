@@ -8,7 +8,7 @@ from typing import Iterable
 
 import numpy as np
 
-from ultralytics.utils.gcs_fixed_y import validate_official_h_samples_asc
+from ultralytics.utils.gcs_fixed_y import validate_tusimple_h_samples_asc
 
 
 TUSIMPLE_ORIGINAL_SHAPE = (720, 1280)
@@ -406,7 +406,7 @@ def gcs_lanes_to_tusimple_lanes(
 ) -> list[list[int]]:
     """Convert decoded GCS lanes to TuSimple official x-at-h_samples lanes."""
     h, w = int(image_shape[0]), int(image_shape[1])
-    validate_official_h_samples_asc(h_samples, name="TuSimple official h_samples")
+    validate_tusimple_h_samples_asc(h_samples, name="TuSimple record h_samples")
     sample_y = np.asarray(h_samples, dtype=np.float32)
     tusimple_lanes: list[list[int]] = []
 

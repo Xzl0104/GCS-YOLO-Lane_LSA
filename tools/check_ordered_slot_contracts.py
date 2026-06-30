@@ -47,6 +47,7 @@ from gcs_tools.official_selection import (  # noqa: E402
     sweep_sort_key,
 )
 from gcs_tools.tusimple_official_eval import (  # noqa: E402
+    gcs_lanes_to_tusimple_lanes,
     official_gt_contract_summary,
     stable_raw_file_hash,
     validate_canonical_val_gt,
@@ -65,6 +66,7 @@ from ultralytics.models.gcs.decode_ordered_slot import decode_ordered_slot_predi
 from ultralytics.utils.gcs_fixed_y import (  # noqa: E402
     validate_fixed_y_anchors,
     validate_official_h_samples_asc,
+    validate_tusimple_h_samples_asc,
     validate_training_fixed_y_desc,
 )
 from ultralytics.models.gcs.loss_ordered_slot import OrderedSlotGCSLoss  # noqa: E402
@@ -661,6 +663,28 @@ def test_training_fixed_y_ascending_fails_and_official_ascending_passes() -> Non
         raise AssertionError("Training fixed_y anchors in asc 160..710 order must fail.")
 
     assert validate_official_h_samples_asc(asc.numpy(), name="official h_samples") == "asc"
+
+
+def test_tusimple_record_h_samples_accepts_canonical_subsets_for_export() -> None:
+    partial = list(range(240, 720, 10))
+    try:
+        validate_official_h_samples_asc(partial, name="strict official h_samples")
+    except ValueError as exc:
+        assert "K mismatch" in str(exc)
+    else:
+        raise AssertionError("Strict K56 official h_samples validation must reject per-record K48 h_samples.")
+
+    assert validate_tusimple_h_samples_asc(partial, name="record h_samples") == "asc"
+
+    y_desc = torch.arange(710.0, 150.0, -10.0) / 720.0
+    points = torch.zeros(56, 2)
+    points[:, 0] = 0.5
+    points[:, 1] = y_desc
+    lane = {"points_norm": points.numpy(), "point_valid": np.ones((56,), dtype=np.float32)}
+    converted = gcs_lanes_to_tusimple_lanes([lane], partial, image_shape=(720, 1280))
+    assert len(converted) == 1
+    assert len(converted[0]) == len(partial)
+    assert all(x == 640 for x in converted[0])
 
 
 def test_slot_target_removes_padding_before_fixed_y_validation() -> None:
@@ -1813,6 +1837,7 @@ def main() -> None:
         test_ordered_point_loss_defaults_preserve_protocol_behavior,
         test_aspect_l1_requires_explicit_ordered_point_loss_flag,
         test_training_fixed_y_ascending_fails_and_official_ascending_passes,
+        test_tusimple_record_h_samples_accepts_canonical_subsets_for_export,
         test_slot_target_removes_padding_before_fixed_y_validation,
         test_ordered_slot_target_sorts_shuffled_gt_by_bottom_x,
         test_ordered_slot_target_accepts_half_quantized_fixed_y,
