@@ -272,10 +272,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--gcs-allow-disable-order-loss",
         action="store_true",
-        help="Allow --gcs-order <= 0 only for explicit ordered_slot order-loss ablations.",
+        help="Allow ordered_slot order losses <= 0 only for explicit ablations.",
     )
     parser.add_argument("--gcs-slot-exist-w4", type=float, default=1.0, help="ordered_slot BCE weight for slot 4.")
     parser.add_argument("--gcs-slot-exist-w5", type=float, default=1.0, help="ordered_slot BCE weight for slot 5.")
+    parser.add_argument(
+        "--gcs-min-interval-points",
+        type=int,
+        default=2,
+        help="ordered_slot minimum decoded start/end interval length.",
+    )
     parser.add_argument("--gcs-order-margin-px", type=float, default=5.0, help="ordered_slot left-to-right margin in pixels.")
     parser.add_argument(
         "--gcs-bottom-order-margin-px",
@@ -662,6 +668,7 @@ def main() -> None:
         "gcs_allow_disable_order_loss": args.gcs_allow_disable_order_loss,
         "gcs_slot_exist_w4": args.gcs_slot_exist_w4,
         "gcs_slot_exist_w5": args.gcs_slot_exist_w5,
+        "gcs_min_interval_points": args.gcs_min_interval_points,
         "gcs_order_margin_px": args.gcs_order_margin_px,
         "gcs_bottom_order_margin_px": args.gcs_bottom_order_margin_px,
         "gcs_ordered_point_loss": args.gcs_ordered_point_loss,

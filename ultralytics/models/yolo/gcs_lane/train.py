@@ -143,6 +143,7 @@ class GCSLaneTrainer(BaseTrainer):
         overrides.setdefault("scale", 0.0)
         overrides.setdefault("erasing", 0.0)
         super().__init__(cfg, overrides, _callbacks)
+        self._warned_ordered_slot_without_official_best = False
         assert_ordered_slot_scale_contract(self._gcs_mode(), getattr(self.args, "scale", 0.0))
         self.official_best = self.wdir / "official_best.pt"
         self.official_best_sweep = self.wdir / "official_best_sweep.json"
@@ -150,6 +151,7 @@ class GCSLaneTrainer(BaseTrainer):
         self._official_best_state = self._load_official_best_state()
         self._lock_gcs_shape_contract()
         self._set_loss_names_for_mode()
+        self._warn_if_ordered_slot_without_official_best()
 
     def _gcs_mode(self) -> str:
         """Return normalized GCS training mode."""
@@ -186,6 +188,7 @@ class GCSLaneTrainer(BaseTrainer):
         order = float(self._get_arg_value("gcs_order", 0.2))
         gt_bottom_order = float(self._get_arg_value("gcs_gt_bottom_order", 1.0))
         decoded_bottom_order = float(self._get_arg_value("gcs_decoded_bottom_order", 1.0))
+        min_interval_points = int(self._get_arg_value("gcs_min_interval_points", 2))
         bottom_order_margin_px = float(self._get_arg_value("gcs_bottom_order_margin_px", 2.0))
         allow_disable_order = bool(self._get_arg_value("gcs_allow_disable_order_loss", False))
         if count_ce <= 0.0:
@@ -203,6 +206,18 @@ class GCSLaneTrainer(BaseTrainer):
                 "ordered_slot order loss is disabled. "
                 "Pass --gcs-allow-disable-order-loss only for an explicit ablation."
             )
+        if gt_bottom_order <= 0.0 and not allow_disable_order:
+            raise RuntimeError(
+                "ordered_slot strict contract requires gcs_gt_bottom_order > 0. "
+                "Pass --gcs-allow-disable-order-loss only for an explicit ablation."
+            )
+        if decoded_bottom_order <= 0.0 and not allow_disable_order:
+            raise RuntimeError(
+                "ordered_slot strict contract requires gcs_decoded_bottom_order > 0. "
+                "Pass --gcs-allow-disable-order-loss only for an explicit ablation."
+            )
+        if min_interval_points <= 0:
+            raise ValueError(f"gcs_min_interval_points must be > 0, got {min_interval_points}.")
         return {
             "gcs_point": float(self._get_arg_value("gcs_point", 15.0)),
             "gcs_exist": float(self._get_arg_value("gcs_exist", 2.0)),
@@ -212,6 +227,8 @@ class GCSLaneTrainer(BaseTrainer):
             "gcs_order": order,
             "gcs_gt_bottom_order": gt_bottom_order,
             "gcs_decoded_bottom_order": decoded_bottom_order,
+            "gcs_min_interval_points": min_interval_points,
+            "gcs_ordered_point_loss": str(self._get_arg_value("gcs_ordered_point_loss", "normalized_smooth_l1")),
             "gcs_bottom_order_margin_px": bottom_order_margin_px,
             "gcs_allow_disable_order_loss": allow_disable_order,
             "count_supervision_enabled": count_ce > 0.0,
@@ -246,6 +263,18 @@ class GCSLaneTrainer(BaseTrainer):
                 )
             },
         )
+
+    def _warn_if_ordered_slot_without_official_best(self) -> None:
+        """Warn when ordered-slot training is not selecting checkpoints by strict official-val."""
+        if self._gcs_mode() != "ordered_slot" or bool(getattr(self, "_warned_ordered_slot_without_official_best", False)):
+            return
+        if not bool(getattr(self.args, "gcs_official_best", False)):
+            LOGGER.warning(
+                "ordered_slot training is running with gcs_official_best=False. "
+                "weights/best.pt is internal validation best, not strict official order-aware best. "
+                "For formal TuSimple results, enable --gcs-official-best True and pass --gcs-official-gt-json."
+            )
+            self._warned_ordered_slot_without_official_best = True
 
     def _assert_model_gcs_mode(self, model: nn.Module) -> None:
         """Fail fast when CLI/YAML/head GCS modes disagree."""
@@ -630,6 +659,7 @@ class GCSLaneTrainer(BaseTrainer):
         """Return a GCS lane model with GCSLoss wiring."""
         model = GCSLaneModel(cfg, nc=self.data["nc"], ch=self.data.get("channels", 3), verbose=verbose and RANK == -1)
         self._assert_model_gcs_mode(model)
+        self._warn_if_ordered_slot_without_official_best()
         self._record_ordered_slot_loss_contract()
         self._rewrite_args_yaml_after_gcs_mode_sync()
         self._set_loss_names_for_mode()

@@ -49,6 +49,7 @@ from gcs_tools.official_selection import (  # noqa: E402
 from gcs_tools.tusimple_official_eval import (  # noqa: E402
     gcs_lanes_to_tusimple_lanes,
     official_gt_contract_summary,
+    stable_gt_content_hash,
     stable_raw_file_hash,
     validate_canonical_val_gt,
 )
@@ -62,7 +63,11 @@ from ultralytics.models.gcs.decode_summary import (  # noqa: E402
     raise_for_ordered_slot_query_args,
     validate_decode_yaml_for_model,
 )
-from ultralytics.models.gcs.decode_ordered_slot import decode_ordered_slot_predictions, validate_ordered_slot_pred_shapes  # noqa: E402
+from ultralytics.models.gcs.decode_ordered_slot import (  # noqa: E402
+    decode_ordered_slot_predictions,
+    decoded_bottom_idx_from_start_end_logits,
+    validate_ordered_slot_pred_shapes,
+)
 from ultralytics.utils.gcs_fixed_y import (  # noqa: E402
     validate_fixed_y_anchors,
     validate_official_h_samples_asc,
@@ -148,6 +153,7 @@ def _write_manifest(path: Path, records: list[dict]) -> None:
                 "name": "test_canonical_val_manifest",
                 "num_images": len(records),
                 "raw_file_sha256": stable_raw_file_hash(records),
+                "gt_content_sha256": stable_gt_content_hash(records),
             },
             indent=2,
         ),
@@ -299,12 +305,16 @@ def test_ordered_slot_loss_defaults_match_default_yaml_and_do_not_silent_disable
     assert cfg["gcs_gt_bottom_order"] == 1.0
     assert cfg["gcs_decoded_bottom_order"] == 1.0
     assert cfg["gcs_bottom_order_margin_px"] == 2.0
+    assert cfg["gcs_min_interval_points"] == 2
+    assert cfg["gcs_ordered_point_loss"] == "normalized_smooth_l1"
     assert criterion.count_ce_gain == cfg["gcs_count_ce"]
     assert criterion.interval_gain == cfg["gcs_interval"]
     assert criterion.order_gain == cfg["gcs_order"]
     assert criterion.gt_bottom_order_gain == cfg["gcs_gt_bottom_order"]
     assert criterion.decoded_bottom_order_gain == cfg["gcs_decoded_bottom_order"]
     assert criterion.bottom_order_margin_px == cfg["gcs_bottom_order_margin_px"]
+    assert criterion.min_interval_points == cfg["gcs_min_interval_points"]
+    assert criterion.loss_contract_summary()["gcs_ordered_point_loss"] == "normalized_smooth_l1"
     assert criterion.count_ce_gain > 0.0
     assert criterion.interval_gain > 0.0
     assert criterion.order_gain > 0.0
@@ -328,11 +338,71 @@ def test_ordered_slot_loss_core_supervision_requires_explicit_ablation() -> None
     else:
         raise AssertionError("ordered_slot order loss cannot be disabled without explicit ablation flag.")
 
+    for key in ("gcs_gt_bottom_order", "gcs_decoded_bottom_order"):
+        try:
+            OrderedSlotGCSLoss({"gcs_imgsz": [544, 960], key: 0.0})
+        except RuntimeError as exc:
+            assert key in str(exc)
+            assert "--gcs-allow-disable-order-loss" in str(exc)
+        else:
+            raise AssertionError(f"ordered_slot {key} cannot be disabled without explicit ablation flag.")
+
     criterion = OrderedSlotGCSLoss(
-        {"gcs_imgsz": [544, 960], "gcs_order": 0.0, "gcs_allow_disable_order_loss": True}
+        {
+            "gcs_imgsz": [544, 960],
+            "gcs_order": 0.0,
+            "gcs_gt_bottom_order": 0.0,
+            "gcs_decoded_bottom_order": 0.0,
+            "gcs_allow_disable_order_loss": True,
+        }
     )
     assert criterion.order_gain == 0.0
+    assert criterion.gt_bottom_order_gain == 0.0
+    assert criterion.decoded_bottom_order_gain == 0.0
     assert criterion.loss_contract_summary()["order_supervision_enabled"] is False
+    assert criterion.loss_contract_summary()["gt_bottom_order_supervision_enabled"] is False
+    assert criterion.loss_contract_summary()["decoded_bottom_order_supervision_enabled"] is False
+
+
+def test_trainer_ordered_slot_loss_contract_rejects_disabled_bottom_order_losses() -> None:
+    for key in ("gcs_gt_bottom_order", "gcs_decoded_bottom_order"):
+        trainer = _fresh_trainer()
+        trainer.args = SimpleNamespace(
+            gcs_count_ce=1.0,
+            gcs_interval=1.0,
+            gcs_order=0.2,
+            gcs_gt_bottom_order=1.0,
+            gcs_decoded_bottom_order=1.0,
+            gcs_min_interval_points=2,
+            gcs_bottom_order_margin_px=2.0,
+            gcs_allow_disable_order_loss=False,
+            gcs_ordered_point_loss="normalized_smooth_l1",
+        )
+        setattr(trainer.args, key, 0.0)
+        try:
+            trainer._ordered_slot_loss_contract_from_args()
+        except RuntimeError as exc:
+            assert key in str(exc)
+            assert "--gcs-allow-disable-order-loss" in str(exc)
+        else:
+            raise AssertionError(f"trainer contract must reject {key}=0.0 without explicit ablation flag.")
+
+    trainer = _fresh_trainer()
+    trainer.args = SimpleNamespace(
+        gcs_count_ce=1.0,
+        gcs_interval=1.0,
+        gcs_order=0.2,
+        gcs_gt_bottom_order=0.0,
+        gcs_decoded_bottom_order=0.0,
+        gcs_min_interval_points=2,
+        gcs_bottom_order_margin_px=2.0,
+        gcs_allow_disable_order_loss=True,
+        gcs_ordered_point_loss="normalized_smooth_l1",
+    )
+    contract = trainer._ordered_slot_loss_contract_from_args()
+    assert contract["gt_bottom_order_supervision_enabled"] is False
+    assert contract["decoded_bottom_order_supervision_enabled"] is False
+    assert contract["gcs_ordered_point_loss"] == "normalized_smooth_l1"
 
 
 def test_bottom_order_loss_catches_no_common_anchor_violation() -> None:
@@ -370,6 +440,78 @@ def test_bottom_order_loss_catches_no_common_anchor_violation() -> None:
     assert float(loss_items[names.index("slot_order_gt_bottom_violation_rate")].item()) == 1.0
     assert float(loss_items[names.index("slot_order_decoded_bottom_violation_rate")].item()) == 1.0
     assert float(loss_items[names.index("slot_order_decoded_bottom_pair_total")].item()) == 1.0
+    assert float(loss_items[names.index("slot_order_decoded_bottom_violation_pairs")].item()) == 1.0
+
+
+def test_decoded_bottom_idx_matches_repaired_interval_when_start_gt_end() -> None:
+    b, slots, k = 1, 5, 56
+    start_logits = torch.full((b, slots, k), -10.0)
+    end_logits = torch.full((b, slots, k), -10.0)
+    start_logits[0, 0, 30] = 10.0
+    end_logits[0, 0, 10] = 10.0
+    start_logits[0, 1, 20] = 10.0
+    end_logits[0, 1, 40] = 10.0
+    start_logits[0, 2, 30] = 10.0
+    end_logits[0, 2, 30] = 10.0
+
+    idx = decoded_bottom_idx_from_start_end_logits(start_logits, end_logits, min_interval_points=2)
+
+    assert int(idx[0, 0].item()) == 10
+    assert int(idx[0, 1].item()) == 20
+    assert int(idx[0, 2].item()) == 29
+
+
+def test_decoded_bottom_helper_sees_same_start_gt_end_violation_as_strict_decoder() -> None:
+    preds = _base_preds()
+    preds["pred_count_logits"][0, 0] = 10.0
+    preds["pred_start_logits"].fill_(-10.0)
+    preds["pred_end_logits"].fill_(-10.0)
+    preds["pred_start_logits"][0, 0, 30] = 10.0
+    preds["pred_end_logits"][0, 0, 10] = 10.0
+    preds["pred_start_logits"][0, 1, 20] = 10.0
+    preds["pred_end_logits"][0, 1, 40] = 10.0
+    preds["pred_points"][0, 0, 10, 0] = 0.80
+    preds["pred_points"][0, 1, 20, 0] = 0.20
+
+    try:
+        decode_ordered_slot_predictions(preds, batch_index=0, output_order="slot", order_check="error")
+    except AssertionError as exc:
+        assert "ordered_slot order violation" in str(exc)
+    else:
+        raise AssertionError("strict ordered-slot decoder must reject repaired bottom-x reversal.")
+
+    idx = decoded_bottom_idx_from_start_end_logits(
+        preds["pred_start_logits"],
+        preds["pred_end_logits"],
+        min_interval_points=2,
+    )
+    bottom_x = preds["pred_points"][..., 0].gather(dim=2, index=idx.unsqueeze(-1)).squeeze(-1)
+    assert abs(float(bottom_x[0, 0].item()) - 0.80) < 1e-6
+    assert abs(float(bottom_x[0, 1].item()) - 0.20) < 1e-6
+    assert float(bottom_x[0, 0].item()) > float(bottom_x[0, 1].item())
+
+
+def test_decoded_bottom_loss_and_metric_use_repaired_start_end_interval() -> None:
+    points, valid = _fixed_y_points(2)
+    preds = _base_preds()
+    preds["pred_count_logits"][0, 0] = 10.0
+    preds["pred_start_logits"].fill_(-10.0)
+    preds["pred_end_logits"].fill_(-10.0)
+    preds["pred_start_logits"][0, 0, 30] = 10.0
+    preds["pred_end_logits"][0, 0, 10] = 10.0
+    preds["pred_start_logits"][0, 1, 20] = 10.0
+    preds["pred_end_logits"][0, 1, 40] = 10.0
+    preds["pred_points"][0, 0, 10, 0] = 0.80
+    preds["pred_points"][0, 0, 30, 0] = 0.10
+    preds["pred_points"][0, 1, 20, 0] = 0.20
+
+    criterion = OrderedSlotGCSLoss({"gcs_imgsz": [544, 960]})
+    batch = {"lanes": [points], "lane_valid": [valid], "img": torch.zeros(1, 3, 544, 960)}
+    _, loss_items = criterion(preds, batch)
+    names = OrderedSlotGCSLoss.loss_names
+
+    assert float(loss_items[names.index("slot_decoded_bottom_order_loss")].item()) > 0.0
+    assert float(loss_items[names.index("slot_order_decoded_bottom_violation_rate")].item()) == 1.0
     assert float(loss_items[names.index("slot_order_decoded_bottom_violation_pairs")].item()) == 1.0
 
 
@@ -1347,6 +1489,46 @@ def test_official_val_rejects_wrong_363_raw_file_set() -> None:
     assert summary["comparable_to_e1_spurious"] is False
     assert summary["gt_images"] == 363
     assert summary["gt_raw_file_sha256"] == stable_raw_file_hash(gt_records)
+    assert summary["gt_content_sha256"] == stable_gt_content_hash(gt_records)
+
+
+def test_official_val_rejects_same_raw_files_with_modified_gt_content() -> None:
+    tmp = _reset_tmp_subdir("official_val_same_raw_changed_content")
+    h_samples = list(range(160, 720, 10))
+    lanes = [[320 for _ in h_samples], [720 for _ in h_samples]]
+    gt_records = [
+        {"lanes": [list(lane) for lane in lanes], "h_samples": h_samples, "raw_file": f"clips/canonical/{i:04d}/20.jpg"}
+        for i in range(363)
+    ]
+    manifest_path = tmp / "canonical_manifest.json"
+    _write_manifest(manifest_path, gt_records)
+
+    modified_records = [
+        {"lanes": [list(lane) for lane in record["lanes"]], "h_samples": list(record["h_samples"]), "raw_file": record["raw_file"]}
+        for record in gt_records
+    ]
+    modified_records[0]["lanes"][0][0] = modified_records[0]["lanes"][0][0] + 1
+
+    assert stable_raw_file_hash(modified_records) == stable_raw_file_hash(gt_records)
+    assert stable_gt_content_hash(modified_records) != stable_gt_content_hash(gt_records)
+
+    try:
+        validate_canonical_val_gt(modified_records, manifest_path=manifest_path, allow_noncanonical_gt=False)
+    except RuntimeError as exc:
+        assert "Official val GT is not the canonical 363-image validation set" in str(exc)
+        assert stable_raw_file_hash(modified_records) in str(exc)
+        assert stable_gt_content_hash(modified_records) in str(exc)
+        assert stable_gt_content_hash(gt_records) in str(exc)
+    else:
+        raise AssertionError("GT records with the canonical raw_file set but modified lanes must not be canonical.")
+
+    summary = validate_canonical_val_gt(modified_records, manifest_path=manifest_path, allow_noncanonical_gt=True)
+    assert summary["gt_contract"] == "noncanonical"
+    assert summary["comparable_to_e1_spurious"] is False
+    assert summary["gt_raw_file_sha256"] == stable_raw_file_hash(modified_records)
+    assert summary["canonical_raw_file_sha256"] == stable_raw_file_hash(gt_records)
+    assert summary["gt_content_sha256"] == stable_gt_content_hash(modified_records)
+    assert summary["canonical_gt_content_sha256"] == stable_gt_content_hash(gt_records)
 
 
 def test_official_val_canonical_manifest_hash_match_is_comparable() -> None:
@@ -1374,6 +1556,8 @@ def test_official_val_canonical_manifest_hash_match_is_comparable() -> None:
     assert output["comparable_to_e1_spurious"] is True
     assert output["gt_raw_file_sha256"] == stable_raw_file_hash(gt_records)
     assert output["canonical_raw_file_sha256"] == stable_raw_file_hash(gt_records)
+    assert output["gt_content_sha256"] == stable_gt_content_hash(gt_records)
+    assert output["canonical_gt_content_sha256"] == stable_gt_content_hash(gt_records)
 
 
 def test_pred_json_ordered_slot_summary_uses_ordered_contract() -> None:
@@ -1818,7 +2002,11 @@ def main() -> None:
         test_slot_count_acc_aggregates_from_correct_total_and_skips_absent,
         test_ordered_slot_loss_defaults_match_default_yaml_and_do_not_silent_disable,
         test_ordered_slot_loss_core_supervision_requires_explicit_ablation,
+        test_trainer_ordered_slot_loss_contract_rejects_disabled_bottom_order_losses,
         test_bottom_order_loss_catches_no_common_anchor_violation,
+        test_decoded_bottom_idx_matches_repaired_interval_when_start_gt_end,
+        test_decoded_bottom_helper_sees_same_start_gt_end_violation_as_strict_decoder,
+        test_decoded_bottom_loss_and_metric_use_repaired_start_end_interval,
         test_decode_count_two_lanes,
         test_ordered_slot_head_requires_five_slots_and_queries,
         test_ordered_slot_decode_shape_guard_rejects_bad_count_logits,
@@ -1869,6 +2057,7 @@ def main() -> None:
         test_official_val_requires_explicit_gt_json,
         test_official_val_rejects_noncanonical_gt_by_default,
         test_official_val_rejects_wrong_363_raw_file_set,
+        test_official_val_rejects_same_raw_files_with_modified_gt_content,
         test_official_val_canonical_manifest_hash_match_is_comparable,
         test_pred_json_ordered_slot_summary_uses_ordered_contract,
         test_model_decode_ordered_slot_summary_uses_real_order_stats,

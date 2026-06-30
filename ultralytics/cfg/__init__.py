@@ -303,6 +303,7 @@ CFG_INT_KEYS = frozenset(
         "gcs_min_lanes",
         "gcs_max_lanes",
         "gcs_count_classes",
+        "gcs_min_interval_points",
         "gcs_match_min_overlap",
         "gcs_eval_min_overlap",
         "gcs_lane_count_min_group",

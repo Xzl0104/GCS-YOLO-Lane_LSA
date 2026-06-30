@@ -37,6 +37,48 @@ def repair_interval(start: int, end: int, k: int, min_len: int = 2) -> tuple[int
     return max(0, new_start), min(k - 1, new_end)
 
 
+def decoded_bottom_idx_from_start_end_logits(
+    pred_start_logits: torch.Tensor,
+    pred_end_logits: torch.Tensor,
+    min_interval_points: int = 2,
+) -> torch.Tensor:
+    """Return the bottom index that strict ordered-slot decode uses after interval repair."""
+    if pred_start_logits.shape != pred_end_logits.shape:
+        raise ValueError(
+            "pred_start_logits and pred_end_logits must have identical shape, "
+            f"got {tuple(pred_start_logits.shape)} vs {tuple(pred_end_logits.shape)}."
+        )
+    if pred_start_logits.ndim != 3:
+        raise ValueError(f"pred_start_logits must have shape B x S x K, got {tuple(pred_start_logits.shape)}.")
+    k = int(pred_start_logits.shape[-1])
+    if k <= 0:
+        raise ValueError(f"ordered_slot interval repair requires K > 0, got {k}.")
+
+    min_len = max(1, min(int(min_interval_points), k))
+    start = pred_start_logits.detach().float().argmax(dim=-1).long()
+    end = pred_end_logits.detach().float().argmax(dim=-1).long()
+
+    lo = torch.minimum(start, end).clamp(0, k - 1)
+    hi = torch.maximum(start, end).clamp(0, k - 1)
+    length = hi - lo + 1
+    need_expand = length < min_len
+
+    center = (lo + hi) // 2
+    new_start = center - (min_len // 2)
+    new_end = new_start + min_len - 1
+
+    left_overflow = new_start < 0
+    new_start = torch.where(left_overflow, torch.zeros_like(new_start), new_start)
+    new_end = torch.where(left_overflow, torch.full_like(new_end, min_len - 1), new_end)
+
+    right_overflow = new_end >= k
+    new_end = torch.where(right_overflow, torch.full_like(new_end, k - 1), new_end)
+    new_start = torch.where(right_overflow, torch.full_like(new_start, k - min_len), new_start)
+
+    repaired_start = torch.where(need_expand, new_start, lo)
+    return repaired_start.clamp(0, k - 1).long()
+
+
 def lane_bottom_x_from_interval(points_norm: np.ndarray, start: int, end: int) -> float:
     """Return the bottom-most normalized x for a repaired fixed-y interval."""
     bottom_idx = int(min(start, end))

@@ -70,6 +70,31 @@ def stable_raw_file_hash(gt_records: Iterable[dict]) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _normalize_gt_hash_value(value) -> int | float:
+    """Normalize JSON numeric values for stable GT content hashing."""
+    numeric = float(value)
+    return int(numeric) if numeric.is_integer() else round(numeric, 6)
+
+
+def stable_gt_content_hash(gt_records: Iterable[dict]) -> str:
+    """Return a stable hash of raw_file, h_samples, and lanes for a TuSimple GT surface."""
+    normalized = []
+    for record in gt_records:
+        normalized.append(
+            {
+                "raw_file": str(record["raw_file"]).replace("\\", "/"),
+                "h_samples": [_normalize_gt_hash_value(x) for x in record.get("h_samples", [])],
+                "lanes": [
+                    [_normalize_gt_hash_value(x) for x in lane]
+                    for lane in record.get("lanes", [])
+                ],
+            }
+        )
+    normalized.sort(key=lambda item: item["raw_file"])
+    payload = json.dumps(normalized, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
 def load_canonical_val_manifest(path: str | Path = DEFAULT_CANONICAL_TUSIMPLE_VAL_MANIFEST) -> dict:
     """Load the canonical 363-image TuSimple val manifest."""
     manifest_path = Path(path)
@@ -90,15 +115,19 @@ def validate_canonical_val_gt(
     manifest = load_canonical_val_manifest(manifest_path)
     gt_images = int(len(gt_records))
     gt_raw_hash = stable_raw_file_hash(gt_records)
+    gt_content_hash = stable_gt_content_hash(gt_records)
     expected_images = int(manifest["num_images"])
-    expected_hash = str(manifest["raw_file_sha256"])
+    expected_raw_hash = str(manifest["raw_file_sha256"])
+    expected_content_hash = str(manifest["gt_content_sha256"])
 
     summary: dict[str, object] = {
         "gt_images": gt_images,
         "gt_raw_file_sha256": gt_raw_hash,
-        "canonical_raw_file_sha256": expected_hash,
+        "canonical_raw_file_sha256": expected_raw_hash,
+        "gt_content_sha256": gt_content_hash,
+        "canonical_gt_content_sha256": expected_content_hash,
     }
-    if gt_images == expected_images and gt_raw_hash == expected_hash:
+    if gt_images == expected_images and gt_raw_hash == expected_raw_hash and gt_content_hash == expected_content_hash:
         summary.update(
             {
                 "gt_contract": "canonical_official_val_363",
@@ -118,8 +147,9 @@ def validate_canonical_val_gt(
 
     raise RuntimeError(
         "Official val GT is not the canonical 363-image validation set. "
-        f"got images={gt_images}, raw_file_sha256={gt_raw_hash}; "
-        f"expected images={expected_images}, raw_file_sha256={expected_hash}. "
+        f"got images={gt_images}, raw_file_sha256={gt_raw_hash}, gt_content_sha256={gt_content_hash}; "
+        f"expected images={expected_images}, raw_file_sha256={expected_raw_hash}, "
+        f"gt_content_sha256={expected_content_hash}. "
         "Pass the canonical --gt-json or use --allow-noncanonical-gt, but noncanonical results "
         "are not comparable to E1/spurious baselines."
     )
