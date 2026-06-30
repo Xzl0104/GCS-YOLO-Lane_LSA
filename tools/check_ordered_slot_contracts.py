@@ -304,6 +304,9 @@ def test_ordered_slot_loss_defaults_match_default_yaml_and_do_not_silent_disable
     assert cfg["gcs_order"] == 0.2
     assert cfg["gcs_gt_bottom_order"] == 1.0
     assert cfg["gcs_decoded_bottom_order"] == 1.0
+    assert cfg["gcs_slot_gt_bottom_x"] == 0.0
+    assert cfg["gcs_slot_gt_bottom_x_beta"] == 0.05
+    assert cfg["gcs_slot_gt_bottom_x_detach_interval"] == 1
     assert cfg["gcs_bottom_order_margin_px"] == 2.0
     assert cfg["gcs_min_interval_points"] == 2
     assert cfg["gcs_ordered_point_loss"] == "normalized_smooth_l1"
@@ -312,6 +315,9 @@ def test_ordered_slot_loss_defaults_match_default_yaml_and_do_not_silent_disable
     assert criterion.order_gain == cfg["gcs_order"]
     assert criterion.gt_bottom_order_gain == cfg["gcs_gt_bottom_order"]
     assert criterion.decoded_bottom_order_gain == cfg["gcs_decoded_bottom_order"]
+    assert criterion.slot_gt_bottom_x_gain == cfg["gcs_slot_gt_bottom_x"]
+    assert criterion.slot_gt_bottom_x_beta == cfg["gcs_slot_gt_bottom_x_beta"]
+    assert criterion.slot_gt_bottom_x_detach_interval is True
     assert criterion.bottom_order_margin_px == cfg["gcs_bottom_order_margin_px"]
     assert criterion.min_interval_points == cfg["gcs_min_interval_points"]
     assert criterion.loss_contract_summary()["gcs_ordered_point_loss"] == "normalized_smooth_l1"
@@ -320,6 +326,7 @@ def test_ordered_slot_loss_defaults_match_default_yaml_and_do_not_silent_disable
     assert criterion.order_gain > 0.0
     assert criterion.gt_bottom_order_gain > 0.0
     assert criterion.decoded_bottom_order_gain > 0.0
+    assert criterion.loss_contract_summary()["slot_gt_bottom_x_supervision_enabled"] is False
 
 
 def test_ordered_slot_loss_core_supervision_requires_explicit_ablation() -> None:
@@ -402,6 +409,10 @@ def test_trainer_ordered_slot_loss_contract_rejects_disabled_bottom_order_losses
     contract = trainer._ordered_slot_loss_contract_from_args()
     assert contract["gt_bottom_order_supervision_enabled"] is False
     assert contract["decoded_bottom_order_supervision_enabled"] is False
+    assert contract["gcs_slot_gt_bottom_x"] == 0.0
+    assert contract["gcs_slot_gt_bottom_x_beta"] == 0.05
+    assert contract["gcs_slot_gt_bottom_x_detach_interval"] is True
+    assert contract["slot_gt_bottom_x_supervision_enabled"] is False
     assert contract["gcs_ordered_point_loss"] == "normalized_smooth_l1"
 
 
@@ -513,6 +524,60 @@ def test_decoded_bottom_loss_and_metric_use_repaired_start_end_interval() -> Non
     assert float(loss_items[names.index("slot_decoded_bottom_order_loss")].item()) > 0.0
     assert float(loss_items[names.index("slot_order_decoded_bottom_violation_rate")].item()) == 1.0
     assert float(loss_items[names.index("slot_order_decoded_bottom_violation_pairs")].item()) == 1.0
+
+
+def test_slot_gt_bottom_x_loss_uses_repaired_decoded_bottom_index() -> None:
+    points, valid = _fixed_y_points(2)
+    preds = _base_preds()
+    preds["pred_count_logits"][0, 0] = 10.0
+    preds["pred_points"][0, 0, :, 0] = 0.15
+    preds["pred_points"][0, 1, :, 0] = 0.30
+    preds["pred_start_logits"].fill_(-10.0)
+    preds["pred_end_logits"].fill_(-10.0)
+    preds["pred_start_logits"][0, 0, 30] = 10.0
+    preds["pred_end_logits"][0, 0, 10] = 10.0
+    preds["pred_start_logits"][0, 1, 0] = 10.0
+    preds["pred_end_logits"][0, 1, 2] = 10.0
+    preds["pred_points"][0, 0, 10, 0] = 0.45
+    preds["pred_points"][0, 0, 30, 0] = 0.15
+
+    criterion = OrderedSlotGCSLoss({"gcs_imgsz": [544, 960], "gcs_slot_gt_bottom_x": 1.0})
+    batch = {"lanes": [points], "lane_valid": [valid], "img": torch.zeros(1, 3, 544, 960)}
+    _, loss_items = criterion(preds, batch)
+    names = OrderedSlotGCSLoss.loss_names
+
+    assert float(loss_items[names.index("slot_gt_bottom_x_loss")].item()) > 0.10
+    assert abs(float(loss_items[names.index("slot_gt_bottom_x_abs_err")].item()) - 0.15) < 1e-5
+    assert abs(float(loss_items[names.index("slot_gt_bottom_x_abs_err_px")].item()) - 144.0) < 1e-4
+
+
+def test_slot_gt_bottom_x_loss_reports_available_target_keys() -> None:
+    criterion = OrderedSlotGCSLoss({"gcs_imgsz": [544, 960], "gcs_slot_gt_bottom_x": 1.0})
+    preds = _base_preds()
+    preds["pred_count_logits"][0, 0] = 10.0
+
+    def broken_targets(batch: dict, device: torch.device) -> dict[str, torch.Tensor]:
+        return {
+            "slot_valid": torch.ones(1, 5, 56, device=device),
+            "slot_exist": torch.ones(1, 5, device=device),
+            "count_label": torch.zeros(1, dtype=torch.long, device=device),
+            "start_labels": torch.zeros(1, 5, dtype=torch.long, device=device),
+            "end_labels": torch.zeros(1, 5, dtype=torch.long, device=device),
+            "repaired_noncontiguous_lanes": torch.zeros(1, device=device),
+            "repaired_hole_points": torch.zeros(1, device=device),
+        }
+
+    criterion._target_slots = broken_targets
+    try:
+        criterion(preds, {"img": torch.zeros(1, 3, 544, 960)})
+    except KeyError as exc:
+        message = str(exc)
+        assert "slot_gt_bottom_x_loss" in message
+        assert "slot_points" in message
+        assert "available keys" in message
+        assert "slot_valid" in message
+    else:
+        raise AssertionError("slot_gt_bottom_x_loss must report available target keys when required targets are missing.")
 
 
 def test_decode_count_two_lanes() -> None:
@@ -785,8 +850,18 @@ def test_ordered_point_loss_defaults_preserve_protocol_behavior() -> None:
     args = parse_train_gcs_args([])
     criterion = OrderedSlotGCSLoss({"gcs_imgsz": [544, 960]})
     assert cfg["gcs_ordered_point_loss"] == "normalized_smooth_l1"
+    assert cfg["gcs_slot_gt_bottom_x"] == 0.0
+    assert cfg["gcs_slot_gt_bottom_x_beta"] == 0.05
+    assert cfg["gcs_slot_gt_bottom_x_detach_interval"] == 1
     assert args.gcs_ordered_point_loss == "normalized_smooth_l1"
+    assert args.gcs_slot_gt_bottom_x == 0.0
+    assert args.gcs_slot_gt_bottom_x_beta == 0.05
+    assert args.gcs_slot_gt_bottom_x_detach_interval == 1
     assert criterion.ordered_point_loss == "normalized_smooth_l1"
+    source = (ROOT / "tools/train_gcs.py").read_text(encoding="utf-8")
+    assert '"gcs_slot_gt_bottom_x": args.gcs_slot_gt_bottom_x' in source
+    assert '"gcs_slot_gt_bottom_x_beta": args.gcs_slot_gt_bottom_x_beta' in source
+    assert '"gcs_slot_gt_bottom_x_detach_interval": args.gcs_slot_gt_bottom_x_detach_interval' in source
 
 
 def test_aspect_l1_requires_explicit_ordered_point_loss_flag() -> None:
@@ -2107,6 +2182,8 @@ def main() -> None:
         test_decoded_bottom_idx_matches_repaired_interval_when_start_gt_end,
         test_decoded_bottom_helper_sees_same_start_gt_end_violation_as_strict_decoder,
         test_decoded_bottom_loss_and_metric_use_repaired_start_end_interval,
+        test_slot_gt_bottom_x_loss_uses_repaired_decoded_bottom_index,
+        test_slot_gt_bottom_x_loss_reports_available_target_keys,
         test_decode_count_two_lanes,
         test_ordered_slot_head_requires_five_slots_and_queries,
         test_ordered_slot_decode_shape_guard_rejects_bad_count_logits,

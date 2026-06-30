@@ -270,6 +270,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="ordered_slot decoded-bottom adjacent-slot order loss gain.",
     )
     parser.add_argument(
+        "--gcs-slot-gt-bottom-x",
+        type=float,
+        default=0.0,
+        help="ordered_slot decoded bottom-x to GT bottom-x regression gain. 0 disables.",
+    )
+    parser.add_argument(
+        "--gcs-slot-gt-bottom-x-beta",
+        type=float,
+        default=0.05,
+        help="SmoothL1 beta for ordered_slot GT bottom-x regression in normalized x.",
+    )
+    parser.add_argument(
+        "--gcs-slot-gt-bottom-x-detach-interval",
+        type=int,
+        default=1,
+        help="1 detaches start/end logits when selecting decoded bottom index for GT bottom-x loss; 0 keeps them attached.",
+    )
+    parser.add_argument(
         "--gcs-allow-disable-order-loss",
         action="store_true",
         help="Allow ordered_slot order losses <= 0 only for explicit ablations.",
@@ -670,6 +688,9 @@ def main() -> None:
         "gcs_order": args.gcs_order,
         "gcs_gt_bottom_order": args.gcs_gt_bottom_order,
         "gcs_decoded_bottom_order": args.gcs_decoded_bottom_order,
+        "gcs_slot_gt_bottom_x": args.gcs_slot_gt_bottom_x,
+        "gcs_slot_gt_bottom_x_beta": args.gcs_slot_gt_bottom_x_beta,
+        "gcs_slot_gt_bottom_x_detach_interval": args.gcs_slot_gt_bottom_x_detach_interval,
         "gcs_allow_disable_order_loss": args.gcs_allow_disable_order_loss,
         "gcs_slot_exist_w4": args.gcs_slot_exist_w4,
         "gcs_slot_exist_w5": args.gcs_slot_exist_w5,

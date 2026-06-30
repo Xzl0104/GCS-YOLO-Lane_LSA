@@ -139,6 +139,9 @@ gcs_interval: 1.0 # (float) ordered_slot start/end interval cross-entropy gain
 gcs_order: 0.2 # (float) ordered_slot common-anchor adjacent-slot order loss gain
 gcs_gt_bottom_order: 1.0 # (float) ordered_slot GT-bottom adjacent-slot order loss gain
 gcs_decoded_bottom_order: 1.0 # (float) ordered_slot decoded-bottom adjacent-slot order loss gain
+gcs_slot_gt_bottom_x: 0.0 # (float) ordered_slot decoded bottom-x to GT bottom-x regression gain; 0 disables
+gcs_slot_gt_bottom_x_beta: 0.05 # (float) SmoothL1 beta for ordered_slot GT bottom-x regression in normalized x
+gcs_slot_gt_bottom_x_detach_interval: 1 # (int) detach start/end logits when selecting decoded bottom index for GT bottom-x loss
 gcs_allow_disable_order_loss: False # (bool) allow ordered_slot order losses <= 0 only for an explicit ablation
 gcs_slot_exist_w4: 1.0 # (float) ordered_slot slot4 existence BCE element weight; weights positive and negative targets
 gcs_slot_exist_w5: 1.0 # (float) ordered_slot slot5 existence BCE element weight; weights positive and negative targets

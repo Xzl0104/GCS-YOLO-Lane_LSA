@@ -30,6 +30,9 @@ class OrderedSlotGCSLoss(nn.Module):
         "slot_order_loss",
         "slot_gt_bottom_order_loss",
         "slot_decoded_bottom_order_loss",
+        "slot_gt_bottom_x_loss",
+        "slot_gt_bottom_x_abs_err",
+        "slot_gt_bottom_x_abs_err_px",
         "slot_count_acc",
         "slot_count_acc_2",
         "slot_count_acc_3",
@@ -67,6 +70,9 @@ class OrderedSlotGCSLoss(nn.Module):
         "order",
         "gt_bot_ord",
         "dec_bot_ord",
+        "gt_bot_x",
+        "gt_bot_xerr",
+        "gt_bot_xpx",
         "cnt_acc",
         "cnt_a2",
         "cnt_a3",
@@ -146,6 +152,11 @@ class OrderedSlotGCSLoss(nn.Module):
         self.order_gain = float(self._arg(args, "gcs_order", 0.2))
         self.gt_bottom_order_gain = float(self._arg(args, "gcs_gt_bottom_order", 1.0))
         self.decoded_bottom_order_gain = float(self._arg(args, "gcs_decoded_bottom_order", 1.0))
+        self.slot_gt_bottom_x_gain = float(self._arg(args, "gcs_slot_gt_bottom_x", 0.0))
+        self.slot_gt_bottom_x_beta = float(self._arg(args, "gcs_slot_gt_bottom_x_beta", 0.05))
+        self.slot_gt_bottom_x_detach_interval = self._bool_arg(
+            self._arg(args, "gcs_slot_gt_bottom_x_detach_interval", 1)
+        )
         self.allow_disable_order_loss = self._bool_arg(self._arg(args, "gcs_allow_disable_order_loss", False))
         self.min_interval_points = int(
             self._arg(args, "gcs_min_interval_points", yaml.get("gcs_min_interval_points", 2))
@@ -167,6 +178,7 @@ class OrderedSlotGCSLoss(nn.Module):
             self.order_gain,
             self.gt_bottom_order_gain,
             self.decoded_bottom_order_gain,
+            self.slot_gt_bottom_x_gain,
         ) < 0:
             raise ValueError("ordered_slot loss gains must be non-negative.")
         if self.count_ce_gain <= 0.0:
@@ -198,6 +210,8 @@ class OrderedSlotGCSLoss(nn.Module):
             )
         if self.min_interval_points <= 0:
             raise ValueError(f"gcs_min_interval_points must be > 0, got {self.min_interval_points}.")
+        if self.slot_gt_bottom_x_beta <= 0.0:
+            raise ValueError(f"gcs_slot_gt_bottom_x_beta must be > 0, got {self.slot_gt_bottom_x_beta}.")
         if min(self.slot_exist_w4, self.slot_exist_w5) <= 0:
             raise ValueError("gcs_slot_exist_w4 and gcs_slot_exist_w5 must be positive.")
         if self.ordered_point_loss not in {"aspect_l1", "pixel_smooth_l1", "normalized_smooth_l1"}:
@@ -238,6 +252,9 @@ class OrderedSlotGCSLoss(nn.Module):
             "gcs_order": float(self.order_gain),
             "gcs_gt_bottom_order": float(self.gt_bottom_order_gain),
             "gcs_decoded_bottom_order": float(self.decoded_bottom_order_gain),
+            "gcs_slot_gt_bottom_x": float(self.slot_gt_bottom_x_gain),
+            "gcs_slot_gt_bottom_x_beta": float(self.slot_gt_bottom_x_beta),
+            "gcs_slot_gt_bottom_x_detach_interval": bool(self.slot_gt_bottom_x_detach_interval),
             "gcs_min_interval_points": int(self.min_interval_points),
             "gcs_order_margin_px": float(self.order_margin_px),
             "gcs_bottom_order_margin_px": float(self.bottom_order_margin_px),
@@ -248,6 +265,7 @@ class OrderedSlotGCSLoss(nn.Module):
             "order_supervision_enabled": self.order_gain > 0.0,
             "gt_bottom_order_supervision_enabled": self.gt_bottom_order_gain > 0.0,
             "decoded_bottom_order_supervision_enabled": self.decoded_bottom_order_gain > 0.0,
+            "slot_gt_bottom_x_supervision_enabled": self.slot_gt_bottom_x_gain > 0.0,
             "slot4_exist_bce_weight": float(self.slot_exist_w4),
             "slot5_exist_bce_weight": float(self.slot_exist_w5),
             "slot_exist_weight_semantics": "BCE element weight applied to positive and negative targets",
@@ -268,6 +286,15 @@ class OrderedSlotGCSLoss(nn.Module):
     @staticmethod
     def _zero_like(pred_points: torch.Tensor) -> torch.Tensor:
         return pred_points.sum() * 0.0
+
+    @staticmethod
+    def _require_target_keys(targets: dict[str, torch.Tensor], required: tuple[str, ...], context: str) -> None:
+        missing = [key for key in required if key not in targets]
+        if missing:
+            raise KeyError(
+                f"{context} requires target keys {list(required)}, missing={missing}, "
+                f"available keys={list(targets.keys())}"
+            )
 
     @classmethod
     def label_loss_items(cls, loss_items: list[float] | torch.Tensor | None = None, prefix: str = "train"):
@@ -447,6 +474,67 @@ class OrderedSlotGCSLoss(nn.Module):
         violation = F.relu(bottom_x[:, :-1] - bottom_x[:, 1:] + margin)
         return violation[pair_mask].mean()
 
+    def _slot_gt_bottom_x_loss(
+        self,
+        pred_points: torch.Tensor,
+        pred_start_logits: torch.Tensor,
+        pred_end_logits: torch.Tensor,
+        target_points: torch.Tensor,
+        target_start_labels: torch.Tensor,
+        slot_exist: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Regress decoded slot bottom x to the corresponding GT slot bottom x."""
+        zero = self._zero_like(pred_points)
+        if self.slot_gt_bottom_x_gain <= 0.0:
+            return zero, zero, zero
+        if pred_points.ndim != 4 or pred_points.shape[-1] != 2:
+            raise ValueError(f"pred_points must be [B,S,K,2], got {tuple(pred_points.shape)}.")
+        b, slots, k, _ = pred_points.shape
+        expected_logits = (b, slots, k)
+        if tuple(pred_start_logits.shape) != expected_logits:
+            raise ValueError(f"pred_start_logits must be [B,S,K]={expected_logits}, got {tuple(pred_start_logits.shape)}.")
+        if tuple(pred_end_logits.shape) != expected_logits:
+            raise ValueError(f"pred_end_logits must be [B,S,K]={expected_logits}, got {tuple(pred_end_logits.shape)}.")
+        if tuple(target_points.shape) != (b, slots, k, 2):
+            raise ValueError(f"target_points must be [B,S,K,2]={(b, slots, k, 2)}, got {tuple(target_points.shape)}.")
+        if tuple(target_start_labels.shape) != (b, slots):
+            raise ValueError(
+                f"target_start_labels must be [B,S]={(b, slots)}, got {tuple(target_start_labels.shape)}."
+            )
+        if slot_exist.ndim == 3 and slot_exist.shape[-1] == 1:
+            slot_exist = slot_exist.squeeze(-1)
+        if tuple(slot_exist.shape) != (b, slots):
+            raise ValueError(f"slot_exist must be [B,S]={(b, slots)}, got {tuple(slot_exist.shape)}.")
+        target_points = target_points.to(device=pred_points.device, dtype=pred_points.dtype)
+        target_start_labels = target_start_labels.to(device=pred_points.device)
+        slot_exist = slot_exist.to(device=pred_points.device)
+
+        pos = slot_exist > 0.5
+        if not bool(pos.any()):
+            return zero, zero, zero
+
+        start_logits = pred_start_logits.detach() if self.slot_gt_bottom_x_detach_interval else pred_start_logits
+        end_logits = pred_end_logits.detach() if self.slot_gt_bottom_x_detach_interval else pred_end_logits
+        decoded_bottom_idx = decoded_bottom_idx_from_start_end_logits(
+            start_logits,
+            end_logits,
+            min_interval_points=self.min_interval_points,
+        ).clamp(0, k - 1)
+
+        pred_bottom_x = pred_points[..., 0].gather(dim=2, index=decoded_bottom_idx.long().unsqueeze(-1)).squeeze(-1)
+        target_idx = target_start_labels.to(dtype=torch.long).clamp(0, k - 1)
+        target_bottom_x = target_points[..., 0].gather(dim=2, index=target_idx.unsqueeze(-1)).squeeze(-1)
+
+        abs_err = (pred_bottom_x[pos] - target_bottom_x[pos]).abs().mean()
+        abs_err_px = abs_err * float(self.image_size[1])
+        loss = F.smooth_l1_loss(
+            pred_bottom_x[pos],
+            target_bottom_x[pos],
+            beta=self.slot_gt_bottom_x_beta,
+            reduction="mean",
+        )
+        return loss, abs_err, abs_err_px
+
     @torch.no_grad()
     def _metrics(
         self,
@@ -568,6 +656,12 @@ class OrderedSlotGCSLoss(nn.Module):
         pred_count_logits = pred_count_logits.float()
 
         targets = self._target_slots(batch, device=pred_points.device)
+        if self.slot_gt_bottom_x_gain > 0.0:
+            self._require_target_keys(
+                targets,
+                ("slot_points", "start_labels", "slot_exist"),
+                "slot_gt_bottom_x_loss",
+            )
         slot_points = targets["slot_points"].to(device=pred_points.device, dtype=torch.float32)
         slot_valid = targets["slot_valid"].to(device=pred_points.device, dtype=torch.float32)
         slot_exist = targets["slot_exist"].to(device=pred_points.device, dtype=torch.float32)
@@ -592,6 +686,14 @@ class OrderedSlotGCSLoss(nn.Module):
             pred_end_logits,
             slot_exist,
         )
+        slot_gt_bottom_x_loss, slot_gt_bottom_x_abs_err, slot_gt_bottom_x_abs_err_px = self._slot_gt_bottom_x_loss(
+            pred_points,
+            pred_start_logits,
+            pred_end_logits,
+            slot_points,
+            start_labels,
+            slot_exist,
+        )
 
         total = (
             self.point_gain * point_loss
@@ -602,6 +704,7 @@ class OrderedSlotGCSLoss(nn.Module):
             + self.order_gain * order_loss
             + self.gt_bottom_order_gain * gt_bottom_order_loss
             + self.decoded_bottom_order_gain * decoded_bottom_order_loss
+            + self.slot_gt_bottom_x_gain * slot_gt_bottom_x_loss
         )
         metrics = self._metrics(
             pred_points,
@@ -626,6 +729,9 @@ class OrderedSlotGCSLoss(nn.Module):
                 order_loss.detach(),
                 gt_bottom_order_loss.detach(),
                 decoded_bottom_order_loss.detach(),
+                slot_gt_bottom_x_loss.detach(),
+                slot_gt_bottom_x_abs_err.detach(),
+                slot_gt_bottom_x_abs_err_px.detach(),
                 *(x.detach() for x in metrics),
                 repaired_noncontiguous_lanes.float().mean().detach(),
                 repaired_hole_points.float().mean().detach(),

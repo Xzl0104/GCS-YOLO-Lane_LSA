@@ -188,9 +188,16 @@ class GCSLaneTrainer(BaseTrainer):
         order = float(self._get_arg_value("gcs_order", 0.2))
         gt_bottom_order = float(self._get_arg_value("gcs_gt_bottom_order", 1.0))
         decoded_bottom_order = float(self._get_arg_value("gcs_decoded_bottom_order", 1.0))
+        slot_gt_bottom_x = float(self._get_arg_value("gcs_slot_gt_bottom_x", 0.0))
+        slot_gt_bottom_x_beta = float(self._get_arg_value("gcs_slot_gt_bottom_x_beta", 0.05))
+        slot_gt_bottom_x_detach_interval = bool(int(self._get_arg_value("gcs_slot_gt_bottom_x_detach_interval", 1)))
         min_interval_points = int(self._get_arg_value("gcs_min_interval_points", 2))
         bottom_order_margin_px = float(self._get_arg_value("gcs_bottom_order_margin_px", 2.0))
         allow_disable_order = bool(self._get_arg_value("gcs_allow_disable_order_loss", False))
+        if slot_gt_bottom_x < 0.0:
+            raise ValueError(f"gcs_slot_gt_bottom_x must be >= 0, got {slot_gt_bottom_x}.")
+        if slot_gt_bottom_x_beta <= 0.0:
+            raise ValueError(f"gcs_slot_gt_bottom_x_beta must be > 0, got {slot_gt_bottom_x_beta}.")
         if count_ce <= 0.0:
             raise RuntimeError(
                 "ordered_slot requires gcs_count_ce > 0. "
@@ -227,6 +234,9 @@ class GCSLaneTrainer(BaseTrainer):
             "gcs_order": order,
             "gcs_gt_bottom_order": gt_bottom_order,
             "gcs_decoded_bottom_order": decoded_bottom_order,
+            "gcs_slot_gt_bottom_x": slot_gt_bottom_x,
+            "gcs_slot_gt_bottom_x_beta": slot_gt_bottom_x_beta,
+            "gcs_slot_gt_bottom_x_detach_interval": slot_gt_bottom_x_detach_interval,
             "gcs_min_interval_points": min_interval_points,
             "gcs_ordered_point_loss": str(self._get_arg_value("gcs_ordered_point_loss", "normalized_smooth_l1")),
             "gcs_bottom_order_margin_px": bottom_order_margin_px,
@@ -236,6 +246,7 @@ class GCSLaneTrainer(BaseTrainer):
             "order_supervision_enabled": order > 0.0,
             "gt_bottom_order_supervision_enabled": gt_bottom_order > 0.0,
             "decoded_bottom_order_supervision_enabled": decoded_bottom_order > 0.0,
+            "slot_gt_bottom_x_supervision_enabled": slot_gt_bottom_x > 0.0,
             "slot4_exist_bce_weight": float(self._get_arg_value("gcs_slot_exist_w4", 1.0)),
             "slot5_exist_bce_weight": float(self._get_arg_value("gcs_slot_exist_w5", 1.0)),
             "slot_exist_weight_semantics": "BCE element weight applied to positive and negative targets",
@@ -260,6 +271,7 @@ class GCSLaneTrainer(BaseTrainer):
                     "gcs_order",
                     "gcs_gt_bottom_order",
                     "gcs_decoded_bottom_order",
+                    "gcs_slot_gt_bottom_x",
                 )
             },
         )
