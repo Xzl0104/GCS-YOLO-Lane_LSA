@@ -288,6 +288,36 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="1 detaches start/end logits when selecting decoded bottom index for GT bottom-x loss; 0 keeps them attached.",
     )
     parser.add_argument(
+        "--gcs-slot-gt-bottom-x-soft",
+        type=float,
+        default=0.0,
+        help="Gain for differentiable soft-start GT bottom-x loss. 0 disables.",
+    )
+    parser.add_argument(
+        "--gcs-slot-gt-bottom-x-soft-tau",
+        type=float,
+        default=0.5,
+        help="Temperature for softmax over start logits in soft GT bottom-x loss.",
+    )
+    parser.add_argument(
+        "--gcs-slot-gt-bottom-x-soft-beta",
+        type=float,
+        default=0.05,
+        help="SmoothL1 beta for soft GT bottom-x loss in normalized x.",
+    )
+    parser.add_argument(
+        "--gcs-slot-start-index-l1",
+        type=float,
+        default=0.0,
+        help="Gain for differentiable soft start-index L1 loss. 0 disables.",
+    )
+    parser.add_argument(
+        "--gcs-slot-start-index-l1-beta",
+        type=float,
+        default=2.0,
+        help="SmoothL1 beta for soft start-index L1 loss in anchor units.",
+    )
+    parser.add_argument(
         "--gcs-allow-disable-order-loss",
         action="store_true",
         help="Allow ordered_slot order losses <= 0 only for explicit ablations.",
@@ -691,6 +721,11 @@ def main() -> None:
         "gcs_slot_gt_bottom_x": args.gcs_slot_gt_bottom_x,
         "gcs_slot_gt_bottom_x_beta": args.gcs_slot_gt_bottom_x_beta,
         "gcs_slot_gt_bottom_x_detach_interval": args.gcs_slot_gt_bottom_x_detach_interval,
+        "gcs_slot_gt_bottom_x_soft": args.gcs_slot_gt_bottom_x_soft,
+        "gcs_slot_gt_bottom_x_soft_tau": args.gcs_slot_gt_bottom_x_soft_tau,
+        "gcs_slot_gt_bottom_x_soft_beta": args.gcs_slot_gt_bottom_x_soft_beta,
+        "gcs_slot_start_index_l1": args.gcs_slot_start_index_l1,
+        "gcs_slot_start_index_l1_beta": args.gcs_slot_start_index_l1_beta,
         "gcs_allow_disable_order_loss": args.gcs_allow_disable_order_loss,
         "gcs_slot_exist_w4": args.gcs_slot_exist_w4,
         "gcs_slot_exist_w5": args.gcs_slot_exist_w5,

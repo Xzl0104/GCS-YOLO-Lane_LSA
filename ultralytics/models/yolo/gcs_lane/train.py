@@ -191,6 +191,11 @@ class GCSLaneTrainer(BaseTrainer):
         slot_gt_bottom_x = float(self._get_arg_value("gcs_slot_gt_bottom_x", 0.0))
         slot_gt_bottom_x_beta = float(self._get_arg_value("gcs_slot_gt_bottom_x_beta", 0.05))
         slot_gt_bottom_x_detach_interval = bool(int(self._get_arg_value("gcs_slot_gt_bottom_x_detach_interval", 1)))
+        slot_gt_bottom_x_soft = float(self._get_arg_value("gcs_slot_gt_bottom_x_soft", 0.0))
+        slot_gt_bottom_x_soft_tau = float(self._get_arg_value("gcs_slot_gt_bottom_x_soft_tau", 0.5))
+        slot_gt_bottom_x_soft_beta = float(self._get_arg_value("gcs_slot_gt_bottom_x_soft_beta", 0.05))
+        slot_start_index_l1 = float(self._get_arg_value("gcs_slot_start_index_l1", 0.0))
+        slot_start_index_l1_beta = float(self._get_arg_value("gcs_slot_start_index_l1_beta", 2.0))
         min_interval_points = int(self._get_arg_value("gcs_min_interval_points", 2))
         bottom_order_margin_px = float(self._get_arg_value("gcs_bottom_order_margin_px", 2.0))
         allow_disable_order = bool(self._get_arg_value("gcs_allow_disable_order_loss", False))
@@ -198,6 +203,16 @@ class GCSLaneTrainer(BaseTrainer):
             raise ValueError(f"gcs_slot_gt_bottom_x must be >= 0, got {slot_gt_bottom_x}.")
         if slot_gt_bottom_x_beta <= 0.0:
             raise ValueError(f"gcs_slot_gt_bottom_x_beta must be > 0, got {slot_gt_bottom_x_beta}.")
+        if slot_gt_bottom_x_soft < 0.0:
+            raise ValueError(f"gcs_slot_gt_bottom_x_soft must be >= 0, got {slot_gt_bottom_x_soft}.")
+        if slot_gt_bottom_x_soft_tau <= 0.0:
+            raise ValueError(f"gcs_slot_gt_bottom_x_soft_tau must be > 0, got {slot_gt_bottom_x_soft_tau}.")
+        if slot_gt_bottom_x_soft_beta <= 0.0:
+            raise ValueError(f"gcs_slot_gt_bottom_x_soft_beta must be > 0, got {slot_gt_bottom_x_soft_beta}.")
+        if slot_start_index_l1 < 0.0:
+            raise ValueError(f"gcs_slot_start_index_l1 must be >= 0, got {slot_start_index_l1}.")
+        if slot_start_index_l1_beta <= 0.0:
+            raise ValueError(f"gcs_slot_start_index_l1_beta must be > 0, got {slot_start_index_l1_beta}.")
         if count_ce <= 0.0:
             raise RuntimeError(
                 "ordered_slot requires gcs_count_ce > 0. "
@@ -237,6 +252,11 @@ class GCSLaneTrainer(BaseTrainer):
             "gcs_slot_gt_bottom_x": slot_gt_bottom_x,
             "gcs_slot_gt_bottom_x_beta": slot_gt_bottom_x_beta,
             "gcs_slot_gt_bottom_x_detach_interval": slot_gt_bottom_x_detach_interval,
+            "gcs_slot_gt_bottom_x_soft": slot_gt_bottom_x_soft,
+            "gcs_slot_gt_bottom_x_soft_tau": slot_gt_bottom_x_soft_tau,
+            "gcs_slot_gt_bottom_x_soft_beta": slot_gt_bottom_x_soft_beta,
+            "gcs_slot_start_index_l1": slot_start_index_l1,
+            "gcs_slot_start_index_l1_beta": slot_start_index_l1_beta,
             "gcs_min_interval_points": min_interval_points,
             "gcs_ordered_point_loss": str(self._get_arg_value("gcs_ordered_point_loss", "normalized_smooth_l1")),
             "gcs_bottom_order_margin_px": bottom_order_margin_px,
@@ -247,6 +267,8 @@ class GCSLaneTrainer(BaseTrainer):
             "gt_bottom_order_supervision_enabled": gt_bottom_order > 0.0,
             "decoded_bottom_order_supervision_enabled": decoded_bottom_order > 0.0,
             "slot_gt_bottom_x_supervision_enabled": slot_gt_bottom_x > 0.0,
+            "slot_gt_bottom_x_soft_supervision_enabled": slot_gt_bottom_x_soft > 0.0,
+            "slot_start_index_l1_supervision_enabled": slot_start_index_l1 > 0.0,
             "slot4_exist_bce_weight": float(self._get_arg_value("gcs_slot_exist_w4", 1.0)),
             "slot5_exist_bce_weight": float(self._get_arg_value("gcs_slot_exist_w5", 1.0)),
             "slot_exist_weight_semantics": "BCE element weight applied to positive and negative targets",
@@ -272,6 +294,8 @@ class GCSLaneTrainer(BaseTrainer):
                     "gcs_gt_bottom_order",
                     "gcs_decoded_bottom_order",
                     "gcs_slot_gt_bottom_x",
+                    "gcs_slot_gt_bottom_x_soft",
+                    "gcs_slot_start_index_l1",
                 )
             },
         )

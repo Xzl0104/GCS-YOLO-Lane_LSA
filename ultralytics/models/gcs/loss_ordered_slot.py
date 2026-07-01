@@ -33,6 +33,9 @@ class OrderedSlotGCSLoss(nn.Module):
         "slot_gt_bottom_x_loss",
         "slot_gt_bottom_x_abs_err",
         "slot_gt_bottom_x_abs_err_px",
+        "slot_gt_bottom_x_soft_loss",
+        "slot_gt_bottom_x_soft_abs_err_px",
+        "slot_start_index_l1_loss",
         "slot_count_acc",
         "slot_count_acc_2",
         "slot_count_acc_3",
@@ -73,6 +76,9 @@ class OrderedSlotGCSLoss(nn.Module):
         "gt_bot_x",
         "gt_bot_xerr",
         "gt_bot_xpx",
+        "gt_bot_xs",
+        "gt_bot_xspx",
+        "st_idx_l1",
         "cnt_acc",
         "cnt_a2",
         "cnt_a3",
@@ -157,6 +163,11 @@ class OrderedSlotGCSLoss(nn.Module):
         self.slot_gt_bottom_x_detach_interval = self._bool_arg(
             self._arg(args, "gcs_slot_gt_bottom_x_detach_interval", 1)
         )
+        self.slot_gt_bottom_x_soft_gain = float(self._arg(args, "gcs_slot_gt_bottom_x_soft", 0.0))
+        self.slot_gt_bottom_x_soft_tau = float(self._arg(args, "gcs_slot_gt_bottom_x_soft_tau", 0.5))
+        self.slot_gt_bottom_x_soft_beta = float(self._arg(args, "gcs_slot_gt_bottom_x_soft_beta", 0.05))
+        self.slot_start_index_l1_gain = float(self._arg(args, "gcs_slot_start_index_l1", 0.0))
+        self.slot_start_index_l1_beta = float(self._arg(args, "gcs_slot_start_index_l1_beta", 2.0))
         self.allow_disable_order_loss = self._bool_arg(self._arg(args, "gcs_allow_disable_order_loss", False))
         self.min_interval_points = int(
             self._arg(args, "gcs_min_interval_points", yaml.get("gcs_min_interval_points", 2))
@@ -179,6 +190,8 @@ class OrderedSlotGCSLoss(nn.Module):
             self.gt_bottom_order_gain,
             self.decoded_bottom_order_gain,
             self.slot_gt_bottom_x_gain,
+            self.slot_gt_bottom_x_soft_gain,
+            self.slot_start_index_l1_gain,
         ) < 0:
             raise ValueError("ordered_slot loss gains must be non-negative.")
         if self.count_ce_gain <= 0.0:
@@ -212,6 +225,12 @@ class OrderedSlotGCSLoss(nn.Module):
             raise ValueError(f"gcs_min_interval_points must be > 0, got {self.min_interval_points}.")
         if self.slot_gt_bottom_x_beta <= 0.0:
             raise ValueError(f"gcs_slot_gt_bottom_x_beta must be > 0, got {self.slot_gt_bottom_x_beta}.")
+        if self.slot_gt_bottom_x_soft_tau <= 0.0:
+            raise ValueError(f"gcs_slot_gt_bottom_x_soft_tau must be > 0, got {self.slot_gt_bottom_x_soft_tau}.")
+        if self.slot_gt_bottom_x_soft_beta <= 0.0:
+            raise ValueError(f"gcs_slot_gt_bottom_x_soft_beta must be > 0, got {self.slot_gt_bottom_x_soft_beta}.")
+        if self.slot_start_index_l1_beta <= 0.0:
+            raise ValueError(f"gcs_slot_start_index_l1_beta must be > 0, got {self.slot_start_index_l1_beta}.")
         if min(self.slot_exist_w4, self.slot_exist_w5) <= 0:
             raise ValueError("gcs_slot_exist_w4 and gcs_slot_exist_w5 must be positive.")
         if self.ordered_point_loss not in {"aspect_l1", "pixel_smooth_l1", "normalized_smooth_l1"}:
@@ -255,6 +274,11 @@ class OrderedSlotGCSLoss(nn.Module):
             "gcs_slot_gt_bottom_x": float(self.slot_gt_bottom_x_gain),
             "gcs_slot_gt_bottom_x_beta": float(self.slot_gt_bottom_x_beta),
             "gcs_slot_gt_bottom_x_detach_interval": bool(self.slot_gt_bottom_x_detach_interval),
+            "gcs_slot_gt_bottom_x_soft": float(self.slot_gt_bottom_x_soft_gain),
+            "gcs_slot_gt_bottom_x_soft_tau": float(self.slot_gt_bottom_x_soft_tau),
+            "gcs_slot_gt_bottom_x_soft_beta": float(self.slot_gt_bottom_x_soft_beta),
+            "gcs_slot_start_index_l1": float(self.slot_start_index_l1_gain),
+            "gcs_slot_start_index_l1_beta": float(self.slot_start_index_l1_beta),
             "gcs_min_interval_points": int(self.min_interval_points),
             "gcs_order_margin_px": float(self.order_margin_px),
             "gcs_bottom_order_margin_px": float(self.bottom_order_margin_px),
@@ -266,6 +290,8 @@ class OrderedSlotGCSLoss(nn.Module):
             "gt_bottom_order_supervision_enabled": self.gt_bottom_order_gain > 0.0,
             "decoded_bottom_order_supervision_enabled": self.decoded_bottom_order_gain > 0.0,
             "slot_gt_bottom_x_supervision_enabled": self.slot_gt_bottom_x_gain > 0.0,
+            "slot_gt_bottom_x_soft_supervision_enabled": self.slot_gt_bottom_x_soft_gain > 0.0,
+            "slot_start_index_l1_supervision_enabled": self.slot_start_index_l1_gain > 0.0,
             "slot4_exist_bce_weight": float(self.slot_exist_w4),
             "slot5_exist_bce_weight": float(self.slot_exist_w5),
             "slot_exist_weight_semantics": "BCE element weight applied to positive and negative targets",
@@ -535,6 +561,73 @@ class OrderedSlotGCSLoss(nn.Module):
         )
         return loss, abs_err, abs_err_px
 
+    def _slot_gt_bottom_x_soft_loss(
+        self,
+        pred_points: torch.Tensor,
+        pred_start_logits: torch.Tensor,
+        target_points: torch.Tensor,
+        target_start_labels: torch.Tensor,
+        slot_exist: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Regress soft-start expected bottom x and start index to GT without detaching start logits."""
+        zero = self._zero_like(pred_points)
+        if self.slot_gt_bottom_x_soft_gain <= 0.0 and self.slot_start_index_l1_gain <= 0.0:
+            return zero, zero, zero
+        if pred_points.ndim != 4 or pred_points.shape[-1] != 2:
+            raise ValueError(f"pred_points must be [B,S,K,2], got {tuple(pred_points.shape)}.")
+        b, slots, k, _ = pred_points.shape
+        expected_logits = (b, slots, k)
+        if tuple(pred_start_logits.shape) != expected_logits:
+            raise ValueError(f"pred_start_logits must be [B,S,K]={expected_logits}, got {tuple(pred_start_logits.shape)}.")
+        if tuple(target_points.shape) != (b, slots, k, 2):
+            raise ValueError(f"target_points must be [B,S,K,2]={(b, slots, k, 2)}, got {tuple(target_points.shape)}.")
+        if tuple(target_start_labels.shape) != (b, slots):
+            raise ValueError(
+                f"target_start_labels must be [B,S]={(b, slots)}, got {tuple(target_start_labels.shape)}."
+            )
+        if slot_exist.ndim == 3 and slot_exist.shape[-1] == 1:
+            slot_exist = slot_exist.squeeze(-1)
+        if tuple(slot_exist.shape) != (b, slots):
+            raise ValueError(f"slot_exist must be [B,S]={(b, slots)}, got {tuple(slot_exist.shape)}.")
+        target_points = target_points.to(device=pred_points.device, dtype=pred_points.dtype)
+        target_start_labels = target_start_labels.to(device=pred_points.device)
+        slot_exist = slot_exist.to(device=pred_points.device)
+
+        pos = slot_exist > 0.5
+        if not bool(pos.any()):
+            return zero, zero, zero
+
+        target_idx = target_start_labels.to(dtype=torch.long).clamp(0, k - 1)
+        p_start = torch.softmax(pred_start_logits / float(self.slot_gt_bottom_x_soft_tau), dim=-1)
+        pred_bottom_x_soft = (p_start * pred_points[..., 0]).sum(dim=-1)
+
+        slot_gt_bottom_x_soft_loss = zero
+        slot_gt_bottom_x_soft_abs_err_px = zero
+        if self.slot_gt_bottom_x_soft_gain > 0.0:
+            target_bottom_x = target_points[..., 0].gather(dim=2, index=target_idx.unsqueeze(-1)).squeeze(-1)
+            slot_gt_bottom_x_soft_loss = F.smooth_l1_loss(
+                pred_bottom_x_soft[pos],
+                target_bottom_x[pos],
+                beta=self.slot_gt_bottom_x_soft_beta,
+                reduction="mean",
+            )
+            slot_gt_bottom_x_soft_abs_err = (pred_bottom_x_soft[pos] - target_bottom_x[pos]).abs().mean()
+            slot_gt_bottom_x_soft_abs_err_px = slot_gt_bottom_x_soft_abs_err * float(self.image_size[1])
+
+        slot_start_index_l1_loss = zero
+        if self.slot_start_index_l1_gain > 0.0:
+            idx = torch.arange(k, device=pred_points.device, dtype=pred_points.dtype).view(1, 1, k)
+            pred_start_idx_soft = (p_start * idx).sum(dim=-1)
+            target_start_idx = target_idx.to(dtype=pred_points.dtype)
+            slot_start_index_l1_loss = F.smooth_l1_loss(
+                pred_start_idx_soft[pos],
+                target_start_idx[pos],
+                beta=self.slot_start_index_l1_beta,
+                reduction="mean",
+            )
+
+        return slot_gt_bottom_x_soft_loss, slot_gt_bottom_x_soft_abs_err_px, slot_start_index_l1_loss
+
     @torch.no_grad()
     def _metrics(
         self,
@@ -656,11 +749,15 @@ class OrderedSlotGCSLoss(nn.Module):
         pred_count_logits = pred_count_logits.float()
 
         targets = self._target_slots(batch, device=pred_points.device)
-        if self.slot_gt_bottom_x_gain > 0.0:
+        if (
+            self.slot_gt_bottom_x_gain > 0.0
+            or self.slot_gt_bottom_x_soft_gain > 0.0
+            or self.slot_start_index_l1_gain > 0.0
+        ):
             self._require_target_keys(
                 targets,
                 ("slot_points", "start_labels", "slot_exist"),
-                "slot_gt_bottom_x_loss",
+                "slot_gt_bottom_x_loss/slot_gt_bottom_x_soft_loss/slot_start_index_l1_loss",
             )
         slot_points = targets["slot_points"].to(device=pred_points.device, dtype=torch.float32)
         slot_valid = targets["slot_valid"].to(device=pred_points.device, dtype=torch.float32)
@@ -694,6 +791,15 @@ class OrderedSlotGCSLoss(nn.Module):
             start_labels,
             slot_exist,
         )
+        slot_gt_bottom_x_soft_loss, slot_gt_bottom_x_soft_abs_err_px, slot_start_index_l1_loss = (
+            self._slot_gt_bottom_x_soft_loss(
+                pred_points,
+                pred_start_logits,
+                slot_points,
+                start_labels,
+                slot_exist,
+            )
+        )
 
         total = (
             self.point_gain * point_loss
@@ -705,6 +811,8 @@ class OrderedSlotGCSLoss(nn.Module):
             + self.gt_bottom_order_gain * gt_bottom_order_loss
             + self.decoded_bottom_order_gain * decoded_bottom_order_loss
             + self.slot_gt_bottom_x_gain * slot_gt_bottom_x_loss
+            + self.slot_gt_bottom_x_soft_gain * slot_gt_bottom_x_soft_loss
+            + self.slot_start_index_l1_gain * slot_start_index_l1_loss
         )
         metrics = self._metrics(
             pred_points,
@@ -732,6 +840,9 @@ class OrderedSlotGCSLoss(nn.Module):
                 slot_gt_bottom_x_loss.detach(),
                 slot_gt_bottom_x_abs_err.detach(),
                 slot_gt_bottom_x_abs_err_px.detach(),
+                slot_gt_bottom_x_soft_loss.detach(),
+                slot_gt_bottom_x_soft_abs_err_px.detach(),
+                slot_start_index_l1_loss.detach(),
                 *(x.detach() for x in metrics),
                 repaired_noncontiguous_lanes.float().mean().detach(),
                 repaired_hole_points.float().mean().detach(),

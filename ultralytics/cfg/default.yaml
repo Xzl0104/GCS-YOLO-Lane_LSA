@@ -142,6 +142,11 @@ gcs_decoded_bottom_order: 1.0 # (float) ordered_slot decoded-bottom adjacent-slo
 gcs_slot_gt_bottom_x: 0.0 # (float) ordered_slot decoded bottom-x to GT bottom-x regression gain; 0 disables
 gcs_slot_gt_bottom_x_beta: 0.05 # (float) SmoothL1 beta for ordered_slot GT bottom-x regression in normalized x
 gcs_slot_gt_bottom_x_detach_interval: 1 # (int) detach start/end logits when selecting decoded bottom index for GT bottom-x loss
+gcs_slot_gt_bottom_x_soft: 0.0 # (float) ordered_slot differentiable soft-start GT bottom-x regression gain; 0 disables
+gcs_slot_gt_bottom_x_soft_tau: 0.5 # (float) temperature for softmax over start logits in soft GT bottom-x loss
+gcs_slot_gt_bottom_x_soft_beta: 0.05 # (float) SmoothL1 beta for soft GT bottom-x regression in normalized x
+gcs_slot_start_index_l1: 0.0 # (float) ordered_slot differentiable soft start-index L1 gain; 0 disables
+gcs_slot_start_index_l1_beta: 2.0 # (float) SmoothL1 beta for soft start-index L1 in anchor units
 gcs_allow_disable_order_loss: False # (bool) allow ordered_slot order losses <= 0 only for an explicit ablation
 gcs_slot_exist_w4: 1.0 # (float) ordered_slot slot4 existence BCE element weight; weights positive and negative targets
 gcs_slot_exist_w5: 1.0 # (float) ordered_slot slot5 existence BCE element weight; weights positive and negative targets

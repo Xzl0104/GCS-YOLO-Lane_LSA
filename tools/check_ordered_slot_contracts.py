@@ -93,7 +93,10 @@ TRACKED_FILES = (
     "tools/check_ordered_slot_contracts.py",
     "tools/overfit_ordered_slot_20.py",
     "tools/strip_gcs_head_ckpt.py",
+    "tools/train_gcs.py",
     "tools/visualize_ordered_slot_targets.py",
+    "ultralytics/cfg/__init__.py",
+    "ultralytics/cfg/default.yaml",
     "ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q5-slot-k56.yaml",
     "ultralytics/models/gcs/__init__.py",
     "ultralytics/models/gcs/decode_ordered_slot.py",
@@ -103,6 +106,8 @@ TRACKED_FILES = (
     "ultralytics/models/gcs/loss_ordered_slot.py",
     "ultralytics/models/gcs/mode_utils.py",
     "ultralytics/models/gcs/slot_targets.py",
+    "ultralytics/models/yolo/gcs_lane/train.py",
+    "ultralytics/models/yolo/gcs_lane/val.py",
     "ultralytics/utils/gcs_point_loss.py",
 )
 REQUIRED_IMPORT_MODULES = (
@@ -307,6 +312,11 @@ def test_ordered_slot_loss_defaults_match_default_yaml_and_do_not_silent_disable
     assert cfg["gcs_slot_gt_bottom_x"] == 0.0
     assert cfg["gcs_slot_gt_bottom_x_beta"] == 0.05
     assert cfg["gcs_slot_gt_bottom_x_detach_interval"] == 1
+    assert cfg["gcs_slot_gt_bottom_x_soft"] == 0.0
+    assert cfg["gcs_slot_gt_bottom_x_soft_tau"] == 0.5
+    assert cfg["gcs_slot_gt_bottom_x_soft_beta"] == 0.05
+    assert cfg["gcs_slot_start_index_l1"] == 0.0
+    assert cfg["gcs_slot_start_index_l1_beta"] == 2.0
     assert cfg["gcs_bottom_order_margin_px"] == 2.0
     assert cfg["gcs_min_interval_points"] == 2
     assert cfg["gcs_ordered_point_loss"] == "normalized_smooth_l1"
@@ -318,6 +328,11 @@ def test_ordered_slot_loss_defaults_match_default_yaml_and_do_not_silent_disable
     assert criterion.slot_gt_bottom_x_gain == cfg["gcs_slot_gt_bottom_x"]
     assert criterion.slot_gt_bottom_x_beta == cfg["gcs_slot_gt_bottom_x_beta"]
     assert criterion.slot_gt_bottom_x_detach_interval is True
+    assert criterion.slot_gt_bottom_x_soft_gain == cfg["gcs_slot_gt_bottom_x_soft"]
+    assert criterion.slot_gt_bottom_x_soft_tau == cfg["gcs_slot_gt_bottom_x_soft_tau"]
+    assert criterion.slot_gt_bottom_x_soft_beta == cfg["gcs_slot_gt_bottom_x_soft_beta"]
+    assert criterion.slot_start_index_l1_gain == cfg["gcs_slot_start_index_l1"]
+    assert criterion.slot_start_index_l1_beta == cfg["gcs_slot_start_index_l1_beta"]
     assert criterion.bottom_order_margin_px == cfg["gcs_bottom_order_margin_px"]
     assert criterion.min_interval_points == cfg["gcs_min_interval_points"]
     assert criterion.loss_contract_summary()["gcs_ordered_point_loss"] == "normalized_smooth_l1"
@@ -327,6 +342,8 @@ def test_ordered_slot_loss_defaults_match_default_yaml_and_do_not_silent_disable
     assert criterion.gt_bottom_order_gain > 0.0
     assert criterion.decoded_bottom_order_gain > 0.0
     assert criterion.loss_contract_summary()["slot_gt_bottom_x_supervision_enabled"] is False
+    assert criterion.loss_contract_summary()["slot_gt_bottom_x_soft_supervision_enabled"] is False
+    assert criterion.loss_contract_summary()["slot_start_index_l1_supervision_enabled"] is False
 
 
 def test_ordered_slot_loss_core_supervision_requires_explicit_ablation() -> None:
@@ -412,8 +429,42 @@ def test_trainer_ordered_slot_loss_contract_rejects_disabled_bottom_order_losses
     assert contract["gcs_slot_gt_bottom_x"] == 0.0
     assert contract["gcs_slot_gt_bottom_x_beta"] == 0.05
     assert contract["gcs_slot_gt_bottom_x_detach_interval"] is True
+    assert contract["gcs_slot_gt_bottom_x_soft"] == 0.0
+    assert contract["gcs_slot_gt_bottom_x_soft_tau"] == 0.5
+    assert contract["gcs_slot_gt_bottom_x_soft_beta"] == 0.05
+    assert contract["gcs_slot_start_index_l1"] == 0.0
+    assert contract["gcs_slot_start_index_l1_beta"] == 2.0
     assert contract["slot_gt_bottom_x_supervision_enabled"] is False
+    assert contract["slot_gt_bottom_x_soft_supervision_enabled"] is False
+    assert contract["slot_start_index_l1_supervision_enabled"] is False
     assert contract["gcs_ordered_point_loss"] == "normalized_smooth_l1"
+
+
+def test_ordered_slot_validator_loss_gains_include_bottom_x_terms() -> None:
+    validator = object.__new__(GCSLaneValidator)
+    validator.args = SimpleNamespace(
+        gcs_mode="ordered_slot",
+        gcs_point=11.0,
+        gcs_exist=2.0,
+        gcs_count_ce=3.0,
+        gcs_interval=4.0,
+        gcs_point_valid=5.0,
+        gcs_order=6.0,
+        gcs_gt_bottom_order=7.0,
+        gcs_decoded_bottom_order=8.0,
+        gcs_slot_gt_bottom_x=0.25,
+        gcs_slot_gt_bottom_x_soft=0.5,
+        gcs_slot_start_index_l1=0.75,
+    )
+    gains = validator._loss_gains(torch.device("cpu"))
+    names = OrderedSlotGCSLoss.loss_names
+
+    assert float(gains[names.index("slot_gt_bottom_x_loss")].item()) == 0.25
+    assert float(gains[names.index("slot_gt_bottom_x_abs_err")].item()) == 0.0
+    assert float(gains[names.index("slot_gt_bottom_x_abs_err_px")].item()) == 0.0
+    assert float(gains[names.index("slot_gt_bottom_x_soft_loss")].item()) == 0.5
+    assert float(gains[names.index("slot_gt_bottom_x_soft_abs_err_px")].item()) == 0.0
+    assert float(gains[names.index("slot_start_index_l1_loss")].item()) == 0.75
 
 
 def test_bottom_order_loss_catches_no_common_anchor_violation() -> None:
@@ -549,6 +600,39 @@ def test_slot_gt_bottom_x_loss_uses_repaired_decoded_bottom_index() -> None:
     assert float(loss_items[names.index("slot_gt_bottom_x_loss")].item()) > 0.10
     assert abs(float(loss_items[names.index("slot_gt_bottom_x_abs_err")].item()) - 0.15) < 1e-5
     assert abs(float(loss_items[names.index("slot_gt_bottom_x_abs_err_px")].item()) - 144.0) < 1e-4
+
+
+def test_slot_gt_bottom_x_soft_loss_backprops_to_start_logits() -> None:
+    criterion = OrderedSlotGCSLoss(
+        {
+            "gcs_imgsz": [544, 960],
+            "gcs_slot_gt_bottom_x_soft": 1.0,
+            "gcs_slot_start_index_l1": 1.0,
+        }
+    )
+    k = 56
+    pred_points = torch.zeros(1, 5, k, 2)
+    pred_points[..., 0] = torch.linspace(0.0, 1.0, k).view(1, 1, k)
+    pred_start_logits = torch.zeros(1, 5, k, requires_grad=True)
+    target_points = torch.zeros(1, 5, k, 2)
+    target_start_labels = torch.zeros(1, 5, dtype=torch.long)
+    slot_exist = torch.ones(1, 5)
+
+    bottom_x_loss, bottom_x_abs_err_px, start_index_l1_loss = criterion._slot_gt_bottom_x_soft_loss(
+        pred_points,
+        pred_start_logits,
+        target_points,
+        target_start_labels,
+        slot_exist,
+    )
+    total = bottom_x_loss + start_index_l1_loss
+    total.backward()
+
+    assert float(bottom_x_loss.item()) > 0.0
+    assert float(bottom_x_abs_err_px.item()) > 0.0
+    assert float(start_index_l1_loss.item()) > 0.0
+    assert pred_start_logits.grad is not None
+    assert float(pred_start_logits.grad.abs().sum().item()) > 0.0
 
 
 def test_slot_gt_bottom_x_loss_reports_available_target_keys() -> None:
@@ -853,15 +937,30 @@ def test_ordered_point_loss_defaults_preserve_protocol_behavior() -> None:
     assert cfg["gcs_slot_gt_bottom_x"] == 0.0
     assert cfg["gcs_slot_gt_bottom_x_beta"] == 0.05
     assert cfg["gcs_slot_gt_bottom_x_detach_interval"] == 1
+    assert cfg["gcs_slot_gt_bottom_x_soft"] == 0.0
+    assert cfg["gcs_slot_gt_bottom_x_soft_tau"] == 0.5
+    assert cfg["gcs_slot_gt_bottom_x_soft_beta"] == 0.05
+    assert cfg["gcs_slot_start_index_l1"] == 0.0
+    assert cfg["gcs_slot_start_index_l1_beta"] == 2.0
     assert args.gcs_ordered_point_loss == "normalized_smooth_l1"
     assert args.gcs_slot_gt_bottom_x == 0.0
     assert args.gcs_slot_gt_bottom_x_beta == 0.05
     assert args.gcs_slot_gt_bottom_x_detach_interval == 1
+    assert args.gcs_slot_gt_bottom_x_soft == 0.0
+    assert args.gcs_slot_gt_bottom_x_soft_tau == 0.5
+    assert args.gcs_slot_gt_bottom_x_soft_beta == 0.05
+    assert args.gcs_slot_start_index_l1 == 0.0
+    assert args.gcs_slot_start_index_l1_beta == 2.0
     assert criterion.ordered_point_loss == "normalized_smooth_l1"
     source = (ROOT / "tools/train_gcs.py").read_text(encoding="utf-8")
     assert '"gcs_slot_gt_bottom_x": args.gcs_slot_gt_bottom_x' in source
     assert '"gcs_slot_gt_bottom_x_beta": args.gcs_slot_gt_bottom_x_beta' in source
     assert '"gcs_slot_gt_bottom_x_detach_interval": args.gcs_slot_gt_bottom_x_detach_interval' in source
+    assert '"gcs_slot_gt_bottom_x_soft": args.gcs_slot_gt_bottom_x_soft' in source
+    assert '"gcs_slot_gt_bottom_x_soft_tau": args.gcs_slot_gt_bottom_x_soft_tau' in source
+    assert '"gcs_slot_gt_bottom_x_soft_beta": args.gcs_slot_gt_bottom_x_soft_beta' in source
+    assert '"gcs_slot_start_index_l1": args.gcs_slot_start_index_l1' in source
+    assert '"gcs_slot_start_index_l1_beta": args.gcs_slot_start_index_l1_beta' in source
 
 
 def test_aspect_l1_requires_explicit_ordered_point_loss_flag() -> None:
@@ -2178,11 +2277,13 @@ def main() -> None:
         test_ordered_slot_loss_defaults_match_default_yaml_and_do_not_silent_disable,
         test_ordered_slot_loss_core_supervision_requires_explicit_ablation,
         test_trainer_ordered_slot_loss_contract_rejects_disabled_bottom_order_losses,
+        test_ordered_slot_validator_loss_gains_include_bottom_x_terms,
         test_bottom_order_loss_catches_no_common_anchor_violation,
         test_decoded_bottom_idx_matches_repaired_interval_when_start_gt_end,
         test_decoded_bottom_helper_sees_same_start_gt_end_violation_as_strict_decoder,
         test_decoded_bottom_loss_and_metric_use_repaired_start_end_interval,
         test_slot_gt_bottom_x_loss_uses_repaired_decoded_bottom_index,
+        test_slot_gt_bottom_x_soft_loss_backprops_to_start_logits,
         test_slot_gt_bottom_x_loss_reports_available_target_keys,
         test_decode_count_two_lanes,
         test_ordered_slot_head_requires_five_slots_and_queries,
