@@ -215,6 +215,7 @@ gcs_official_point_valid_thrs: [0.45, 0.5] # (list[float]) official-val sweep po
 gcs_official_nms_dist_pxs: [0.0, 18.0, 30.0, 50.0] # (list[float]) official-val sweep lane NMS distances
 gcs_official_max_dets: [5, 6, 8] # (list[int]) official-val sweep max_det values
 gcs_official_min_points: [4, 5, 6] # (list[int]) official-val sweep visible-anchor floors
+gcs_official_valid_before_maxdet: False # (bool) filter point-valid/min_points failures before max_det in official sweeps
 gcs_official_score_fp_weight: 0.02 # (float) FP penalty for official_score tie-break logging
 gcs_official_score_fn_weight: 0.02 # (float) FN penalty for official_score tie-break logging
 gcs_official_half: False # (bool) use FP16 inference for training-time official sweeps

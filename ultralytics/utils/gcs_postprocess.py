@@ -197,6 +197,7 @@ def decode_gcs_predictions(
     min_points: int = 2,
     max_det: int | None = None,
     nms_dist_px: float = 0.0,
+    valid_before_maxdet: bool = False,
     count_aware_topk: bool = False,
     count_aware_min_k: int = 3,
     count_aware_max_k: int = 5,
@@ -215,6 +216,7 @@ def decode_gcs_predictions(
         min_points: Minimum number of points required to keep a lane.
         max_det: Optional maximum number of kept lanes after score sorting.
         nms_dist_px: Optional duplicate-lane suppression threshold in pixels. 0 disables lane NMS.
+        valid_before_maxdet: If true, discard point-valid/min_points failures before ``max_det`` truncation.
         count_aware_topk: If true, keep only the quality-best ``k_hat`` lanes after conf/NMS.
         count_aware_min_k: Minimum dynamic lane count when count-aware top-k is enabled.
         count_aware_max_k: Maximum dynamic lane count when count-aware top-k is enabled.
@@ -304,6 +306,20 @@ def decode_gcs_predictions(
         if point_valid_scores is not None:
             point_valid_scores = point_valid_scores[order][keep_sorted]
         order = torch.arange(scores.shape[0], dtype=torch.long)
+    if valid_before_maxdet and point_valid_scores is not None:
+        valid_masks = torch.stack(
+            [
+                longest_contiguous_valid_mask(v >= float(point_valid_thr), min_points=min_points)
+                for v in point_valid_scores
+            ],
+            dim=0,
+        )
+        keep_valid = torch.nonzero(valid_masks.sum(dim=1) >= int(min_points), as_tuple=False).flatten()
+        points = points[keep_valid]
+        scores = scores[keep_valid]
+        query_indices = query_indices[keep_valid]
+        point_valid_scores = point_valid_scores[keep_valid]
+        order = torch.argsort(scores, descending=True)
     if max_det is not None and max_det > 0:
         order = order[: int(max_det)]
     points = points[order]

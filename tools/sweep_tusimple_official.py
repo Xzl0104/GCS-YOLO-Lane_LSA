@@ -59,6 +59,7 @@ ORDERED_SLOT_QUERY_ONLY_DEFAULTS = {
     "nms_dist_pxs": [18.0],
     "max_dets": [8],
     "min_points": [6],
+    "valid_before_maxdet": False,
     "count_aware_topk": False,
     "count_aware_min_k": 3,
     "count_aware_max_k": 5,
@@ -148,6 +149,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--max-dets", nargs="+", type=int, default=[8], help="max_det values to sweep.")
     parser.add_argument("--min-points", nargs="+", type=int, default=[6], help="Minimum visible-anchor floors to sweep.")
+    parser.add_argument("--valid-before-maxdet", action="store_true", help="Filter point-valid/min_points failures before max_det truncation.")
     parser.add_argument("--count-aware-topk", action="store_true", help="Use count_score to keep only the quality-best dynamic lane count.")
     parser.add_argument("--count-aware-min-k", type=int, default=3, help="Minimum k_hat for --count-aware-topk.")
     parser.add_argument("--count-aware-max-k", type=int, default=5, help="Maximum k_hat for --count-aware-topk.")
@@ -190,6 +192,7 @@ def resolve_save_dir(
     weights: str | Path,
     split: str,
     count_aware_topk: bool = False,
+    valid_before_maxdet: bool = False,
     decode_mode: str = "auto",
 ) -> Path:
     if save_dir is not None and str(save_dir).strip():
@@ -197,7 +200,11 @@ def resolve_save_dir(
     if str(decode_mode) == "ordered_slot":
         suffix = "_ordered_slot"
     else:
-        suffix = "_count_aware_topk" if count_aware_topk else ""
+        suffix = ""
+        if count_aware_topk:
+            suffix += "_count_aware_topk"
+        if valid_before_maxdet:
+            suffix += "_valid_before_maxdet"
     run_dir = _weight_run_dir(weights)
     if run_dir is not None:
         return run_dir / f"official_sweep_{split}{suffix}"
@@ -253,6 +260,7 @@ def build_combos(args: argparse.Namespace, decode_yaml_cfg: dict | None = None) 
     count_aware_min_k = int(getattr(args, "count_aware_min_k", 3))
     count_aware_max_k = int(getattr(args, "count_aware_max_k", 5))
     count_aware_length_norm = float(getattr(args, "count_aware_length_norm", 12.0))
+    valid_before_maxdet = bool(getattr(args, "valid_before_maxdet", False))
     if count_aware_topk:
         if count_aware_min_k < 0 or count_aware_max_k < 0 or count_aware_min_k > count_aware_max_k:
             raise ValueError(
@@ -283,6 +291,7 @@ def build_combos(args: argparse.Namespace, decode_yaml_cfg: dict | None = None) 
                 "nms_dist_px": nms_dist_px,
                 "max_det": max_det,
                 "min_points": min_points,
+                "valid_before_maxdet": valid_before_maxdet,
                 "count_aware_topk": count_aware_topk,
                 "count_aware_min_k": count_aware_min_k,
                 "count_aware_max_k": count_aware_max_k,
@@ -316,6 +325,7 @@ def write_csv(path: Path, rows: list[dict]) -> None:
         "nms_dist_px",
         "max_det",
         "min_points",
+        "valid_before_maxdet",
         "count_aware_topk",
         "count_aware_min_k",
         "count_aware_max_k",
@@ -385,6 +395,7 @@ def sweep(args: argparse.Namespace) -> dict:
             args.nms_dist_pxs = [float(decode_yaml_cfg["nms_dist_px"])]
             args.max_dets = [int(decode_yaml_cfg["max_det"])]
             args.min_points = [int(decode_yaml_cfg["min_points"])]
+            args.valid_before_maxdet = bool(decode_yaml_cfg.get("valid_before_maxdet", False))
             args.count_aware_topk = bool(decode_yaml_cfg["count_aware_topk"])
             args.count_aware_min_k = int(decode_yaml_cfg["count_aware_min_k"])
             args.count_aware_max_k = int(decode_yaml_cfg["count_aware_max_k"])
@@ -461,6 +472,7 @@ def sweep(args: argparse.Namespace) -> dict:
                     min_points=combo["min_points"],
                     max_det=combo["max_det"],
                     nms_dist_px=combo["nms_dist_px"],
+                    valid_before_maxdet=combo["valid_before_maxdet"],
                     count_aware_topk=combo["count_aware_topk"],
                     count_aware_min_k=combo["count_aware_min_k"],
                     count_aware_max_k=combo["count_aware_max_k"],
@@ -513,6 +525,7 @@ def sweep(args: argparse.Namespace) -> dict:
         args.weights,
         args.split,
         count_aware_topk=bool(getattr(args, "count_aware_topk", False)),
+        valid_before_maxdet=bool(getattr(args, "valid_before_maxdet", False)),
         decode_mode=str(getattr(args, "decode_mode", "query")),
     )
     save_dir.mkdir(parents=True, exist_ok=True)
@@ -577,6 +590,7 @@ def sweep(args: argparse.Namespace) -> dict:
                 "nms_dist_pxs": [float(x) for x in sorted({float(x) for x in args.nms_dist_pxs})],
                 "max_dets": [int(x) for x in sorted({int(x) for x in args.max_dets})],
                 "min_points": [int(x) for x in sorted({int(x) for x in args.min_points})],
+                "valid_before_maxdet": bool(getattr(args, "valid_before_maxdet", False)),
                 "count_aware_topk": bool(getattr(args, "count_aware_topk", False)),
                 "count_aware_min_k": int(getattr(args, "count_aware_min_k", 3)),
                 "count_aware_max_k": int(getattr(args, "count_aware_max_k", 5)),

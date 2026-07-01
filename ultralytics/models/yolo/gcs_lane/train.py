@@ -1048,6 +1048,7 @@ class GCSLaneTrainer(BaseTrainer):
             "gcs_official_nms_dist_pxs": [0.0, 18.0, 30.0, 50.0],
             "gcs_official_max_dets": [5, 6, 8],
             "gcs_official_min_points": [4, 5, 6],
+            "gcs_official_valid_before_maxdet": False,
         }
         if ordered_slot:
             sweep_arg_values = {
@@ -1101,6 +1102,7 @@ class GCSLaneTrainer(BaseTrainer):
             gcs_num_slots=int(getattr(self.args, "gcs_num_slots", 5)),
             gcs_min_interval_points=int(getattr(self.args, "gcs_min_interval_points", 2)),
             gcs_bottom_order_margin_px=float(getattr(self.args, "gcs_bottom_order_margin_px", 2.0)),
+            valid_before_maxdet=bool(getattr(self.args, "gcs_official_valid_before_maxdet", False)),
             max_images=int(getattr(self.args, "gcs_official_max_images", 0) or 0),
             warmup=int(getattr(self.args, "gcs_official_warmup", 5) or 0),
             device=self._official_device_arg(),

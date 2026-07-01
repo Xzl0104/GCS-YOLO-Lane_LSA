@@ -925,6 +925,7 @@ class BaseTrainer:
                     "gcs_official_nms_dist_pxs",
                     "gcs_official_max_dets",
                     "gcs_official_min_points",
+                    "gcs_official_valid_before_maxdet",
                     "gcs_official_score_fp_weight",
                     "gcs_official_score_fn_weight",
                     "gcs_official_half",

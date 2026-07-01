@@ -453,6 +453,16 @@ and keeps the quality-best post-conf, post-NMS lanes. This does not change
 training, labels, losses, model outputs, official metrics, Count Head, Quality
 Head, Survival Head, or default decode behavior.
 
+The branch includes a default-off query-mode decode ablation
+`valid_before_maxdet`. When explicitly enabled with
+`--valid-before-maxdet`, decode applies the existing point-valid/min_points
+filter after confidence sorting and Lane-NMS but before `max_det`
+truncation, then re-sorts by lane score before truncating. This prevents
+queries with too few valid anchors from occupying a final `max_det` slot. The
+default remains `false`, preserving old sweep/eval behavior. This does not
+change training, labels, losses, model outputs, official metrics, Count Head,
+Quality Head, Survival Head, or default decode behavior.
+
 This branch includes `tools/eval_tusimple_official.py`,
 `tools/sweep_tusimple_official.py`, `gcs_tools/tusimple_official_eval.py`, and
 explicit training-time `official_best` checkpoint preservation. It does not

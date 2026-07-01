@@ -99,6 +99,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--nms-dist-px", type=float, default=18.0, help="Lane-NMS distance in original-image pixels. 0 disables.")
     parser.add_argument("--min-points", type=int, default=6, help="Minimum visible anchors required to keep a lane.")
     parser.add_argument("--max-det", type=int, default=8, help="Maximum decoded lane queries kept before official evaluation.")
+    parser.add_argument("--valid-before-maxdet", action="store_true", help="Filter point-valid/min_points failures before max_det truncation.")
     parser.add_argument("--count-aware-topk", action="store_true", help="Use count_score to keep only the quality-best dynamic lane count.")
     parser.add_argument("--count-aware-min-k", type=int, default=3, help="Minimum k_hat for --count-aware-topk.")
     parser.add_argument("--count-aware-max-k", type=int, default=5, help="Maximum k_hat for --count-aware-topk.")
@@ -157,6 +158,7 @@ def resolve_save_dir(
     max_det: int,
     min_points: int,
     count_aware_topk: bool = False,
+    valid_before_maxdet: bool = False,
     decode_mode: str = "auto",
 ) -> Path:
     if save_dir is not None and str(save_dir).strip():
@@ -165,9 +167,10 @@ def resolve_save_dir(
         tag = f"official_{split}_ordered_slot"
     else:
         count_tag = "_catopk" if count_aware_topk else ""
+        valid_tag = "_validbeforemaxdet" if valid_before_maxdet else ""
         tag = (
             f"official_{split}_conf{float(conf):.4g}_pvalid{float(point_valid_thr):.4g}_"
-            f"nms{float(nms_dist_px):.4g}_maxdet{int(max_det)}_minp{int(min_points)}{count_tag}"
+            f"nms{float(nms_dist_px):.4g}_maxdet{int(max_det)}_minp{int(min_points)}{count_tag}{valid_tag}"
         ).replace(".", "p")
     run_dir = _weight_run_dir(weights)
     if run_dir is not None:
@@ -194,6 +197,7 @@ def _apply_query_decode_yaml(args: argparse.Namespace, decode_yaml_cfg: dict) ->
     args.nms_dist_px = float(decode_yaml_cfg["nms_dist_px"])
     args.max_det = int(decode_yaml_cfg["max_det"])
     args.min_points = int(decode_yaml_cfg["min_points"])
+    args.valid_before_maxdet = bool(decode_yaml_cfg.get("valid_before_maxdet", False))
     args.count_aware_topk = bool(decode_yaml_cfg["count_aware_topk"])
     args.count_aware_min_k = int(decode_yaml_cfg["count_aware_min_k"])
     args.count_aware_max_k = int(decode_yaml_cfg["count_aware_max_k"])
@@ -277,6 +281,7 @@ def generate_predictions(
     count_aware_min_k: int = 3,
     count_aware_max_k: int = 5,
     count_aware_length_norm: float = 12.0,
+    valid_before_maxdet: bool = False,
     decode_mode: str = "auto",
     decode_yaml_cfg: dict | None = None,
     gcs_min_lanes: int = 2,
@@ -297,6 +302,7 @@ def generate_predictions(
             nms_dist_px = float(decode_yaml_cfg["nms_dist_px"])
             max_det = int(decode_yaml_cfg["max_det"])
             min_points = int(decode_yaml_cfg["min_points"])
+            valid_before_maxdet = bool(decode_yaml_cfg.get("valid_before_maxdet", False))
             count_aware_topk = bool(decode_yaml_cfg["count_aware_topk"])
             count_aware_min_k = int(decode_yaml_cfg["count_aware_min_k"])
             count_aware_max_k = int(decode_yaml_cfg["count_aware_max_k"])
@@ -311,6 +317,7 @@ def generate_predictions(
                 "nms_dist_px": nms_dist_px,
                 "min_points": min_points,
                 "max_det": max_det,
+                "valid_before_maxdet": valid_before_maxdet,
                 "count_aware_topk": count_aware_topk,
                 "count_aware_min_k": count_aware_min_k,
                 "count_aware_max_k": count_aware_max_k,
@@ -391,6 +398,7 @@ def generate_predictions(
                 min_points=min_points,
                 max_det=max_det,
                 nms_dist_px=nms_dist_px,
+                valid_before_maxdet=valid_before_maxdet,
                 count_aware_topk=count_aware_topk,
                 count_aware_min_k=count_aware_min_k,
                 count_aware_max_k=count_aware_max_k,
@@ -458,6 +466,7 @@ def evaluate_official(args: argparse.Namespace) -> dict:
             nms_dist_px=args.nms_dist_px,
             max_det=args.max_det,
             min_points=args.min_points,
+            valid_before_maxdet=args.valid_before_maxdet,
             count_aware_topk=args.count_aware_topk,
             count_aware_min_k=args.count_aware_min_k,
             count_aware_max_k=args.count_aware_max_k,
@@ -489,6 +498,7 @@ def evaluate_official(args: argparse.Namespace) -> dict:
         args.max_det,
         args.min_points,
         count_aware_topk=args.count_aware_topk,
+        valid_before_maxdet=args.valid_before_maxdet,
         decode_mode=active_decode_mode,
     )
     save_dir.mkdir(parents=True, exist_ok=True)
@@ -576,6 +586,7 @@ def evaluate_official(args: argparse.Namespace) -> dict:
                 "nms_dist_px": float(args.nms_dist_px),
                 "max_det": int(args.max_det),
                 "min_points": int(args.min_points),
+                "valid_before_maxdet": bool(args.valid_before_maxdet),
                 "count_aware_topk": bool(args.count_aware_topk),
                 "count_aware_min_k": int(args.count_aware_min_k),
                 "count_aware_max_k": int(args.count_aware_max_k),

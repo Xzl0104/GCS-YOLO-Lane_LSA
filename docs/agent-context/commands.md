@@ -1700,6 +1700,31 @@ E3 `best.pt`, focusing on `official_acc`, `count_acc_4`, `count_acc_5`,
 `official_FP`, and `official_FN`. The sweep summary records
 `count_aware_topk`.
 
+Default-off valid-before-maxdet query decode uses the same official-val
+surface and must be selected on validation only:
+
+```bash
+python tools/eval_tusimple_official.py \
+  --archive-root archive/TUSimple \
+  --split val \
+  --gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
+  --weights runs/gcs_lane/gcs_yolo_lane_s_q12_k56_boundary02_spurious_lite_v1/weights/best.pt \
+  --imgsz 544 960 \
+  --device 0 \
+  --half \
+  --conf 0.005 \
+  --point-valid-thr 0.45 \
+  --nms-dist-px 0.0 \
+  --max-det 5 \
+  --min-points 2 \
+  --valid-before-maxdet \
+  --save-records
+```
+
+Compare against the matching default decode on official-val only, focusing on
+`5->4`, `official_FP`, `4->5`, and `official_acc`. The summary/config records
+`valid_before_maxdet`.
+
 Legacy post-`b6535f641` Q18/count-head guided sweeps used the same
 official-val surface and kept normal/count-guided rows in one sweep table.
 These flags are not available in the active rollback code:

@@ -363,6 +363,7 @@ CFG_BOOL_KEYS = frozenset(
         "gcs_allow_internal_best",
         "gcs_official_half",
         "gcs_allow_disable_order_loss",
+        "gcs_official_valid_before_maxdet",
         "gcs_lane_count_balanced",
         "gcs_hard_sampling",
         "gcs_point_x_only",

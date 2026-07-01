@@ -551,6 +551,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--gcs-official-nms-dist-pxs", nargs="+", type=float, default=[0.0, 18.0, 30.0, 50.0])
     parser.add_argument("--gcs-official-max-dets", nargs="+", type=int, default=[5, 6, 8])
     parser.add_argument("--gcs-official-min-points", nargs="+", type=int, default=[4, 5, 6])
+    official_valid_group = parser.add_mutually_exclusive_group()
+    official_valid_group.add_argument(
+        "--gcs-official-valid-before-maxdet",
+        dest="gcs_official_valid_before_maxdet",
+        action="store_true",
+        default=None,
+        help="During training-time official sweeps, filter point-valid/min_points failures before max_det truncation.",
+    )
+    official_valid_group.add_argument(
+        "--no-gcs-official-valid-before-maxdet",
+        dest="gcs_official_valid_before_maxdet",
+        action="store_false",
+        default=None,
+        help="Disable valid-before-maxdet during training-time official sweeps when overriding a resumed run.",
+    )
     parser.add_argument("--gcs-official-score-fp-weight", type=float, default=0.02)
     parser.add_argument("--gcs-official-score-fn-weight", type=float, default=0.02)
     parser.add_argument(
@@ -807,6 +822,8 @@ def main() -> None:
         "gcs_hard_visible_thr": args.gcs_hard_visible_thr,
         "gcs_hard_gt3_visible_thr": args.gcs_hard_gt3_visible_thr,
     }
+    if args.gcs_official_valid_before_maxdet is not None:
+        overrides["gcs_official_valid_before_maxdet"] = args.gcs_official_valid_before_maxdet
 
     print(f"GCS input shape: {shape_str(gcs_imgsz)} (W x H), stored as H,W={gcs_imgsz}")
     trainer = GCSLaneTrainer(overrides=overrides)

@@ -116,6 +116,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", default="0", help="Inference device, e.g. 0 or cpu.")
     parser.add_argument("--half", action="store_true", help="Use FP16 on CUDA.")
     parser.add_argument("--max-det", type=int, default=8, help="Maximum lane queries to keep after score sorting.")
+    parser.add_argument("--min-points", type=int, default=2, help="Minimum visible anchors required to keep a lane.")
+    parser.add_argument("--valid-before-maxdet", action="store_true", help="Filter point-valid/min_points failures before max_det truncation.")
     parser.add_argument("--count-aware-topk", action="store_true", help="Use count_score to keep only the quality-best dynamic lane count.")
     parser.add_argument("--count-aware-min-k", type=int, default=3, help="Minimum k_hat for --count-aware-topk.")
     parser.add_argument("--count-aware-max-k", type=int, default=5, help="Maximum k_hat for --count-aware-topk.")
@@ -272,6 +274,8 @@ def run_inference(
     device: str = "0",
     half: bool = False,
     max_det: int = 8,
+    min_points: int = 2,
+    valid_before_maxdet: bool = False,
     count_aware_topk: bool = False,
     count_aware_min_k: int = 3,
     count_aware_max_k: int = 5,
@@ -363,8 +367,10 @@ def run_inference(
                 image_shape=img.shape[:2],
                 score_thr=conf,
                 point_valid_thr=point_valid_thr,
+                min_points=min_points,
                 max_det=max_det,
                 nms_dist_px=nms_dist_px,
+                valid_before_maxdet=valid_before_maxdet,
                 count_aware_topk=count_aware_topk,
                 count_aware_min_k=count_aware_min_k,
                 count_aware_max_k=count_aware_max_k,
@@ -392,11 +398,56 @@ def run_inference(
             }
         )
 
-    if save_json:
-        (save_dir / "predictions.json").write_text(json.dumps(records, indent=2), encoding="utf-8")
-
     n = max(len(records), 1)
     fps = n / max(total_infer + total_post, 1e-9)
+    predictions_json = save_dir / "predictions.json" if save_json else None
+    if predictions_json is not None:
+        predictions_json.write_text(json.dumps(records, indent=2), encoding="utf-8")
+
+    summary = {
+        "config": {
+            "weights": str(Path(weights).resolve()),
+            "source": str(Path(source).resolve()),
+            "save_dir": str(save_dir.resolve()),
+            "imgsz": [int(imgsz[0]), int(imgsz[1])],
+            "decode_mode": str(active_decode_mode),
+            "conf": float(conf),
+            "point_valid_thr": float(point_valid_thr),
+            "nms_dist_px": float(nms_dist_px),
+            "max_det": int(max_det),
+            "min_points": int(min_points),
+            "valid_before_maxdet": bool(valid_before_maxdet),
+            "count_aware_topk": bool(count_aware_topk),
+            "count_aware_min_k": int(count_aware_min_k),
+            "count_aware_max_k": int(count_aware_max_k),
+            "count_aware_length_norm": float(count_aware_length_norm),
+            "gcs_min_lanes": int(gcs_min_lanes),
+            "gcs_max_lanes": int(gcs_max_lanes),
+            "gcs_num_slots": int(gcs_num_slots),
+            "gcs_min_interval_points": int(gcs_min_interval_points),
+            "gcs_bottom_order_margin_px": float(gcs_bottom_order_margin_px),
+            "max_images": int(max_images),
+            "device": str(device),
+            "half": bool(half),
+            "save_img": bool(save_img),
+            "save_txt": bool(save_txt),
+            "save_json": bool(save_json),
+            "line_width": int(line_width),
+        },
+        "outputs": {
+            "predictions_json": str(predictions_json.resolve()) if predictions_json is not None else None,
+            "image_dir": str(image_dir.resolve()) if save_img else None,
+            "label_dir": str(label_dir.resolve()) if save_txt else None,
+        },
+        "metrics": {
+            "images": len(records),
+            "avg_inference_ms": round(total_infer * 1000.0 / n, 3),
+            "avg_postprocess_ms": round(total_post * 1000.0 / n, 3),
+            "fps_infer_post": round(fps, 3),
+        },
+    }
+    (save_dir / "infer_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+
     print(f"images: {len(records)}")
     print(f"avg inference: {total_infer * 1000.0 / n:.2f} ms/image")
     print(f"avg postprocess: {total_post * 1000.0 / n:.2f} ms/image")
@@ -420,6 +471,8 @@ def main() -> None:
         device=args.device,
         half=args.half,
         max_det=args.max_det,
+        min_points=args.min_points,
+        valid_before_maxdet=args.valid_before_maxdet,
         count_aware_topk=args.count_aware_topk,
         count_aware_min_k=args.count_aware_min_k,
         count_aware_max_k=args.count_aware_max_k,

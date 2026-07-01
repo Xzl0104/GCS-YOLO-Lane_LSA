@@ -18,6 +18,7 @@ QUERY_DECODE_KEYS = frozenset(
         "nms_dist_px",
         "max_det",
         "min_points",
+        "valid_before_maxdet",
         "count_aware_topk",
         "count_aware_min_k",
         "count_aware_max_k",
@@ -32,6 +33,7 @@ ORDERED_SLOT_QUERY_DECODE_DEFAULTS = {
     "nms_dist_px": 18.0,
     "min_points": 6,
     "max_det": 8,
+    "valid_before_maxdet": False,
     "count_aware_topk": False,
     "count_aware_min_k": 3,
     "count_aware_max_k": 5,
@@ -268,8 +270,10 @@ def _bool_value(value: Any) -> bool:
     return bool(value)
 
 
-def query_decode_cfg(best_row: Mapping[str, Any]) -> dict[str, Any]:
+def query_decode_cfg(best_row: Mapping[str, Any], valid_before_maxdet: Any = None) -> dict[str, Any]:
     """Build the official query decode-yaml schema from a selected sweep row."""
+    if valid_before_maxdet is None:
+        valid_before_maxdet = best_row.get("valid_before_maxdet", False)
     cfg = {
         "schema": QUERY_DECODE_SCHEMA,
         "decode_mode": "query",
@@ -278,6 +282,7 @@ def query_decode_cfg(best_row: Mapping[str, Any]) -> dict[str, Any]:
         "nms_dist_px": float(best_row["nms_dist_px"]),
         "max_det": int(best_row["max_det"]),
         "min_points": int(best_row["min_points"]),
+        "valid_before_maxdet": _bool_value(valid_before_maxdet),
         "count_aware_topk": _bool_value(best_row.get("count_aware_topk", False)),
         "count_aware_min_k": int(best_row.get("count_aware_min_k", 3) or 3),
         "count_aware_max_k": int(best_row.get("count_aware_max_k", 5) or 5),
@@ -295,7 +300,11 @@ def build_official_best_decode_cfg(best_row: Mapping[str, Any], model_mode: str,
     if model_mode == "ordered_slot":
         return ordered_slot_decode_cfg(args)
     if model_mode == "query":
-        return query_decode_cfg(best_row)
+        valid_before_maxdet = best_row.get(
+            "valid_before_maxdet",
+            _arg(args, "gcs_official_valid_before_maxdet", False),
+        )
+        return query_decode_cfg(best_row, valid_before_maxdet=valid_before_maxdet)
     raise ValueError(f"Unknown model_mode={model_mode!r}.")
 
 
@@ -343,7 +352,8 @@ def validate_decode_yaml_for_model(decode_cfg: Mapping[str, Any], model_mode: st
     if model_mode == "query":
         if schema != QUERY_DECODE_SCHEMA:
             raise RuntimeError(f"Invalid query schema={schema!r}. Expected {QUERY_DECODE_SCHEMA}.")
-        missing = sorted(QUERY_DECODE_KEYS.difference(decode_cfg))
+        required = QUERY_DECODE_KEYS - {"valid_before_maxdet"}
+        missing = sorted(required.difference(decode_cfg))
         if missing:
             raise RuntimeError(f"Invalid query decode yaml: missing keys {missing}.")
         return

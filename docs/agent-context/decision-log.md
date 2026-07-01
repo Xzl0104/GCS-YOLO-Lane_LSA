@@ -278,6 +278,37 @@ point-loss gradient, ascending training fixed-y rejection, ascending official
 h-samples acceptance, padding-before-fixed-y validation,
 selection-policy/sort-key consistency,
 ordered-slot summary helpers, and official eval query-arg rejection.
+## 2026-07-02: Add Default-Off Valid-Before-MaxDet Decode Ablation
+
+Decision:
+
+Add a default-disabled query-mode decode option `valid_before_maxdet`, exposed
+as `--valid-before-maxdet` in TuSimple official eval/sweep and inference
+helpers. When enabled, decoded candidates are filtered by the existing
+point-valid/min_points rule after confidence sorting and Lane-NMS but before
+`max_det` truncation, then re-sorted by score before final truncation.
+
+Why:
+
+The old decode order could let a high-score query with zero valid anchors take
+a `max_det` slot, then be removed by the later point-valid/min_points filter,
+leaving a real lower-score lane unavailable. The new opt-in path removes such
+invalid queries before slot allocation.
+
+Scope:
+
+This is inference/evaluation postprocess selection only. It does not change
+training, labels, losses, model outputs, official metrics, Count Head, Quality
+Head, Survival Head, or default decode behavior. The default remains
+`valid_before_maxdet=false`, preserving old experiments and sweeps.
+
+Validation target:
+
+Use the 363-image official-val surface only for counterfactual evaluation.
+Do not use test for selecting this option. The minimal synthetic check should
+cover `q_empty score=0.20 valid_count=0`, `q_true score=0.07 valid_count=7`,
+and `max_det=1`, where the old path returns no lane and the opt-in path keeps
+`q_true`.
 
 ## 2026-06-28: Reject E2 Short0601 Hard-Sampling Run
 
