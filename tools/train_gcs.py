@@ -234,6 +234,41 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Margin around the 4/5 boundary: GT4 upper=4+margin, GT5 lower=5-margin.",
     )
     parser.add_argument(
+        "--gcs-short-side-geom",
+        type=float,
+        default=0.0,
+        help="Matched short-side GT geometry loss gain. 0 disables.",
+    )
+    parser.add_argument(
+        "--gcs-short-side-geom-min-gt-lanes",
+        type=int,
+        default=4,
+        help="Minimum GT lane count that enables short-side geometry loss.",
+    )
+    parser.add_argument(
+        "--gcs-short-side-geom-visible-max",
+        type=int,
+        default=20,
+        help="Maximum visible anchors for matched GT lanes selected by short-side geometry loss.",
+    )
+    parser.add_argument(
+        "--gcs-short-side-geom-side-only",
+        action="store_true",
+        help="Apply short-side geometry loss only to leftmost/rightmost GT lanes by bottom visible x.",
+    )
+    parser.add_argument(
+        "--gcs-short-side-geom-weight-gt4",
+        type=float,
+        default=1.0,
+        help="Per-image multiplier for short-side geometry loss on GT4 samples.",
+    )
+    parser.add_argument(
+        "--gcs-short-side-geom-weight-gt5",
+        type=float,
+        default=1.0,
+        help="Per-image multiplier for short-side geometry loss on GT5-or-denser samples.",
+    )
+    parser.add_argument(
         "--gcs-count-ce",
         nargs="?",
         const=1.0,
@@ -420,6 +455,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=3,
         help="Minimum overlapping anchors with a GT lane for GT-aware spurious candidate protection.",
+    )
+    parser.add_argument(
+        "--gcs-spurious-gt-protect-min-gt-lanes",
+        type=int,
+        default=0,
+        help="Minimum GT lane count for GT-aware spurious candidate protection. 0 preserves the old all-count behavior.",
     )
     parser.add_argument(
         "--gcs-spurious-gt-protect-margin-px",
@@ -728,6 +769,12 @@ def main() -> None:
         "gcs_count_boundary_gt5_under_weight": args.gcs_count_boundary_gt5_under_weight,
         "gcs_count_boundary_margin34": args.gcs_count_boundary_margin34,
         "gcs_count_boundary_margin45": args.gcs_count_boundary_margin45,
+        "gcs_short_side_geom": args.gcs_short_side_geom,
+        "gcs_short_side_geom_min_gt_lanes": args.gcs_short_side_geom_min_gt_lanes,
+        "gcs_short_side_geom_visible_max": args.gcs_short_side_geom_visible_max,
+        "gcs_short_side_geom_side_only": args.gcs_short_side_geom_side_only,
+        "gcs_short_side_geom_weight_gt4": args.gcs_short_side_geom_weight_gt4,
+        "gcs_short_side_geom_weight_gt5": args.gcs_short_side_geom_weight_gt5,
         "gcs_count_ce": args.gcs_count_ce,
         "gcs_interval": args.gcs_interval,
         "gcs_order": args.gcs_order,
@@ -763,6 +810,7 @@ def main() -> None:
         "gcs_spurious_gt_protect": args.gcs_spurious_gt_protect,
         "gcs_spurious_gt_protect_px": args.gcs_spurious_gt_protect_px,
         "gcs_spurious_gt_protect_min_overlap": args.gcs_spurious_gt_protect_min_overlap,
+        "gcs_spurious_gt_protect_min_gt_lanes": args.gcs_spurious_gt_protect_min_gt_lanes,
         "gcs_spurious_gt_protect_margin_px": args.gcs_spurious_gt_protect_margin_px,
         "gcs_spurious_gt_protect_mode": args.gcs_spurious_gt_protect_mode,
         "gcs_gt5_short_visible_thr": args.gcs_gt5_short_visible_thr,

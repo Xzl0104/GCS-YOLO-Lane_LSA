@@ -134,6 +134,12 @@ gcs_count_boundary_gt5_weight: 1.5 # (float) weight for GT5 undercount boundary 
 gcs_count_boundary_gt5_under_weight: null # (float|None) optional separate GT5 undercount boundary weight; null follows gcs_count_boundary_gt5_weight
 gcs_count_boundary_margin34: 0.35 # (float) margin for GT3 upper and GT4 lower count-score boundaries
 gcs_count_boundary_margin45: 0.35 # (float) margin for GT4 upper and GT5 lower count-score boundaries
+gcs_short_side_geom: 0.0 # (float) matched short-side GT geometry loss gain; 0 disables
+gcs_short_side_geom_min_gt_lanes: 4 # (int) minimum GT lane count that enables short-side geometry loss
+gcs_short_side_geom_visible_max: 20 # (int) maximum visible anchors for selected matched short-side GT lanes
+gcs_short_side_geom_side_only: False # (bool) limit short-side geometry loss to leftmost/rightmost GT lanes by bottom visible x
+gcs_short_side_geom_weight_gt4: 1.0 # (float) per-image multiplier for short-side geometry loss on GT4 samples
+gcs_short_side_geom_weight_gt5: 1.0 # (float) per-image multiplier for short-side geometry loss on GT5-or-denser samples
 gcs_count_ce: 1.0 # (float) ordered_slot 2/3/4/5 count cross-entropy gain
 gcs_interval: 1.0 # (float) ordered_slot start/end interval cross-entropy gain
 gcs_order: 0.2 # (float) ordered_slot common-anchor adjacent-slot order loss gain
@@ -169,6 +175,7 @@ gcs_spurious_min_overlap: 3 # (int) minimum overlapping visible anchors with a m
 gcs_spurious_gt_protect: False # (bool) protect duplicate-like candidates that are close to a GT lane
 gcs_spurious_gt_protect_px: 25.0 # (float) maximum mean x distance in pixels for GT-aware protection
 gcs_spurious_gt_protect_min_overlap: 3 # (int) minimum overlapping anchors with a GT lane for protection
+gcs_spurious_gt_protect_min_gt_lanes: 0 # (int) minimum GT lane count for GT-aware protection; 0 preserves all-count behavior
 gcs_spurious_gt_protect_margin_px: 5.0 # (float) better-matched protection margin in pixels
 gcs_spurious_gt_protect_mode: better_matched # (str) GT-aware protection policy
 gcs_gt5_short_visible_thr: 0 # (int) matched GT5 lanes with visible_count <= this get point-valid positive rescue; 0 disables

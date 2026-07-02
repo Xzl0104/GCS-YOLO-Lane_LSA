@@ -17,6 +17,12 @@ The branch also includes the 2026-06-27 user-requested, default-off `gcs_hard_sa
 
 The branch also includes the 2026-06-27 user-requested, default-off `gcs_spurious_neg` loss for E3-lite. It uses the training Hungarian matcher indices only to select unmatched short duplicate-like queries near matched queries, then adds an extra target-zero BCE on their `pred_logits`. The GT-count weighting extension keeps the old default behavior with `gcs_spurious_gt3_weight=1.0`, `gcs_spurious_gt4_weight=1.0`, `gcs_spurious_gt5_weight=1.0`, and `gcs_spurious_disable_gt5=False`, while allowing GT3-or-sparser, GT4, and GT5-or-denser samples to carry different spurious-negative weights. The 2026-06-28 `gcs_spurious_gt_protect` extension is also default-off and only removes GT-close candidate queries from this extra negative BCE. It does not change data sampling, dataset labels, matcher logic, point/smooth/curve losses, decode, NMS, or official metrics.
 
+The branch also includes the 2026-07-02 user-requested, default-off
+`gcs_short_side_geom` matched-lane geometry loss. It only strengthens
+Hungarian-matched short visible GT lanes, optionally restricted to the
+left/right side GT lanes, and does not change unmatched queries, matcher logic,
+decode, NMS, or official metrics.
+
 Training-time `official_best` checkpoint preservation is active as an explicit 2026-06-27 selection-protocol change. It preserves the 5-25-3 algorithm body and only changes how formal TuSimple checkpoints are selected.
 
 The 2026-06-29 `ordered_slot_training_protocol_fix_v1` change is a protocol
@@ -347,6 +353,10 @@ edge_loss
 count_loss
 count_under5_loss
 count_boundary_loss
+short_side_geom_loss
+short_side_geom_count
+short_side_geom_gt4
+short_side_geom_gt5
 spurious_neg_loss
 spurious_negative_count
 spur_cand
@@ -396,6 +406,20 @@ defaults to `None`, which follows `gcs_count_boundary_gt5_weight`; setting it
 allows only the GT5 undercount boundary weight to be changed. `cnt_bound_5under`
 logs the unweighted GT5 undercount boundary term.
 
+`short_side_geom_loss` is disabled by default through
+`gcs_short_side_geom=0.0`. When enabled, it adds an aspect-weighted L1 point
+loss only on Hungarian-matched GT lanes for images with at least
+`gcs_short_side_geom_min_gt_lanes` GT lanes. Matched lanes are selected only
+when their visible anchor count is at or below
+`gcs_short_side_geom_visible_max`; `gcs_short_side_geom_side_only=True`
+further restricts them to the leftmost/rightmost GT lanes by bottom visible x.
+GT4 and GT5-or-denser samples can be weighted with
+`gcs_short_side_geom_weight_gt4` and `gcs_short_side_geom_weight_gt5`. This
+does not change unmatched queries, matcher logic, data sampling, labels, point
+visibility targets, decode, NMS, or official metrics. `short_side_geom_count`,
+`short_side_geom_gt4`, and `short_side_geom_gt5` are diagnostics for the
+selected matched lanes.
+
 `gcs_gt5_short_visible_thr=0` and
 `gcs_gt5_short_point_valid_weight=1.0` keep GT5 short point-valid rescue
 effectively disabled by default. When enabled, the point-valid BCE keeps the
@@ -427,7 +451,9 @@ training objective.
 
 `gcs_spurious_gt_protect=False` preserves the old E3-lite spurious-negative
 selection. When enabled, each duplicate-like spurious candidate is compared
-against all GT lanes. If the candidate overlaps a GT lane by at least
+against all GT lanes when the image has at least
+`gcs_spurious_gt_protect_min_gt_lanes` GT lanes; the default `0` preserves the
+old all-count behavior. If the candidate overlaps a GT lane by at least
 `gcs_spurious_gt_protect_min_overlap` anchors and has mean x distance at most
 `gcs_spurious_gt_protect_px` pixels, `better_matched` mode protects it when the
 GT lane has no matched query, the matched query has insufficient GT overlap, or

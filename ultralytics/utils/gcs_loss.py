@@ -26,6 +26,10 @@ class GCSLoss(nn.Module):
         "count_loss",
         "count_under5_loss",
         "count_boundary_loss",
+        "short_side_geom_loss",
+        "short_side_geom_count",
+        "short_side_geom_gt4",
+        "short_side_geom_gt5",
         "spurious_neg_loss",
         "spurious_negative_count",
         "spur_cand",
@@ -59,6 +63,7 @@ class GCSLoss(nn.Module):
         lambda_count: float | None = None,
         lambda_count_under5: float | None = None,
         lambda_count_boundary: float | None = None,
+        lambda_short_side_geom: float | None = None,
         lambda_spurious_neg: float | None = None,
         count_under5_min_lanes: int | None = None,
         count_boundary_gt4_weight: float | None = None,
@@ -66,6 +71,11 @@ class GCSLoss(nn.Module):
         count_boundary_gt5_under_weight: float | None = None,
         count_boundary_margin34: float | None = None,
         count_boundary_margin45: float | None = None,
+        short_side_geom_min_gt_lanes: int | None = None,
+        short_side_geom_visible_max: int | None = None,
+        short_side_geom_side_only: bool | None = None,
+        short_side_geom_weight_gt4: float | None = None,
+        short_side_geom_weight_gt5: float | None = None,
         spurious_neg_weight: float | None = None,
         spurious_gt3_weight: float | None = None,
         spurious_gt4_weight: float | None = None,
@@ -77,6 +87,7 @@ class GCSLoss(nn.Module):
         spurious_gt_protect: bool | None = None,
         spurious_gt_protect_px: float | None = None,
         spurious_gt_protect_min_overlap: int | None = None,
+        spurious_gt_protect_min_gt_lanes: int | None = None,
         spurious_gt_protect_margin_px: float | None = None,
         spurious_gt_protect_mode: str | None = None,
         eval_point_valid_thr: float | None = None,
@@ -126,6 +137,11 @@ class GCSLoss(nn.Module):
             if lambda_count_boundary is not None
             else self._arg(args, "gcs_count_boundary", 0.0)
         )
+        self.short_side_geom_gain = float(
+            lambda_short_side_geom
+            if lambda_short_side_geom is not None
+            else self._arg(args, "gcs_short_side_geom", 0.0)
+        )
         self.spurious_neg_gain = float(
             lambda_spurious_neg if lambda_spurious_neg is not None else self._arg(args, "gcs_spurious_neg", 0.0)
         )
@@ -154,6 +170,31 @@ class GCSLoss(nn.Module):
             count_boundary_margin45
             if count_boundary_margin45 is not None
             else self._arg(args, "gcs_count_boundary_margin45", 0.35)
+        )
+        self.short_side_geom_min_gt_lanes = int(
+            short_side_geom_min_gt_lanes
+            if short_side_geom_min_gt_lanes is not None
+            else self._arg(args, "gcs_short_side_geom_min_gt_lanes", 4)
+        )
+        self.short_side_geom_visible_max = int(
+            short_side_geom_visible_max
+            if short_side_geom_visible_max is not None
+            else self._arg(args, "gcs_short_side_geom_visible_max", 20)
+        )
+        self.short_side_geom_side_only = self._bool_arg(
+            short_side_geom_side_only
+            if short_side_geom_side_only is not None
+            else self._arg(args, "gcs_short_side_geom_side_only", False)
+        )
+        self.short_side_geom_weight_gt4 = float(
+            short_side_geom_weight_gt4
+            if short_side_geom_weight_gt4 is not None
+            else self._arg(args, "gcs_short_side_geom_weight_gt4", 1.0)
+        )
+        self.short_side_geom_weight_gt5 = float(
+            short_side_geom_weight_gt5
+            if short_side_geom_weight_gt5 is not None
+            else self._arg(args, "gcs_short_side_geom_weight_gt5", 1.0)
         )
         self.spurious_neg_weight = float(
             spurious_neg_weight if spurious_neg_weight is not None else self._arg(args, "gcs_spurious_neg_weight", 1.0)
@@ -204,6 +245,11 @@ class GCSLoss(nn.Module):
             if spurious_gt_protect_min_overlap is not None
             else self._arg(args, "gcs_spurious_gt_protect_min_overlap", 3)
         )
+        self.spurious_gt_protect_min_gt_lanes = int(
+            spurious_gt_protect_min_gt_lanes
+            if spurious_gt_protect_min_gt_lanes is not None
+            else self._arg(args, "gcs_spurious_gt_protect_min_gt_lanes", 0)
+        )
         self.spurious_gt_protect_margin_px = float(
             spurious_gt_protect_margin_px
             if spurious_gt_protect_margin_px is not None
@@ -240,6 +286,28 @@ class GCSLoss(nn.Module):
             raise ValueError(f"gcs_count_boundary_margin34 must be >= 0, got {self.count_boundary_margin34}.")
         if self.count_boundary_margin45 < 0.0:
             raise ValueError(f"gcs_count_boundary_margin45 must be >= 0, got {self.count_boundary_margin45}.")
+        if self.short_side_geom_gain < 0.0:
+            raise ValueError(f"gcs_short_side_geom must be >= 0, got {self.short_side_geom_gain}.")
+        if self.short_side_geom_min_gt_lanes < 1:
+            raise ValueError(
+                "gcs_short_side_geom_min_gt_lanes must be >= 1, "
+                f"got {self.short_side_geom_min_gt_lanes}."
+            )
+        if self.short_side_geom_visible_max < 0:
+            raise ValueError(
+                "gcs_short_side_geom_visible_max must be >= 0, "
+                f"got {self.short_side_geom_visible_max}."
+            )
+        if self.short_side_geom_weight_gt4 < 0.0:
+            raise ValueError(
+                "gcs_short_side_geom_weight_gt4 must be >= 0, "
+                f"got {self.short_side_geom_weight_gt4}."
+            )
+        if self.short_side_geom_weight_gt5 < 0.0:
+            raise ValueError(
+                "gcs_short_side_geom_weight_gt5 must be >= 0, "
+                f"got {self.short_side_geom_weight_gt5}."
+            )
         if self.spurious_neg_gain < 0.0:
             raise ValueError(f"gcs_spurious_neg must be >= 0, got {self.spurious_neg_gain}.")
         if self.spurious_neg_weight < 0.0:
@@ -264,6 +332,11 @@ class GCSLoss(nn.Module):
             raise ValueError(
                 "gcs_spurious_gt_protect_min_overlap must be >= 1, "
                 f"got {self.spurious_gt_protect_min_overlap}."
+            )
+        if self.spurious_gt_protect_min_gt_lanes < 0:
+            raise ValueError(
+                "gcs_spurious_gt_protect_min_gt_lanes must be >= 0, "
+                f"got {self.spurious_gt_protect_min_gt_lanes}."
             )
         if self.spurious_gt_protect_margin_px < 0.0:
             raise ValueError(
@@ -563,6 +636,104 @@ class GCSLoss(nn.Module):
             )
 
         return torch.stack(losses).mean() if losses else self._zero_like(pred_points)
+
+    @staticmethod
+    def _side_gt_indices_by_bottom_x(gt_points_b: torch.Tensor, gt_valid_b: torch.Tensor) -> set[int]:
+        """Return leftmost/rightmost GT ids using each lane's bottom-most visible x."""
+        valid_mask = gt_valid_b > 0.5
+        lane_has_visible = valid_mask.any(dim=1)
+        if not bool(lane_has_visible.any()):
+            return set()
+        lane_ids = lane_has_visible.nonzero(as_tuple=False).reshape(-1)
+        bottom_idx = valid_mask.to(dtype=torch.long).argmax(dim=1)
+        bottom_x = gt_points_b[lane_ids, bottom_idx[lane_ids], 0]
+        left_id = int(lane_ids[bottom_x.argmin()].item())
+        right_id = int(lane_ids[bottom_x.argmax()].item())
+        return {left_id, right_id}
+
+    def short_side_geom_loss(
+        self,
+        pred_points: torch.Tensor,
+        gt_points: list[torch.Tensor],
+        gt_valid: list[torch.Tensor],
+        indices: list[tuple[torch.Tensor, torch.Tensor]],
+        gt_lanes: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Extra matched-lane geometry loss for short side GT lanes."""
+        zero = pred_points.new_zeros(())
+        if self.short_side_geom_gain == 0.0:
+            return self._zero_like(pred_points), zero, zero, zero
+
+        bsz = pred_points.shape[0]
+        device, dtype = pred_points.device, pred_points.dtype
+        gt_lanes = torch.as_tensor(gt_lanes, device=device, dtype=dtype).reshape(-1)
+        if gt_lanes.numel() != bsz:
+            raise ValueError(f"gt_lanes must have one value per image, got {gt_lanes.numel()} vs B={bsz}.")
+
+        losses: list[torch.Tensor] = []
+        selected_count = 0
+        selected_gt4 = 0
+        selected_gt5 = 0
+        min_gt_lanes = int(self.short_side_geom_min_gt_lanes)
+        visible_max = int(self.short_side_geom_visible_max)
+
+        for b, (src_idx, tgt_idx) in enumerate(indices):
+            gt_count = int(round(float(gt_lanes[b].detach().item())))
+            if gt_count < min_gt_lanes or src_idx.numel() == 0:
+                continue
+            src_idx = src_idx.to(device=device, dtype=torch.long)
+            tgt_idx = tgt_idx.to(device=device, dtype=torch.long)
+            gt_points_b = gt_points[b].to(device=device, dtype=dtype)
+            gt_valid_b = gt_valid[b].to(device=device, dtype=dtype)
+            if gt_points_b.ndim != 3 or gt_points_b.shape[-1] != 2:
+                raise ValueError(f"Each GT lane tensor must have shape N x K x 2, got {tuple(gt_points_b.shape)}.")
+            if gt_valid_b.shape != gt_points_b.shape[:2]:
+                raise ValueError(
+                    f"GT valid mask must match GT lane first two dims, got {tuple(gt_valid_b.shape)} vs {tuple(gt_points_b.shape[:2])}."
+                )
+
+            side_ids = self._side_gt_indices_by_bottom_x(gt_points_b.detach(), gt_valid_b.detach())
+            if self.short_side_geom_side_only and not side_ids:
+                continue
+            image_weight = 1.0
+            if gt_count == 4:
+                image_weight = float(self.short_side_geom_weight_gt4)
+            elif gt_count >= 5:
+                image_weight = float(self.short_side_geom_weight_gt5)
+
+            for src, tgt in zip(src_idx, tgt_idx):
+                tgt_i = int(tgt.item())
+                if self.short_side_geom_side_only and tgt_i not in side_ids:
+                    continue
+                valid = gt_valid_b[tgt_i]
+                visible = int((valid > 0.5).sum().item())
+                if visible <= 0 or visible > visible_max:
+                    continue
+                pred = pred_points[b, src].unsqueeze(0)
+                target = gt_points_b[tgt_i].unsqueeze(0)
+                valid_mask = valid.unsqueeze(0) > 0.5
+                loss = aspect_weighted_l1_point_loss(
+                    pred,
+                    target,
+                    valid_mask,
+                    image_size=self.image_size,
+                    y_weight=1.0,
+                    x_only=False,
+                )
+                losses.append(loss * image_weight)
+                selected_count += 1
+                if gt_count == 4:
+                    selected_gt4 += 1
+                elif gt_count >= 5:
+                    selected_gt5 += 1
+
+        loss = torch.stack(losses).mean() if losses else self._zero_like(pred_points)
+        return (
+            loss,
+            pred_points.new_tensor(float(selected_count)),
+            pred_points.new_tensor(float(selected_gt4)),
+            pred_points.new_tensor(float(selected_gt5)),
+        )
 
     def point_valid_loss(
         self,
@@ -910,7 +1081,8 @@ class GCSLoss(nn.Module):
 
                 if is_duplicate:
                     candidate_count += 1
-                    if self._spurious_candidate_gt_protected(
+                    protect_enabled_for_gt_count = gt_count >= int(self.spurious_gt_protect_min_gt_lanes)
+                    if protect_enabled_for_gt_count and self._spurious_candidate_gt_protected(
                         points[b],
                         valid_prob[b],
                         uq,
@@ -1065,6 +1237,12 @@ class GCSLoss(nn.Module):
             pred_logits, batch, gt_valid, target=gt_lanes
         )
         (
+            short_side_geom_loss,
+            short_side_geom_count,
+            short_side_geom_gt4,
+            short_side_geom_gt5,
+        ) = self.short_side_geom_loss(pred_points, gt_points, gt_valid, indices, gt_lanes)
+        (
             spurious_neg_loss,
             spurious_negative_count,
             spur_cand,
@@ -1104,6 +1282,8 @@ class GCSLoss(nn.Module):
         )
         if self.count_boundary_gain != 0.0:
             total = total + self.count_boundary_gain * count_boundary_loss
+        if self.short_side_geom_gain != 0.0:
+            total = total + self.short_side_geom_gain * short_side_geom_loss
         if self.spurious_neg_gain != 0.0:
             total = total + self.spurious_neg_gain * self.spurious_neg_weight * spurious_neg_loss
         loss_items = torch.stack(
@@ -1118,6 +1298,10 @@ class GCSLoss(nn.Module):
                 count_loss.detach(),
                 count_under5_loss.detach(),
                 count_boundary_loss.detach(),
+                short_side_geom_loss.detach(),
+                short_side_geom_count.detach(),
+                short_side_geom_gt4.detach(),
+                short_side_geom_gt5.detach(),
                 spurious_neg_loss.detach(),
                 spurious_negative_count.detach(),
                 spur_cand.detach(),
