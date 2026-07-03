@@ -310,6 +310,474 @@ cover `q_empty score=0.20 valid_count=0`, `q_true score=0.07 valid_count=7`,
 and `max_det=1`, where the old path returns no lane and the opt-in path keeps
 `q_true`.
 
+Official-val counterfactual result:
+
+```text
+date = 2026-07-02
+weights = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_boundary02_spurious_lite_v1/weights/best.pt
+gt_json = runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json
+surface = official-val 363 only
+focused_sweep = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_boundary02_spurious_lite_v1_official_val_focused_sweep_valid_before_maxdet/tusimple_official_sweep_summary.json
+focused_sweep_rows = 288
+best decode = conf=0.005, point_valid_thr=0.45, nms_dist_px=0.0, max_det=5, min_points=2, valid_before_maxdet=true
+official_acc = 0.971816
+official_score = 0.971116
+official_FP = 0.019376
+official_FN = 0.015611
+count_acc = 0.975207
+count_acc_3 = 0.986547
+count_acc_4 = 0.924242
+count_acc_5 = 0.986486
+count_confusion = 3->3=220, 3->4=3, 4->3=1, 4->4=61, 4->5=4, 5->4=1, 5->5=73
+```
+
+Conclusion:
+
+For the spurious-lite checkpoint, `valid_before_maxdet=true` fixes the GT5
+decode truncation failure: `5->4` improves from `9` to `1` and `count_acc_5`
+improves from `0.878378` to `0.986486`. Official ACC also increases slightly
+from `0.971721` to `0.971816`. The tradeoff is a moderate FP rebound from
+`0.013866` to `0.019376`, but it remains below the E1 FP value `0.022957`
+while keeping spurious-lite's `4->5=4` benefit versus E1's `4->5=9`.
+
+A focused local grid did not find a better row that both lowers FP below
+`0.018` and keeps official ACC above E1: the best `FP<=0.018` row had
+`official_acc=0.971127`, `official_FP=0.017769`, `5->4=2`, and is slightly
+below E1 `official_acc=0.971208`. Treat the selected row above as the current
+official-val decode candidate for this checkpoint, not as a global default.
+
+## 2026-07-02: Reject GT-Aware Spurious-Protect V2 Training Run
+
+Decision:
+
+Do not promote `gcs_yolo_lane_s_q12_k56_boundary02_spurious_gtprotect_v2`.
+Do not run final test for it. Treat it as diagnostic evidence that default
+GT-aware spurious protection plus valid-before-maxdet can recover GT5, but in
+this configuration it loses the GT3/GT4 FP benefit needed from spurious-lite.
+
+Official-val evidence:
+
+```text
+run = gcs_yolo_lane_s_q12_k56_boundary02_spurious_gtprotect_v2
+pretrained = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_count03_under5_boundary02_v1/weights/best.pt
+gcs_spurious_neg = 0.1
+gcs_spurious_gt3_weight = 1.0
+gcs_spurious_gt4_weight = 1.0
+gcs_spurious_gt5_weight = 1.0
+gcs_spurious_gt_protect = true
+gcs_gt5_short_visible_thr = 0
+gcs_official_best = true
+gcs_official_valid_before_maxdet = true
+official_best = weights/official_best.pt
+official_best_epoch = 40
+official_best_decode = conf=0.005, point_valid_thr=0.45, nms_dist_px=0.0, max_det=5, min_points=2, valid_before_maxdet=true
+official_acc = 0.968515
+official_score = 0.967623
+official_FP = 0.029201
+official_FN = 0.015381
+count_acc = 0.928375
+count_acc_3 = 0.937220
+count_acc_4 = 0.833333
+count_acc_5 = 0.986486
+count_confusion = 3->3=209, 3->4=12, 3->5=2, 4->3=2, 4->4=55, 4->5=9, 5->4=1, 5->5=73
+```
+
+Focused official-val sweep on `official_best.pt`:
+
+```text
+sweep = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_boundary02_spurious_gtprotect_v2_official_best_focused_sweep_valid_before_maxdet/tusimple_official_sweep_summary.json
+surface = official-val 363 only
+rows = 480
+grid = conf 0.005..0.25, point_valid_thr 0.45/0.50/0.55/0.60, nms 0/18/30/50, max_det=5, min_points=2/3/4, valid_before_maxdet=true
+best decode = conf=0.02, point_valid_thr=0.45, nms_dist_px=0.0, max_det=5, min_points=4
+official_acc = 0.968515
+official_score = 0.967682
+official_FP = 0.026263
+official_FN = 0.015381
+count_acc = 0.936639
+count_acc_3 = 0.946188
+count_acc_4 = 0.848485
+count_acc_5 = 0.986486
+count_confusion = 3->3=211, 3->4=10, 3->5=2, 4->3=3, 4->4=56, 4->5=7, 5->4=1, 5->5=73
+```
+
+Integrated conclusion:
+
+- Supported fact: GT5 is recovered under valid-before-maxdet (`5->4=1`,
+  `count_acc_5=0.986486`), so the original GT5 truncation symptom is not the
+  remaining blocker.
+- Supported fact: official ACC is far below E1 and spurious-lite
+  (`0.968515` vs E1 `0.971208`, spurious-lite+valid-before `0.971816`).
+- Supported fact: FP rebounds above both E1 and spurious-lite+valid-before.
+  Even the focused sweep best has `official_FP=0.026263`, above E1 `0.022957`
+  and above spurious-lite+valid-before `0.019376`.
+- Supported fact: the GT4 benefit is mostly lost: focused-sweep best has
+  `4->5=7`, worse than spurious-lite's `4`, and the training official-best
+  row has `4->5=9`, back at the E1 level.
+- Supported fact: the new FP is not only GT4 false fifth. GT3 over-count also
+  increases in the focused-sweep best (`3->4=10`, `3->5=2`) versus E1
+  (`3->4=7`) and spurious-lite+valid-before (`3->4=3`).
+- Supported fact: no focused-sweep row satisfied both `4->5<=5` and
+  `5->4<=2`. Lower-FP rows required higher thresholds and reintroduced GT5
+  misses (`5->4=8..9`) while keeping official ACC around `0.966`.
+
+Likely mechanism:
+
+The protection/default-weight setup does not preserve the desired GT4 pressure.
+Late training logs show only small GT4 spurious-negative selection while many
+selected spurious negatives are GT5-group candidates. The protection count is
+small relative to candidate count, so the run neither cleanly protects only
+true GT5-like short candidates nor focuses enough negative pressure on GT4
+false-fifth cases.
+
+Next action:
+
+Do not add exist rescue to this failed V2 line. The next smallest controlled
+experiment should narrow the protection policy to GT5-or-denser samples or
+increase GT4 pressure while keeping GT5 protection, for example:
+
+```text
+--gcs-spurious-neg 0.1
+--gcs-spurious-gt4-weight 1.5
+--gcs-spurious-gt5-weight 1.0
+--gcs-spurious-gt-protect
+--gcs-official-valid-before-maxdet
+```
+
+If code is changed, prefer an explicit `gcs_spurious_gt_protect_min_gt_lanes`
+or equivalent gate so GT3/GT4 samples keep the original spurious-lite negative
+behavior while only GT5-like true short candidates are protected.
+
+## 2026-07-02: GT5-Only Protect + GT4W15 V1 Official-Val / Test Review
+
+Decision:
+
+Treat `gcs_yolo_lane_s_q12_k56_boundary02_spurious_gt5only_gt4w15_v1` as a
+strong official-val diagnostic candidate, but do not claim a final-test
+improvement. The one-shot test report selected from official-val is below the
+previous reporting-only final-test high-water mark, so any follow-up must return
+to official-val/train diagnostics and must not tune from test.
+
+Training/config evidence:
+
+```text
+run = gcs_yolo_lane_s_q12_k56_boundary02_spurious_gt5only_gt4w15_v1
+pretrained = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_count03_under5_boundary02_v1/weights/best.pt
+gcs_spurious_neg = 0.1
+gcs_spurious_gt3_weight = 1.0
+gcs_spurious_gt4_weight = 1.5
+gcs_spurious_gt5_weight = 1.0
+gcs_spurious_gt_protect = true
+gcs_spurious_gt_protect_min_gt_lanes = 5
+gcs_official_valid_before_maxdet = true
+official_best = weights/official_best.pt
+official_best_epoch = 123
+official_best_decode = conf=0.005, point_valid_thr=0.45, nms_dist_px=0.0, max_det=5, min_points=2, valid_before_maxdet=true
+official_best_acc = 0.974056
+official_best_FP = 0.012580
+official_best_FN = 0.011938
+official_best_count_acc = 0.972452
+official_best_count_acc_4 = 0.939394
+official_best_count_acc_5 = 0.972973
+official_best_confusion = 3->3=219, 3->4=4, 4->3=3, 4->4=62, 4->5=1, 5->4=2, 5->5=72
+```
+
+Post-hoc official-val sweep on `official_best.pt`:
+
+```text
+sweep = D:/gcsxxl/1/gcs_yolo_lane_s_q12_k56_boundary02_spurious_gt5only_gt4w15_v1_official_best_val_sweep/tusimple_official_sweep_summary.json
+surface = canonical official-val 363
+rows = 1512
+valid_before_maxdet = false
+best decode = conf=0.003, point_valid_thr=0.6, nms_dist_px=18.0, max_det=8, min_points=2
+official_acc = 0.975185
+official_score = 0.974711
+official_FP = 0.012443
+official_FN = 0.011249
+count_acc = 0.972452
+count_acc_3 = 0.982063
+count_acc_4 = 0.939394
+count_acc_5 = 0.972973
+count_confusion = 3->3=219, 3->4=4, 4->3=3, 4->4=62, 4->5=1, 5->4=2, 5->5=72
+```
+
+Reporting-only final-test result selected from official-val:
+
+```text
+summary = D:/gcsxxl/1/gcs_yolo_lane_s_q12_k56_boundary02_spurious_gt5only_gt4w15_v1_official_best_test_best_from_val/tusimple_official_summary.json
+decode = conf=0.003, point_valid_thr=0.6, nms_dist_px=18.0, max_det=8, min_points=2, valid_before_maxdet=false
+official_acc = 0.963755
+official_score = 0.962489
+official_FP = 0.032213
+official_FN = 0.031093
+count_acc = 0.872753
+count_acc_3 = 0.971264
+count_acc_4 = 0.602564
+count_acc_5 = 0.797891
+count_confusion = 2->2=2, 2->3=3, 3->2=7, 3->3=1690, 3->4=40, 3->5=3, 4->2=1, 4->3=111, 4->4=282, 4->5=71, 4->6=3, 5->3=25, 5->4=73, 5->5=454, 5->6=17
+```
+
+Integrated conclusion:
+
+- Supported fact: the official-val result is the strongest seen in this local
+  review set: `official_acc=0.975185`, with both GT4 false-fifth and GT5
+  undercount controlled (`4->5=1`, `5->4=2`).
+- Supported fact: the training-time `official_best` row was already strong
+  under the intended valid-before decode (`official_acc=0.974056`, `4->5=1`,
+  `5->4=2`).
+- Supported fact: the post-hoc val sweep's selected row changes decode away
+  from the intended valid-before policy (`valid_before_maxdet=false`,
+  `max_det=8`, `point_valid_thr=0.6`). This is valid official-val selection
+  evidence, but it should be called out when comparing to the planned
+  valid-before experiment.
+- Supported fact: final-test reporting does not confirm the val gain:
+  `official_acc=0.963755`, below the previous reporting-only
+  `dupmargin005` test result `0.965702` and below older
+  `count03_under5_03` `0.965459`.
+- Supported fact: final-test count errors remain broad: `4->3=111`,
+  `4->5=71`, `5->4=73`, `5->6=17`. Count accuracy matches the old
+  `count03_under5_03` level but does not improve final-test ACC.
+- Caveat: this run's `args.yaml` records `gcs_count=0.0` and
+  `gcs_count_under5=0.0`; it fine-tunes from E1 but is not a pure
+  count03/under5-continuation ablation. That may contribute to the val/test
+  count generalization gap.
+
+Next action:
+
+Do not tune thresholds, `valid_before_maxdet`, `max_det`, NMS, checkpoint, or
+loss weights from this final-test result. If continuing this line, rerun the
+same GT5-only protect + GT4W15 idea with the E1 count losses preserved
+(`gcs_count=0.3`, `gcs_count_under5=0.3`) and compare only on official-val
+before any further test reporting. Also run a matched official-val sweep that
+separates the intended valid-before decode from the post-hoc
+`valid_before_maxdet=false` decode.
+
+## 2026-07-02: Reject Short-Side Geometry GT5-Only + GT4W15 Follow-Up
+
+Decision:
+
+Do not promote
+`gcs_yolo_lane_s_q12_k56_boundary02_count03_under5_spurious_gt5only_gt4w15_shortsidegeom025_v1`.
+Treat it as diagnostic evidence that matched short-side geometry supervision
+can improve the 363-image official-val surface, but that improvement does not
+generalize to official test. The test result remains reporting-only and must
+not be used for threshold, checkpoint, decode, or loss tuning.
+
+Training/config evidence:
+
+```text
+run output = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_boundary02_count03_under5_spurious_gt5only_gt4w15_shortsidegeom025_v1
+args name = gcs_yolo_lane_s_q12_k56_boundary02_count03_under5_spurious_gt5only_gt4w15_shortsidegeom025_v1-3
+pretrained = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_count03_under5_boundary02_v1/weights/best.pt
+gcs_count = 0.3
+gcs_count_under5 = 0.3
+gcs_count_boundary = 0.2
+gcs_spurious_neg = 0.1
+gcs_spurious_gt4_weight = 1.5
+gcs_spurious_gt5_weight = 1.0
+gcs_spurious_gt_protect = true
+gcs_short_side_geom = 0.25
+gcs_short_side_geom_side_only = true
+gcs_short_side_geom_visible_max = 20
+gcs_official_best = true
+gcs_official_valid_before_maxdet = true
+official_best_epoch = 143
+```
+
+Training-time official-best evidence:
+
+```text
+summary = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_boundary02_count03_under5_spurious_gt5only_gt4w15_shortsidegeom025_v1/weights/official_best_sweep.json
+decode = conf=0.005, point_valid_thr=0.45, nms_dist_px=0.0, max_det=5, min_points=2, valid_before_maxdet=true
+official_acc = 0.976719
+official_score = 0.976298
+official_FP = 0.011203
+official_FN = 0.009871
+count_acc = 0.972452
+count_acc_3 = 0.977578
+count_acc_4 = 0.939394
+count_acc_5 = 0.986486
+count_confusion = 3->3=218, 3->4=5, 4->3=3, 4->4=62, 4->5=1, 5->4=1, 5->5=73
+```
+
+External official-val sweep on `official_best.pt`:
+
+```text
+sweep = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_boundary02_count03_under5_spurious_gt5only_gt4w15_shortsidegeom025_v1_official_best_val_sweep_valid_before_maxdet/tusimple_official_sweep_summary.json
+surface = canonical official-val 363
+rows = 1890
+decode = conf=0.003, point_valid_thr=0.6, nms_dist_px=0.0, max_det=5, min_points=4, valid_before_maxdet=true
+official_acc = 0.977032
+official_score = 0.976599
+official_FP = 0.010882
+official_FN = 0.010790
+count_acc = 0.977961
+count_acc_3 = 0.982063
+count_acc_4 = 0.954545
+count_acc_5 = 0.986486
+count_confusion = 3->3=219, 3->4=4, 4->3=3, 4->4=63, 5->4=1, 5->5=73
+```
+
+Reporting-only final-test result selected from the external official-val row:
+
+```text
+summary = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_boundary02_count03_under5_spurious_gt5only_gt4w15_shortsidegeom025_v1_official_best_test_best_from_val/tusimple_official_summary.json
+decode = conf=0.003, point_valid_thr=0.6, nms_dist_px=0.0, max_det=5, min_points=4, valid_before_maxdet=true
+official_acc = 0.963348
+official_score = 0.962070
+official_FP = 0.032171
+official_FN = 0.031722
+count_acc = 0.874191
+count_acc_2 = 0.600000
+count_acc_3 = 0.967816
+count_acc_4 = 0.617521
+count_acc_5 = 0.801406
+count_confusion = 2->2=3, 2->3=2, 3->2=8, 3->3=1684, 3->4=43, 3->5=5, 4->3=107, 4->4=289, 4->5=72, 5->3=28, 5->4=85, 5->5=456
+```
+
+Same-line no-shortside comparator:
+
+```text
+run = gcs_yolo_lane_s_q12_k56_boundary02_count03_under5_spurious_gt5only_gt4w15_v1
+external official-val ACC = 0.974538
+external official-val FP/FN = 0.012856 / 0.012626
+external official-val count_acc_4/5 = 0.924242 / 0.972973
+reporting-only test ACC = 0.964358
+reporting-only test FP/FN = 0.030721 / 0.029415
+reporting-only test count_acc_4/5 = 0.611111 / 0.836555
+test GT5 confusion = 5->3=24, 5->4=69, 5->5=476
+```
+
+Integrated conclusion:
+
+- Supported fact: short-side geometry improves the 363-image official-val
+  surface over the no-shortside same-line run: `official_acc +0.002494`,
+  `official_FP -0.001974`, `official_FN -0.001836`, `count_acc_4 +0.030303`,
+  and `count_acc_5 +0.013513`.
+- Supported fact: the same comparison is negative on reporting-only official
+  test: `official_acc -0.001010`, `official_FP +0.001450`,
+  `official_FN +0.002307`, and `count_acc_5 -0.035149`.
+- Supported fact: the official-test regression is mainly a GT5 retention
+  failure. Versus the no-shortside comparator, test `5->4` grows from `69` to
+  `85`, and `5->5` falls from `476` to `456`.
+- Supported fact: the short-side geometry term mostly trains GT4 side lanes,
+  not GT5. The last 20 recorded epochs average
+  `train/short_side_geom_gt4 ~= 32.83` and
+  `train/short_side_geom_gt5 ~= 3.41`; validation averages are
+  `val/short_side_geom_gt4 = 64.0` and `val/short_side_geom_gt5 ~= 3.67`.
+- Supported fact: the 363-image official-val split is not representative of
+  the test date distribution. The 363 split contains `0313-1`, `0313-2`,
+  `0531`, and `0601`, with no `0530`; all 74 GT5 validation images are from
+  `0601`. Official test contains `0530=1248`, `0531=715`, and `0601=819`
+  images, including `0530|GT4=233` and `0530|GT5=84`.
+- Supported fact: the largest reporting-only test weak spots include
+  `0530|GT4` (`ACC=0.941485`, predicted `3` lanes for `88/233` images) and
+  `0530|GT5` (`ACC=0.942496`, predicted `3/4` lanes for `71/84` images).
+- Hypothesis: the matched-only short-side geometry loss improved the
+  side-lane geometry/count shape that is visible on the canonical 363 split,
+  but did not improve global lane-count calibration or GT5 retention on the
+  broader test distribution. The later selected epoch (`143` versus the
+  no-shortside comparator's `75`) may also reflect stronger fitting to the
+  official-val surface.
+
+Next action:
+
+Do not tune the external-sweep decode (`conf=0.003`,
+`point_valid_thr=0.6`, `min_points=4`), checkpoint, NMS, or short-side loss
+weights from the test report. If continuing this line, keep final test closed
+and use official-val/train-val diagnostics to inspect GT5 short-side matched
+geometry, point-valid survival, and count-score calibration, especially by
+date and GT lane count. Any follow-up must prove on official-val/train-val
+that it preserves GT5 while keeping the GT4/FP benefit.
+
+## 2026-07-02: Integrate Reporting-Only Test for E1 and Spurious-Lite + Valid-Before
+
+Decision:
+
+Record the user-requested official test calculation for two existing
+`weights/best.pt` artifacts as reporting-only evidence. Both test runs used
+decode parameters selected on official-val before touching test. Do not use
+these test summaries to tune thresholds, `valid_before_maxdet`, `max_det`, NMS,
+checkpoint choice, loss weights, or count policy.
+
+Compatibility note:
+
+Both checkpoints are legacy query-mode pickles that lack the newer
+`GCSLaneHead.gcs_mode` attribute. The server evaluation used
+`.tmp/eval_official_legacy_query.py`, which wraps the normal
+`tools/eval_tusimple_official.py` path and only patches missing
+`GCSLaneHead.gcs_mode = "query"` after loading. It does not change weights,
+decode parameters, predictions, labels, or official metrics.
+
+E1 count-boundary test report:
+
+```text
+run = gcs_yolo_lane_s_q12_k56_count03_under5_boundary02_v1
+weights = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_count03_under5_boundary02_v1/weights/best.pt
+official-val sweep = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_count03_under5_boundary02_v1_official_val_sweep/tusimple_official_sweep_summary.json
+test summary = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_count03_under5_boundary02_v1_official_test_best_from_val/tusimple_official_summary.json
+decode = conf=0.005, point_valid_thr=0.5, nms_dist_px=0.0, max_det=6, min_points=2, valid_before_maxdet=false
+images = 2782
+official_acc = 0.965428
+official_score = 0.964279
+official_FP = 0.031368
+official_FN = 0.026060
+count_acc = 0.874551
+count_acc_3 = 0.971839
+count_acc_4 = 0.568376
+count_acc_5 = 0.834798
+count_confusion = 2->2=1, 2->3=2, 2->4=2, 3->2=2, 3->3=1691, 3->4=41, 3->5=6, 4->3=105, 4->4=266, 4->5=94, 4->6=3, 5->3=26, 5->4=46, 5->5=475, 5->6=22
+```
+
+Spurious-lite + valid-before test report:
+
+```text
+run = gcs_yolo_lane_s_q12_k56_boundary02_spurious_lite_v1
+weights = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_boundary02_spurious_lite_v1/weights/best.pt
+official-val focused sweep = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_boundary02_spurious_lite_v1_official_val_focused_sweep_valid_before_maxdet/tusimple_official_sweep_summary.json
+test summary = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_boundary02_spurious_lite_v1_official_test_best_from_val_valid_before_maxdet/tusimple_official_summary.json
+decode = conf=0.005, point_valid_thr=0.45, nms_dist_px=0.0, max_det=5, min_points=2, valid_before_maxdet=true
+images = 2782
+official_acc = 0.965483
+official_score = 0.964313
+official_FP = 0.030847
+official_FN = 0.027678
+count_acc = 0.882818
+count_acc_3 = 0.971839
+count_acc_4 = 0.606838
+count_acc_5 = 0.843585
+count_confusion = 2->2=1, 2->3=3, 2->4=1, 3->2=2, 3->3=1691, 3->4=43, 3->5=4, 4->3=105, 4->4=284, 4->5=79, 5->3=26, 5->4=63, 5->5=480
+```
+
+Integrated conclusion:
+
+- Supported fact: among these two user-requested active-branch `best.pt`
+  reports, spurious-lite + valid-before is marginally higher on official test
+  ACC (`0.965483` vs `0.965428`) and official score (`0.964313` vs
+  `0.964279`).
+- Supported fact: the spurious-lite + valid-before test result improves
+  `count_acc` (`0.882818` vs `0.874551`) and GT4 count accuracy
+  (`0.606838` vs `0.568376`) while reducing GT4 false fifth lanes
+  (`4->5: 94 -> 79`).
+- Supported fact: the tradeoff is FN: spurious-lite + valid-before has higher
+  `official_FN` (`0.027678` vs `0.026060`) and more GT5 undercount to four
+  lanes (`5->4: 46 -> 63`), even though total GT5 correct predictions improve
+  slightly (`475 -> 480`) because `max_det=5` removes the E1 `5->6` cases.
+- Supported fact: the test margin is very small (`+0.000055` ACC). Treat it as
+  reporting evidence consistent with the official-val selected decode, not as
+  a reason to search test thresholds or claim a broad algorithmic fix.
+- Caveat: both artifacts were trained without training-time `official_best`
+  preservation (`gcs_official_best=false`) and were selected by post-hoc
+  official-val sweeps over `weights/best.pt`. Future formal candidates should
+  use `weights/official_best.pt` plus `weights/official_best_decode.yaml`.
+
+Smallest safe next action:
+
+Keep test closed for further tuning. If this line continues, use official-val
+and train/val diagnostics only, with training-time official-best enabled. The
+next change should target the remaining GT4/GT5 count generalization gap
+without selecting any new decode or checkpoint from these test reports.
+
 ## 2026-06-28: Reject E2 Short0601 Hard-Sampling Run
 
 Decision:

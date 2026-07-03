@@ -137,9 +137,82 @@ Supported interpretation:
 
 The next bottleneck is no longer whether spurious-negative suppression can
 reduce GT4 over-count. It can. The bottleneck is preserving true GT5 short
-side lanes while retaining the FP / `4->5` benefit. Do not run final test for
-`spurious_lite_v1`; finish a GT4-strong + GT5-safe official-val ablation first
-using `--gcs-spurious-gt4-weight 1.5` and `--gcs-spurious-gt5-weight 0.25`.
+side lanes while retaining the FP / `4->5` benefit. The original default-decode
+`spurious_lite_v1` artifact was not promotable and should not have been sent to
+test for selection. After the 2026-07-02 official-val-only
+`valid_before_maxdet` counterfactual selected a stronger decode for the same
+`best.pt`, the user requested a reporting-only official test. That test report
+is recorded below and must not be used for tuning.
+
+```text
+spurious_lite + valid_before test:
+summary = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_boundary02_spurious_lite_v1_official_test_best_from_val_valid_before_maxdet/tusimple_official_summary.json
+decode = conf=0.005, point_valid_thr=0.45, nms_dist_px=0.0, max_det=5, min_points=2, valid_before_maxdet=true
+official_acc = 0.965483
+official_FP = 0.030847
+official_FN = 0.027678
+count_acc = 0.882818
+count_acc_4 = 0.606838
+count_acc_5 = 0.843585
+
+E1 count-boundary test comparator:
+summary = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_count03_under5_boundary02_v1_official_test_best_from_val/tusimple_official_summary.json
+decode = conf=0.005, point_valid_thr=0.5, nms_dist_px=0.0, max_det=6, min_points=2, valid_before_maxdet=false
+official_acc = 0.965428
+official_FP = 0.031368
+official_FN = 0.026060
+count_acc = 0.874551
+count_acc_4 = 0.568376
+count_acc_5 = 0.834798
+```
+
+The integrated reading is narrow: spurious-lite + valid-before is marginally
+higher than E1 on this one reporting-only test comparison (`+0.000055` ACC)
+and improves GT4 false-fifth count shape, but it still has broad final-test
+count errors and higher FN. Keep test closed for any further threshold,
+checkpoint, decode, or loss decisions. Future formal candidates should use
+training-time `official_best` and return to official-val/train diagnostics.
+
+The 2026-07-02 short-side-geometry follow-up
+`gcs_yolo_lane_s_q12_k56_boundary02_count03_under5_spurious_gt5only_gt4w15_shortsidegeom025_v1`
+is also diagnostic-only, not promotable. It improved the canonical 363-image
+official-val surface over the no-shortside same-line comparator:
+
+```text
+shortside external official-val ACC = 0.977032
+no-shortside external official-val ACC = 0.974538
+delta = +0.002494
+shortside official-val FP/FN = 0.010882 / 0.010790
+shortside official-val count_acc_4/5 = 0.954545 / 0.986486
+```
+
+But the same official-val-selected decode regressed reporting-only official
+test:
+
+```text
+shortside test ACC = 0.963348
+no-shortside test ACC = 0.964358
+delta = -0.001010
+shortside test FP/FN = 0.032171 / 0.031722
+shortside test count_acc_4/5 = 0.617521 / 0.801406
+no-shortside test count_acc_4/5 = 0.611111 / 0.836555
+GT5 5->4 = 85 for shortside, 69 for no-shortside
+```
+
+Supported interpretation:
+
+- The matched short-side geometry term primarily hit GT4 side lanes in
+  training (`train/short_side_geom_gt4 ~= 32.83` versus
+  `train/short_side_geom_gt5 ~= 3.41` over the last 20 recorded epochs), so
+  the 363 gain does not prove GT5 retention generalization.
+- The 363 official-val split has no `0530` images and all GT5 validation
+  images are from `0601`; official test has `0530=1248` images, including
+  difficult `0530|GT4` and `0530|GT5` groups. This makes the 363 count-shape
+  gain too narrow to trust as a final-test improvement signal.
+- The next bottleneck is not adding more matched geometry in isolation. It is
+  preserving GT5 short-side lanes and count-score calibration across date/GT
+  count groups while keeping the GT4/FP benefit. Do not tune from the
+  reporting-only test result.
 
 The existing `gcs_yolo_lane_s_q12_k56_boundary02_spurious_gt5safe_v1` artifact
 has only `gcs_spurious_gt5_weight=0.25`, starts from E1 `best.pt`, and keeps

@@ -25,6 +25,47 @@ Compatibility paths `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml` an
 
 The 5-25-3 algorithm body is intentionally not upgraded to later mainline Count Head, Quality Head, Survival Head, or near-miss machinery. The only active Count Boundary, hard-sampling, spurious-negative, and official-best behavior is the explicit branch-local default-off/protocol work recorded in `docs/agent-context/current-contracts.md`.
 
+## Current Branch Reporting-Only Test Evidence
+
+On 2026-07-02, active-branch artifacts were evaluated on TuSimple official
+test at the user's request. Each used decode
+parameters selected on official-val first; these reports are not a threshold,
+checkpoint, or postprocess selection surface.
+
+```text
+gcs_yolo_lane_s_q12_k56_boundary02_spurious_lite_v1 + valid_before_maxdet:
+summary = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_boundary02_spurious_lite_v1_official_test_best_from_val_valid_before_maxdet/tusimple_official_summary.json
+official_test_ACC = 0.965483
+FP = 0.030847
+FN = 0.027678
+count_acc = 0.882818
+
+gcs_yolo_lane_s_q12_k56_count03_under5_boundary02_v1:
+summary = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_count03_under5_boundary02_v1_official_test_best_from_val/tusimple_official_summary.json
+official_test_ACC = 0.965428
+FP = 0.031368
+FN = 0.026060
+count_acc = 0.874551
+
+gcs_yolo_lane_s_q12_k56_boundary02_count03_under5_spurious_gt5only_gt4w15_shortsidegeom025_v1:
+val_sweep = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_boundary02_count03_under5_spurious_gt5only_gt4w15_shortsidegeom025_v1_official_best_val_sweep_valid_before_maxdet/tusimple_official_sweep_summary.json
+test_summary = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_boundary02_count03_under5_spurious_gt5only_gt4w15_shortsidegeom025_v1_official_best_test_best_from_val/tusimple_official_summary.json
+official_val_ACC = 0.977032
+official_test_ACC = 0.963348
+FP = 0.032171
+FN = 0.031722
+count_acc = 0.874191
+```
+
+The integrated conclusion is narrow: spurious-lite with the official-val
+selected `valid_before_maxdet=true` decode is marginally higher than the E1
+count-boundary comparator on this reporting-only test pair, but the margin is
+small (`+0.000055` ACC) and must not be used for further test-time tuning.
+The later short-side-geometry run improves the 363-image official-val surface,
+but its reporting-only test result is lower than the no-shortside same-line
+comparator and exposes a GT5 undercount/generalization gap; do not promote it
+or tune from test.
+
 ## Legacy Post-b653 Official-Val Evidence
 
 The 2026-06-25 `v2_validbranch_neg05-3` result was a post-`b6535f641`

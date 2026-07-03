@@ -42,6 +42,14 @@ class GCSLoss(nn.Module):
         "spur_neg_gt3",
         "spur_neg_gt4",
         "spur_neg_gt5",
+        "far_spur_loss",
+        "far_spur_cand",
+        "far_spur_neg",
+        "far_spur_gt3",
+        "far_spur_gt4",
+        "far_spur_gt5",
+        "far_spur_score",
+        "far_spur_valid",
         "count_score_mean",
         "gt5_short_pos_count",
         "gt5_short_pos_anchor_count",
@@ -65,6 +73,7 @@ class GCSLoss(nn.Module):
         lambda_count_boundary: float | None = None,
         lambda_short_side_geom: float | None = None,
         lambda_spurious_neg: float | None = None,
+        lambda_far_spurious_neg: float | None = None,
         count_under5_min_lanes: int | None = None,
         count_boundary_gt4_weight: float | None = None,
         count_boundary_gt5_weight: float | None = None,
@@ -90,6 +99,17 @@ class GCSLoss(nn.Module):
         spurious_gt_protect_min_gt_lanes: int | None = None,
         spurious_gt_protect_margin_px: float | None = None,
         spurious_gt_protect_mode: str | None = None,
+        far_spurious_min_gt_lanes: int | None = None,
+        far_spurious_max_gt_lanes: int | None = None,
+        far_spurious_min_valid: int | None = None,
+        far_spurious_max_valid: int | None = None,
+        far_spurious_far_px: float | None = None,
+        far_spurious_protect_px: float | None = None,
+        far_spurious_min_overlap: int | None = None,
+        far_spurious_score_thr: float | None = None,
+        far_spurious_gt3_weight: float | None = None,
+        far_spurious_gt4_weight: float | None = None,
+        far_spurious_gt5_weight: float | None = None,
         eval_point_valid_thr: float | None = None,
         gt5_short_visible_thr: int | None = None,
         gt5_short_point_valid_weight: float | None = None,
@@ -144,6 +164,11 @@ class GCSLoss(nn.Module):
         )
         self.spurious_neg_gain = float(
             lambda_spurious_neg if lambda_spurious_neg is not None else self._arg(args, "gcs_spurious_neg", 0.0)
+        )
+        self.far_spurious_neg_gain = float(
+            lambda_far_spurious_neg
+            if lambda_far_spurious_neg is not None
+            else self._arg(args, "gcs_far_spurious_neg", 0.0)
         )
         self.count_boundary_gt4_weight = float(
             count_boundary_gt4_weight
@@ -260,6 +285,61 @@ class GCSLoss(nn.Module):
             if spurious_gt_protect_mode is not None
             else self._arg(args, "gcs_spurious_gt_protect_mode", "better_matched")
         )
+        self.far_spurious_min_gt_lanes = int(
+            far_spurious_min_gt_lanes
+            if far_spurious_min_gt_lanes is not None
+            else self._arg(args, "gcs_far_spurious_min_gt_lanes", 3)
+        )
+        self.far_spurious_max_gt_lanes = int(
+            far_spurious_max_gt_lanes
+            if far_spurious_max_gt_lanes is not None
+            else self._arg(args, "gcs_far_spurious_max_gt_lanes", 4)
+        )
+        self.far_spurious_min_valid = int(
+            far_spurious_min_valid
+            if far_spurious_min_valid is not None
+            else self._arg(args, "gcs_far_spurious_min_valid", 2)
+        )
+        self.far_spurious_max_valid = int(
+            far_spurious_max_valid
+            if far_spurious_max_valid is not None
+            else self._arg(args, "gcs_far_spurious_max_valid", 56)
+        )
+        self.far_spurious_far_px = float(
+            far_spurious_far_px
+            if far_spurious_far_px is not None
+            else self._arg(args, "gcs_far_spurious_far_px", 40.0)
+        )
+        self.far_spurious_protect_px = float(
+            far_spurious_protect_px
+            if far_spurious_protect_px is not None
+            else self._arg(args, "gcs_far_spurious_protect_px", 25.0)
+        )
+        self.far_spurious_min_overlap = int(
+            far_spurious_min_overlap
+            if far_spurious_min_overlap is not None
+            else self._arg(args, "gcs_far_spurious_min_overlap", 3)
+        )
+        self.far_spurious_score_thr = float(
+            far_spurious_score_thr
+            if far_spurious_score_thr is not None
+            else self._arg(args, "gcs_far_spurious_score_thr", 0.003)
+        )
+        self.far_spurious_gt3_weight = float(
+            far_spurious_gt3_weight
+            if far_spurious_gt3_weight is not None
+            else self._arg(args, "gcs_far_spurious_gt3_weight", 1.0)
+        )
+        self.far_spurious_gt4_weight = float(
+            far_spurious_gt4_weight
+            if far_spurious_gt4_weight is not None
+            else self._arg(args, "gcs_far_spurious_gt4_weight", 1.0)
+        )
+        self.far_spurious_gt5_weight = float(
+            far_spurious_gt5_weight
+            if far_spurious_gt5_weight is not None
+            else self._arg(args, "gcs_far_spurious_gt5_weight", 0.0)
+        )
         self.eval_point_valid_thr = float(
             eval_point_valid_thr
             if eval_point_valid_thr is not None
@@ -310,6 +390,8 @@ class GCSLoss(nn.Module):
             )
         if self.spurious_neg_gain < 0.0:
             raise ValueError(f"gcs_spurious_neg must be >= 0, got {self.spurious_neg_gain}.")
+        if self.far_spurious_neg_gain < 0.0:
+            raise ValueError(f"gcs_far_spurious_neg must be >= 0, got {self.far_spurious_neg_gain}.")
         if self.spurious_neg_weight < 0.0:
             raise ValueError(f"gcs_spurious_neg_weight must be >= 0, got {self.spurious_neg_weight}.")
         if self.spurious_gt3_weight < 0.0:
@@ -348,6 +430,39 @@ class GCSLoss(nn.Module):
                 "Only gcs_spurious_gt_protect_mode='better_matched' is supported, "
                 f"got {self.spurious_gt_protect_mode!r}."
             )
+        if self.far_spurious_min_gt_lanes < 0:
+            raise ValueError(
+                "gcs_far_spurious_min_gt_lanes must be >= 0, "
+                f"got {self.far_spurious_min_gt_lanes}."
+            )
+        if self.far_spurious_max_gt_lanes < self.far_spurious_min_gt_lanes:
+            raise ValueError(
+                "gcs_far_spurious_max_gt_lanes must be >= gcs_far_spurious_min_gt_lanes "
+                f"({self.far_spurious_max_gt_lanes} < {self.far_spurious_min_gt_lanes})."
+            )
+        if self.far_spurious_min_valid < 1:
+            raise ValueError(f"gcs_far_spurious_min_valid must be >= 1, got {self.far_spurious_min_valid}.")
+        if self.far_spurious_max_valid < self.far_spurious_min_valid:
+            raise ValueError(
+                "gcs_far_spurious_max_valid must be >= gcs_far_spurious_min_valid "
+                f"({self.far_spurious_max_valid} < {self.far_spurious_min_valid})."
+            )
+        if self.far_spurious_far_px < 0.0:
+            raise ValueError(f"gcs_far_spurious_far_px must be >= 0, got {self.far_spurious_far_px}.")
+        if self.far_spurious_protect_px < 0.0:
+            raise ValueError(f"gcs_far_spurious_protect_px must be >= 0, got {self.far_spurious_protect_px}.")
+        if self.far_spurious_min_overlap < 1:
+            raise ValueError(f"gcs_far_spurious_min_overlap must be >= 1, got {self.far_spurious_min_overlap}.")
+        if not 0.0 <= self.far_spurious_score_thr <= 1.0:
+            raise ValueError(
+                f"gcs_far_spurious_score_thr must be in [0, 1], got {self.far_spurious_score_thr}."
+            )
+        if self.far_spurious_gt3_weight < 0.0:
+            raise ValueError(f"gcs_far_spurious_gt3_weight must be >= 0, got {self.far_spurious_gt3_weight}.")
+        if self.far_spurious_gt4_weight < 0.0:
+            raise ValueError(f"gcs_far_spurious_gt4_weight must be >= 0, got {self.far_spurious_gt4_weight}.")
+        if self.far_spurious_gt5_weight < 0.0:
+            raise ValueError(f"gcs_far_spurious_gt5_weight must be >= 0, got {self.far_spurious_gt5_weight}.")
         if not 0.0 <= self.eval_point_valid_thr <= 1.0:
             raise ValueError(f"gcs_eval_point_valid_thr must be in [0, 1], got {self.eval_point_valid_thr}.")
         if self.gt5_short_visible_thr < 0:
@@ -951,6 +1066,27 @@ class GCSLoss(nn.Module):
             return 4, float(self.spurious_gt4_weight)
         return 5, float(self.spurious_gt5_weight)
 
+    def _far_spurious_gt_group_and_weight(self, gt_count: int) -> tuple[int, float]:
+        """Map GT lane count to diagnostic group and per-image far-spurious-negative weight."""
+        if gt_count <= 3:
+            return 3, float(self.far_spurious_gt3_weight)
+        if gt_count == 4:
+            return 4, float(self.far_spurious_gt4_weight)
+        return 5, float(self.far_spurious_gt5_weight)
+
+    @staticmethod
+    def _longest_true_run(mask: torch.Tensor) -> int:
+        """Return the longest contiguous True run in a 1D boolean mask."""
+        best = 0
+        current = 0
+        for value in mask.detach().bool().flatten().tolist():
+            if value:
+                current += 1
+                best = max(best, current)
+            else:
+                current = 0
+        return best
+
     def _spurious_candidate_gt_protected(
         self,
         points_b: torch.Tensor,
@@ -1123,6 +1259,127 @@ class GCSLoss(nn.Module):
             mean_or_zero(group_losses[5]),
         )
 
+    def far_spurious_negative_loss(
+        self,
+        pred_points: torch.Tensor,
+        pred_logits: torch.Tensor,
+        pred_valid_logits: torch.Tensor | None,
+        indices: list[tuple[torch.Tensor, torch.Tensor]],
+        gt_lanes: torch.Tensor,
+        gt_points: list[torch.Tensor],
+        gt_valid: list[torch.Tensor],
+    ) -> tuple[torch.Tensor, ...]:
+        """Extra BCE negative loss for far unmatched queries with enough score and valid anchors."""
+        zero = pred_logits.new_zeros(())
+        if self.far_spurious_neg_gain == 0.0:
+            return self._zero_like(pred_points), zero, zero, zero, zero, zero, zero, zero
+        if pred_valid_logits is None:
+            raise ValueError(
+                "gcs_far_spurious_neg requires preds['pred_valid_logits'] with shape B x Q x K; "
+                "disable --gcs-far-spurious-neg or use a GCS head that emits per-point visibility logits."
+            )
+
+        bsz, num_queries, _, _ = pred_points.shape
+        device = pred_logits.device
+        gt_lanes = torch.as_tensor(gt_lanes, device=device, dtype=pred_logits.dtype).reshape(-1)
+        if gt_lanes.numel() != bsz:
+            raise ValueError(f"gt_lanes must have one value per image, got {gt_lanes.numel()} vs B={bsz}.")
+
+        valid_thr = float(self.eval_point_valid_thr)
+        valid_prob = pred_valid_logits.detach().sigmoid()
+        score_prob = pred_logits.detach().sigmoid()
+        points = pred_points.detach()
+        x_scale = self._spurious_x_scale(pred_points)
+        min_gt_lanes = int(self.far_spurious_min_gt_lanes)
+        max_gt_lanes = int(self.far_spurious_max_gt_lanes)
+        min_valid = int(self.far_spurious_min_valid)
+        max_valid = int(self.far_spurious_max_valid)
+        min_overlap = int(self.far_spurious_min_overlap)
+        score_thr = float(self.far_spurious_score_thr)
+        protect_px = float(self.far_spurious_protect_px)
+        far_px = float(self.far_spurious_far_px)
+
+        selected_losses = []
+        selected_scores = []
+        selected_valid_counts = []
+        candidate_count = 0
+        final_count = 0
+        group_counts = {3: 0, 4: 0, 5: 0}
+
+        for b in range(bsz):
+            gt_count = int(round(float(gt_lanes[b].detach().item())))
+            if gt_count < min_gt_lanes or gt_count > max_gt_lanes:
+                continue
+            group_key, image_weight = self._far_spurious_gt_group_and_weight(gt_count)
+            src_idx, _ = indices[b]
+            src_idx = src_idx.to(device=device, dtype=torch.long)
+            matched_mask = torch.zeros(num_queries, dtype=torch.bool, device=device)
+            if src_idx.numel():
+                matched_mask[src_idx] = True
+            unmatched_idx = torch.arange(num_queries, device=device)[~matched_mask]
+            if unmatched_idx.numel() == 0:
+                continue
+
+            gt_points_b = gt_points[b].detach().to(device=device, dtype=points.dtype)
+            gt_valid_b = gt_valid[b].detach().to(device=device)
+            if gt_points_b.ndim != 3 or gt_points_b.shape[-1] != 2:
+                raise ValueError(f"Each GT lane tensor must have shape N x K x 2, got {tuple(gt_points_b.shape)}.")
+            if gt_valid_b.shape != gt_points_b.shape[:2]:
+                raise ValueError(
+                    f"GT valid mask must match GT lane first two dims, got {tuple(gt_valid_b.shape)} vs {tuple(gt_points_b.shape[:2])}."
+                )
+
+            for uq in unmatched_idx:
+                score = score_prob[b, uq]
+                if float(score.item()) < score_thr:
+                    continue
+                uq_valid = valid_prob[b, uq] >= valid_thr
+                valid_count = self._longest_true_run(uq_valid)
+                if valid_count < min_valid or valid_count > max_valid:
+                    continue
+
+                candidate_count += 1
+                distances = []
+                protected = False
+                for gt_i in range(gt_points_b.shape[0]):
+                    lane_valid = gt_valid_b[gt_i] > 0.5
+                    overlap = uq_valid & lane_valid
+                    if int(overlap.sum().item()) < min_overlap:
+                        continue
+                    dx_px = (points[b, uq, overlap, 0] - gt_points_b[gt_i, overlap, 0]).abs() * x_scale
+                    mean_dx = float(dx_px.mean().item())
+                    if mean_dx <= protect_px:
+                        protected = True
+                        break
+                    distances.append(mean_dx)
+                if protected or not distances:
+                    continue
+                if not all(distance >= far_px for distance in distances):
+                    continue
+
+                raw_loss = F.binary_cross_entropy_with_logits(
+                    pred_logits[b, uq], pred_logits.new_zeros(()), reduction="none"
+                )
+                selected_losses.append(raw_loss * image_weight)
+                selected_scores.append(score)
+                selected_valid_counts.append(pred_logits.new_tensor(float(valid_count)))
+                final_count += 1
+                group_counts[group_key] += 1
+
+        loss = torch.stack(selected_losses).mean() if selected_losses else self._zero_like(pred_points)
+        mean_score = torch.stack(selected_scores).mean() if selected_scores else zero
+        mean_valid = torch.stack(selected_valid_counts).mean() if selected_valid_counts else zero
+        return (
+            loss,
+            pred_logits.new_tensor(float(candidate_count)),
+            pred_logits.new_tensor(float(final_count)),
+            pred_logits.new_tensor(float(group_counts[3])),
+            pred_logits.new_tensor(float(group_counts[4])),
+            pred_logits.new_tensor(float(group_counts[5])),
+            mean_score,
+            mean_valid,
+        )
+
     @staticmethod
     def _foreground_pos_weight(target: torch.Tensor, max_weight: float) -> torch.Tensor:
         """Return a capped foreground weight for sparse binary auxiliary targets."""
@@ -1258,6 +1515,18 @@ class GCSLoss(nn.Module):
         ) = self.spurious_negative_loss(
             pred_points, pred_logits, pred_valid_logits, indices, gt_lanes, gt_points, gt_valid
         )
+        (
+            far_spur_loss,
+            far_spur_cand,
+            far_spur_neg,
+            far_spur_gt3,
+            far_spur_gt4,
+            far_spur_gt5,
+            far_spur_score,
+            far_spur_valid,
+        ) = self.far_spurious_negative_loss(
+            pred_points, pred_logits, pred_valid_logits, indices, gt_lanes, gt_points, gt_valid
+        )
 
         mask_loss = self._zero_like(pred_points)
         if "aux_mask_logits" in preds and "semantic_mask" in batch:
@@ -1286,6 +1555,8 @@ class GCSLoss(nn.Module):
             total = total + self.short_side_geom_gain * short_side_geom_loss
         if self.spurious_neg_gain != 0.0:
             total = total + self.spurious_neg_gain * self.spurious_neg_weight * spurious_neg_loss
+        if self.far_spurious_neg_gain != 0.0:
+            total = total + self.far_spurious_neg_gain * far_spur_loss
         loss_items = torch.stack(
             (
                 exist_loss.detach(),
@@ -1314,6 +1585,14 @@ class GCSLoss(nn.Module):
                 spur_neg_gt3.detach(),
                 spur_neg_gt4.detach(),
                 spur_neg_gt5.detach(),
+                far_spur_loss.detach(),
+                far_spur_cand.detach(),
+                far_spur_neg.detach(),
+                far_spur_gt3.detach(),
+                far_spur_gt4.detach(),
+                far_spur_gt5.detach(),
+                far_spur_score.detach(),
+                far_spur_valid.detach(),
                 count_score_mean.detach(),
                 gt5_short_pos_count.detach(),
                 gt5_short_pos_anchor_count.detach(),

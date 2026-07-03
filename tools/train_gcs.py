@@ -476,6 +476,78 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="GT-aware spurious protection policy.",
     )
     parser.add_argument(
+        "--gcs-far-spurious-neg",
+        type=float,
+        default=0.0,
+        help="Extra BCE negative loss gain for far unmatched spurious queries. 0 disables.",
+    )
+    parser.add_argument(
+        "--gcs-far-spurious-min-gt-lanes",
+        type=int,
+        default=3,
+        help="Minimum GT lane count that enables far spurious-negative loss.",
+    )
+    parser.add_argument(
+        "--gcs-far-spurious-max-gt-lanes",
+        type=int,
+        default=4,
+        help="Maximum GT lane count that enables far spurious-negative loss.",
+    )
+    parser.add_argument(
+        "--gcs-far-spurious-min-valid",
+        type=int,
+        default=2,
+        help="Minimum longest contiguous predicted-valid anchors for far spurious candidates.",
+    )
+    parser.add_argument(
+        "--gcs-far-spurious-max-valid",
+        type=int,
+        default=56,
+        help="Maximum longest contiguous predicted-valid anchors for far spurious candidates.",
+    )
+    parser.add_argument(
+        "--gcs-far-spurious-far-px",
+        type=float,
+        default=40.0,
+        help="Candidate must be at least this far in mean x from every overlapping GT lane.",
+    )
+    parser.add_argument(
+        "--gcs-far-spurious-protect-px",
+        type=float,
+        default=25.0,
+        help="Protect a candidate if it is this close in mean x to any overlapping GT lane.",
+    )
+    parser.add_argument(
+        "--gcs-far-spurious-min-overlap",
+        type=int,
+        default=3,
+        help="Minimum overlapping anchors with a GT lane for far/protect distance checks.",
+    )
+    parser.add_argument(
+        "--gcs-far-spurious-score-thr",
+        type=float,
+        default=0.003,
+        help="Minimum sigmoid existence score for far spurious candidates.",
+    )
+    parser.add_argument(
+        "--gcs-far-spurious-gt3-weight",
+        type=float,
+        default=1.0,
+        help="Per-image multiplier for far spurious-negative loss on GT3-or-sparser samples.",
+    )
+    parser.add_argument(
+        "--gcs-far-spurious-gt4-weight",
+        type=float,
+        default=1.0,
+        help="Per-image multiplier for far spurious-negative loss on GT4 samples.",
+    )
+    parser.add_argument(
+        "--gcs-far-spurious-gt5-weight",
+        type=float,
+        default=0.0,
+        help="Per-image multiplier for far spurious-negative loss on GT5-or-denser samples; default protects true fifth lanes.",
+    )
+    parser.add_argument(
         "--gcs-gt5-short-visible-thr",
         type=int,
         default=0,
@@ -813,6 +885,18 @@ def main() -> None:
         "gcs_spurious_gt_protect_min_gt_lanes": args.gcs_spurious_gt_protect_min_gt_lanes,
         "gcs_spurious_gt_protect_margin_px": args.gcs_spurious_gt_protect_margin_px,
         "gcs_spurious_gt_protect_mode": args.gcs_spurious_gt_protect_mode,
+        "gcs_far_spurious_neg": args.gcs_far_spurious_neg,
+        "gcs_far_spurious_min_gt_lanes": args.gcs_far_spurious_min_gt_lanes,
+        "gcs_far_spurious_max_gt_lanes": args.gcs_far_spurious_max_gt_lanes,
+        "gcs_far_spurious_min_valid": args.gcs_far_spurious_min_valid,
+        "gcs_far_spurious_max_valid": args.gcs_far_spurious_max_valid,
+        "gcs_far_spurious_far_px": args.gcs_far_spurious_far_px,
+        "gcs_far_spurious_protect_px": args.gcs_far_spurious_protect_px,
+        "gcs_far_spurious_min_overlap": args.gcs_far_spurious_min_overlap,
+        "gcs_far_spurious_score_thr": args.gcs_far_spurious_score_thr,
+        "gcs_far_spurious_gt3_weight": args.gcs_far_spurious_gt3_weight,
+        "gcs_far_spurious_gt4_weight": args.gcs_far_spurious_gt4_weight,
+        "gcs_far_spurious_gt5_weight": args.gcs_far_spurious_gt5_weight,
         "gcs_gt5_short_visible_thr": args.gcs_gt5_short_visible_thr,
         "gcs_gt5_short_point_valid_weight": args.gcs_gt5_short_point_valid_weight,
         "gcs_exist_pos_weight": args.gcs_exist_pos_weight,

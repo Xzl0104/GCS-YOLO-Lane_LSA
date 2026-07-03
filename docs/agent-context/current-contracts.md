@@ -17,6 +17,17 @@ The branch also includes the 2026-06-27 user-requested, default-off `gcs_hard_sa
 
 The branch also includes the 2026-06-27 user-requested, default-off `gcs_spurious_neg` loss for E3-lite. It uses the training Hungarian matcher indices only to select unmatched short duplicate-like queries near matched queries, then adds an extra target-zero BCE on their `pred_logits`. The GT-count weighting extension keeps the old default behavior with `gcs_spurious_gt3_weight=1.0`, `gcs_spurious_gt4_weight=1.0`, `gcs_spurious_gt5_weight=1.0`, and `gcs_spurious_disable_gt5=False`, while allowing GT3-or-sparser, GT4, and GT5-or-denser samples to carry different spurious-negative weights. The 2026-06-28 `gcs_spurious_gt_protect` extension is also default-off and only removes GT-close candidate queries from this extra negative BCE. It does not change data sampling, dataset labels, matcher logic, point/smooth/curve losses, decode, NMS, or official metrics.
 
+The branch also includes the 2026-07-03 user-requested, default-off
+`gcs_far_spurious_neg` loss for far unmatched over-count queries. It uses
+training Hungarian matcher indices only to exclude matched queries, then adds
+target-zero BCE on unmatched queries whose existence score and longest
+contiguous predicted-valid span pass the configured gates, whose overlapping
+GT comparisons are all far, and whose GT-close overlaps are not protected. The
+default `gcs_far_spurious_gt5_weight=0.0` keeps true fifth-lane samples
+unpressured unless a future ablation explicitly enables GT5 pressure. It does
+not change data sampling, dataset labels, matcher logic, point/smooth/curve
+losses, decode, NMS, or official metrics.
+
 The branch also includes the 2026-07-02 user-requested, default-off
 `gcs_short_side_geom` matched-lane geometry loss. It only strengthens
 Hungarian-matched short visible GT lanes, optionally restricted to the
@@ -369,6 +380,14 @@ spur_cnt_gt5
 spur_neg_gt3
 spur_neg_gt4
 spur_neg_gt5
+far_spur_loss
+far_spur_cand
+far_spur_neg
+far_spur_gt3
+far_spur_gt4
+far_spur_gt5
+far_spur_score
+far_spur_valid
 count_score_mean
 gt5_short_pos_count
 gt5_short_pos_anchor_count
@@ -463,6 +482,24 @@ excluded only from the extra spurious target-zero BCE. `spur_cand` logs the
 pre-protect candidate count, `spur_prot` logs protected candidates,
 `spur_final` and `spurious_negative_count` log final selected negatives, and
 `spur_neg` mirrors `spurious_neg_loss` for compact progress logging.
+
+`far_spur_loss` is disabled by default through `gcs_far_spurious_neg=0.0`.
+When enabled, it requires `pred_valid_logits` and applies only to unmatched
+queries on images whose GT lane count is in
+`[gcs_far_spurious_min_gt_lanes, gcs_far_spurious_max_gt_lanes]`. A candidate
+must have `sigmoid(pred_logits) >= gcs_far_spurious_score_thr` and a longest
+contiguous predicted-valid span in
+`[gcs_far_spurious_min_valid, gcs_far_spurious_max_valid]`. If any GT lane
+overlaps by at least `gcs_far_spurious_min_overlap` valid anchors and has mean
+x distance at or below `gcs_far_spurious_protect_px`, the candidate is
+protected. Otherwise, all overlapping GT-lane mean x distances must be at least
+`gcs_far_spurious_far_px` before target-zero BCE is applied to the unmatched
+query logit. `gcs_far_spurious_gt3_weight`, `gcs_far_spurious_gt4_weight`, and
+`gcs_far_spurious_gt5_weight` weight selected candidates by GT group. Defaults
+target GT3/GT4 (`1.0`, `1.0`) and keep GT5 pressure off (`0.0`).
+`far_spur_cand`, `far_spur_neg`, `far_spur_gt3`, `far_spur_gt4`,
+`far_spur_gt5`, `far_spur_score`, and `far_spur_valid` are diagnostics for
+selected far spurious candidates.
 
 ## Decode And Evaluation Contract
 

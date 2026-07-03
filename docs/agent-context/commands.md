@@ -1725,6 +1725,103 @@ Compare against the matching default decode on official-val only, focusing on
 `5->4`, `official_FP`, `4->5`, and `official_acc`. The summary/config records
 `valid_before_maxdet`.
 
+The 2026-07-02 user-requested reporting-only official test for this
+official-val selected decode used a temporary legacy-query compatibility
+wrapper because the old pickled `best.pt` lacks the newer
+`GCSLaneHead.gcs_mode` attribute. The wrapper only patches missing
+`gcs_mode="query"` after model loading; it does not change weights, decode,
+labels, or official metrics. If source compatibility is fixed, the same args
+can be run through `tools/eval_tusimple_official.py` directly.
+
+```bash
+python .tmp/eval_official_legacy_query.py \
+  --archive-root archive/TUSimple \
+  --split test \
+  --weights runs/gcs_lane/gcs_yolo_lane_s_q12_k56_boundary02_spurious_lite_v1/weights/best.pt \
+  --imgsz 544 960 \
+  --device 0 \
+  --conf 0.005 \
+  --point-valid-thr 0.45 \
+  --nms-dist-px 0.0 \
+  --max-det 5 \
+  --min-points 2 \
+  --valid-before-maxdet \
+  --half \
+  --save-dir runs/gcs_lane/gcs_yolo_lane_s_q12_k56_boundary02_spurious_lite_v1_official_test_best_from_val_valid_before_maxdet \
+  --save-records
+```
+
+Result:
+
+```text
+summary = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_boundary02_spurious_lite_v1_official_test_best_from_val_valid_before_maxdet/tusimple_official_summary.json
+official_acc = 0.965483
+official_score = 0.964313
+official_FP = 0.030847
+official_FN = 0.027678
+count_acc = 0.882818
+count_acc_3 = 0.971839
+count_acc_4 = 0.606838
+count_acc_5 = 0.843585
+```
+
+The matched E1 count-boundary `best.pt` reporting-only official test used the
+same wrapper and the E1 official-val selected decode:
+
+```bash
+python .tmp/eval_official_legacy_query.py \
+  --archive-root archive/TUSimple \
+  --split test \
+  --weights runs/gcs_lane/gcs_yolo_lane_s_q12_k56_count03_under5_boundary02_v1/weights/best.pt \
+  --imgsz 544 960 \
+  --device 0 \
+  --conf 0.005 \
+  --point-valid-thr 0.5 \
+  --nms-dist-px 0.0 \
+  --max-det 6 \
+  --min-points 2 \
+  --half \
+  --save-dir runs/gcs_lane/gcs_yolo_lane_s_q12_k56_count03_under5_boundary02_v1_official_test_best_from_val \
+  --save-records
+```
+
+Result:
+
+```text
+summary = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_count03_under5_boundary02_v1_official_test_best_from_val/tusimple_official_summary.json
+official_acc = 0.965428
+official_score = 0.964279
+official_FP = 0.031368
+official_FN = 0.026060
+count_acc = 0.874551
+count_acc_3 = 0.971839
+count_acc_4 = 0.568376
+count_acc_5 = 0.834798
+```
+
+Do not tune thresholds, `valid_before_maxdet`, `max_det`, NMS, checkpoint, or
+loss weights from either test report.
+
+The later short-side-geometry follow-up used an official-val-selected decode
+from the external sweep below and is also reporting-only:
+
+```text
+val_sweep = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_boundary02_count03_under5_spurious_gt5only_gt4w15_shortsidegeom025_v1_official_best_val_sweep_valid_before_maxdet/tusimple_official_sweep_summary.json
+test_summary = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_boundary02_count03_under5_spurious_gt5only_gt4w15_shortsidegeom025_v1_official_best_test_best_from_val/tusimple_official_summary.json
+decode = conf=0.003, point_valid_thr=0.6, nms_dist_px=0.0, max_det=5, min_points=4, valid_before_maxdet=true
+official_val_acc = 0.977032
+official_test_acc = 0.963348
+official_test_FP = 0.032171
+official_test_FN = 0.031722
+test_count_acc_4 = 0.617521
+test_count_acc_5 = 0.801406
+```
+
+This result should not be promoted despite the higher 363-image official-val
+ACC. Compared with the no-shortside same-line run, reporting-only test ACC
+drops by `0.001010` and GT5 undercount worsens (`5->4: 69 -> 85`). Keep test
+closed for any further tuning.
+
 Legacy post-`b6535f641` Q18/count-head guided sweeps used the same
 official-val surface and kept normal/count-guided rows in one sweep table.
 These flags are not available in the active rollback code:

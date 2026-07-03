@@ -178,6 +178,18 @@ gcs_spurious_gt_protect_min_overlap: 3 # (int) minimum overlapping anchors with 
 gcs_spurious_gt_protect_min_gt_lanes: 0 # (int) minimum GT lane count for GT-aware protection; 0 preserves all-count behavior
 gcs_spurious_gt_protect_margin_px: 5.0 # (float) better-matched protection margin in pixels
 gcs_spurious_gt_protect_mode: better_matched # (str) GT-aware protection policy
+gcs_far_spurious_neg: 0.0 # (float) far unmatched spurious-negative BCE loss gain; 0 disables
+gcs_far_spurious_min_gt_lanes: 3 # (int) minimum GT lane count that enables far spurious-negative loss
+gcs_far_spurious_max_gt_lanes: 4 # (int) maximum GT lane count that enables far spurious-negative loss
+gcs_far_spurious_min_valid: 2 # (int) minimum longest contiguous predicted-valid anchors for far spurious candidates
+gcs_far_spurious_max_valid: 56 # (int) maximum longest contiguous predicted-valid anchors for far spurious candidates
+gcs_far_spurious_far_px: 40.0 # (float) candidate must be at least this far in mean x from every overlapping GT lane
+gcs_far_spurious_protect_px: 25.0 # (float) protect candidate if it is this close in mean x to any overlapping GT lane
+gcs_far_spurious_min_overlap: 3 # (int) minimum overlapping anchors with a GT lane for far/protect distance checks
+gcs_far_spurious_score_thr: 0.003 # (float) minimum sigmoid existence score for far spurious candidates
+gcs_far_spurious_gt3_weight: 1.0 # (float) per-image far-spurious multiplier for GT3-or-sparser samples
+gcs_far_spurious_gt4_weight: 1.0 # (float) per-image far-spurious multiplier for GT4 samples
+gcs_far_spurious_gt5_weight: 0.0 # (float) per-image far-spurious multiplier for GT5-or-denser samples; default protects true fifth lanes
 gcs_gt5_short_visible_thr: 0 # (int) matched GT5 lanes with visible_count <= this get point-valid positive rescue; 0 disables
 gcs_gt5_short_point_valid_weight: 1.0 # (float) point-valid BCE multiplier for visible anchors of rescued short GT5 lanes
 gcs_exist_pos_weight: 1.0 # (float) positive query weight for GCS lane existence BCE
