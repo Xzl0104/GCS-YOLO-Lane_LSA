@@ -1822,6 +1822,33 @@ ACC. Compared with the no-shortside same-line run, reporting-only test ACC
 drops by `0.001010` and GT5 undercount worsens (`5->4: 69 -> 85`). Keep test
 closed for any further tuning.
 
+The later far-spurious follow-up also used an official-val-selected decode and
+is reporting-only:
+
+```text
+val_sweep = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_boundary02_count03_under5_spurious_gt5only_gt4w15_farspur005_v1_official_best_val_sweep_valid_before_maxdet/tusimple_official_sweep_summary.json
+test_summary = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_boundary02_count03_under5_spurious_gt5only_gt4w15_farspur005_v1_official_best_test_best_from_val/tusimple_official_summary.json
+decode = conf=0.003, point_valid_thr=0.575, nms_dist_px=50.0, max_det=5, min_points=2, valid_before_maxdet=true
+official_val_acc = 0.977758
+official_val_FP = 0.008219
+official_val_FN = 0.008953
+official_val_count_acc_4 = 0.954545
+official_val_count_acc_5 = 0.972973
+official_val_count_confusion includes 4->5=0, 5->4=2
+official_test_acc = 0.963907
+official_test_FP = 0.031860
+official_test_FN = 0.031332
+test_count_acc_4 = 0.628205
+test_count_acc_5 = 0.815466
+test_count_confusion includes 4->5=65, 5->4=77, 5->5=464
+```
+
+Do not promote this run. Compared with the no-shortside same-line run, it
+improves reporting-only test GT4 false-fifth behavior (`4->5: 75 -> 65`) but
+regresses test ACC (`0.964358 -> 0.963907`), FP/FN, and GT5 retention
+(`5->4: 69 -> 77`, `count_acc_5: 0.836555 -> 0.815466`). Keep test closed for
+any further threshold, NMS, checkpoint, decode, or far-spur loss tuning.
+
 Legacy post-`b6535f641` Q18/count-head guided sweeps used the same
 official-val surface and kept normal/count-guided rows in one sweep table.
 These flags are not available in the active rollback code:

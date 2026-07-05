@@ -22,17 +22,83 @@ The branch also includes the 2026-07-03 user-requested, default-off
 training Hungarian matcher indices only to exclude matched queries, then adds
 target-zero BCE on unmatched queries whose existence score and longest
 contiguous predicted-valid span pass the configured gates, whose overlapping
-GT comparisons are all far, and whose GT-close overlaps are not protected. The
+GT comparisons are all strictly farther than the configured far distance, and
+whose GT-close overlaps are not protected. The
 default `gcs_far_spurious_gt5_weight=0.0` keeps true fifth-lane samples
 unpressured unless a future ablation explicitly enables GT5 pressure. It does
 not change data sampling, dataset labels, matcher logic, point/smooth/curve
 losses, decode, NMS, or official metrics.
+
+The branch also includes the 2026-07-03 user-requested, default-off
+`gcs_farspur_ignore_first` / `gcs_farspur_weight` loss. This is separate from
+the older `gcs_far_spurious_neg` contract: it first ignores near-GT corridor
+and ambiguous side-region unmatched queries, then applies target-zero BCE only
+to high-score clear-far unmatched queries. `gcs_farspur_weight > 0` requires
+`gcs_farspur_ignore_first=True` so the old hard-negative-first behavior cannot
+be enabled accidentally through the new knob.
 
 The branch also includes the 2026-07-02 user-requested, default-off
 `gcs_short_side_geom` matched-lane geometry loss. It only strengthens
 Hungarian-matched short visible GT lanes, optionally restricted to the
 left/right side GT lanes, and does not change unmatched queries, matcher logic,
 decode, NMS, or official metrics.
+
+The branch also includes the 2026-07-03 user-requested, default-off
+`gcs_shortside_rawmatch_boost` positive-loss weighting for GT4/GT5 count
+contract ablations. Matched same-GT raw-close short side lanes can still
+receive the old positive boost. The 2026-07-04 `gcs_shortside_raw_rescue`
+extension is separate and default-off: it can protect unmatched raw-close short
+side queries from the original negative BCE and, only through explicit
+`gcs_shortside_rescue_*_gain` values, add independent auxiliary positive
+supervision. Short side weak-visible eligibility requires at least
+`gcs_shortside_ultra_min_valid_points=2` visible anchors and either
+`visible <= gcs_shortside_visible_max=42` or, with
+`gcs_shortside_use_median=True`, `visible < image_gt_visible_median -
+gcs_shortside_median_margin`. Visible `2..5` lanes are ultra-short and do not
+enter unmatched rescue by default, but a same-GT Hungarian rawmatch visible
+`2..5` side lane can still receive the base shortside positive boost when the
+rawmatch boost path is enabled. Existence target flooring is separate and only
+applies when `gcs_shortside_exist_target_floor > 0`. Full reliable unmatched rescue requires
+`gcs_shortside_reliable_min_valid_points=6`
+(`gcs_shortside_min_valid_points` is a compatibility alias). The image median
+is the standard median, using the average of the two middle values for even
+lane counts, over current-image GT lanes with visible count at or above the
+reliable minimum.
+Leftmost/rightmost side ordering for this contract uses the K56 bottom/lower
+half only. K56 fixed-y is bottom-to-top: index 0 is bottom `y=710`, index
+`K-1` is top `y=160`, so lower/bottom half means indices `< K//2`.
+
+The branch also includes the 2026-07-03 user-requested, default-off
+`gcs_rank_topk_weight` ranking loss. It uses the same query-mode lane score as
+decode, `sigmoid(pred_logits)`, and only applies on images with at least
+`gcs_rank_gt_min_lanes=4` GT lanes. Ranking positives are selected by
+`gcs_rank_pos_scope`: default `shortside_reliable` keeps the old conservative
+scope to Hungarian shortside rawmatch positives,
+`shortside_with_ultra` adds explicitly enabled ultra-short positives,
+`gt4gt5_matched` uses all Hungarian matched positives on GT4/GT5-or-denser
+images, and `all_matched` uses all Hungarian matched positives on all eligible
+images. The older
+`gcs_rank_focus_shortside` bool is compatibility-only: `False` maps the
+default `shortside_reliable` scope to `all_matched`.
+Unmatched raw-rescue queries are excluded from ranking positives by default
+and are counted through `rank_pos_unmatched_rescue_excluded_count`. They may
+enter ranking positives only under the explicit
+`gcs_rank_include_unmatched_rescue_pos=True` ablation after conflict and
+duplicate-like filtering.
+Negative queries are only high-score clear-far queries, normal duplicate-like
+queries, or explicitly enabled side duplicate-like queries. Near-GT corridor
+queries and side-ambiguous true-or-uncertain queries are ignore/protect only.
+Normal duplicate-like requires closeness to a matched query, at least
+`gcs_rank_dup_min_overlap=6` overlapping predicted-valid anchors, no raw-rescue
+protection, and no rank side-ambiguous flag. With
+`gcs_rank_side_duplicate_enable=False`, side-ambiguous duplicate-like queries
+are still ignored. When explicitly enabled, a side duplicate-like query may
+become a ranking negative only if it is close to a matched side GT, overlaps by
+at least `gcs_rank_side_dup_min_overlap=6`, is not raw-rescue protected, the
+same side GT has a selected true ranking-positive query, and the duplicate is
+worse than that true query by at least `gcs_rank_side_dup_margin_px=5.0`.
+Duplicate-like queries are ranked below positives but are not forced to zero
+by BCE through this loss.
 
 Training-time `official_best` checkpoint preservation is active as an explicit 2026-06-27 selection-protocol change. It preserves the 5-25-3 algorithm body and only changes how formal TuSimple checkpoints are selected.
 
@@ -292,14 +358,16 @@ Historical q12-k56 experiment docs are old records. Preserve them, but do not le
 
 Active source/config is rolled back to commit `b6535f641` (`Fix GCS training
 progress header alignment`). Its algorithm contract remains the 5-25-3 K56
-mainline: no later Count Head, Q18/Q20/dataref, duplicate/spurious/ranking,
-lane-balanced, valid-repair, side-aux, legacy `gcs_gt4_short_boost` sampling,
-`extra_exist_loss`, short matched existence floor, or count-confusion
-diagnostic tooling is active. Later commits and notes are preserved only as
-legacy experiment conclusions in the docs. They are not active CLI, loss,
-model-output, tool, or config contracts in this code state. The explicit
-default-off `gcs_spurious_neg` E3-lite loss above is branch-local and is not an
-import of the later legacy spurious/ranking loss family.
+mainline: no later Count Head, Q18/Q20/dataref, lane-balanced, valid-repair,
+side-aux, legacy `gcs_gt4_short_boost` sampling, `extra_exist_loss`, short
+matched existence floor, or later Count/Quality mechanisms are active. Active
+mainline does not enable later legacy ranking/spurious/count-contract tooling
+by default. This branch contains default-off experimental GT4/GT5
+count-contract tools, including shortside raw-match rescue, far-spurious
+ignore-first mining, rank_topk alignment loss, and count-contract diagnostics.
+They are disabled by default and must be enabled explicitly through CLI/config
+flags. Later commits and notes are preserved only as legacy experiment
+conclusions in the docs. They are not active default behavior.
 
 ## Label Contract
 
@@ -394,6 +462,109 @@ gt5_short_pos_anchor_count
 gt5_short_point_valid_loss
 cnt_bound_5under
 cnt_score
+short_raw_boost_count
+short_raw_boost_gt4
+short_raw_boost_gt5
+short_raw_missing
+shortside_selected_by_abs_count
+shortside_selected_by_median_count
+shortside_selected_total_count
+shortside_hungarian_rawmatch_candidate_count
+shortside_unmatched_raw_rescue_candidate_count
+shortside_rawmatch_candidate_total_count
+raw_rescue_candidate_count
+raw_rescue_final_count
+raw_rescue_conflict_count
+shortside_selected_hungarian_rawmatch
+shortside_selected_unmatched_rescue
+shortside_rescue_conflict
+shortside_missing_no_rawmatch
+shortside_nearest_was_duplicate_but_hungarian_boosted
+shortside_rescue_exist_loss
+shortside_rescue_point_loss
+shortside_rescue_valid_loss
+shortside_score_floor_loss
+shortside_ultra_point_loss
+shortside_ultra_valid_loss
+short_raw_boost_exist_target_mean
+short_raw_boost_exist_target_min
+short_raw_boost_exist_target_p25
+short_raw_boost_exist_target_p50
+short_raw_boost_exist_target_p75
+short_raw_boost_target_below_05_count
+short_raw_boost_target_below_07_count
+shortside_rawmatch_target_mean_before
+shortside_rawmatch_target_min_before
+shortside_rawmatch_target_p25_before
+shortside_rawmatch_target_p50_before
+shortside_rawmatch_target_below_05_count
+shortside_rawmatch_target_below_07_count
+shortside_target_floor_applied_count
+shortside_reliable_count
+shortside_reliable_selected_count
+shortside_ultra_seen_count
+shortside_ultra_enabled_count
+shortside_ultra_score_floor_count
+shortside_ultra_valid_count
+shortside_visible_lt2_skipped_count
+shortside_ultra_hungarian_base_boost_count
+shortside_ultra_unmatched_rescue_seen_count
+shortside_ultra_unmatched_rescue_enabled_count
+shortside_ultra_unmatched_rescue_skipped_count
+shortside_ultra_in_gt4_4to3_count
+shortside_ultra_in_gt5_5to4_count
+near_gt_ignored_count
+duplicate_like_rank_neg_count
+clear_far_rank_neg_count
+clear_far_boundary_count
+rank_neg_side_duplicate_like_count
+rank_neg_normal_duplicate_like_count
+rank_side_ambiguous_ignored_count
+rank_side_duplicate_rejected_better_than_true_count
+rank_pos_scope
+rank_pos_total
+rank_pos_hungarian_all
+rank_pos_shortside_matched
+rank_pos_shortside_rescue
+rank_pos_shortside_reliable
+rank_pos_shortside_ultra
+rank_pos_gt4gt5_matched
+rank_pos_all_matched
+rank_pos_hungarian_count
+rank_pos_unmatched_rescue_excluded_count
+rank_pos_unmatched_rescue_included_count
+rank_pos_conflict_excluded_count
+rank_neg_duplicate_like
+rank_neg_clear_far
+rank_neg_near_ignored
+base_exist_ignore_raw_rescue_count
+base_exist_ignore_rank_near_count
+base_exist_ignore_rank_side_count
+base_exist_ignore_farspur_near_count
+base_exist_ignore_farspur_side_count
+base_exist_ignore_duplicate_rank_only_count
+base_exist_ignore_near_count
+base_exist_ignore_side_ambiguous_count
+base_exist_ignore_duplicate_like_count
+base_exist_negative_kept_clear_far_count
+base_exist_negative_kept_other_count
+legacy_spurious_active
+farspur_if_loss
+farspur_if_samples
+farspur_if_pos
+farspur_if_ignore
+farspur_if_clear
+farspur_if_near
+farspur_if_side
+rank_topk_loss
+rank_topk_samples
+rank_topk_pos
+rank_topk_neg
+rank_topk_clear
+rank_topk_dup
+rank_loss_noop_images
+rank_noop_because_no_pos
+rank_noop_because_no_neg
 ```
 
 For ordered-slot mode, standalone `OrderedSlotGCSLoss` defaults must match
@@ -439,6 +610,108 @@ visibility targets, decode, NMS, or official metrics. `short_side_geom_count`,
 `short_side_geom_gt4`, and `short_side_geom_gt5` are diagnostics for the
 selected matched lanes.
 
+`gcs_shortside_rawmatch_boost=0.0` keeps shortside raw-match positive weighting
+disabled by default. The shared shortside raw-match contract considers only
+images with at least `gcs_shortside_min_gt_lanes=4`, only leftmost/rightmost GT
+lanes by K56 bottom/lower-half mean x, and only GT lanes passing the shared
+weak-visible predicate:
+`visible >= gcs_shortside_ultra_min_valid_points=2` and
+(`visible <= gcs_shortside_visible_max=42` or
+`visible < image_gt_visible_median - gcs_shortside_median_margin`). The median
+branch is enabled by default with `gcs_shortside_use_median=True` and
+`gcs_shortside_median_margin=0.0`; the standard median is computed from
+current-image GT lanes after filtering out lanes below the reliable minimum
+`gcs_shortside_reliable_min_valid_points=6`, so even lane counts average the
+two middle values. Visible `<2` side GT is skipped
+for training rescue and logged through `shortside_visible_lt2_skipped_count`.
+Visible `2..5` side GT is ultra-short: it can enter diagnostic and optional
+light unmatched-rescue score-floor supervision, but only a same-GT Hungarian
+rawmatch query receives the base shortside positive boost/target floor by
+default. Unmatched ultra-short raw-rescue remains default-off, does not receive
+strong geometry rescue, and does not enter ranking positives by default.
+Visible `>=6` side GT is reliable and can use the full shortside rawmatch/rescue
+path. For each eligible side GT, raw geometry is compared against all Q queries using
+canonical `gcs_shortside_rawmatch_px=30` pixels, or canonical
+`gcs_shortside_side_rawmatch_px=40` pixels for side lanes. Legacy
+aliases `gcs_shortside_rawmatch_dist_px`, `gcs_shortside_side_dist_px`, and
+`gcs_shortside_max_valid_points` are fallback-only compatibility keys. If a
+canonical key and a legacy alias both exist with different values, the
+canonical key wins and training logs a warning. For each eligible side GT, the
+same-GT Hungarian query has first priority: if it exists and is raw-close, the
+reliable boost path multiplies that matched query existence BCE by
+`1 + gcs_shortside_rawmatch_boost` and visible point-valid positive anchors by
+`1 + 0.8 * gcs_shortside_rawmatch_boost`. `gcs_shortside_exist_target_floor`
+is separate and defaults to `0.0`; only an explicit positive floor value raises
+the quality-aware existence target for selected shortside rawmatch/rescue
+queries. A nearer unmatched duplicate cannot block this matched-query boost.
+Optional independent reliable score-floor BCE uses
+`gcs_shortside_score_floor_gain=0.0` and `gcs_shortside_score_target=0.8`.
+Only when no same-GT Hungarian query satisfies the raw threshold does reliable
+unmatched raw-rescue selection consider raw-close unmatched queries and choose
+the nearest one. Queries already Hungarian-matched to another GT are skipped,
+not reassigned. Multiple side GT lanes choosing the same unmatched rescue query
+keep only the nearest GT and count the rest as conflicts.
+
+`gcs_shortside_raw_rescue=False` keeps unmatched raw-rescue behavior disabled by
+default. When explicitly enabled, an accepted unmatched best query becomes a
+raw-rescue auxiliary positive. It is excluded from
+rank/far-spur/spurious negative masks and can receive independent positive
+supervision only through `gcs_shortside_rescue_exist_gain`,
+`gcs_shortside_rescue_point_gain`, and `gcs_shortside_rescue_valid_gain`.
+It is protected from the original base existence and point-valid BCE only when
+the separate explicit base-ignore ablation
+`gcs_base_ignore_raw_rescue=True` is also enabled.
+All three rescue gains default to `0.0`; optional positive existence target
+flooring requires an explicit `gcs_shortside_exist_target_floor > 0`, while
+decode, NMS, matcher assignment, official metrics, labels, and data sampling
+are unchanged. Ultra-short
+visible `2..5` side GT lanes are a separate tier. They are seen and counted by
+default, but `gcs_shortside_ultra_enable=False`,
+`gcs_shortside_ultra_score_floor_gain=0.0`,
+`gcs_shortside_ultra_valid_gain=0.0`, and
+`gcs_shortside_ultra_rank_pos=False` keep unmatched ultra-short light
+score-floor, unmatched ultra-short light valid rescue, and optional ultra
+ranking-positive participation off unless explicitly ablated. Same-GT
+Hungarian ultra-short rawmatch base boost is not blocked by
+`gcs_shortside_ultra_enable=False`.
+`gcs_shortside_ultra_point_gain=0.0` keeps strong geometry off by default.
+`short_raw_boost_count`, `short_raw_boost_gt4`, `short_raw_boost_gt5`,
+`short_raw_missing`, `shortside_hungarian_rawmatch_candidate_count`,
+`shortside_unmatched_raw_rescue_candidate_count`,
+`shortside_rawmatch_candidate_total_count`, `raw_rescue_candidate_count`,
+`raw_rescue_final_count`, `raw_rescue_conflict_count`,
+`shortside_selected_hungarian_rawmatch`,
+`shortside_selected_unmatched_rescue`, `shortside_rescue_conflict`,
+`shortside_missing_no_rawmatch`,
+`shortside_nearest_was_duplicate_but_hungarian_boosted`,
+`shortside_selected_by_abs_count`, `shortside_selected_by_median_count`,
+`shortside_selected_total_count`,
+`short_raw_boost_exist_target_mean`, `short_raw_boost_exist_target_min`,
+`short_raw_boost_exist_target_p25`, `short_raw_boost_exist_target_p50`,
+`short_raw_boost_exist_target_p75`,
+`short_raw_boost_target_below_05_count`,
+`short_raw_boost_target_below_07_count`,
+`shortside_rawmatch_target_mean_before`,
+`shortside_rawmatch_target_min_before`,
+`shortside_rawmatch_target_p25_before`,
+`shortside_rawmatch_target_p50_before`,
+`shortside_rawmatch_target_below_05_count`,
+`shortside_rawmatch_target_below_07_count`,
+`shortside_target_floor_applied_count`, `shortside_reliable_count`,
+`shortside_reliable_selected_count`, `shortside_ultra_seen_count`,
+`shortside_ultra_enabled_count`, `shortside_ultra_score_floor_count`,
+`shortside_ultra_valid_count`, `shortside_visible_lt2_skipped_count`,
+`shortside_ultra_hungarian_base_boost_count`,
+`shortside_ultra_unmatched_rescue_seen_count`,
+`shortside_ultra_unmatched_rescue_enabled_count`,
+`shortside_ultra_unmatched_rescue_skipped_count`,
+`shortside_ultra_in_gt4_4to3_count`, and
+`shortside_ultra_in_gt5_5to4_count` are diagnostics. Training and
+`tools/diagnose_gcs_count_contract.py` use the same weak-visible helper.
+`raw_rescue_candidate_count` is now the unmatched raw-rescue candidate count;
+Hungarian raw-close matches are reported separately through
+`shortside_hungarian_rawmatch_candidate_count`.
+
 `gcs_gt5_short_visible_thr=0` and
 `gcs_gt5_short_point_valid_weight=1.0` keep GT5 short point-valid rescue
 effectively disabled by default. When enabled, the point-valid BCE keeps the
@@ -468,6 +741,16 @@ setting preserves old E3-lite behavior. `spurious_negative_count`,
 `cnt_score` are log-only diagnostics and are not directly part of the weighted
 training objective.
 
+The legacy `gcs_spurious_neg` BCE system is mutually exclusive with effective
+new ignore-first/ranking/raw-rescue/base-ignore count-contract paths by
+default. If any of `gcs_farspur_weight > 0`, `gcs_rank_topk_weight > 0`,
+`gcs_shortside_raw_rescue=True`, or any `gcs_base_ignore_*` flag is active
+while `gcs_spurious_neg != 0`, loss construction raises `ValueError` with the
+message that `gcs_spurious_neg` conflicts with the new ignore-first/ranking
+contract. A legacy reproduction can override this only by explicitly setting
+`gcs_allow_legacy_spurious_with_new_contract=True`, which logs a strong warning
+and records `legacy_spurious_active=True`.
+
 `gcs_spurious_gt_protect=False` preserves the old E3-lite spurious-negative
 selection. When enabled, each duplicate-like spurious candidate is compared
 against all GT lanes when the image has at least
@@ -492,14 +775,124 @@ contiguous predicted-valid span in
 `[gcs_far_spurious_min_valid, gcs_far_spurious_max_valid]`. If any GT lane
 overlaps by at least `gcs_far_spurious_min_overlap` valid anchors and has mean
 x distance at or below `gcs_far_spurious_protect_px`, the candidate is
-protected. Otherwise, all overlapping GT-lane mean x distances must be at least
-`gcs_far_spurious_far_px` before target-zero BCE is applied to the unmatched
+protected. Otherwise, all overlapping GT-lane mean x distances must be greater
+than `gcs_far_spurious_far_px` before target-zero BCE is applied to the unmatched
 query logit. `gcs_far_spurious_gt3_weight`, `gcs_far_spurious_gt4_weight`, and
 `gcs_far_spurious_gt5_weight` weight selected candidates by GT group. Defaults
 target GT3/GT4 (`1.0`, `1.0`) and keep GT5 pressure off (`0.0`).
 `far_spur_cand`, `far_spur_neg`, `far_spur_gt3`, `far_spur_gt4`,
 `far_spur_gt5`, `far_spur_score`, and `far_spur_valid` are diagnostics for
 selected far spurious candidates.
+
+`farspur_if_loss` is disabled by default through `gcs_farspur_weight=0.0`.
+When enabled with `gcs_farspur_ignore_first=True`, unmatched queries are first
+classified into near-GT corridor, ambiguous side region, and clear-far
+spurious groups using the `gcs_farspur_near_dist_px` and
+`gcs_farspur_side_ignore_dist_px` thresholds. Near/ambiguous queries are
+ignored for this BCE term. Only
+queries with `sigmoid(pred_logits) >= gcs_farspur_score_thr`, longest
+predicted-valid span at least `gcs_farspur_min_valid_points`, and distance
+greater than `gcs_farspur_clear_dist_px` from all GT lanes receive target-zero
+BCE. `farspur_if_samples`, `farspur_if_pos`, `farspur_if_ignore`,
+`farspur_if_clear`, `farspur_if_near`, `farspur_if_side`, and
+`clear_far_boundary_count` are diagnostics. A query exactly at
+`gcs_farspur_clear_dist_px` is counted as a boundary diagnostic but is not a
+clear-far spurious negative.
+
+Base existence BCE and point-valid BCE ignore masks are independent explicit
+ablations. They default off through:
+`gcs_base_ignore_raw_rescue=False`,
+`gcs_base_ignore_rank_near=False`,
+`gcs_base_ignore_farspur_near=False`, and
+`gcs_base_ignore_duplicate_like=False`. Enabling `gcs_rank_topk_weight`,
+`gcs_farspur_ignore_first`, `gcs_farspur_weight`, or
+`gcs_shortside_raw_rescue` does not implicitly change the base BCE targets.
+`gcs_farspur_ignore_first=True` with `gcs_farspur_weight=0` therefore only
+classifies diagnostics and does not protect base BCE negatives; the
+farspur-derived base ignore flag is effective only in the full ignore-first
+contract where `gcs_farspur_ignore_first=True`, `gcs_farspur_weight > 0`, and
+`gcs_base_ignore_farspur_near=True`. The rank-derived base-ignore
+sources are additionally scoped to images with
+`gt_lanes >= gcs_rank_gt_min_lanes`, so GT3 samples are not affected by the
+default GT4/GT5 ranking contract. `gcs_base_ignore_duplicate_like=True` ignores
+only duplicate-like rank negatives from base BCE; rank near-GT/side-ambiguous
+base ignore still requires `gcs_base_ignore_rank_near=True`. Clear-far base
+BCE negatives are preserved through `clear_far_final`, and point-valid BCE
+expands the same explicit per-query ignore to all anchors only for the
+selected base-ignore sources.
+Diagnostics include `base_exist_ignore_raw_rescue_count`,
+`base_exist_ignore_rank_near_count`, `base_exist_ignore_rank_side_count`,
+`base_exist_ignore_farspur_near_count`,
+`base_exist_ignore_farspur_side_count`,
+`base_exist_ignore_duplicate_rank_only_count`,
+`base_exist_ignore_near_count`, `base_exist_ignore_side_ambiguous_count`,
+`base_exist_ignore_duplicate_like_count`,
+`base_exist_negative_kept_clear_far_count`, and
+`base_exist_negative_kept_other_count`.
+
+`rank_topk_loss` is disabled by default through `gcs_rank_topk_weight=0.0`.
+When enabled, it uses the same score as query decode,
+`sigmoid(pred_logits)`, and applies
+`mean(max(0, gcs_rank_margin - pos_score + neg_score))`. The default
+`gcs_rank_pair_reduction=global_pair_mean` averages across all valid
+positive-negative pairs in the batch. The legacy-compatible
+`gcs_rank_pair_reduction=image_mean` first averages pairs inside each image
+and then averages images. It applies only on images with at least
+`gcs_rank_gt_min_lanes=4` GT lanes. Positive queries are selected by
+`gcs_rank_pos_scope`, whose default is `shortside_reliable`.
+Supported scopes are `shortside_reliable`, `shortside_with_ultra`,
+`gt4gt5_matched`, and `all_matched`. The default `shortside_reliable` scope
+uses reliable Hungarian shortside rawmatch positives only. `shortside_with_ultra`
+only adds the Hungarian ultra tier when `gcs_shortside_ultra_rank_pos=True`;
+unmatched ultra rescue still stays out of ranking positives by default.
+`gt4gt5_matched` means all Hungarian matched true-lane queries on images with
+GT lane count >= 4, and `all_matched` means all Hungarian matched true-lane
+queries; neither scope is narrowed by `gcs_shortside_ultra_rank_pos`. If
+`gcs_rank_pos_scope=gt4gt5_matched`, use a small first ablation weight such as
+`gcs_rank_topk_weight=0.01` or `0.02` because the positive set is wider.
+When `gcs_rank_topk_weight > 0` and the default
+`gcs_rank_pos_scope=shortside_reliable` is used, training logs a warning that
+the run is not all-GT4/GT5-matched-positive ranking.
+Unmatched reliable raw-rescue queries are excluded from ranking positives by
+default through `gcs_rank_include_unmatched_rescue_pos=False`. Enabling that
+escape hatch only allows vetted unmatched reliable rescue queries that are not
+conflicting and not duplicate-like to enter `rank_pos`; it is an explicit
+ablation, not baseline behavior.
+Negative queries are capped by `gcs_rank_max_negs` and can only come from
+`clear_far_spurious | normal_duplicate_like | side_duplicate_like`.
+`clear_far_spurious` must be unmatched, high-score, have enough
+predicted-valid anchors, be greater than `gcs_farspur_clear_dist_px` from all
+GT lanes, and be outside near/ambiguous ignore zones. Normal duplicate-like
+queries are close to a matched query within `gcs_rank_dup_close_px`, overlap by
+at least `gcs_rank_dup_min_overlap` predicted-valid anchors, are not
+raw-rescue protected, and are not rank side-ambiguous. Side-ambiguous
+true-or-uncertain queries stay ignored; side-ambiguous duplicate-like queries
+enter ranking negatives only when `gcs_rank_side_duplicate_enable=True` and the
+same side GT has a selected true positive that is better by
+`gcs_rank_side_dup_margin_px`. Duplicate-like queries are not BCE hard
+negatives through this loss. `rank_topk_samples`, `rank_topk_pos`,
+`rank_topk_neg`, `rank_topk_clear`, `rank_topk_dup`,
+`rank_loss_noop_images`, `rank_noop_because_no_pos`,
+`rank_noop_because_no_neg`, `near_gt_ignored_count`,
+`duplicate_like_rank_neg_count`, `clear_far_rank_neg_count`,
+`rank_neg_side_duplicate_like_count`, `rank_neg_normal_duplicate_like_count`,
+`rank_side_ambiguous_ignored_count`,
+`rank_side_duplicate_rejected_better_than_true_count`, `rank_pos_scope`,
+`rank_pos_total`, `rank_pos_shortside_reliable`,
+`rank_pos_shortside_ultra`, `rank_pos_gt4gt5_matched`,
+`rank_pos_all_matched`, `rank_pos_hungarian_count`,
+`rank_pos_unmatched_rescue_excluded_count`,
+`rank_pos_unmatched_rescue_included_count`,
+`rank_pos_conflict_excluded_count`, `rank_neg_duplicate_like`,
+`rank_neg_clear_far`, and `rank_neg_near_ignored` are diagnostics.
+
+For the new GT4/GT5 count-contract features, `gcs_shortside_min_gt_lanes` and
+`gcs_rank_gt_min_lanes` must stay at least `4`. Setting either below `4`
+raises by default with the message:
+"GT4/GT5 count-contract losses require min_gt_lanes >= 4. Set
+gcs_allow_gt3_count_contract_ablation=True for explicit GT3 ablation." The
+escape hatch `gcs_allow_gt3_count_contract_ablation=True` is only for explicit
+GT3 ablations and logs a strong warning.
 
 ## Decode And Evaluation Contract
 
@@ -528,12 +921,14 @@ Quality Head, Survival Head, or default decode behavior.
 
 This branch includes `tools/eval_tusimple_official.py`,
 `tools/sweep_tusimple_official.py`, `gcs_tools/tusimple_official_eval.py`, and
-explicit training-time `official_best` checkpoint preservation. It does not
-include `tools/diagnose_tusimple_count_confusion.py`,
-`tools/diagnose_gcs_gt5.py`, or later mainline Count/Quality/Boundary
-diagnostics unless a future task explicitly ports them. Use the canonical
-363-image official-val GT for selection and test only once for final
-evaluation.
+explicit training-time `official_best` checkpoint preservation. It also
+includes the branch-local `tools/diagnose_gcs_count_contract.py` diagnostic for
+GT4/GT5 count-contract query roles; it is reporting/diagnostic tooling and not
+a selection surface. The branch still does not include
+`tools/diagnose_tusimple_count_confusion.py`, `tools/diagnose_gcs_gt5.py`, or
+later mainline Count/Quality/Boundary diagnostics unless a future task
+explicitly ports them. Use the canonical 363-image official-val GT for
+selection and test only once for final evaluation.
 
 Formal TuSimple checkpoint selection uses the `OFFICIAL_SELECTION_POLICY`
 defined in `gcs_tools/official_selection.py` (`official_best_v4`). The

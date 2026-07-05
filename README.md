@@ -2,7 +2,7 @@
 
 This is the current GCS-YOLO-Lane mainline branch. It imports the historical `5-25-3.zip` algorithm and adapts only the TuSimple fixed-y contract.
 
-Active source/config is rolled back to commit `b6535f641` (`Fix GCS training progress header alignment`). Its active algorithm contract remains the 5-25-3 K56 mainline with no later Count Head, Q18/Q20/dataref, lane-balanced, valid-repair, side-aux, or GT4-hard diagnostic mechanisms active. The explicit 2026-06-27 branch-local additions are exceptions: default-off `count_boundary_loss`, default-off train-only `gcs_hard_sampling`, default-off E3-lite `gcs_spurious_neg`, and training-time `official_best` checkpoint selection. Results and mechanisms from later commits are retained below as legacy experiment conclusions only; they do not describe currently available CLI flags, loss items, diagnostic scripts, model outputs, configs, or selected candidates unless explicitly listed as branch-local additions here.
+Active source/config is rolled back to commit `b6535f641` (`Fix GCS training progress header alignment`). Its active algorithm contract remains the 5-25-3 K56 mainline with no later Count Head, Q18/Q20/dataref, lane-balanced, valid-repair, side-aux, or GT4-hard diagnostic mechanisms active. Explicit branch-local additions are exceptions: default-off `count_boundary_loss`, default-off train-only `gcs_hard_sampling`, default-off E3-lite `gcs_spurious_neg`, default-off `gcs_short_side_geom`, default-off `gcs_far_spurious_neg`, and training-time `official_best` checkpoint selection. Results and mechanisms from later commits are retained below as legacy experiment conclusions only; they do not describe currently available CLI flags, loss items, diagnostic scripts, model outputs, configs, or selected candidates unless explicitly listed as branch-local additions here.
 
 ## Contract
 
@@ -19,16 +19,27 @@ imgsz: 544 960
 
 `--imgsz 544 960` is H,W order.
 
-The 56 fixed-y anchors are TuSimple official h-samples `710, 700, 690, ..., 160`. K56 labels must be regenerated from original TuSimple JSON and images, not resampled from old K32 labels.
+The 56 fixed-y anchors are TuSimple official h-samples `710, 700, 690, ..., 160`. This order is bottom-to-top: index `0` is bottom `y=710`, and index `55` is top `y=160`. Any lower/bottom-half side ordering for K56 uses indices `< K//2`. K56 labels must be regenerated from original TuSimple JSON and images, not resampled from old K32 labels.
 
 Compatibility paths `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml` and `data/tusimple_gcs_fixed_y_k56_960x544.yaml` keep the same K56 contract for old run records. New training commands should use the mainline paths above.
 
-The 5-25-3 algorithm body is intentionally not upgraded to later mainline Count Head, Quality Head, Survival Head, or near-miss machinery. The only active Count Boundary, hard-sampling, spurious-negative, and official-best behavior is the explicit branch-local default-off/protocol work recorded in `docs/agent-context/current-contracts.md`.
+The 5-25-3 algorithm body is intentionally not upgraded to later mainline Count Head, Quality Head, Survival Head, or near-miss machinery. The only active Count Boundary, hard-sampling, spurious-negative, short-side-geometry, far-spurious-negative, and official-best behavior is the explicit branch-local default-off/protocol work recorded in `docs/agent-context/current-contracts.md`.
+
+## Count-Contract Diagnostics
+
+`tools/diagnose_gcs_count_contract.py` reports query roles for GT4/GT5 count-contract debugging. GT records distinguish Hungarian assignment from raw geometry:
+
+- `hungarian_query_idx` and `hungarian_raw_dist_px` are the Hungarian matched query and its raw distance to that GT.
+- `best_raw_query_idx` and `best_raw_dist_px` are the nearest raw-geometry query, which may be an unmatched duplicate.
+- `selected_shortside_query_idx` and `selected_shortside_reason` show the training count-contract shortside selection, for example `hungarian_rawmatch` or `unmatched_raw_rescue`.
+- `matched_query_idx` is retained only as a deprecated compatibility alias for `best_raw_query_idx`; it is not the Hungarian query.
+
+Clear-far spurious diagnostics use a strict boundary: distance must be greater than `gcs_farspur_clear_dist_px`; equality is recorded by `clear_far_boundary_count` but is not selected as clear-far.
 
 ## Current Branch Reporting-Only Test Evidence
 
-On 2026-07-02, active-branch artifacts were evaluated on TuSimple official
-test at the user's request. Each used decode
+On 2026-07-02 and 2026-07-03, active-branch artifacts were evaluated on
+TuSimple official test at the user's request. Each used decode
 parameters selected on official-val first; these reports are not a threshold,
 checkpoint, or postprocess selection surface.
 
@@ -55,6 +66,15 @@ official_test_ACC = 0.963348
 FP = 0.032171
 FN = 0.031722
 count_acc = 0.874191
+
+gcs_yolo_lane_s_q12_k56_boundary02_count03_under5_spurious_gt5only_gt4w15_farspur005_v1:
+val_sweep = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_boundary02_count03_under5_spurious_gt5only_gt4w15_farspur005_v1_official_best_val_sweep_valid_before_maxdet/tusimple_official_sweep_summary.json
+test_summary = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_boundary02_count03_under5_spurious_gt5only_gt4w15_farspur005_v1_official_best_test_best_from_val/tusimple_official_summary.json
+official_val_ACC = 0.977758
+official_test_ACC = 0.963907
+FP = 0.031860
+FN = 0.031332
+count_acc = 0.882459
 ```
 
 The integrated conclusion is narrow: spurious-lite with the official-val
@@ -64,7 +84,11 @@ small (`+0.000055` ACC) and must not be used for further test-time tuning.
 The later short-side-geometry run improves the 363-image official-val surface,
 but its reporting-only test result is lower than the no-shortside same-line
 comparator and exposes a GT5 undercount/generalization gap; do not promote it
-or tune from test.
+or tune from test. The later far-spurious run further improves the 363-image
+official-val surface and reduces reporting-only test GT4 false-fifth errors
+versus the no-shortside same-line comparator, but it also regresses test ACC,
+FP/FN, and GT5 retention; treat it as diagnostic-only and keep test closed for
+any further threshold, NMS, checkpoint, decode, or far-spur loss tuning.
 
 ## Legacy Post-b653 Official-Val Evidence
 

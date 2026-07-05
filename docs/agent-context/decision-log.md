@@ -690,6 +690,148 @@ geometry, point-valid survival, and count-score calibration, especially by
 date and GT lane count. Any follow-up must prove on official-val/train-val
 that it preserves GT5 while keeping the GT4/FP benefit.
 
+## 2026-07-03: Reject Far-Spurious GT3/GT4 Follow-Up as Promotion
+
+Decision:
+
+Do not promote
+`gcs_yolo_lane_s_q12_k56_boundary02_count03_under5_spurious_gt5only_gt4w15_farspur005_v1`.
+Treat it as diagnostic evidence that far unmatched-query suppression can reduce
+GT4 false-fifth lanes, but the reporting-only official test does not confirm a
+candidate improvement and shows a GT5 retention tradeoff. The test result must
+not be used to tune thresholds, NMS, checkpoint choice, or loss weights.
+
+Training/config evidence:
+
+```text
+run = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_boundary02_count03_under5_spurious_gt5only_gt4w15_farspur005_v1
+pretrained = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_count03_under5_boundary02_v1/weights/best.pt
+gcs_count = 0.3
+gcs_count_under5 = 0.3
+gcs_count_boundary = 0.2
+gcs_spurious_neg = 0.1
+gcs_spurious_gt4_weight = 1.5
+gcs_spurious_gt5_weight = 1.0
+gcs_spurious_gt_protect = true
+gcs_spurious_gt_protect_min_gt_lanes = 5
+gcs_far_spurious_neg = 0.05
+gcs_far_spurious_min_gt_lanes = 3
+gcs_far_spurious_max_gt_lanes = 4
+gcs_far_spurious_gt3_weight = 1.0
+gcs_far_spurious_gt4_weight = 1.0
+gcs_far_spurious_gt5_weight = 0.0
+gcs_official_best = true
+gcs_official_valid_before_maxdet = true
+official_best_epoch = 145
+```
+
+Training-time official-best evidence:
+
+```text
+summary = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_boundary02_count03_under5_spurious_gt5only_gt4w15_farspur005_v1/weights/official_best_sweep.json
+decode = conf=0.005, point_valid_thr=0.45, nms_dist_px=0.0, max_det=5, min_points=2, valid_before_maxdet=true
+official_acc = 0.977374
+official_score = 0.977004
+official_FP = 0.009550
+official_FN = 0.008953
+count_acc = 0.975207
+count_acc_3 = 0.986547
+count_acc_4 = 0.939394
+count_acc_5 = 0.972973
+count_confusion = 3->3=220, 3->4=3, 4->3=3, 4->4=62, 4->5=1, 5->4=2, 5->5=72
+```
+
+External official-val sweep on `official_best.pt`:
+
+```text
+sweep = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_boundary02_count03_under5_spurious_gt5only_gt4w15_farspur005_v1_official_best_val_sweep_valid_before_maxdet/tusimple_official_sweep_summary.json
+surface = canonical official-val 363
+rows = 1890
+decode = conf=0.003, point_valid_thr=0.575, nms_dist_px=50.0, max_det=5, min_points=2, valid_before_maxdet=true
+official_acc = 0.977758
+official_score = 0.977415
+official_FP = 0.008219
+official_FN = 0.008953
+count_acc = 0.975207
+count_acc_3 = 0.982063
+count_acc_4 = 0.954545
+count_acc_5 = 0.972973
+count_confusion = 3->2=1, 3->3=219, 3->4=3, 4->3=3, 4->4=63, 5->4=2, 5->5=72
+```
+
+Reporting-only final-test result selected from the external official-val row:
+
+```text
+summary = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_boundary02_count03_under5_spurious_gt5only_gt4w15_farspur005_v1_official_best_test_best_from_val/tusimple_official_summary.json
+decode = conf=0.003, point_valid_thr=0.575, nms_dist_px=50.0, max_det=5, min_points=2, valid_before_maxdet=true
+official_acc = 0.963907
+official_score = 0.962643
+official_FP = 0.031860
+official_FN = 0.031332
+count_acc = 0.882459
+count_acc_2 = 0.400000
+count_acc_3 = 0.974138
+count_acc_4 = 0.628205
+count_acc_5 = 0.815466
+count_confusion = 2->2=2, 2->3=3, 3->2=5, 3->3=1695, 3->4=37, 3->5=3, 4->3=109, 4->4=294, 4->5=65, 5->3=28, 5->4=77, 5->5=464
+```
+
+Same-line comparators:
+
+```text
+no-shortside run = gcs_yolo_lane_s_q12_k56_boundary02_count03_under5_spurious_gt5only_gt4w15_v1
+no-shortside official-val ACC = 0.974538
+no-shortside official-val FP/FN = 0.012856 / 0.012626
+no-shortside official-val count_acc_4/5 = 0.924242 / 0.972973
+no-shortside reporting-only test ACC = 0.964358
+no-shortside reporting-only test FP/FN = 0.030721 / 0.029415
+no-shortside reporting-only test count_acc_4/5 = 0.611111 / 0.836555
+no-shortside test count_confusion includes 4->5=75, 5->4=69, 5->5=476
+
+shortsidegeom025 official-val ACC = 0.977032
+shortsidegeom025 reporting-only test ACC = 0.963348
+shortsidegeom025 test count_confusion includes 4->5=72, 5->4=85, 5->5=456
+```
+
+Integrated conclusion:
+
+- Supported fact: the far-spurious loss was active and not a no-op. In
+  `results.csv`, train `far_spur_neg` averaged about `2.56` over the first 20
+  epochs and about `0.024` over the last 20 epochs; `far_spur_gt5` stayed
+  `0.0`, matching the intended GT3/GT4-only pressure.
+- Supported fact: on canonical official-val, the external selected row is very
+  strong: `official_acc=0.977758`, `FP=0.008219`, `FN=0.008953`, with GT4
+  false-fifth removed (`4->5=0`) and GT5 undercount held to `5->4=2`.
+- Supported fact: the full 1890-row official-val sweep is broadly strong, not a
+  single lucky row. A lower-FP row exists (`FP=0.005923`) but worsens count
+  shape (`count_acc_4=0.924242`, `count_acc_5=0.959459`, `5->4=3`), so it is
+  not a better selection.
+- Supported fact: reporting-only official test is below the same-line
+  no-shortside comparator: `official_acc -0.000451`, `FP +0.001139`,
+  `FN +0.001917`.
+- Supported fact: the test tradeoff is the intended GT4 benefit plus GT5
+  collateral damage. Versus no-shortside, GT4 improves (`4->5: 75 -> 65`,
+  `count_acc_4: 0.611111 -> 0.628205`), but GT5 retention worsens
+  (`5->4: 69 -> 77`, `5->5: 476 -> 464`,
+  `count_acc_5: 0.836555 -> 0.815466`).
+- Hypothesis: far-spur suppresses the far extra-lane pattern visible on
+  official-val and partly on test GT4, but it does not solve the broader
+  date/count generalization gap. It likely shifts some borderline dense-lane
+  examples toward undercount on the broader test distribution.
+
+Next action:
+
+Do not promote this run and do not tune from its final-test report. If this
+line continues, keep final test closed and run a train/val-only diagnostic
+against the same-line no-shortside comparator: compare raw unmatched candidates,
+post-NMS survival, nearest-GT distance, and point-valid spans for GT4 and GT5
+groups. Use the reporting-only test date/count breakdown only as a risk
+description; first reproduce comparable GT4 over-count and GT5 under-count
+failure modes on train/official-val before designing or selecting another
+far-spur ablation. Any future far-spur ablation must prove GT5 retention on
+official-val/train-val diagnostics while preserving the GT4 false-fifth
+reduction.
+
 ## 2026-07-02: Integrate Reporting-Only Test for E1 and Spurious-Lite + Valid-Before
 
 Decision:
@@ -4895,3 +5037,238 @@ Integrated conclusion:
   continues, use a geometry-focused follow-up that changes reference-bank
   coverage or strengthens the point/refaux pull; the `valid05` branch is not
   justified because raw geometry failed first.
+
+## 2026-07-03: Reject shortside010_gt5off + farspur005 Combination
+
+Decision:
+
+Do not promote
+`gcs_yolo_lane_s_q12_k56_boundary02_count03_under5_spurious_gt5only_gt4w15_shortsidegeom010_gt5off_farspur005_v1`.
+The combination improves GT4 false-fifth behavior, but it reintroduces the
+GT5 undercount failure more strongly than either single component.
+
+Protocol note:
+
+The first external 363-image sweep directory named
+`...shortsidegeom010_gt5off_farspur005_v1_official_best_val_sweep_valid_before_maxdet`
+used `weights/best.pt`, while the paired test directory used
+`weights/official_best.pt`. Treat that pair as protocol-mismatched evidence.
+A corrected official-val sweep was run on `weights/official_best.pt`:
+
+```text
+corrected_sweep = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_boundary02_count03_under5_spurious_gt5only_gt4w15_shortsidegeom010_gt5off_farspur005_v1_official_bestpt_val_sweep_valid_before_maxdet/tusimple_official_sweep_summary.json
+selected_decode = conf=0.003, point_valid_thr=0.6, nms_dist_px=0.0, max_det=5, min_points=2, valid_before_maxdet=true
+official_val_acc = 0.976937
+official_val_FP = 0.003489
+official_val_FN = 0.008724
+official_val_count_acc_4 = 0.939394
+official_val_count_acc_5 = 0.878378
+official_val_count_confusion includes 3->4=2, 4->5=0, 5->4=9
+```
+
+The protocol-correct reporting-only test for that corrected official-val
+decode was also run:
+
+```text
+test_summary = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_boundary02_count03_under5_spurious_gt5only_gt4w15_shortsidegeom010_gt5off_farspur005_v1_official_best_test_best_from_correct_val/tusimple_official_summary.json
+official_test_acc = 0.963280
+official_test_FP = 0.031087
+official_test_FN = 0.032590
+test_count_acc_4 = 0.632479
+test_count_acc_5 = 0.773286
+test_count_confusion includes 4->5=63, 5->4=103, 5->5=440
+```
+
+Why:
+
+- Against the same-line no-shortside comparator, the combination improves
+  reporting-only test GT4 `4->5` from `75` to `63` and `count_acc_4` from
+  `0.611111` to `0.632479`.
+- The cost is unacceptable GT5 retention loss: `5->4` worsens from `69` to
+  `103`, and `count_acc_5` drops from `0.836555` to `0.773286`.
+- The damage is concentrated on `0601|GT5`: `5->4` grows from `26` to `62`
+  and `5->5` falls from `458` to `421`.
+- The corrected official-val sweep has zero rows with `5->4 <= 2` or
+  `count_acc_5 >= 0.972973`, so this checkpoint cannot be saved by choosing a
+  different row inside the tested validation grid.
+- Training logs confirm `gcs_far_spurious_gt5_weight=0.0` kept far-spur off
+  GT5, and `gcs_short_side_geom_weight_gt5=0.0` did not remove all GT5-side
+  pressure because duplicate-like `gcs_spurious_neg` still selected GT5-group
+  candidates late in training.
+
+Integrated conclusion:
+
+The combination is diagnostic-only. Far-spur remains useful for GT4 overcount
+pressure, but pairing it with even reduced short-side geometry does not solve
+the generalization problem. Do not continue by increasing `short_side_geom` to
+`0.125`. The next safe step should target GT5 existence/rank protection or
+remove remaining GT5 duplicate-like spurious pressure before adding any more
+GT4/short-side pressure.
+
+## 2026-07-05: Fix ranking/shortside count-contract debug surfaces
+
+Decision:
+
+Keep the ignore-first/ranking/shortside count-contract line default-off, but
+fix three contract gaps before any new ablation:
+
+- split side-ambiguous unmatched queries into true-or-uncertain ignore versus
+  worse side duplicate-like ranking negatives;
+- keep visible `2..5` side GT as a separate ultra-short tier with optional
+  light score-floor and valid rescue only;
+- replace the too-narrow implicit ranking-positive bool with explicit
+  `gcs_rank_pos_scope`.
+
+Implementation scope:
+
+- `gcs_rank_side_duplicate_enable=False` preserves the old conservative
+  default. When enabled, `side_duplicate_like` can enter ranking negatives only
+  if it is close/overlapping, side-ambiguous, not raw-rescue protected, tied to
+  a selected true same-side/GT positive, and worse by
+  `gcs_rank_side_dup_margin_px`.
+- BCE hard-negative pressure remains clear-far only under the ignore-first
+  contract. Normal duplicate-like and side duplicate-like queries are ranking
+  negatives only.
+- `gcs_shortside_ultra_enable=False`,
+  `gcs_shortside_ultra_score_floor_gain=0.0`,
+  `gcs_shortside_ultra_valid_gain=0.0`, and
+  `gcs_shortside_ultra_rank_pos=False` keep ultra-short visible `2..5` lanes
+  diagnostic-only by default. Strong ultra-short point geometry remains off
+  through `gcs_shortside_ultra_point_gain=0.0`.
+- `gcs_rank_pos_scope` supports `shortside_reliable`,
+  `shortside_with_ultra`, `gt4gt5_matched`, and `all_matched`; the default is
+  `shortside_reliable`.
+- Training, validation, and `tools/diagnose_gcs_count_contract.py` now expose
+  explicit debug counts for side duplicate negatives, normal duplicate
+  negatives, side-ambiguous ignores, ultra-short selection/enabling, and
+  ranking no-op reasons.
+
+Validation target:
+
+Use local compile and contract checks only. Formal training/official-val
+evidence must run remotely and be selected on official-val.
+
+## 2026-07-05: Harden count-contract positive and ignore semantics
+
+Decision:
+
+Fix five count-contract guard gaps while keeping the ignore-first/ranking and
+shortside rescue line default-off:
+
+- ranking positives are Hungarian true-lane positives by default; unmatched
+  reliable raw-rescue queries are excluded unless the explicit
+  `gcs_rank_include_unmatched_rescue_pos=True` ablation is set and the rescue
+  query passes conflict/duplicate-like filtering;
+- base `exist_loss` and `point_valid_loss` use the same ignore-first protection
+  for unmatched raw-rescue, near-GT corridor, side-ambiguous, and duplicate-like
+  rank-only queries whenever the new count-contract path is enabled, while
+  clear-far spurious queries remain BCE negatives;
+- visible `2..5` same-GT Hungarian shortside rawmatch lanes receive the base
+  shortside positive boost/target floor, but unmatched ultra-short rescue stays
+  gated by `gcs_shortside_ultra_enable`;
+- `gcs_shortside_min_gt_lanes < 4` or `gcs_rank_gt_min_lanes < 4` now fails
+  under the new count-contract path unless
+  `gcs_allow_gt3_count_contract_ablation=True` is explicitly set;
+- shortside image medians now use the standard median, so `[30, 40, 50, 56]`
+  gives `45` instead of the lower median `40`.
+
+Implementation scope:
+
+- Added debug counts for unmatched-rescue ranking inclusion/exclusion, base BCE
+  ignore source counts, clear-far negatives kept, and ultra-short matched versus
+  unmatched rescue handling.
+- Added CLI/config defaults for `gcs_rank_include_unmatched_rescue_pos=False`
+  and `gcs_allow_gt3_count_contract_ablation=False`.
+- Kept decode, matcher assignment, labels, official metrics, and default-off
+  training objectives unchanged.
+
+Validation target:
+
+Run `python tools/check_gcs_count_contract_losses.py` and Python compile checks
+for changed Python files locally. Formal training/official-val evidence remains
+remote-only and official-val selected.
+
+## 2026-07-05: Fix farspur/base-BCE ignore and shortside/ranking semantics
+
+Decision:
+
+Close five high-priority count-contract gaps before any new ablation:
+
+- Farspur ignore-first near-GT corridor and ambiguous side-region masks now
+  protect the original base `exist_loss` and `point_valid_loss`, not only the
+  farspur auxiliary BCE term.
+- Base BCE clear-far preservation now uses a final clear-far mask outside both
+  rank and farspur near/side ignore zones and outside raw-rescue protection.
+- `gcs_shortside_rawmatch_boost` no longer implicitly enables
+  `gcs_shortside_exist_target_floor`; the floor defaults to `0.0` and only an
+  explicit positive value changes existence targets.
+- `shortside_rescue_pos` is unmatched-rescue-only; same-GT Hungarian rawmatch
+  positives are tracked separately through `shortside_hungarian_rawmatch_pos`,
+  and `shortside_rawmatch_pos` is the explicit union/debug mask.
+- `gcs_rank_pos_scope=gt4gt5_matched` and `all_matched` now mean all Hungarian
+  matched true-lane queries in their scopes, regardless of
+  `gcs_shortside_ultra_rank_pos`.
+
+Implementation scope:
+
+- Added base-BCE debug counts for rank-near, rank-side, farspur-near,
+  farspur-side, duplicate-rank-only ignores, and kept final clear-far
+  negatives.
+- Kept unmatched raw-rescue excluded from ranking positives by default; it can
+  enter only through `gcs_rank_include_unmatched_rescue_pos=True` after existing
+  conflict/duplicate filtering.
+- Kept decode, matcher assignment, labels, official metrics, and default-off
+  training objectives unchanged.
+
+Validation:
+
+- `D:\miniconda3\envs\lsa_yolo\python.exe -m py_compile
+  ultralytics\utils\gcs_loss.py tools\check_gcs_count_contract_losses.py
+  ultralytics\models\yolo\gcs_lane\train.py
+  ultralytics\models\yolo\gcs_lane\val.py tools\train_gcs.py`
+- `D:\miniconda3\envs\lsa_yolo\python.exe tools\check_gcs_count_contract_losses.py`
+- `D:\miniconda3\envs\lsa_yolo\python.exe tools\check_model.py --cfg
+  ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml --imgsz 544 960 --batch 1
+  --device cpu`
+
+## 2026-07-05: Isolate base-BCE ignore, target floor, and ranking reduction
+
+Decision:
+
+Fix the ablation-isolation errors in the ignore-first/ranking/shortside
+count-contract line before any new training run.
+
+Implementation scope:
+
+- Added explicit default-off base BCE ignore controls:
+  `gcs_base_ignore_raw_rescue`, `gcs_base_ignore_rank_near`,
+  `gcs_base_ignore_farspur_near`, and
+  `gcs_base_ignore_duplicate_like`.
+- Enabling `gcs_rank_topk_weight`, `gcs_farspur_ignore_first`,
+  `gcs_farspur_weight`, or `gcs_shortside_raw_rescue` no longer implicitly
+  changes the original base `exist_loss` or `point_valid_loss`. Rank-derived
+  base ignore is also scoped by `gcs_rank_gt_min_lanes`, preventing GT3 samples
+  from receiving rank-side base ignore when the ranking loss itself skips them.
+- `gcs_farspur_ignore_first=True` with `gcs_farspur_weight=0` is now
+  diagnostics/classification only unless a separate `gcs_base_ignore_*`
+  experiment explicitly enables base BCE protection.
+- `gcs_shortside_exist_target_floor` now has before-floor target diagnostics
+  and `shortside_target_floor_applied_count`, so boost-only, floor-only, and
+  boost+floor ablations are distinguishable.
+- `rank_topk_loss` now defaults to
+  `gcs_rank_pair_reduction=global_pair_mean`; the old per-image-equal behavior
+  remains available as `image_mean`.
+- Split shortside rawmatch/rescue candidate diagnostics into
+  `shortside_hungarian_rawmatch_candidate_count`,
+  `shortside_unmatched_raw_rescue_candidate_count`, and
+  `shortside_rawmatch_candidate_total_count`. The compatibility
+  `raw_rescue_candidate_count` now means unmatched raw-rescue candidates.
+- Kept `gcs_rank_pos_scope=shortside_reliable` as the conservative default,
+  but training logs a warning when `gcs_rank_topk_weight > 0` uses that scope
+  so the run is not mislabeled as all-GT4/GT5 matched ranking.
+
+Validation target:
+
+Run local py_compile, `tools/check_gcs_count_contract_losses.py`, and the CPU
+model shape check. Formal training/official-val evidence remains remote-only
+and must be selected on official-val.

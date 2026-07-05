@@ -9,7 +9,7 @@
 
 This branch is the current GCS-YOLO-Lane mainline, imported from the historical `5-25-3.zip` algorithm.
 
-The branch keeps the historical 5-25-3 algorithm body, the TuSimple fixed-y contract, the explicit default-off `count_boundary_loss`, and the explicit default-off train-only `gcs_hard_sampling` requested on 2026-06-27.
+The branch keeps the historical 5-25-3 algorithm body, the TuSimple fixed-y contract, the explicit default-off `count_boundary_loss`, the explicit default-off train-only `gcs_hard_sampling`, the default-off `gcs_spurious_neg`, the default-off `gcs_short_side_geom`, the default-off `gcs_far_spurious_neg`, and the training-time `official_best` protocol additions requested on this branch.
 
 It is not the current mainline Count Head / Quality Head branch. Current behavior is governed by `docs/agent-context/current-contracts.md`.
 
@@ -109,7 +109,7 @@ The active source/config is rolled back to commit `b6535f641` (`Fix GCS training
 
 ## Branch Scope
 
-Do not silently import later mainline mechanisms into this branch. In particular, do not add Count Head, Quality Head, Survival Head, near-miss mining, or mainline K56 candidate scripts unless a future task explicitly asks for that algorithm change. The only active Count Boundary mechanism is the 2026-06-27 user-requested, default-off `count_boundary_loss`. The only active hard sampler is the 2026-06-27 user-requested, default-off train-only `gcs_hard_sampling`.
+Do not silently import later mainline mechanisms into this branch. In particular, do not add Count Head, Quality Head, Survival Head, near-miss mining, or mainline K56 candidate scripts unless a future task explicitly asks for that algorithm change. The only active Count Boundary mechanism is the 2026-06-27 user-requested, default-off `count_boundary_loss`. The only active hard sampler is the 2026-06-27 user-requested, default-off train-only `gcs_hard_sampling`. The only active spurious, short-side geometry, and far-spurious mechanisms are the branch-local default-off `gcs_spurious_neg`, `gcs_short_side_geom`, and `gcs_far_spurious_neg` contracts recorded in `docs/agent-context/current-contracts.md`.
 
 Training-time `official_best` checkpoint preservation is now an explicit protocol change requested on 2026-06-27. It is selection/evaluation tooling only, not an algorithm-body change.
 
@@ -129,7 +129,8 @@ aux_edge_logits: B x 1 x H x W
 
 ## Loss Contract
 
-Default logged loss items on this branch:
+The authoritative loss/log contract is `docs/agent-context/current-contracts.md`.
+The common baseline logged loss items include:
 
 ```text
 exist_loss
@@ -144,6 +145,11 @@ count_under5_loss
 count_boundary_loss
 count_score_mean
 ```
+
+Default-off branch-local experiment terms such as `short_side_geom_loss`,
+`spurious_neg_loss`, and `far_spur_loss` are also documented in
+`docs/agent-context/current-contracts.md`; do not infer active gains from their
+presence in logs.
 
 ## Agent Coordination Rules
 

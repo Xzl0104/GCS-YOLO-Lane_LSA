@@ -67,7 +67,9 @@ def check_loss_names_and_gains() -> None:
     """Check train/val loss vectors and validation gain mapping stay aligned."""
     assert GCSLoss.loss_names == GCSLaneTrainer.loss_names
     assert GCSLoss.loss_names == LOSS_NAMES
-    assert len(LOSS_NAMES) == len(LOSS_GAIN_ARGS) == len(DEFAULT_LOSS_GAINS) == 40
+    assert len(GCSLoss.loss_names) == len(GCSLaneTrainer.progress_loss_names)
+    assert len(LOSS_NAMES) == len(LOSS_GAIN_ARGS) == len(DEFAULT_LOSS_GAINS)
+    assert len(GCSLoss.loss_names) == len(LOSS_NAMES)
 
     idx = LOSS_NAMES.index("short_side_geom_loss")
     assert LOSS_GAIN_ARGS[idx] == "gcs_short_side_geom"

@@ -214,6 +214,104 @@ Supported interpretation:
   count groups while keeping the GT4/FP benefit. Do not tune from the
   reporting-only test result.
 
+The 2026-07-03 far-spurious follow-up
+`gcs_yolo_lane_s_q12_k56_boundary02_count03_under5_spurious_gt5only_gt4w15_farspur005_v1`
+is also diagnostic-only, not promotable. It added GT3/GT4-only far unmatched
+query pressure on top of the same GT5-only protect + GT4W15 line:
+
+```text
+farspur official-val ACC = 0.977758
+farspur official-val FP/FN = 0.008219 / 0.008953
+farspur official-val count_acc_4/5 = 0.954545 / 0.972973
+farspur official-val count_confusion includes 4->5=0, 5->4=2
+same-line no-shortside official-val ACC = 0.974538
+```
+
+But the official-val-selected decode regressed reporting-only official test
+against the same-line no-shortside comparator:
+
+```text
+farspur test ACC = 0.963907
+no-shortside test ACC = 0.964358
+delta = -0.000451
+farspur test FP/FN = 0.031860 / 0.031332
+no-shortside test FP/FN = 0.030721 / 0.029415
+farspur test count_acc_4/5 = 0.628205 / 0.815466
+no-shortside test count_acc_4/5 = 0.611111 / 0.836555
+GT4 4->5 = 65 for farspur, 75 for no-shortside
+GT5 5->4 = 77 for farspur, 69 for no-shortside
+```
+
+Supported interpretation:
+
+- Far-spur is useful diagnostically: it reduces GT4 false-fifth lanes on both
+  official-val and reporting-only test.
+- It is not a promoted candidate because the same test comparison loses ACC,
+  FP, FN, and GT5 retention. The gain is a GT4 over-count reduction traded for
+  broader GT5 undercount.
+- Training logs show the loss was active early and then saturated on train:
+  first-20 train `far_spur_neg` averaged about `2.56`, last-20 averaged about
+  `0.024`, and `far_spur_gt5` stayed `0.0`. The remaining issue is
+  generalization, not an inactive loss.
+- Do not tune thresholds, NMS, checkpoint choice, or far-spur weights from the
+  reporting-only test. If continuing, run train/val-only raw-candidate and
+  post-NMS diagnostics for GT4/GT5 date/count groups before another ablation.
+  Reporting-only test date/count breakdowns are risk descriptions only, not
+  selection gates.
+
+The follow-up combination
+`gcs_yolo_lane_s_q12_k56_boundary02_count03_under5_spurious_gt5only_gt4w15_shortsidegeom010_gt5off_farspur005_v1`
+is also rejected. It combined reduced short-side geometry
+(`gcs_short_side_geom=0.10`, `gcs_short_side_geom_weight_gt5=0.0`) with
+GT3/GT4-only far-spur (`gcs_far_spurious_neg=0.05`,
+`gcs_far_spurious_max_gt_lanes=4`, `gcs_far_spurious_gt5_weight=0.0`).
+
+Protocol caveat:
+
+- The first external sweep directory named
+  `...shortsidegeom010_gt5off_farspur005_v1_official_best_val_sweep_valid_before_maxdet`
+  used `weights/best.pt`, while the paired test used
+  `weights/official_best.pt`. Treat that pair as protocol-mismatched.
+- The corrected official-val sweep on `weights/official_best.pt` is
+  `...shortsidegeom010_gt5off_farspur005_v1_official_bestpt_val_sweep_valid_before_maxdet`.
+
+Corrected official-val evidence:
+
+```text
+selected decode = conf=0.003, point_valid_thr=0.6, nms_dist_px=0.0, max_det=5, min_points=2, valid_before_maxdet=true
+official-val ACC = 0.976937
+official-val FP/FN = 0.003489 / 0.008724
+official-val count_acc_4/5 = 0.939394 / 0.878378
+official-val count_confusion includes 4->5=0, 5->4=9
+zero sweep rows had 5->4 <= 2 or count_acc_5 >= 0.972973
+```
+
+Protocol-correct reporting-only test evidence:
+
+```text
+test summary = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_boundary02_count03_under5_spurious_gt5only_gt4w15_shortsidegeom010_gt5off_farspur005_v1_official_best_test_best_from_correct_val/tusimple_official_summary.json
+test ACC = 0.963280
+test FP/FN = 0.031087 / 0.032590
+test count_acc_4/5 = 0.632479 / 0.773286
+same-line no-shortside test ACC = 0.964358
+same-line no-shortside count_acc_4/5 = 0.611111 / 0.836555
+GT4 4->5 = 63 for combo, 75 for no-shortside
+GT5 5->4 = 103 for combo, 69 for no-shortside
+```
+
+Supported interpretation:
+
+- The combination gives the intended GT4 over-count signal: reporting-only
+  test `4->5` improves from `75` to `63`, and `count_acc_4` improves from
+  `0.611111` to `0.632479`.
+- The cost is too high: GT5 undercount becomes the dominant failure, with
+  `5->4` increasing to `103` and `count_acc_5` dropping to `0.773286`.
+- The damage is concentrated in `0601|GT5`: reporting-only test `5->4`
+  increases from `26` for no-shortside to `62` for the combination.
+- The next bottleneck is not more short-side or far-spur pressure. It is
+  preventing GT5 existence/rank suppression and remaining GT5-group
+  duplicate-like spurious pressure before adding more GT4 over-count pressure.
+
 The existing `gcs_yolo_lane_s_q12_k56_boundary02_spurious_gt5safe_v1` artifact
 has only `gcs_spurious_gt5_weight=0.25`, starts from E1 `best.pt`, and keeps
 `gcs_hard_sampling=false`, but it did not apply the GT4-strong weight. It is

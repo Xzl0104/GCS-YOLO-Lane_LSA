@@ -1,5 +1,13 @@
 # 当前算法实现
 
+> Legacy snapshot warning: despite the filename, this document is no longer the
+> current source of truth after rollback to `b6535f641` (`Fix GCS training
+> progress header alignment`). It is retained only as historical context. Use
+> `docs/agent-context/current-contracts.md` for the active rollback contract,
+> and treat post-`b6535f641` mechanisms, commands, losses, tools, selected
+> candidates, and results below as legacy experiment conclusions unless another
+> current `docs/agent-context/*` file explicitly re-enables them.
+
 ## 算法大纲
 
 当前项目实现的是 GCS-YOLO-Lane 结构化车道线检测：输入 TuSimple 图像，输出最多 `Q=12` 条 lane query；每条 lane 在固定的 `K=56` 个 y 锚点上预测 x 坐标、lane 存在性和逐点可见性。模型不以普通检测框作为主输出，也不以分割 mask 作为最终 lane 输出；分割 mask 和 edge mask 只作为训练期辅助监督。
@@ -750,9 +758,3 @@ count_confusion = 2->2:1, 2->3:3, 2->4:1,
                   4->3:118, 4->4:256, 4->5:90, 4->6:4,
                   5->3:25, 5->4:73, 5->5:461, 5->6:10
 ```
-Legacy snapshot warning: despite the filename, this document is no longer the
-current source of truth after rollback to `b6535f641` (`Fix GCS training
-progress header alignment`). It is retained only as historical context. Any
-post-`b6535f641` mechanisms, commands, losses, tools, selected candidates, and
-results described below are legacy experiment conclusions only. Use
-`docs/agent-context/current-contracts.md` for the active rollback contract.

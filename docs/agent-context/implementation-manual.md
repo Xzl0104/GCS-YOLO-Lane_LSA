@@ -10,6 +10,15 @@ This branch is the current mainline source import of `5-25-3.zip` with a K56 TuS
 - The only active Count Boundary mechanism is the 2026-06-27 user-requested, default-off `count_boundary_loss` on `sum(sigmoid(pred_logits))`; keep it separate from Count Head and decode changes.
 - The active train-only hard-sampling mechanism is the 2026-06-27 user-requested, default-off `gcs_hard_sampling`; keep it limited to the training dataloader and do not change labels, validation/test dataloaders, point loss, smooth loss, curve loss, decode, or official metrics.
 - The active E3-lite spurious negative mechanism is the 2026-06-27 user-requested, default-off `gcs_spurious_neg`; keep it limited to an extra `GCSLoss` BCE term on selected unmatched short duplicate-like queries and do not change data sampling, matcher logic, point loss, smooth loss, curve loss, decode, or official metrics.
+- The active matched short-side geometry mechanism is the 2026-07-02 user-requested, default-off `gcs_short_side_geom`; keep it limited to matched short visible GT lanes and do not change unmatched queries, matcher logic, decode, NMS, or official metrics.
+- The active far-spurious negative mechanism is the 2026-07-03 user-requested, default-off `gcs_far_spurious_neg`; keep it limited to target-zero BCE on gated far unmatched queries, with GT5 pressure off by default unless explicitly ablated.
+- The active ignore-first count-contract mechanisms are default-off and training-only: `gcs_farspur_weight`, `gcs_rank_topk_weight`, reliable shortside raw-match/rescue, ultra-short light score/valid protection, and side-duplicate ranking negatives. They must not change labels, matcher assignment, decode, NMS, or official metrics.
+- `gcs_shortside_rawmatch_boost` must remain a pure loss-weight boost unless `gcs_shortside_exist_target_floor > 0` is explicitly set; do not implicitly couple the boost knob to target flooring.
+- Base `exist_loss` and `point_valid_loss` ignore masks must be controlled only by explicit default-off flags: `gcs_base_ignore_raw_rescue`, `gcs_base_ignore_rank_near`, `gcs_base_ignore_farspur_near`, and `gcs_base_ignore_duplicate_like`. Enabling ranking, farspur, raw-rescue, or `gcs_farspur_ignore_first=True` must not implicitly change base BCE supervision. Farspur-derived base ignore is effective only when the farspur ignore-first loss is active (`gcs_farspur_ignore_first=True` and `gcs_farspur_weight > 0`) and `gcs_base_ignore_farspur_near=True`; `gcs_farspur_weight=0` must not protect base BCE through the farspur masks. Rank-derived base-ignore sources must stay scoped to `gt_lanes >= gcs_rank_gt_min_lanes`, and final clear-far queries must remain trainable BCE negatives.
+- Ranking duplicate-like negatives must stay ranking-only. Do not add normal duplicate-like or side duplicate-like queries to the original BCE hard-negative path; only clear-far spurious queries may be BCE hard negatives under the ignore-first contract.
+- `gcs_rank_pair_reduction=global_pair_mean` is the default ranking reduction. Keep `image_mean` available only as an explicit legacy-compatible ablation.
+- `gcs_rank_pos_scope=gt4gt5_matched` and `gcs_rank_pos_scope=all_matched` must mean all Hungarian matched true-lane queries in their image scopes; they must not be narrowed by `gcs_shortside_ultra_rank_pos`.
+- Ultra-short visible `2..5` side GT lanes must stay a separate tier. Do not silently apply strong point geometry or ranking-positive treatment unless `gcs_shortside_ultra_enable` and the relevant ultra gain/rank flags are explicitly enabled.
 - Keep the explicit 2026-06-27 `official_best` hook limited to official-val checkpoint/decode selection; it must not change model outputs, loss terms, training labels, or official metrics.
 - Keep shared fixed-y contract helpers in `ultralytics/utils/gcs_fixed_y.py` so dataset and standalone tools do not depend on `ultralytics.models`.
 - Keep ordered-slot target construction in float32 under AMP. Do not cast GT points to prediction dtype before fixed-y validation or slot construction.
@@ -27,8 +36,11 @@ valid-repair objectives, side-aux checks, and their diagnostic helpers are
 legacy records only and are not available in the current code unless a future
 task explicitly restores them. The branch-local `count_boundary_loss` added on
 2026-06-27, the branch-local train-only `gcs_hard_sampling` added on
-2026-06-27, and the branch-local `gcs_spurious_neg` E3-lite loss added on
-2026-06-27 are explicit exceptions requested by the user and remain
+2026-06-27, the branch-local `gcs_spurious_neg` E3-lite loss added on
+2026-06-27, the branch-local `gcs_short_side_geom` loss added on 2026-07-02,
+the branch-local `gcs_far_spurious_neg` loss added on 2026-07-03, and the
+branch-local ignore-first/ranking/shortside count-contract tools updated on
+2026-07-05 are explicit exceptions requested by the user and remain
 default-disabled.
 
 ## Main Files

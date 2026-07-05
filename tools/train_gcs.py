@@ -269,6 +269,160 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Per-image multiplier for short-side geometry loss on GT5-or-denser samples.",
     )
     parser.add_argument(
+        "--gcs-shortside-rawmatch-boost",
+        type=float,
+        default=0.0,
+        help="Positive loss boost for raw-matched short side GT lanes. 0 disables.",
+    )
+    parser.add_argument(
+        "--gcs-shortside-rawmatch-dist-px",
+        type=float,
+        default=None,
+        help="Deprecated alias for --gcs-shortside-rawmatch-px. Uses the loss default when omitted.",
+    )
+    parser.add_argument(
+        "--gcs-shortside-side-dist-px",
+        type=float,
+        default=None,
+        help="Deprecated alias for --gcs-shortside-side-rawmatch-px. Uses the loss default when omitted.",
+    )
+    parser.add_argument(
+        "--gcs-shortside-max-valid-points",
+        type=int,
+        default=None,
+        help="Deprecated alias for --gcs-shortside-visible-max. Uses the loss default when omitted.",
+    )
+    parser.add_argument(
+        "--gcs-shortside-raw-rescue",
+        action="store_true",
+        help="Ignore original negative BCE and optionally add aux positive losses for unmatched raw-close short side GT queries.",
+    )
+    parser.add_argument(
+        "--gcs-shortside-min-gt-lanes",
+        type=int,
+        default=4,
+        help="Minimum GT lane count for shortside raw-rescue eligibility.",
+    )
+    parser.add_argument(
+        "--gcs-shortside-min-valid-points",
+        type=int,
+        default=6,
+        help="Legacy alias for --gcs-shortside-reliable-min-valid-points.",
+    )
+    parser.add_argument(
+        "--gcs-shortside-ultra-min-valid-points",
+        type=int,
+        default=2,
+        help="Minimum GT visible anchors for ultra-short diagnostic/light rescue; below this is skipped.",
+    )
+    parser.add_argument(
+        "--gcs-shortside-reliable-min-valid-points",
+        type=int,
+        default=None,
+        help="Minimum GT visible anchors for full shortside raw-match/rescue eligibility. Uses legacy min-valid when omitted.",
+    )
+    parser.add_argument(
+        "--gcs-shortside-visible-max",
+        type=int,
+        default=None,
+        help="Canonical maximum GT visible anchors for absolute shortside raw-match/rescue eligibility.",
+    )
+    parser.add_argument(
+        "--gcs-shortside-rawmatch-px",
+        type=float,
+        default=None,
+        help="Canonical raw-match mean x-distance threshold in pixels.",
+    )
+    parser.add_argument(
+        "--gcs-shortside-side-rawmatch-px",
+        type=float,
+        default=None,
+        help="Canonical side raw-match threshold in pixels.",
+    )
+    parser.add_argument(
+        "--gcs-shortside-use-median",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable image-relative weak-visible shortside selection using visible < current image median.",
+    )
+    parser.add_argument(
+        "--gcs-shortside-median-margin",
+        type=float,
+        default=0.0,
+        help="Subtractive margin for the median branch: visible < image median - margin.",
+    )
+    parser.add_argument(
+        "--gcs-shortside-exist-target-floor",
+        type=float,
+        default=0.0,
+        help="Explicit exist target floor for selected shortside rawmatch/rescue positives. 0 disables.",
+    )
+    parser.add_argument(
+        "--gcs-shortside-score-floor-gain",
+        type=float,
+        default=0.0,
+        help="Optional independent score-floor BCE gain for reliable shortside positives. 0 disables.",
+    )
+    parser.add_argument(
+        "--gcs-shortside-score-target",
+        type=float,
+        default=0.8,
+        help="Target probability for optional shortside score-floor BCE.",
+    )
+    parser.add_argument(
+        "--gcs-shortside-ultra-enable",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Enable light score/valid protection for visible 2-5 shortside GT lanes.",
+    )
+    parser.add_argument(
+        "--gcs-shortside-ultra-score-floor-gain",
+        type=float,
+        default=0.0,
+        help="Optional light score-floor BCE gain for visible 2-5 shortside GT. 0 disables.",
+    )
+    parser.add_argument(
+        "--gcs-shortside-ultra-point-gain",
+        type=float,
+        default=0.0,
+        help="Reserved default-off ultra-short point rescue gain; keep 0 to avoid strong geometry on 2-5 point lanes.",
+    )
+    parser.add_argument(
+        "--gcs-shortside-ultra-valid-gain",
+        type=float,
+        default=0.0,
+        help="Optional light point-valid BCE gain for visible 2-5 shortside GT. 0 disables.",
+    )
+    parser.add_argument(
+        "--gcs-shortside-ultra-rank-pos",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Allow enabled ultra-short selected shortside queries to become ranking positives.",
+    )
+    parser.add_argument(
+        "--gcs-shortside-rescue-exist-gain",
+        type=float,
+        default=0.0,
+        help="Auxiliary exist-positive gain for unmatched raw-rescue queries. 0 disables.",
+    )
+    parser.add_argument(
+        "--gcs-shortside-rescue-point-gain",
+        type=float,
+        default=0.0,
+        help="Auxiliary point-positive gain for unmatched raw-rescue queries. 0 disables.",
+    )
+    parser.add_argument(
+        "--gcs-shortside-rescue-valid-gain",
+        type=float,
+        default=0.0,
+        help="Auxiliary valid-positive gain for unmatched raw-rescue queries. 0 disables.",
+    )
+    parser.add_argument(
+        "--gcs-shortside-debug",
+        action="store_true",
+        help="Log shortside raw-match boost diagnostics even when the boost gain is 0.",
+    )
+    parser.add_argument(
         "--gcs-count-ce",
         nargs="?",
         const=1.0,
@@ -391,6 +545,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=float,
         default=0.0,
         help="Extra BCE negative loss gain for short unmatched duplicate lane queries. 0 disables.",
+    )
+    parser.add_argument(
+        "--gcs-allow-legacy-spurious-with-new-contract",
+        action="store_true",
+        help="Explicitly allow legacy gcs_spurious_neg with ignore-first/ranking/raw-rescue contract; otherwise this raises.",
     )
     parser.add_argument(
         "--gcs-spurious-neg-weight",
@@ -546,6 +705,167 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=float,
         default=0.0,
         help="Per-image multiplier for far spurious-negative loss on GT5-or-denser samples; default protects true fifth lanes.",
+    )
+    parser.add_argument(
+        "--gcs-farspur-ignore-first",
+        action="store_true",
+        help="Enable ignore-first far-spurious query classification for --gcs-farspur-weight.",
+    )
+    parser.add_argument(
+        "--gcs-farspur-weight",
+        type=float,
+        default=0.0,
+        help="Ignore-first clear-far spurious BCE loss gain. 0 disables.",
+    )
+    parser.add_argument(
+        "--gcs-farspur-score-thr",
+        type=float,
+        default=0.05,
+        help="Minimum sigmoid lane score for ignore-first far-spurious candidates.",
+    )
+    parser.add_argument(
+        "--gcs-farspur-near-dist-px",
+        type=float,
+        default=40.0,
+        help="Mean x-distance threshold in pixels for near-GT corridor ignore.",
+    )
+    parser.add_argument(
+        "--gcs-farspur-side-ignore-dist-px",
+        type=float,
+        default=60.0,
+        help="Distance in pixels to left/right GT side lanes that marks an ambiguous side query for ignore.",
+    )
+    parser.add_argument(
+        "--gcs-farspur-clear-dist-px",
+        type=float,
+        default=80.0,
+        help="Minimum distance in pixels from every GT for clear-far spurious BCE candidates.",
+    )
+    parser.add_argument(
+        "--gcs-farspur-min-valid-points",
+        type=int,
+        default=2,
+        help="Minimum longest contiguous predicted-valid anchors for ignore-first far-spurious candidates.",
+    )
+    parser.add_argument(
+        "--gcs-rank-topk-weight",
+        type=float,
+        default=0.0,
+        help="Top-k ranking loss gain that puts matched true query scores above duplicate/spurious scores. 0 disables.",
+    )
+    parser.add_argument(
+        "--gcs-rank-margin",
+        type=float,
+        default=0.05,
+        help="Margin for top-k ranking loss on sigmoid lane scores.",
+    )
+    parser.add_argument(
+        "--gcs-rank-max-negs",
+        type=int,
+        default=3,
+        help="Maximum high-score negative queries per image used by top-k ranking loss.",
+    )
+    parser.add_argument(
+        "--gcs-rank-gt-min-lanes",
+        type=int,
+        default=4,
+        help="Minimum GT lane count for top-k ranking loss.",
+    )
+    parser.add_argument(
+        "--gcs-rank-focus-shortside",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="When enabled, ranking positives are shortside matched/rescue positives instead of all Hungarian positives.",
+    )
+    parser.add_argument(
+        "--gcs-rank-pos-scope",
+        choices=("shortside_reliable", "shortside_with_ultra", "gt4gt5_matched", "all_matched"),
+        default="shortside_reliable",
+        help="Ranking positive scope. Use gt4gt5_matched with a small rank weight for max_det-drop ablations.",
+    )
+    parser.add_argument(
+        "--gcs-rank-include-unmatched-rescue-pos",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Explicit ablation: allow vetted unmatched raw-rescue queries to become ranking positives.",
+    )
+    parser.add_argument(
+        "--gcs-rank-dup-close-px",
+        type=float,
+        default=30.0,
+        help="Duplicate-like rank-negative maximum mean x distance to a matched query in pixels.",
+    )
+    parser.add_argument(
+        "--gcs-rank-dup-min-overlap",
+        type=int,
+        default=6,
+        help="Duplicate-like rank-negative minimum predicted-valid overlap with a matched query.",
+    )
+    parser.add_argument(
+        "--gcs-rank-side-duplicate-enable",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Allow worse side-ambiguous duplicate-like queries to be ranking negatives while keeping them out of BCE hard negatives.",
+    )
+    parser.add_argument(
+        "--gcs-rank-side-dup-margin-px",
+        type=float,
+        default=5.0,
+        help="Side duplicate must be this many pixels worse than the selected true query to become a rank negative.",
+    )
+    parser.add_argument(
+        "--gcs-rank-side-dup-min-overlap",
+        type=int,
+        default=6,
+        help="Side duplicate-like rank-negative minimum predicted-valid overlap with a matched query.",
+    )
+    parser.add_argument(
+        "--gcs-rank-near-gt-ignore-px",
+        type=float,
+        default=40.0,
+        help="Near-GT corridor distance in pixels used only for ignore/protection.",
+    )
+    parser.add_argument(
+        "--gcs-rank-side-ignore-px",
+        type=float,
+        default=60.0,
+        help="Ambiguous side-region distance in pixels used only for ignore/protection.",
+    )
+    parser.add_argument(
+        "--gcs-rank-pair-reduction",
+        choices=("global_pair_mean", "image_mean"),
+        default="global_pair_mean",
+        help="Reduction for rank top-k hinge pairs. global_pair_mean weights every valid pair equally.",
+    )
+    parser.add_argument(
+        "--gcs-base-ignore-raw-rescue",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Explicitly protect unmatched raw-rescue queries from base exist/point-valid BCE.",
+    )
+    parser.add_argument(
+        "--gcs-base-ignore-rank-near",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Explicitly protect rank near-GT corridor and side-ambiguous queries from base BCE.",
+    )
+    parser.add_argument(
+        "--gcs-base-ignore-farspur-near",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Explicitly protect farspur near-GT corridor and side-ambiguous queries from base BCE.",
+    )
+    parser.add_argument(
+        "--gcs-base-ignore-duplicate-like",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Explicitly protect duplicate-like ranking negatives from base BCE.",
+    )
+    parser.add_argument(
+        "--gcs-allow-gt3-count-contract-ablation",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Allow min_gt_lanes < 4 only for an explicit GT3 count-contract ablation.",
     )
     parser.add_argument(
         "--gcs-gt5-short-visible-thr",
@@ -847,6 +1167,32 @@ def main() -> None:
         "gcs_short_side_geom_side_only": args.gcs_short_side_geom_side_only,
         "gcs_short_side_geom_weight_gt4": args.gcs_short_side_geom_weight_gt4,
         "gcs_short_side_geom_weight_gt5": args.gcs_short_side_geom_weight_gt5,
+        "gcs_shortside_rawmatch_boost": args.gcs_shortside_rawmatch_boost,
+        "gcs_shortside_rawmatch_dist_px": args.gcs_shortside_rawmatch_dist_px,
+        "gcs_shortside_side_dist_px": args.gcs_shortside_side_dist_px,
+        "gcs_shortside_max_valid_points": args.gcs_shortside_max_valid_points,
+        "gcs_shortside_raw_rescue": args.gcs_shortside_raw_rescue,
+        "gcs_shortside_min_gt_lanes": args.gcs_shortside_min_gt_lanes,
+        "gcs_shortside_min_valid_points": args.gcs_shortside_min_valid_points,
+        "gcs_shortside_ultra_min_valid_points": args.gcs_shortside_ultra_min_valid_points,
+        "gcs_shortside_reliable_min_valid_points": args.gcs_shortside_reliable_min_valid_points,
+        "gcs_shortside_visible_max": args.gcs_shortside_visible_max,
+        "gcs_shortside_rawmatch_px": args.gcs_shortside_rawmatch_px,
+        "gcs_shortside_side_rawmatch_px": args.gcs_shortside_side_rawmatch_px,
+        "gcs_shortside_use_median": args.gcs_shortside_use_median,
+        "gcs_shortside_median_margin": args.gcs_shortside_median_margin,
+        "gcs_shortside_exist_target_floor": args.gcs_shortside_exist_target_floor,
+        "gcs_shortside_score_floor_gain": args.gcs_shortside_score_floor_gain,
+        "gcs_shortside_score_target": args.gcs_shortside_score_target,
+        "gcs_shortside_ultra_enable": args.gcs_shortside_ultra_enable,
+        "gcs_shortside_ultra_score_floor_gain": args.gcs_shortside_ultra_score_floor_gain,
+        "gcs_shortside_ultra_point_gain": args.gcs_shortside_ultra_point_gain,
+        "gcs_shortside_ultra_valid_gain": args.gcs_shortside_ultra_valid_gain,
+        "gcs_shortside_ultra_rank_pos": args.gcs_shortside_ultra_rank_pos,
+        "gcs_shortside_rescue_exist_gain": args.gcs_shortside_rescue_exist_gain,
+        "gcs_shortside_rescue_point_gain": args.gcs_shortside_rescue_point_gain,
+        "gcs_shortside_rescue_valid_gain": args.gcs_shortside_rescue_valid_gain,
+        "gcs_shortside_debug": args.gcs_shortside_debug,
         "gcs_count_ce": args.gcs_count_ce,
         "gcs_interval": args.gcs_interval,
         "gcs_order": args.gcs_order,
@@ -871,6 +1217,7 @@ def main() -> None:
         "gcs_point_x_only": args.gcs_point_x_only,
         "gcs_pixel_smoothl1_beta": args.gcs_pixel_smoothl1_beta,
         "gcs_spurious_neg": args.gcs_spurious_neg,
+        "gcs_allow_legacy_spurious_with_new_contract": args.gcs_allow_legacy_spurious_with_new_contract,
         "gcs_spurious_neg_weight": args.gcs_spurious_neg_weight,
         "gcs_spurious_gt3_weight": args.gcs_spurious_gt3_weight,
         "gcs_spurious_gt4_weight": args.gcs_spurious_gt4_weight,
@@ -897,6 +1244,33 @@ def main() -> None:
         "gcs_far_spurious_gt3_weight": args.gcs_far_spurious_gt3_weight,
         "gcs_far_spurious_gt4_weight": args.gcs_far_spurious_gt4_weight,
         "gcs_far_spurious_gt5_weight": args.gcs_far_spurious_gt5_weight,
+        "gcs_farspur_ignore_first": args.gcs_farspur_ignore_first,
+        "gcs_farspur_weight": args.gcs_farspur_weight,
+        "gcs_farspur_score_thr": args.gcs_farspur_score_thr,
+        "gcs_farspur_near_dist_px": args.gcs_farspur_near_dist_px,
+        "gcs_farspur_side_ignore_dist_px": args.gcs_farspur_side_ignore_dist_px,
+        "gcs_farspur_clear_dist_px": args.gcs_farspur_clear_dist_px,
+        "gcs_farspur_min_valid_points": args.gcs_farspur_min_valid_points,
+        "gcs_rank_topk_weight": args.gcs_rank_topk_weight,
+        "gcs_rank_margin": args.gcs_rank_margin,
+        "gcs_rank_max_negs": args.gcs_rank_max_negs,
+        "gcs_rank_gt_min_lanes": args.gcs_rank_gt_min_lanes,
+        "gcs_rank_focus_shortside": args.gcs_rank_focus_shortside,
+        "gcs_rank_pos_scope": args.gcs_rank_pos_scope,
+        "gcs_rank_include_unmatched_rescue_pos": args.gcs_rank_include_unmatched_rescue_pos,
+        "gcs_rank_dup_close_px": args.gcs_rank_dup_close_px,
+        "gcs_rank_dup_min_overlap": args.gcs_rank_dup_min_overlap,
+        "gcs_rank_side_duplicate_enable": args.gcs_rank_side_duplicate_enable,
+        "gcs_rank_side_dup_margin_px": args.gcs_rank_side_dup_margin_px,
+        "gcs_rank_side_dup_min_overlap": args.gcs_rank_side_dup_min_overlap,
+        "gcs_rank_near_gt_ignore_px": args.gcs_rank_near_gt_ignore_px,
+        "gcs_rank_side_ignore_px": args.gcs_rank_side_ignore_px,
+        "gcs_rank_pair_reduction": args.gcs_rank_pair_reduction,
+        "gcs_base_ignore_raw_rescue": args.gcs_base_ignore_raw_rescue,
+        "gcs_base_ignore_rank_near": args.gcs_base_ignore_rank_near,
+        "gcs_base_ignore_farspur_near": args.gcs_base_ignore_farspur_near,
+        "gcs_base_ignore_duplicate_like": args.gcs_base_ignore_duplicate_like,
+        "gcs_allow_gt3_count_contract_ablation": args.gcs_allow_gt3_count_contract_ablation,
         "gcs_gt5_short_visible_thr": args.gcs_gt5_short_visible_thr,
         "gcs_gt5_short_point_valid_weight": args.gcs_gt5_short_point_valid_weight,
         "gcs_exist_pos_weight": args.gcs_exist_pos_weight,
