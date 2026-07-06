@@ -14,8 +14,15 @@ DEVICE="${DEVICE:-0}"
 BATCH="${BATCH:-32}"
 EPOCHS="${EPOCHS:-220}"
 WORKERS="${WORKERS:-4}"
-SWEEP_DIR="${SWEEP_DIR:-${PROJECT}/${RUN_NAME}_official_val_sweep_count_modes}"
-ACC_DIR="${ACC_DIR:-${PROJECT}/${RUN_NAME}_official_val_acc_from_sweep_best}"
+CONF="${CONF:-0.005}"
+POINT_VALID_THR="${POINT_VALID_THR:-0.45}"
+NMS_DIST_PX="${NMS_DIST_PX:-0}"
+MAX_DET="${MAX_DET:-5}"
+MIN_POINTS="${MIN_POINTS:-2}"
+VALID_BEFORE_MAXDET="${VALID_BEFORE_MAXDET:-1}"
+COUNT_AWARE_TOPK="${COUNT_AWARE_TOPK:-1}"
+COUNT_MODE="${COUNT_MODE:-count_logits}"
+ACC_DIR="${ACC_DIR:-${PROJECT}/${RUN_NAME}_official_val_acc_fixed_conf005_pv045_nms0_max5_min2_${COUNT_MODE}}"
 
 if [[ -f /root/miniconda3/etc/profile.d/conda.sh ]]; then
   # shellcheck source=/dev/null
@@ -59,55 +66,14 @@ python tools/train_gcs.py \
 
 WEIGHTS="${PROJECT}/${RUN_NAME}/weights/official_best.pt"
 
-python tools/sweep_tusimple_official.py \
-  --archive-root "${ARCHIVE_ROOT}" \
-  --split val \
-  --gt-json "${GT_JSON}" \
-  --weights "${WEIGHTS}" \
-  --imgsz 544 960 \
-  --device "${DEVICE}" \
-  --half \
-  --confs 0.003 0.005 0.008 0.01 0.02 \
-  --point-valid-thrs 0.45 0.5 0.55 0.6 \
-  --nms-dist-pxs 0 18 30 \
-  --max-dets 5 6 \
-  --min-points 2 3 4 \
-  --valid-before-maxdet \
-  --count-aware-topk \
-  --count-modes score_sum count_logits \
-  --save-dir "${SWEEP_DIR}"
+DECODE_ARGS=()
+if [[ "${VALID_BEFORE_MAXDET}" == "1" || "${VALID_BEFORE_MAXDET}" == "true" ]]; then
+  DECODE_ARGS+=(--valid-before-maxdet)
+fi
+if [[ "${COUNT_AWARE_TOPK}" == "1" || "${COUNT_AWARE_TOPK}" == "true" ]]; then
+  DECODE_ARGS+=(--count-aware-topk --count-mode "${COUNT_MODE}")
+fi
 
-SWEEP_SUMMARY="${SWEEP_DIR}/tusimple_official_sweep_summary.json"
-BEST_ARGS="$(
-  python - "${SWEEP_SUMMARY}" <<'PY'
-import json
-import shlex
-import sys
-
-summary_path = sys.argv[1]
-with open(summary_path, "r", encoding="utf-8") as f:
-    best = json.load(f)["best"]
-
-args = [
-    "--conf", str(best["conf"]),
-    "--point-valid-thr", str(best["point_valid_thr"]),
-    "--nms-dist-px", str(best["nms_dist_px"]),
-    "--max-det", str(best["max_det"]),
-    "--min-points", str(best["min_points"]),
-    "--count-aware-min-k", str(best.get("count_aware_min_k", 3)),
-    "--count-aware-max-k", str(best.get("count_aware_max_k", 5)),
-    "--count-aware-length-norm", str(best.get("count_aware_length_norm", 12.0)),
-    "--count-mode", str(best.get("count_mode", "score_sum")),
-]
-if best.get("valid_before_maxdet", False):
-    args.append("--valid-before-maxdet")
-if best.get("count_aware_topk", False):
-    args.append("--count-aware-topk")
-print(" ".join(shlex.quote(x) for x in args))
-PY
-)"
-
-# shellcheck disable=SC2086
 python tools/eval_tusimple_official.py \
   --archive-root "${ARCHIVE_ROOT}" \
   --split val \
@@ -116,6 +82,11 @@ python tools/eval_tusimple_official.py \
   --imgsz 544 960 \
   --device "${DEVICE}" \
   --half \
+  --conf "${CONF}" \
+  --point-valid-thr "${POINT_VALID_THR}" \
+  --nms-dist-px "${NMS_DIST_PX}" \
+  --max-det "${MAX_DET}" \
+  --min-points "${MIN_POINTS}" \
   --save-dir "${ACC_DIR}" \
   --save-records \
-  ${BEST_ARGS}
+  "${DECODE_ARGS[@]}"
