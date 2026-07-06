@@ -1,12 +1,12 @@
 # 当前算法实现
 
 > Legacy snapshot warning: despite the filename, this document is no longer the
-> current source of truth after rollback to `b6535f641` (`Fix GCS training
-> progress header alignment`). It is retained only as historical context. Use
-> `docs/agent-context/current-contracts.md` for the active rollback contract,
-> and treat post-`b6535f641` mechanisms, commands, losses, tools, selected
-> candidates, and results below as legacy experiment conclusions unless another
-> current `docs/agent-context/*` file explicitly re-enables them.
+> current source of truth after rollback to `424ab1c86` (`Add
+> valid-before-maxdet decode option`). It is retained only as historical
+> context. Use `docs/agent-context/current-contracts.md` for the active rollback
+> contract, and treat post-`424ab1c86` mechanisms, commands, losses, tools,
+> selected candidates, and results below as legacy experiment conclusions
+> unless another current `docs/agent-context/*` file explicitly re-enables them.
 
 ## 算法大纲
 

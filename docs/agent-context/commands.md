@@ -26,13 +26,14 @@ The q12-k56-named model/data files are compatibility paths for old experiment re
 
 The 5-25-3 branch now includes explicit branch-local `--gcs-official-best` training-time checkpoint selection. It does not include later mainline Count/Quality/Survival, near-miss, or K56 candidate machinery. It also includes branch-local TuSimple official eval/sweep helpers: `tools/eval_tusimple_official.py` and `tools/sweep_tusimple_official.py`.
 
-Active source/config is rolled back to commit `b6535f641` (`Fix GCS training
-progress header alignment`). Sections below that mention post-`b6535f641`
-mechanisms such as duplicate/spurious/ranking losses, GT3/GT4/GT5 follow-up
-losses, Q18/Q20/dataref configs, Count Head, count-guided decode, side-aux,
-or GT4-hard diagnostics are legacy experiment records only. They are not
-commands for the current code state unless a future task explicitly restores
-those commits.
+Active source/config is rolled back to commit `424ab1c86` (`Add
+valid-before-maxdet decode option`). Sections below that mention
+post-`424ab1c86` mechanisms such as short-side hardset diagnostics,
+`gcs_short_side_geom`, `gcs_far_spurious_neg`, `gcs_farspur_*`,
+`gcs_shortside_*`, `gcs_rank_*`, count-contract diagnostics, Q18/Q20/dataref
+configs, Count Head, count-guided decode, side-aux, or GT4-hard diagnostics
+are legacy experiment records only. They are not commands for the current code
+state unless a future task explicitly restores those commits.
 
 ## Full Remote Training
 
@@ -1306,7 +1307,7 @@ Use this test result only as final reporting evidence for the previous `count03_
 
 ## Legacy Train/Val Count-Confusion Diagnostic
 
-The 2026-06-20 train/val diagnostic for `count03_under5_03` groups decoded lane-count confusion by date, GT lane count, and the shortest visible GT lane bucket. It is a legacy post-`b6535f641` diagnostic; `tools/diagnose_tusimple_count_confusion.py` is not present in the active rollback code. It used the frozen official-val selected decode and did not touch final test:
+The 2026-06-20 train/val diagnostic for `count03_under5_03` groups decoded lane-count confusion by date, GT lane count, and the shortest visible GT lane bucket. It is a legacy diagnostic; `tools/diagnose_tusimple_count_confusion.py` is not present in the active `424ab1c86` rollback code. It used the frozen official-val selected decode and did not touch final test:
 
 ```text
 output: runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_visible_iou_count03_under5_03_count_confusion_train_val_by_visibility/summary.json
@@ -1445,7 +1446,7 @@ short-lane failure trace. The main outputs are `summary.json`,
 ## Legacy GT4 Short-Lane Weighted Training
 
 The GT4 short-lane sampler boost was an explicit post-`b6535f641`
-experimental option. It is not present in the active rollback code. Historical
+experimental option. It is not present in the active `424ab1c86` rollback code. Historical
 defaults were:
 
 ```text
@@ -1849,9 +1850,72 @@ regresses test ACC (`0.964358 -> 0.963907`), FP/FN, and GT5 retention
 (`5->4: 69 -> 77`, `count_acc_5: 0.836555 -> 0.815466`). Keep test closed for
 any further threshold, NMS, checkpoint, decode, or far-spur loss tuning.
 
-Legacy post-`b6535f641` Q18/count-head guided sweeps used the same
+The later shortside boost-only fixed-threshold follow-up used
+`gcs_shortside_rawmatch_boost=0.25` and
+`gcs_shortside_exist_target_floor=0.0`; it is also reporting-only:
+
+```text
+val_sweep = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_ablate_shortside_boost_only_fixedthr_v1_official_best_val_sweep_valid_before_maxdet_b/tusimple_official_sweep_summary.json
+test_summary = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_ablate_shortside_boost_only_fixedthr_v1_test_best_from_val_b/tusimple_official_summary.json
+decode = conf=0.003, point_valid_thr=0.6, nms_dist_px=0.0, max_det=5, min_points=2, valid_before_maxdet=true
+official_val_acc = 0.974445
+official_val_FP = 0.007576
+official_val_FN = 0.009642
+official_val_count_acc_4 = 0.954545
+official_val_count_acc_5 = 0.959459
+official_test_acc = 0.964144
+official_test_FP = 0.028666
+official_test_FN = 0.028696
+test_count_acc_4 = 0.630342
+test_count_acc_5 = 0.757469
+test_count_confusion includes 4->3=106, 4->5=67, 5->3=27, 5->4=111, 5->5=431
+```
+
+Do not promote this run. Compared with spurious-lite + valid-before, it
+improves reporting-only test GT4 false-fifth behavior (`4->5: 79 -> 67`) and
+FP (`0.030847 -> 0.028666`), but it misses the ACC target
+(`0.964144 < 0.9655`) and severely regresses GT5 retention
+(`5->4: 63 -> 111`, `count_acc_5: 0.843585 -> 0.757469`). Do not reselect
+`point_valid_thr`, NMS, checkpoint, decode, or loss weights from this test.
+
+The later shortside protect floor follow-up used
+`gcs_shortside_rawmatch_boost=0.25` and
+`gcs_shortside_exist_target_floor=0.7`; it is also reporting-only. Because the
+run used `--gcs-official-best`, use the `weights/official_best.pt` sweep/test
+as the primary comparable result; the companion `weights/best.pt` sweep/test is
+not the main candidate.
+
+```text
+run = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_ablate_shortside_protect_floor07_v1-2
+val_sweep = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_ablate_shortside_protect_floor07_v1-2_official_best_val_sweep_valid_before_maxdet_b/tusimple_official_sweep_summary.json
+test_summary = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_ablate_shortside_protect_floor07_v1-2_test_best_from_val_b/tusimple_official_summary.json
+weights = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_ablate_shortside_protect_floor07_v1-2/weights/official_best.pt
+decode = conf=0.008, point_valid_thr=0.6, nms_dist_px=0.0, max_det=5, min_points=2, valid_before_maxdet=true
+official_val_acc = 0.972798
+official_val_FP = 0.011433
+official_val_FN = 0.012626
+official_val_count_acc_4 = 0.939394
+official_val_count_acc_5 = 0.959459
+official_test_acc = 0.964281
+official_test_FP = 0.029014
+official_test_FN = 0.029385
+test_count_acc_4 = 0.621795
+test_count_acc_5 = 0.766257
+test_count_confusion includes 4->3=112, 4->5=65, 5->3=28, 5->4=105, 5->5=436
+```
+
+Do not promote this run. Compared with spurious-lite + valid-before, it
+improves reporting-only test GT4 false-fifth behavior (`4->5: 79 -> 65`) but
+misses ACC (`0.964281 < 0.9655`), worsens FN (`0.027678 -> 0.029385`), and
+still severely regresses GT5 retention (`5->4: 63 -> 105`,
+`count_acc_5: 0.843585 -> 0.766257`). Compared with boost-only, official-val
+ACC/FP/FN/`count_acc_4` are worse, and the reporting-only test ACC gain is too
+small to offset worse FP/FN and GT4 `4->3`. Do not reselect `point_valid_thr`,
+NMS, checkpoint, decode, target floor, or loss weights from this test.
+
+Legacy Q18/count-head guided sweeps used the same
 official-val surface and kept normal/count-guided rows in one sweep table.
-These flags are not available in the active rollback code:
+These flags are not available in the active `424ab1c86` rollback code:
 
 ```bash
 python tools/sweep_tusimple_official.py \

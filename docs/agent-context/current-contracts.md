@@ -17,88 +17,24 @@ The branch also includes the 2026-06-27 user-requested, default-off `gcs_hard_sa
 
 The branch also includes the 2026-06-27 user-requested, default-off `gcs_spurious_neg` loss for E3-lite. It uses the training Hungarian matcher indices only to select unmatched short duplicate-like queries near matched queries, then adds an extra target-zero BCE on their `pred_logits`. The GT-count weighting extension keeps the old default behavior with `gcs_spurious_gt3_weight=1.0`, `gcs_spurious_gt4_weight=1.0`, `gcs_spurious_gt5_weight=1.0`, and `gcs_spurious_disable_gt5=False`, while allowing GT3-or-sparser, GT4, and GT5-or-denser samples to carry different spurious-negative weights. The 2026-06-28 `gcs_spurious_gt_protect` extension is also default-off and only removes GT-close candidate queries from this extra negative BCE. It does not change data sampling, dataset labels, matcher logic, point/smooth/curve losses, decode, NMS, or official metrics.
 
-The branch also includes the 2026-07-03 user-requested, default-off
-`gcs_far_spurious_neg` loss for far unmatched over-count queries. It uses
-training Hungarian matcher indices only to exclude matched queries, then adds
-target-zero BCE on unmatched queries whose existence score and longest
-contiguous predicted-valid span pass the configured gates, whose overlapping
-GT comparisons are all strictly farther than the configured far distance, and
-whose GT-close overlaps are not protected. The
-default `gcs_far_spurious_gt5_weight=0.0` keeps true fifth-lane samples
-unpressured unless a future ablation explicitly enables GT5 pressure. It does
-not change data sampling, dataset labels, matcher logic, point/smooth/curve
-losses, decode, NMS, or official metrics.
+Active source/config is rolled back to commit
+`424ab1c869f0a02556d8b6b6a44c27e5585e47c0` (`Add valid-before-maxdet decode
+option`). The following commits are old state for this rollback and their
+mechanisms, tools, commands, logs, and experiment results are legacy records
+only unless a future task explicitly re-enables them:
 
-The branch also includes the 2026-07-03 user-requested, default-off
-`gcs_farspur_ignore_first` / `gcs_farspur_weight` loss. This is separate from
-the older `gcs_far_spurious_neg` contract: it first ignores near-GT corridor
-and ambiguous side-region unmatched queries, then applies target-zero BCE only
-to high-score clear-far unmatched queries. `gcs_farspur_weight > 0` requires
-`gcs_farspur_ignore_first=True` so the old hard-negative-first behavior cannot
-be enabled accidentally through the new knob.
+- `436fcb616` (`Add GCS short-side hardset diagnostics`)
+- `f4c200bbe` (`Add default-off short-side geometry loss`)
+- `f7f0bcc07` (`Add far spurious negative loss`)
+- `8357e1ad8` (`Add GCS count contract tooling`)
 
-The branch also includes the 2026-07-02 user-requested, default-off
-`gcs_short_side_geom` matched-lane geometry loss. It only strengthens
-Hungarian-matched short visible GT lanes, optionally restricted to the
-left/right side GT lanes, and does not change unmatched queries, matcher logic,
-decode, NMS, or official metrics.
-
-The branch also includes the 2026-07-03 user-requested, default-off
-`gcs_shortside_rawmatch_boost` positive-loss weighting for GT4/GT5 count
-contract ablations. Matched same-GT raw-close short side lanes can still
-receive the old positive boost. The 2026-07-04 `gcs_shortside_raw_rescue`
-extension is separate and default-off: it can protect unmatched raw-close short
-side queries from the original negative BCE and, only through explicit
-`gcs_shortside_rescue_*_gain` values, add independent auxiliary positive
-supervision. Short side weak-visible eligibility requires at least
-`gcs_shortside_ultra_min_valid_points=2` visible anchors and either
-`visible <= gcs_shortside_visible_max=42` or, with
-`gcs_shortside_use_median=True`, `visible < image_gt_visible_median -
-gcs_shortside_median_margin`. Visible `2..5` lanes are ultra-short and do not
-enter unmatched rescue by default, but a same-GT Hungarian rawmatch visible
-`2..5` side lane can still receive the base shortside positive boost when the
-rawmatch boost path is enabled. Existence target flooring is separate and only
-applies when `gcs_shortside_exist_target_floor > 0`. Full reliable unmatched rescue requires
-`gcs_shortside_reliable_min_valid_points=6`
-(`gcs_shortside_min_valid_points` is a compatibility alias). The image median
-is the standard median, using the average of the two middle values for even
-lane counts, over current-image GT lanes with visible count at or above the
-reliable minimum.
-Leftmost/rightmost side ordering for this contract uses the K56 bottom/lower
-half only. K56 fixed-y is bottom-to-top: index 0 is bottom `y=710`, index
-`K-1` is top `y=160`, so lower/bottom half means indices `< K//2`.
-
-The branch also includes the 2026-07-03 user-requested, default-off
-`gcs_rank_topk_weight` ranking loss. It uses the same query-mode lane score as
-decode, `sigmoid(pred_logits)`, and only applies on images with at least
-`gcs_rank_gt_min_lanes=4` GT lanes. Ranking positives are selected by
-`gcs_rank_pos_scope`: default `shortside_reliable` keeps the old conservative
-scope to Hungarian shortside rawmatch positives,
-`shortside_with_ultra` adds explicitly enabled ultra-short positives,
-`gt4gt5_matched` uses all Hungarian matched positives on GT4/GT5-or-denser
-images, and `all_matched` uses all Hungarian matched positives on all eligible
-images. The older
-`gcs_rank_focus_shortside` bool is compatibility-only: `False` maps the
-default `shortside_reliable` scope to `all_matched`.
-Unmatched raw-rescue queries are excluded from ranking positives by default
-and are counted through `rank_pos_unmatched_rescue_excluded_count`. They may
-enter ranking positives only under the explicit
-`gcs_rank_include_unmatched_rescue_pos=True` ablation after conflict and
-duplicate-like filtering.
-Negative queries are only high-score clear-far queries, normal duplicate-like
-queries, or explicitly enabled side duplicate-like queries. Near-GT corridor
-queries and side-ambiguous true-or-uncertain queries are ignore/protect only.
-Normal duplicate-like requires closeness to a matched query, at least
-`gcs_rank_dup_min_overlap=6` overlapping predicted-valid anchors, no raw-rescue
-protection, and no rank side-ambiguous flag. With
-`gcs_rank_side_duplicate_enable=False`, side-ambiguous duplicate-like queries
-are still ignored. When explicitly enabled, a side duplicate-like query may
-become a ranking negative only if it is close to a matched side GT, overlaps by
-at least `gcs_rank_side_dup_min_overlap=6`, is not raw-rescue protected, the
-same side GT has a selected true ranking-positive query, and the duplicate is
-worse than that true query by at least `gcs_rank_side_dup_margin_px=5.0`.
-Duplicate-like queries are ranked below positives but are not forced to zero
-by BCE through this loss.
+Therefore `tools/build_gcs_short_side_hardset.py`,
+`tools/diagnose_gcs_short_side_hardset.py`,
+`tools/diagnose_gcs_count_contract.py`, `gcs_short_side_geom`,
+`gcs_far_spurious_neg`, `gcs_farspur_*`, `gcs_shortside_*`, `gcs_rank_*`,
+`gcs_base_ignore_*`, and the GT4/GT5 count-contract diagnostics are not part of
+the active code/config state. Historical sections below that mention those
+names are retained only to interpret old runs.
 
 Training-time `official_best` checkpoint preservation is active as an explicit 2026-06-27 selection-protocol change. It preserves the 5-25-3 algorithm body and only changes how formal TuSimple checkpoints are selected.
 
@@ -356,18 +292,14 @@ All branch configs keep `Q=12`, `K=56`, fixed-y anchors `710/720 -> 160/720`, an
 
 Historical q12-k56 experiment docs are old records. Preserve them, but do not let them override the active 5-25-3 K56 mainline contract.
 
-Active source/config is rolled back to commit `b6535f641` (`Fix GCS training
-progress header alignment`). Its algorithm contract remains the 5-25-3 K56
-mainline: no later Count Head, Q18/Q20/dataref, lane-balanced, valid-repair,
-side-aux, legacy `gcs_gt4_short_boost` sampling, `extra_exist_loss`, short
-matched existence floor, or later Count/Quality mechanisms are active. Active
-mainline does not enable later legacy ranking/spurious/count-contract tooling
-by default. This branch contains default-off experimental GT4/GT5
-count-contract tools, including shortside raw-match rescue, far-spurious
-ignore-first mining, rank_topk alignment loss, and count-contract diagnostics.
-They are disabled by default and must be enabled explicitly through CLI/config
-flags. Later commits and notes are preserved only as legacy experiment
-conclusions in the docs. They are not active default behavior.
+Active source/config is rolled back to commit `424ab1c86` (`Add
+valid-before-maxdet decode option`). Its algorithm contract remains the
+5-25-3 K56 mainline through that commit: no later Count Head,
+Q18/Q20/dataref, lane-balanced, valid-repair, side-aux, short-side hardset,
+`gcs_short_side_geom`, `gcs_far_spurious_neg`, ignore-first ranking/raw-rescue,
+or count-contract diagnostic tooling is active. Later commits and notes are
+preserved only as legacy experiment conclusions in the docs. They are not
+active CLI/config/loss/tool behavior.
 
 ## Label Contract
 
@@ -419,7 +351,7 @@ pred_valid_logits: B x 12 x 56
 
 ## Loss Contract
 
-Default logged loss items on this branch:
+Default logged loss items on the active `424ab1c86` rollback state include:
 
 ```text
 exist_loss
@@ -432,10 +364,6 @@ edge_loss
 count_loss
 count_under5_loss
 count_boundary_loss
-short_side_geom_loss
-short_side_geom_count
-short_side_geom_gt4
-short_side_geom_gt5
 spurious_neg_loss
 spurious_negative_count
 spur_cand
@@ -448,124 +376,18 @@ spur_cnt_gt5
 spur_neg_gt3
 spur_neg_gt4
 spur_neg_gt5
-far_spur_loss
-far_spur_cand
-far_spur_neg
-far_spur_gt3
-far_spur_gt4
-far_spur_gt5
-far_spur_score
-far_spur_valid
 count_score_mean
 gt5_short_pos_count
 gt5_short_pos_anchor_count
 gt5_short_point_valid_loss
 cnt_bound_5under
 cnt_score
-short_raw_boost_count
-short_raw_boost_gt4
-short_raw_boost_gt5
-short_raw_missing
-shortside_selected_by_abs_count
-shortside_selected_by_median_count
-shortside_selected_total_count
-shortside_hungarian_rawmatch_candidate_count
-shortside_unmatched_raw_rescue_candidate_count
-shortside_rawmatch_candidate_total_count
-raw_rescue_candidate_count
-raw_rescue_final_count
-raw_rescue_conflict_count
-shortside_selected_hungarian_rawmatch
-shortside_selected_unmatched_rescue
-shortside_rescue_conflict
-shortside_missing_no_rawmatch
-shortside_nearest_was_duplicate_but_hungarian_boosted
-shortside_rescue_exist_loss
-shortside_rescue_point_loss
-shortside_rescue_valid_loss
-shortside_score_floor_loss
-shortside_ultra_point_loss
-shortside_ultra_valid_loss
-short_raw_boost_exist_target_mean
-short_raw_boost_exist_target_min
-short_raw_boost_exist_target_p25
-short_raw_boost_exist_target_p50
-short_raw_boost_exist_target_p75
-short_raw_boost_target_below_05_count
-short_raw_boost_target_below_07_count
-shortside_rawmatch_target_mean_before
-shortside_rawmatch_target_min_before
-shortside_rawmatch_target_p25_before
-shortside_rawmatch_target_p50_before
-shortside_rawmatch_target_below_05_count
-shortside_rawmatch_target_below_07_count
-shortside_target_floor_applied_count
-shortside_reliable_count
-shortside_reliable_selected_count
-shortside_ultra_seen_count
-shortside_ultra_enabled_count
-shortside_ultra_score_floor_count
-shortside_ultra_valid_count
-shortside_visible_lt2_skipped_count
-shortside_ultra_hungarian_base_boost_count
-shortside_ultra_unmatched_rescue_seen_count
-shortside_ultra_unmatched_rescue_enabled_count
-shortside_ultra_unmatched_rescue_skipped_count
-shortside_ultra_in_gt4_4to3_count
-shortside_ultra_in_gt5_5to4_count
-near_gt_ignored_count
-duplicate_like_rank_neg_count
-clear_far_rank_neg_count
-clear_far_boundary_count
-rank_neg_side_duplicate_like_count
-rank_neg_normal_duplicate_like_count
-rank_side_ambiguous_ignored_count
-rank_side_duplicate_rejected_better_than_true_count
-rank_pos_scope
-rank_pos_total
-rank_pos_hungarian_all
-rank_pos_shortside_matched
-rank_pos_shortside_rescue
-rank_pos_shortside_reliable
-rank_pos_shortside_ultra
-rank_pos_gt4gt5_matched
-rank_pos_all_matched
-rank_pos_hungarian_count
-rank_pos_unmatched_rescue_excluded_count
-rank_pos_unmatched_rescue_included_count
-rank_pos_conflict_excluded_count
-rank_neg_duplicate_like
-rank_neg_clear_far
-rank_neg_near_ignored
-base_exist_ignore_raw_rescue_count
-base_exist_ignore_rank_near_count
-base_exist_ignore_rank_side_count
-base_exist_ignore_farspur_near_count
-base_exist_ignore_farspur_side_count
-base_exist_ignore_duplicate_rank_only_count
-base_exist_ignore_near_count
-base_exist_ignore_side_ambiguous_count
-base_exist_ignore_duplicate_like_count
-base_exist_negative_kept_clear_far_count
-base_exist_negative_kept_other_count
-legacy_spurious_active
-farspur_if_loss
-farspur_if_samples
-farspur_if_pos
-farspur_if_ignore
-farspur_if_clear
-farspur_if_near
-farspur_if_side
-rank_topk_loss
-rank_topk_samples
-rank_topk_pos
-rank_topk_neg
-rank_topk_clear
-rank_topk_dup
-rank_loss_noop_images
-rank_noop_because_no_pos
-rank_noop_because_no_neg
 ```
+
+Post-`424ab1c86` log items such as `short_side_geom_loss`, `far_spur_loss`,
+`farspur_if_loss`, `rank_topk_loss`, `shortside_*`, `rank_*`,
+`base_exist_ignore_*`, and `clear_far_boundary_count` are legacy records only
+and are not emitted by the active rollback code.
 
 For ordered-slot mode, standalone `OrderedSlotGCSLoss` defaults must match
 `ultralytics/cfg/default.yaml`: `gcs_count_ce=1.0`,
@@ -596,7 +418,14 @@ defaults to `None`, which follows `gcs_count_boundary_gt5_weight`; setting it
 allows only the GT5 undercount boundary weight to be changed. `cnt_bound_5under`
 logs the unweighted GT5 undercount boundary term.
 
-`short_side_geom_loss` is disabled by default through
+### Legacy Post-424 Loss And Diagnostic Records
+
+The following loss and diagnostic descriptions are retained only for old
+experiment interpretation. They were introduced after `424ab1c86` and are not
+available in the active rollback code unless a future task explicitly restores
+the corresponding commits.
+
+Legacy post-`424ab1c86` record: `short_side_geom_loss` was disabled by default through
 `gcs_short_side_geom=0.0`. When enabled, it adds an aspect-weighted L1 point
 loss only on Hungarian-matched GT lanes for images with at least
 `gcs_short_side_geom_min_gt_lanes` GT lanes. Matched lanes are selected only
@@ -610,7 +439,7 @@ visibility targets, decode, NMS, or official metrics. `short_side_geom_count`,
 `short_side_geom_gt4`, and `short_side_geom_gt5` are diagnostics for the
 selected matched lanes.
 
-`gcs_shortside_rawmatch_boost=0.0` keeps shortside raw-match positive weighting
+Legacy post-`424ab1c86` record: `gcs_shortside_rawmatch_boost=0.0` kept shortside raw-match positive weighting
 disabled by default. The shared shortside raw-match contract considers only
 images with at least `gcs_shortside_min_gt_lanes=4`, only leftmost/rightmost GT
 lanes by K56 bottom/lower-half mean x, and only GT lanes passing the shared
@@ -652,7 +481,7 @@ the nearest one. Queries already Hungarian-matched to another GT are skipped,
 not reassigned. Multiple side GT lanes choosing the same unmatched rescue query
 keep only the nearest GT and count the rest as conflicts.
 
-`gcs_shortside_raw_rescue=False` keeps unmatched raw-rescue behavior disabled by
+Legacy post-`424ab1c86` record: `gcs_shortside_raw_rescue=False` kept unmatched raw-rescue behavior disabled by
 default. When explicitly enabled, an accepted unmatched best query becomes a
 raw-rescue auxiliary positive. It is excluded from
 rank/far-spur/spurious negative masks and can receive independent positive
@@ -741,7 +570,7 @@ setting preserves old E3-lite behavior. `spurious_negative_count`,
 `cnt_score` are log-only diagnostics and are not directly part of the weighted
 training objective.
 
-The legacy `gcs_spurious_neg` BCE system is mutually exclusive with effective
+Legacy post-`424ab1c86` record: the `gcs_spurious_neg` BCE system was mutually exclusive with effective
 new ignore-first/ranking/raw-rescue/base-ignore count-contract paths by
 default. If any of `gcs_farspur_weight > 0`, `gcs_rank_topk_weight > 0`,
 `gcs_shortside_raw_rescue=True`, or any `gcs_base_ignore_*` flag is active
@@ -766,7 +595,7 @@ pre-protect candidate count, `spur_prot` logs protected candidates,
 `spur_final` and `spurious_negative_count` log final selected negatives, and
 `spur_neg` mirrors `spurious_neg_loss` for compact progress logging.
 
-`far_spur_loss` is disabled by default through `gcs_far_spurious_neg=0.0`.
+Legacy post-`424ab1c86` record: `far_spur_loss` was disabled by default through `gcs_far_spurious_neg=0.0`.
 When enabled, it requires `pred_valid_logits` and applies only to unmatched
 queries on images whose GT lane count is in
 `[gcs_far_spurious_min_gt_lanes, gcs_far_spurious_max_gt_lanes]`. A candidate
@@ -784,7 +613,7 @@ target GT3/GT4 (`1.0`, `1.0`) and keep GT5 pressure off (`0.0`).
 `far_spur_gt5`, `far_spur_score`, and `far_spur_valid` are diagnostics for
 selected far spurious candidates.
 
-`farspur_if_loss` is disabled by default through `gcs_farspur_weight=0.0`.
+Legacy post-`424ab1c86` record: `farspur_if_loss` was disabled by default through `gcs_farspur_weight=0.0`.
 When enabled with `gcs_farspur_ignore_first=True`, unmatched queries are first
 classified into near-GT corridor, ambiguous side region, and clear-far
 spurious groups using the `gcs_farspur_near_dist_px` and
@@ -799,7 +628,7 @@ BCE. `farspur_if_samples`, `farspur_if_pos`, `farspur_if_ignore`,
 `gcs_farspur_clear_dist_px` is counted as a boundary diagnostic but is not a
 clear-far spurious negative.
 
-Base existence BCE and point-valid BCE ignore masks are independent explicit
+Legacy post-`424ab1c86` record: base existence BCE and point-valid BCE ignore masks were independent explicit
 ablations. They default off through:
 `gcs_base_ignore_raw_rescue=False`,
 `gcs_base_ignore_rank_near=False`,
@@ -830,7 +659,7 @@ Diagnostics include `base_exist_ignore_raw_rescue_count`,
 `base_exist_negative_kept_clear_far_count`, and
 `base_exist_negative_kept_other_count`.
 
-`rank_topk_loss` is disabled by default through `gcs_rank_topk_weight=0.0`.
+Legacy post-`424ab1c86` record: `rank_topk_loss` was disabled by default through `gcs_rank_topk_weight=0.0`.
 When enabled, it uses the same score as query decode,
 `sigmoid(pred_logits)`, and applies
 `mean(max(0, gcs_rank_margin - pos_score + neg_score))`. The default
@@ -886,7 +715,7 @@ negatives through this loss. `rank_topk_samples`, `rank_topk_pos`,
 `rank_pos_conflict_excluded_count`, `rank_neg_duplicate_like`,
 `rank_neg_clear_far`, and `rank_neg_near_ignored` are diagnostics.
 
-For the new GT4/GT5 count-contract features, `gcs_shortside_min_gt_lanes` and
+Legacy post-`424ab1c86` record: for the GT4/GT5 count-contract features, `gcs_shortside_min_gt_lanes` and
 `gcs_rank_gt_min_lanes` must stay at least `4`. Setting either below `4`
 raises by default with the message:
 "GT4/GT5 count-contract losses require min_gt_lanes >= 4. Set
@@ -921,10 +750,9 @@ Quality Head, Survival Head, or default decode behavior.
 
 This branch includes `tools/eval_tusimple_official.py`,
 `tools/sweep_tusimple_official.py`, `gcs_tools/tusimple_official_eval.py`, and
-explicit training-time `official_best` checkpoint preservation. It also
-includes the branch-local `tools/diagnose_gcs_count_contract.py` diagnostic for
-GT4/GT5 count-contract query roles; it is reporting/diagnostic tooling and not
-a selection surface. The branch still does not include
+explicit training-time `official_best` checkpoint preservation. The
+post-`424ab1c86` `tools/diagnose_gcs_count_contract.py` diagnostic is legacy
+only and is not present in the active rollback code. The branch still does not include
 `tools/diagnose_tusimple_count_confusion.py`, `tools/diagnose_gcs_gt5.py`, or
 later mainline Count/Quality/Boundary diagnostics unless a future task
 explicitly ports them. Use the canonical 363-image official-val GT for

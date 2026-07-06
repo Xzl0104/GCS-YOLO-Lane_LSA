@@ -80,13 +80,13 @@ QUERY_ONLY_ROW_KEYS = (
 
 def validate_search_split(split: str) -> str:
     normalized = str(split).strip().lower()
-    # if normalized == "test":
-    #     raise ValueError(
-    #         "TuSimple official threshold search cannot use --split test. "
-    #         "Use --split val for sweeps, then run tools/eval_tusimple_official.py --split test once with the selected row."
-    #     )
-    # if normalized not in {"train", "val"}:
-    #     raise ValueError(f"Unsupported TuSimple sweep split: {split!r}")
+    if normalized == "test":
+        raise ValueError(
+            "TuSimple official threshold search cannot use --split test. "
+            "Use --split val for sweeps, then run tools/eval_tusimple_official.py --split test once with the selected row."
+        )
+    if normalized not in {"train", "val"}:
+        raise ValueError(f"Unsupported TuSimple sweep split: {split!r}")
     return normalized
 
 

@@ -134,38 +134,6 @@ gcs_count_boundary_gt5_weight: 1.5 # (float) weight for GT5 undercount boundary 
 gcs_count_boundary_gt5_under_weight: null # (float|None) optional separate GT5 undercount boundary weight; null follows gcs_count_boundary_gt5_weight
 gcs_count_boundary_margin34: 0.35 # (float) margin for GT3 upper and GT4 lower count-score boundaries
 gcs_count_boundary_margin45: 0.35 # (float) margin for GT4 upper and GT5 lower count-score boundaries
-gcs_short_side_geom: 0.0 # (float) matched short-side GT geometry loss gain; 0 disables
-gcs_short_side_geom_min_gt_lanes: 4 # (int) minimum GT lane count that enables short-side geometry loss
-gcs_short_side_geom_visible_max: 20 # (int) maximum visible anchors for selected matched short-side GT lanes
-gcs_short_side_geom_side_only: False # (bool) limit short-side geometry loss to leftmost/rightmost GT lanes by bottom visible x
-gcs_short_side_geom_weight_gt4: 1.0 # (float) per-image multiplier for short-side geometry loss on GT4 samples
-gcs_short_side_geom_weight_gt5: 1.0 # (float) per-image multiplier for short-side geometry loss on GT5-or-denser samples
-gcs_shortside_rawmatch_boost: 0.0 # (float) boost matched raw-close short side GT positives; 0 disables
-gcs_shortside_rawmatch_dist_px: 30.0 # (float) deprecated alias for gcs_shortside_rawmatch_px
-gcs_shortside_side_dist_px: 40.0 # (float) deprecated alias for gcs_shortside_side_rawmatch_px
-gcs_shortside_max_valid_points: 42 # (int) deprecated alias for gcs_shortside_visible_max
-gcs_shortside_raw_rescue: False # (bool) ignore/aux-supervise unmatched raw-close short side GT queries
-gcs_shortside_min_gt_lanes: 4 # (int) minimum GT lane count for shortside raw-rescue eligibility
-gcs_shortside_min_valid_points: 6 # (int) legacy alias for gcs_shortside_reliable_min_valid_points
-gcs_shortside_ultra_min_valid_points: 2 # (int) visible anchors below this are diagnostic-only skipped
-gcs_shortside_reliable_min_valid_points: 6 # (int) visible anchors needed for full shortside raw-match/rescue
-gcs_shortside_visible_max: 42 # (int) canonical absolute visible-anchor cutoff for raw-match/rescue eligibility
-gcs_shortside_rawmatch_px: 30.0 # (float) canonical raw-match mean x-distance threshold in pixels
-gcs_shortside_side_rawmatch_px: 40.0 # (float) canonical relaxed raw-match threshold for left/right side GT lanes
-gcs_shortside_use_median: True # (bool) include image-relative weak-visible GT lanes below current image median
-gcs_shortside_median_margin: 0.0 # (float) subtractive margin for visible < image median - margin
-gcs_shortside_exist_target_floor: 0.0 # (float) explicit exist target floor for selected shortside rawmatch/rescue positives; 0 disables
-gcs_shortside_score_floor_gain: 0.0 # (float) optional independent score-floor BCE gain for reliable shortside positives
-gcs_shortside_score_target: 0.8 # (float) score target for optional shortside score-floor BCE
-gcs_shortside_ultra_enable: False # (bool) enable light training protection for visible 2-5 shortside GT
-gcs_shortside_ultra_score_floor_gain: 0.0 # (float) optional light score-floor BCE gain for visible 2-5 shortside GT
-gcs_shortside_ultra_point_gain: 0.0 # (float) reserved default-off ultra-short point rescue gain; 0 keeps geometry off
-gcs_shortside_ultra_valid_gain: 0.0 # (float) optional light point-valid BCE gain for visible 2-5 shortside GT
-gcs_shortside_ultra_rank_pos: False # (bool) allow enabled ultra-short selected queries to become ranking positives
-gcs_shortside_rescue_exist_gain: 0.0 # (float) auxiliary exist-positive gain for unmatched raw-rescue queries
-gcs_shortside_rescue_point_gain: 0.0 # (float) auxiliary point-positive gain for unmatched raw-rescue queries
-gcs_shortside_rescue_valid_gain: 0.0 # (float) auxiliary valid-positive gain for unmatched raw-rescue queries
-gcs_shortside_debug: False # (bool) log shortside raw-match diagnostics with zero boost
 gcs_count_ce: 1.0 # (float) ordered_slot 2/3/4/5 count cross-entropy gain
 gcs_interval: 1.0 # (float) ordered_slot start/end interval cross-entropy gain
 gcs_order: 0.2 # (float) ordered_slot common-anchor adjacent-slot order loss gain
@@ -201,49 +169,8 @@ gcs_spurious_min_overlap: 3 # (int) minimum overlapping visible anchors with a m
 gcs_spurious_gt_protect: False # (bool) protect duplicate-like candidates that are close to a GT lane
 gcs_spurious_gt_protect_px: 25.0 # (float) maximum mean x distance in pixels for GT-aware protection
 gcs_spurious_gt_protect_min_overlap: 3 # (int) minimum overlapping anchors with a GT lane for protection
-gcs_spurious_gt_protect_min_gt_lanes: 0 # (int) minimum GT lane count for GT-aware protection; 0 preserves all-count behavior
 gcs_spurious_gt_protect_margin_px: 5.0 # (float) better-matched protection margin in pixels
 gcs_spurious_gt_protect_mode: better_matched # (str) GT-aware protection policy
-gcs_allow_legacy_spurious_with_new_contract: False # (bool) allow legacy gcs_spurious_neg with ignore-first/ranking/raw-rescue only when explicitly set
-gcs_far_spurious_neg: 0.0 # (float) far unmatched spurious-negative BCE loss gain; 0 disables
-gcs_far_spurious_min_gt_lanes: 3 # (int) minimum GT lane count that enables far spurious-negative loss
-gcs_far_spurious_max_gt_lanes: 4 # (int) maximum GT lane count that enables far spurious-negative loss
-gcs_far_spurious_min_valid: 2 # (int) minimum longest contiguous predicted-valid anchors for far spurious candidates
-gcs_far_spurious_max_valid: 56 # (int) maximum longest contiguous predicted-valid anchors for far spurious candidates
-gcs_far_spurious_far_px: 40.0 # (float) candidate must be at least this far in mean x from every overlapping GT lane
-gcs_far_spurious_protect_px: 25.0 # (float) protect candidate if it is this close in mean x to any overlapping GT lane
-gcs_far_spurious_min_overlap: 3 # (int) minimum overlapping anchors with a GT lane for far/protect distance checks
-gcs_far_spurious_score_thr: 0.003 # (float) minimum sigmoid existence score for far spurious candidates
-gcs_far_spurious_gt3_weight: 1.0 # (float) per-image far-spurious multiplier for GT3-or-sparser samples
-gcs_far_spurious_gt4_weight: 1.0 # (float) per-image far-spurious multiplier for GT4 samples
-gcs_far_spurious_gt5_weight: 0.0 # (float) per-image far-spurious multiplier for GT5-or-denser samples; default protects true fifth lanes
-gcs_farspur_ignore_first: False # (bool) require ignore-first clear-far selection for gcs_farspur_weight
-gcs_farspur_weight: 0.0 # (float) ignore-first clear-far spurious BCE loss gain; 0 disables
-gcs_farspur_score_thr: 0.05 # (float) minimum sigmoid lane score for ignore-first far-spurious candidates
-gcs_farspur_near_dist_px: 40.0 # (float) near-GT corridor ignore distance in pixels
-gcs_farspur_side_ignore_dist_px: 60.0 # (float) side-GT ambiguous-region ignore distance in pixels
-gcs_farspur_clear_dist_px: 80.0 # (float) clear-far distance in pixels from all GT lanes
-gcs_farspur_min_valid_points: 2 # (int) minimum longest contiguous predicted-valid anchors for clear-far candidates
-gcs_rank_topk_weight: 0.0 # (float) top-k score ranking loss gain; 0 disables
-gcs_rank_margin: 0.05 # (float) margin for matched-vs-negative sigmoid lane scores
-gcs_rank_max_negs: 3 # (int) maximum negative queries per image for ranking loss
-gcs_rank_gt_min_lanes: 4 # (int) minimum GT lane count for ranking loss
-gcs_rank_focus_shortside: True # (bool) rank only shortside matched/rescue positives by default
-gcs_rank_pos_scope: shortside_reliable # (str) ranking positive scope: shortside_reliable, shortside_with_ultra, gt4gt5_matched, all_matched
-gcs_rank_include_unmatched_rescue_pos: False # (bool) explicit ablation: allow vetted unmatched raw-rescue queries as ranking positives
-gcs_rank_dup_close_px: 30.0 # (float) duplicate-like rank-negative max mean x distance to a matched query
-gcs_rank_dup_min_overlap: 6 # (int) duplicate-like rank-negative minimum valid-anchor overlap with matched query
-gcs_rank_side_duplicate_enable: False # (bool) allow worse side-ambiguous duplicate-like queries as ranking negatives
-gcs_rank_side_dup_margin_px: 5.0 # (float) side duplicate must be this much worse than selected true query
-gcs_rank_side_dup_min_overlap: 6 # (int) side duplicate-like minimum predicted-valid overlap with matched query
-gcs_rank_near_gt_ignore_px: 40.0 # (float) near-GT corridor distance used only for ignore/protection
-gcs_rank_side_ignore_px: 60.0 # (float) ambiguous side-region distance used only for ignore/protection
-gcs_rank_pair_reduction: global_pair_mean # (str) ranking reduction: global_pair_mean or image_mean
-gcs_base_ignore_raw_rescue: False # (bool) explicitly protect unmatched raw-rescue queries from base exist/point-valid BCE
-gcs_base_ignore_rank_near: False # (bool) explicitly protect rank near-GT/side-ambiguous queries from base BCE
-gcs_base_ignore_farspur_near: False # (bool) explicitly protect farspur near-GT/side-ambiguous queries from base BCE
-gcs_base_ignore_duplicate_like: False # (bool) explicitly protect duplicate-like rank negatives from base BCE
-gcs_allow_gt3_count_contract_ablation: False # (bool) allow min_gt_lanes < 4 only for explicit GT3 count-contract ablation
 gcs_gt5_short_visible_thr: 0 # (int) matched GT5 lanes with visible_count <= this get point-valid positive rescue; 0 disables
 gcs_gt5_short_point_valid_weight: 1.0 # (float) point-valid BCE multiplier for visible anchors of rescued short GT5 lanes
 gcs_exist_pos_weight: 1.0 # (float) positive query weight for GCS lane existence BCE

@@ -2,7 +2,7 @@
 
 This is the current GCS-YOLO-Lane mainline branch. It imports the historical `5-25-3.zip` algorithm and adapts only the TuSimple fixed-y contract.
 
-Active source/config is rolled back to commit `b6535f641` (`Fix GCS training progress header alignment`). Its active algorithm contract remains the 5-25-3 K56 mainline with no later Count Head, Q18/Q20/dataref, lane-balanced, valid-repair, side-aux, or GT4-hard diagnostic mechanisms active. Explicit branch-local additions are exceptions: default-off `count_boundary_loss`, default-off train-only `gcs_hard_sampling`, default-off E3-lite `gcs_spurious_neg`, default-off `gcs_short_side_geom`, default-off `gcs_far_spurious_neg`, and training-time `official_best` checkpoint selection. Results and mechanisms from later commits are retained below as legacy experiment conclusions only; they do not describe currently available CLI flags, loss items, diagnostic scripts, model outputs, configs, or selected candidates unless explicitly listed as branch-local additions here.
+Active source/config is rolled back to commit `424ab1c869f0a02556d8b6b6a44c27e5585e47c0` (`Add valid-before-maxdet decode option`). Its active algorithm contract remains the 5-25-3 K56 mainline with no later Count Head, Q18/Q20/dataref, lane-balanced, valid-repair, side-aux, short-side hardset, `gcs_short_side_geom`, `gcs_far_spurious_neg`, or count-contract/ranking mechanisms active. Explicit branch-local additions before or at this commit are exceptions: default-off `count_boundary_loss`, default-off train-only `gcs_hard_sampling`, default-off E3-lite `gcs_spurious_neg`, training-time `official_best` checkpoint selection, and default-off `valid_before_maxdet` query decode. Results and mechanisms from commits after `424ab1c86` are retained below as legacy experiment conclusions only; they do not describe currently available CLI flags, loss items, diagnostic scripts, model outputs, configs, or selected candidates unless a future task explicitly restores them.
 
 ## Contract
 
@@ -23,25 +23,35 @@ The 56 fixed-y anchors are TuSimple official h-samples `710, 700, 690, ..., 160`
 
 Compatibility paths `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml` and `data/tusimple_gcs_fixed_y_k56_960x544.yaml` keep the same K56 contract for old run records. New training commands should use the mainline paths above.
 
-The 5-25-3 algorithm body is intentionally not upgraded to later mainline Count Head, Quality Head, Survival Head, or near-miss machinery. The only active Count Boundary, hard-sampling, spurious-negative, short-side-geometry, far-spurious-negative, and official-best behavior is the explicit branch-local default-off/protocol work recorded in `docs/agent-context/current-contracts.md`.
+The 5-25-3 algorithm body is intentionally not upgraded to later mainline Count Head, Quality Head, Survival Head, or near-miss machinery. The only active Count Boundary, hard-sampling, spurious-negative, official-best, and valid-before-maxdet behavior is the explicit branch-local default-off/protocol work recorded in `docs/agent-context/current-contracts.md`.
 
-## Count-Contract Diagnostics
+## Legacy Post-424 Diagnostics
 
-`tools/diagnose_gcs_count_contract.py` reports query roles for GT4/GT5 count-contract debugging. GT records distinguish Hungarian assignment from raw geometry:
+The short-side hardset and count-contract diagnostic tooling added after
+`424ab1c86` is old state for this rollback. `tools/diagnose_gcs_count_contract.py`,
+`tools/build_gcs_short_side_hardset.py`, and
+`tools/diagnose_gcs_short_side_hardset.py` are not part of the active code
+after the rollback, but their historical records below are preserved for
+experiment interpretation. In those legacy records, GT entries distinguished
+Hungarian assignment from raw geometry:
 
 - `hungarian_query_idx` and `hungarian_raw_dist_px` are the Hungarian matched query and its raw distance to that GT.
 - `best_raw_query_idx` and `best_raw_dist_px` are the nearest raw-geometry query, which may be an unmatched duplicate.
 - `selected_shortside_query_idx` and `selected_shortside_reason` show the training count-contract shortside selection, for example `hungarian_rawmatch` or `unmatched_raw_rescue`.
 - `matched_query_idx` is retained only as a deprecated compatibility alias for `best_raw_query_idx`; it is not the Hungarian query.
 
-Clear-far spurious diagnostics use a strict boundary: distance must be greater than `gcs_farspur_clear_dist_px`; equality is recorded by `clear_far_boundary_count` but is not selected as clear-far.
+Legacy clear-far spurious diagnostics used a strict boundary: distance had to
+be greater than `gcs_farspur_clear_dist_px`; equality was recorded by
+`clear_far_boundary_count` but was not selected as clear-far.
 
-## Current Branch Reporting-Only Test Evidence
+## Reporting-Only Test Evidence
 
-On 2026-07-02 and 2026-07-03, active-branch artifacts were evaluated on
-TuSimple official test at the user's request. Each used decode
-parameters selected on official-val first; these reports are not a threshold,
-checkpoint, or postprocess selection surface.
+On 2026-07-02, 2026-07-03, and 2026-07-06, branch artifacts were evaluated on
+TuSimple official test at the user's request. Each used decode parameters
+selected on official-val first; these reports are not a threshold, checkpoint,
+or postprocess selection surface. Runs depending on post-`424ab1c86`
+short-side, far-spurious, ranking, or count-contract tooling are legacy records
+only under the current rollback.
 
 ```text
 gcs_yolo_lane_s_q12_k56_boundary02_spurious_lite_v1 + valid_before_maxdet:
@@ -75,6 +85,61 @@ official_test_ACC = 0.963907
 FP = 0.031860
 FN = 0.031332
 count_acc = 0.882459
+
+gcs_yolo_lane_s_q12_k56_ablate_shortside_boost_only_fixedthr_v1:
+val_sweep = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_ablate_shortside_boost_only_fixedthr_v1_official_best_val_sweep_valid_before_maxdet_b/tusimple_official_sweep_summary.json
+test_summary = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_ablate_shortside_boost_only_fixedthr_v1_test_best_from_val_b/tusimple_official_summary.json
+decode = conf=0.003, point_valid_thr=0.6, nms_dist_px=0.0, max_det=5, min_points=2, valid_before_maxdet=true
+official_val_ACC = 0.974445
+official_test_ACC = 0.964144
+FP = 0.028666
+FN = 0.028696
+count_acc = 0.873472
+count_acc_4 = 0.630342
+count_acc_5 = 0.757469
+count_confusion includes 4->3=106, 4->5=67, 5->3=27, 5->4=111, 5->5=431
+
+gcs_yolo_lane_s_q12_k56_ablate_shortside_protect_floor07_v1-2:
+val_sweep = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_ablate_shortside_protect_floor07_v1-2_official_best_val_sweep_valid_before_maxdet_b/tusimple_official_sweep_summary.json
+test_summary = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_ablate_shortside_protect_floor07_v1-2_test_best_from_val_b/tusimple_official_summary.json
+weights = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_ablate_shortside_protect_floor07_v1-2/weights/official_best.pt
+decode = conf=0.008, point_valid_thr=0.6, nms_dist_px=0.0, max_det=5, min_points=2, valid_before_maxdet=true
+official_val_ACC = 0.972798
+official_test_ACC = 0.964281
+FP = 0.029014
+FN = 0.029385
+count_acc = 0.873832
+count_acc_4 = 0.621795
+count_acc_5 = 0.766257
+count_confusion includes 4->3=112, 4->5=65, 5->3=28, 5->4=105, 5->5=436
+
+gcs_yolo_lane_s_q12_k56_ablate_rank_pair_gt4gt5_002_v1:
+val_sweep = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_ablate_rank_pair_gt4gt5_002_v1_official_best_val_sweep_valid_before_maxdet_b/tusimple_official_sweep_summary.json
+test_summary = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_ablate_rank_pair_gt4gt5_002_v1_official_test_best_from_val_bb/tusimple_official_summary.json
+weights = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_ablate_rank_pair_gt4gt5_002_v1/weights/official_best.pt
+decode = conf=0.01, point_valid_thr=0.6, nms_dist_px=0.0, max_det=5, min_points=3, valid_before_maxdet=true
+official_val_ACC = 0.974062
+official_test_ACC = 0.963617
+FP = 0.026725
+FN = 0.030404
+count_acc = 0.870597
+count_acc_4 = 0.632479
+count_acc_5 = 0.738137
+count_confusion includes 4->3=113, 4->5=58, 5->3=28, 5->4=121, 5->5=420
+
+gcs_yolo_lane_s_q12_k56_ablate_rank_full_dupignore_gt4gt5_002_v1:
+val_sweep = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_ablate_rank_full_dupignore_gt4gt5_002_v1_official_best_val_sweep_valid_before_maxdet_b/tusimple_official_sweep_summary.json
+test_summary = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_ablate_rank_full_dupignore_gt4gt5_002_v1_official_test_best_from_val_b/tusimple_official_summary.json
+weights = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_ablate_rank_full_dupignore_gt4gt5_002_v1/weights/official_best.pt
+decode = conf=0.008, point_valid_thr=0.6, nms_dist_px=0.0, max_det=5, min_points=2, valid_before_maxdet=true
+official_val_ACC = 0.974208
+official_test_ACC = 0.963831
+FP = 0.028313
+FN = 0.029625
+count_acc = 0.870597
+count_acc_4 = 0.632479
+count_acc_5 = 0.750439
+count_confusion includes 4->3=110, 4->5=62, 5->3=27, 5->4=115, 5->5=427
 ```
 
 The integrated conclusion is narrow: spurious-lite with the official-val
@@ -88,7 +153,25 @@ or tune from test. The later far-spurious run further improves the 363-image
 official-val surface and reduces reporting-only test GT4 false-fifth errors
 versus the no-shortside same-line comparator, but it also regresses test ACC,
 FP/FN, and GT5 retention; treat it as diagnostic-only and keep test closed for
-any further threshold, NMS, checkpoint, decode, or far-spur loss tuning.
+any further threshold, NMS, checkpoint, decode, or far-spur loss tuning. The
+later shortside boost-only fixed-threshold run is also diagnostic-only: it
+improves GT4 false-fifth errors versus spurious-lite + valid-before
+(`4->5: 79 -> 67`) and lowers FP, but it misses the ACC target
+(`0.964144 < 0.9655`) and severely worsens GT5 retention
+(`5->4: 63 -> 111`, `count_acc_5: 0.843585 -> 0.757469`). Do not promote it
+or use this test report to reselect thresholds. The later shortside
+boost+floor run is also diagnostic-only: the target floor improves GT4
+false-fifth further (`4->5: 79 -> 65` versus spurious-lite + valid-before),
+but it still misses the ACC target (`0.964281 < 0.9655`) and leaves severe GT5
+undercount (`5->4: 63 -> 105`, `count_acc_5: 0.843585 -> 0.766257`). Do not
+promote it or use this test report to reselect thresholds, target floor, or
+loss weights. The later GT4/GT5 ranking ablations are also diagnostic-only:
+both improve the 363-image official-val surface (`0.974062` for rank-pair,
+`0.974208` for full duplicate-ignore), but both miss the reporting-only test
+ACC target and worsen GT5 retention versus spurious-lite + valid-before
+(`5->4: 63 -> 121` for rank-pair, `63 -> 115` for full duplicate-ignore).
+Do not promote either ranking run or use these test reports to reselect
+thresholds, duplicate-ignore policy, ranking margin, or ranking weight.
 
 ## Legacy Post-b653 Official-Val Evidence
 
@@ -138,14 +221,14 @@ line (`raw_match_recall>=13/22`, `after_point_valid_recall>=4/22`, and
 `after_point_valid_recall=0/20`.
 
 Decision at the time: reject Q20 as a GT4-hard geometry fix, do not run its
-official-val sweep, and do not tune valid-loss weights. After the
-`b6535f641` rollback, Q18/Q20/dataref tooling is not part of the active code
+official-val sweep, and do not tune valid-loss weights. Under the current
+`424ab1c86` rollback, Q18/Q20/dataref tooling is not part of the active code
 surface.
 
 ## Legacy Post-b653 Official-Val Candidate
 
 The 2026-06-25 `dupmargin005_gt4pt025` run is the previous official-val
-selected candidate in the later experiment line. After the `b6535f641`
+selected candidate in the later experiment line. Under the current `424ab1c86`
 rollback, it is legacy evidence only and does not define an active selected
 candidate or available loss/config surface:
 
@@ -337,7 +420,7 @@ raising FN as soon as it removes duplicate-like predictions.
 
 The high-score unmatched-query suppression runs are rejected legacy experiments.
 Their `--gcs-extra-exist` flags and `extra_exist_loss` logging are not present
-in the active `b6535f641` rollback code state.
+in the active `424ab1c86` rollback code state.
 The first run,
 `gcs_yolo_lane_s_tusimple_fixed_y_gt4short15_extraexist005_count03_under5_03`,
 had best 363-image official-val
@@ -356,7 +439,7 @@ extra-exist gain sweeps or send these candidates to final test; return to
 short-lane score/geometry retention work selected only on official-val.
 
 The short matched existence floor experiment is a rejected legacy experiment.
-Its `--gcs-short-exist-*` flags are not present in the active `b6535f641` rollback code
+Its `--gcs-short-exist-*` flags are not present in the active `424ab1c86` rollback code
 state. It used a then-experimental `GCSLoss.exist_loss()` floor to protect only
 Hungarian-matched short GT lanes after the existing APE quality and visible-IoU
 quality were computed:

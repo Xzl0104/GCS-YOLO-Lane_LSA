@@ -2,6 +2,324 @@
 
 This file records decisions for branch `codex/5-25-3-k56`.
 
+## 2026-07-06: Roll Active Code Back to 424ab1c86
+
+Decision:
+
+Restore active source/config to commit
+`424ab1c869f0a02556d8b6b6a44c27e5585e47c0` (`Add valid-before-maxdet decode
+option`). Documentation remains current but must treat every mechanism, tool,
+command, and result introduced after this commit as legacy old state unless a
+future task explicitly restores it.
+
+Active boundary:
+
+- Keep the 5-25-3 K56 contract, `count_boundary_loss`, train-only
+  `gcs_hard_sampling`, E3-lite `gcs_spurious_neg`, training-time
+  `official_best`, ordered-slot protocol tooling already present at the target
+  commit, and the target commit's default-off `valid_before_maxdet` decode
+  option.
+- Remove active code/config from later commits by restoring the affected
+  `tools/`, `ultralytics/cfg/`, `ultralytics/models/yolo/gcs_lane/`, and
+  `ultralytics/utils/` paths to the target commit.
+
+Legacy after this rollback:
+
+```text
+436fcb616 Add GCS short-side hardset diagnostics
+f4c200bbe Add default-off short-side geometry loss
+f7f0bcc07 Add far spurious negative loss
+8357e1ad8 Add GCS count contract tooling
+```
+
+These post-`424ab1c86` changes are old state: short-side hardset diagnostics,
+`gcs_short_side_geom`, `gcs_far_spurious_neg`, `gcs_farspur_*`,
+`gcs_shortside_*`, `gcs_rank_*`, `gcs_base_ignore_*`, and
+`tools/diagnose_gcs_count_contract.py` / count-contract tooling must not be
+read as available active code.
+
+Validation target:
+
+- `git diff --name-status 424ab1c869f0a02556d8b6b6a44c27e5585e47c0 -- tools ultralytics/cfg ultralytics/models/yolo/gcs_lane ultralytics/utils`
+  should be empty after the rollback.
+- Run local Python compile on Python files changed relative to `HEAD` where
+  practical.
+- Run `tools/check_gcs_valid_before_maxdet.py` because the target boundary is
+  the valid-before-maxdet commit.
+
+## 2026-07-06: Blocked artifact sync for shortside025_farspur005_rank002
+
+Decision:
+
+Do not record a promotion or rejection conclusion for
+`gcs_yolo_lane_s_q12_k56_shortside025_farspur005_rank002_v1` until the exact
+artifact package is available locally or readable from the remote server.
+
+Evidence status:
+
+- The intended run combines `gcs_shortside_rawmatch_boost=0.25`,
+  `gcs_farspur_ignore_first=True`, `gcs_farspur_weight=0.005`,
+  `gcs_rank_topk_weight=0.02`, and likely
+  `gcs_rank_pos_scope=gt4gt5_matched`.
+- Local searches in `runs/`, `.tmp/`, and `docs/` found no exact artifacts for
+  `gcs_yolo_lane_s_q12_k56_shortside025_farspur005_rank002_v1`.
+- The local artifact scan did not find an `args.yaml` with the full intended
+  three-knob combination.
+- Read-only SSH attempts to `gcs-ebcloud-lane` failed with
+  `Connection closed by 198.18.0.55 port 31343`, so the remote run directory,
+  363-image official-val sweep summary, and reporting-only official test
+  summary could not be verified in this session.
+
+Do not infer this run's result from adjacent experiments:
+
+- `shortsidegeom025` used `gcs_short_side_geom=0.25`, not
+  `gcs_shortside_rawmatch_boost=0.25`.
+- Earlier `farspur005` records used the older `gcs_far_spurious_neg=0.05`,
+  not the ignore-first `gcs_farspur_weight=0.005` contract.
+- The rank-pair and full duplicate-ignore ablations used
+  `gcs_rank_topk_weight=0.02`, but they are not the three-knob combination.
+
+Required evidence before analysis:
+
+```text
+runs/gcs_lane/gcs_yolo_lane_s_q12_k56_shortside025_farspur005_rank002_v1/args.yaml
+runs/gcs_lane/gcs_yolo_lane_s_q12_k56_shortside025_farspur005_rank002_v1/results.csv
+runs/gcs_lane/gcs_yolo_lane_s_q12_k56_shortside025_farspur005_rank002_v1/weights/official_best_decode.yaml
+runs/gcs_lane/gcs_yolo_lane_s_q12_k56_shortside025_farspur005_rank002_v1/weights/official_best_sweep.json
+<matching 363-image official-val sweep>/tusimple_official_sweep_summary.json
+<matching official test report>/tusimple_official_summary.json
+```
+
+Next action:
+
+First restore remote access or copy the minimal evidence package above into the
+workspace. Then rerun the experiment review and `gcs_integrator` synthesis.
+Until then, do not tune thresholds, checkpoint choice, NMS, rank weight,
+farspur weight, or shortside settings from this unavailable test report.
+
+## 2026-07-06: Reject GT4/GT5 ranking pair and duplicate-ignore ablations
+
+Decision:
+
+Do not promote or continue
+`gcs_yolo_lane_s_q12_k56_ablate_rank_pair_gt4gt5_002_v1` or
+`gcs_yolo_lane_s_q12_k56_ablate_rank_full_dupignore_gt4gt5_002_v1`. Treat both
+as diagnostic-only evidence: GT4 false-fifth ranking pressure can reduce
+`4->5`, but the current `gcs_rank_topk_weight=0.02` all-GT4/GT5 matched
+ranking configurations cause unacceptable GT5 undercount on reporting-only
+test.
+
+Evidence:
+
+Baseline `gcs_yolo_lane_s_q12_k56_boundary02_spurious_lite_v1` with
+`valid_before_maxdet=true` fixed official-val selected decode:
+
+```text
+363-val ACC = 0.971816
+363-val FP/FN = 0.019376 / 0.015611
+363-val count_acc_4/5 = 0.924242 / 0.986486
+363-val confusion includes 4->3=1, 4->5=4, 5->4=1, 5->5=73
+
+reporting-only test ACC = 0.965483
+test FP/FN = 0.030847 / 0.027678
+test count_acc_4/5 = 0.606838 / 0.843585
+test confusion includes 4->3=105, 4->5=79, 5->3=26, 5->4=63, 5->5=480
+```
+
+`rank_pair_only` used `gcs_rank_topk_weight=0.02`,
+`gcs_rank_pos_scope=gt4gt5_matched`, and
+`gcs_base_ignore_duplicate_like=False`:
+
+```text
+official_best_val_sweep = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_ablate_rank_pair_gt4gt5_002_v1_official_best_val_sweep_valid_before_maxdet_b/tusimple_official_sweep_summary.json
+selected decode = conf=0.01, point_valid_thr=0.6, nms_dist_px=0.0, max_det=5, min_points=3, valid_before_maxdet=true
+363-val ACC = 0.974062
+363-val FP/FN = 0.007576 / 0.010560
+363-val count_acc_4/5 = 0.939394 / 0.959459
+363-val confusion includes 4->3=4, 4->5=0, 5->4=3, 5->5=71
+
+reporting-only test summary = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_ablate_rank_pair_gt4gt5_002_v1_official_test_best_from_val_bb/tusimple_official_summary.json
+test ACC = 0.963617
+test FP/FN = 0.026725 / 0.030404
+test count_acc_4/5 = 0.632479 / 0.738137
+test confusion includes 4->3=113, 4->5=58, 5->3=28, 5->4=121, 5->5=420
+```
+
+`rank_full_duplicate_contract` used `gcs_rank_topk_weight=0.02`,
+`gcs_rank_pos_scope=gt4gt5_matched`, and
+`gcs_base_ignore_duplicate_like=True`:
+
+```text
+official_best_val_sweep = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_ablate_rank_full_dupignore_gt4gt5_002_v1_official_best_val_sweep_valid_before_maxdet_b/tusimple_official_sweep_summary.json
+selected decode = conf=0.008, point_valid_thr=0.6, nms_dist_px=0.0, max_det=5, min_points=2, valid_before_maxdet=true
+363-val ACC = 0.974208
+363-val FP/FN = 0.007668 / 0.012167
+363-val count_acc_4/5 = 0.909091 / 0.945946
+363-val confusion includes 4->3=6, 4->5=0, 5->4=4, 5->5=70
+
+reporting-only test summary = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_ablate_rank_full_dupignore_gt4gt5_002_v1_official_test_best_from_val_b/tusimple_official_summary.json
+test ACC = 0.963831
+test FP/FN = 0.028313 / 0.029625
+test count_acc_4/5 = 0.632479 / 0.750439
+test confusion includes 4->3=110, 4->5=62, 5->3=27, 5->4=115, 5->5=427
+```
+
+Across both 2520-row `official_best_val_sweep` grids, no row reaches the
+baseline `count_acc_5=0.986486` or `5->4<=1`; the best observed sweep rows only
+reach `max_count_acc_5=0.972973` and `min_5->4=2`.
+
+Why:
+
+- Both ranking variants improve official-val ACC/FP and reduce GT4 false-fifth
+  pressure, but they do not preserve GT5 retention.
+- Reporting-only test confirms the official-val warning: `5->4` worsens from
+  `63` to `121` for rank-pair and to `115` for duplicate-ignore, while test
+  ACC falls below both the spurious-lite baseline and the `0.9655` target.
+- Full duplicate-ignore is slightly better than rank-pair on reporting-only
+  test ACC and GT5 retention, but the gap is too small and still fails the
+  main GT5 and ACC targets.
+- This does not reject all future ranking research. These two runs also kept
+  the count/boundary/spurious training terms off, so the conclusion is scoped
+  to the tested `0.02` all-GT4/GT5 matched ranking configurations.
+
+Next action:
+
+Do not run more final tests, tune thresholds, reselect checkpoints, adjust NMS,
+change duplicate-ignore policy, or change rank margin/weight from these
+reporting-only test results. If ranking is revisited, first run
+train/official-val-only GT5 undercount and rank-mask diagnostics, then
+predefine a GT5-safe gate before any new training.
+
+## 2026-07-06: Reject shortside_protect_floor07_v1-2
+
+Decision:
+
+Do not promote
+`gcs_yolo_lane_s_q12_k56_ablate_shortside_protect_floor07_v1-2`. Treat it as
+diagnostic-only evidence that adding `gcs_shortside_exist_target_floor=0.7` to
+the rawmatch boost does not fix the GT5 retention problem.
+
+Primary protocol note:
+
+Use the `weights/official_best.pt` path for this decision. A companion
+`weights/best.pt` sweep/test exists, but it is not the primary comparable
+candidate because this run was trained with `gcs_official_best=true`.
+
+Official-val evidence:
+
+```text
+val_sweep = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_ablate_shortside_protect_floor07_v1-2_official_best_val_sweep_valid_before_maxdet_b/tusimple_official_sweep_summary.json
+weights = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_ablate_shortside_protect_floor07_v1-2/weights/official_best.pt
+selected_decode = conf=0.008, point_valid_thr=0.6, nms_dist_px=0.0, max_det=5, min_points=2, valid_before_maxdet=true
+official_val_acc = 0.972798
+official_val_FP = 0.011433
+official_val_FN = 0.012626
+official_val_count_acc = 0.972452
+official_val_count_acc_4 = 0.939394
+official_val_count_acc_5 = 0.959459
+official_val_count_confusion includes 4->3=3, 4->5=1, 5->4=3, 5->5=71
+```
+
+Reporting-only test evidence:
+
+```text
+test_summary = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_ablate_shortside_protect_floor07_v1-2_test_best_from_val_b/tusimple_official_summary.json
+official_test_acc = 0.964281
+official_test_FP = 0.029014
+official_test_FN = 0.029385
+test_count_acc = 0.873832
+test_count_acc_4 = 0.621795
+test_count_acc_5 = 0.766257
+test_count_confusion includes 4->3=112, 4->5=65, 5->3=28, 5->4=105, 5->5=436
+```
+
+Why:
+
+- Against `shortside_boost_only_fixedthr_v1`, official-val ACC, FP, FN, and
+  `count_acc_4` are all worse; reporting-only test ACC is only `+0.000137`,
+  while FP/FN and GT4 `4->3` are worse.
+- Against the spurious-lite + valid-before reporting-only comparator, GT4
+  `4->5` improves from `79` to `65`, but ACC drops from `0.965483` to
+  `0.964281`, FN rises from `0.027678` to `0.029385`, `count_acc_5` drops from
+  `0.843585` to `0.766257`, and GT5 `5->4` worsens from `63` to `105`.
+- It misses the active promotion gates: `ACC >= 0.9655`, `5->4 <= 63`,
+  `GT4 4->3 <= 105`, `FN <= 0.0277`, and `count_acc_5` near `0.843585`.
+  It only satisfies the GT4 `4->5 <= 79` and FP gates.
+- The floor did not convert the shortside protect ablation into a GT5-safe
+  candidate. The selected `point_valid_thr=0.6` row still has a large GT5
+  undercount problem.
+- The reporting-only test result is not a selection surface. Do not use it to
+  reselect `point_valid_thr`, NMS, checkpoint, decode, target floor, or loss
+  weights.
+
+Next action:
+
+Keep this run closed as a single val-selected test report. If this line is
+revisited, use official-val/train-val-only error decomposition for the added
+GT4 `4->3` and GT5 `5->4` undercount, especially around the
+`point_valid_thr=0.6` selected row and shortside target floor behavior. Do not
+run another final test until a new candidate is selected by official-val.
+
+## 2026-07-06: Reject shortside_boost_only_fixedthr_v1
+
+Decision:
+
+Do not promote `gcs_yolo_lane_s_q12_k56_ablate_shortside_boost_only_fixedthr_v1`.
+Treat it as diagnostic-only evidence that shortside boost-only can reduce some
+GT4 false-fifth errors, but does not protect GT5 retention.
+
+Official-val evidence:
+
+```text
+val_sweep = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_ablate_shortside_boost_only_fixedthr_v1_official_best_val_sweep_valid_before_maxdet_b/tusimple_official_sweep_summary.json
+weights = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_ablate_shortside_boost_only_fixedthr_v1/weights/official_best.pt
+selected_decode = conf=0.003, point_valid_thr=0.6, nms_dist_px=0.0, max_det=5, min_points=2, valid_before_maxdet=true
+official_val_acc = 0.974445
+official_val_FP = 0.007576
+official_val_FN = 0.009642
+official_val_count_acc = 0.975207
+official_val_count_acc_4 = 0.954545
+official_val_count_acc_5 = 0.959459
+official_val_count_confusion includes 4->3=3, 4->5=0, 5->4=3, 5->5=71
+```
+
+Reporting-only test evidence:
+
+```text
+test_summary = runs/gcs_lane/gcs_yolo_lane_s_q12_k56_ablate_shortside_boost_only_fixedthr_v1_test_best_from_val_b/tusimple_official_summary.json
+official_test_acc = 0.964144
+official_test_FP = 0.028666
+official_test_FN = 0.028696
+test_count_acc = 0.873472
+test_count_acc_4 = 0.630342
+test_count_acc_5 = 0.757469
+test_count_confusion includes 4->3=106, 4->5=67, 5->3=27, 5->4=111, 5->5=431
+```
+
+Why:
+
+- Against the spurious-lite + valid-before reporting-only comparator,
+  `4->5` improves from `79` to `67`, FP improves from `0.030847` to
+  `0.028666`, and `count_acc_4` improves from `0.606838` to `0.630342`.
+- The cost is unacceptable: ACC drops from `0.965483` to `0.964144`, FN rises
+  from `0.027678` to `0.028696`, `count_acc_5` drops from `0.843585` to
+  `0.757469`, and GT5 `5->4` worsens from `63` to `111`.
+- It misses the active promotion gates: `ACC >= 0.9655`, `5->4 <= 63`, and
+  `GT4 4->3 <= 105`. Only the `GT4 4->5 <= 79` gate is met.
+- The failure is consistent with the shortside boost-only concern: increasing
+  BCE weight without an explicit positive target floor can reduce some
+  overcount but still amplify undercount pressure on weak true GT5 lanes.
+- The reporting-only date/count breakdown is a risk description, not a
+  selection surface. Do not use it to reselect `point_valid_thr`, NMS,
+  checkpoint, decode, or loss weights.
+
+Next action:
+
+Keep this run closed as a single val-selected test report. Continue only with
+official-val/train-val diagnostics or new pre-registered ablations such as
+`shortside_floor_only`, `shortside_protect`, `rank_full_duplicate_contract`, or
+`farspur_full_ignore_first`, selected on official-val before any future test.
+
 ## 2026-06-29: Implement ordered_slot_eval_contract_hardening_v1
 
 Decision:
@@ -1524,16 +1842,18 @@ Compile `tools/train_gcs.py`, `tools/sweep_tusimple_official.py`,
 Full official-best behavior requires a remote TuSimple archive and should be
 verified during the next formal training run, not with local 8GB-GPU training.
 
-## 2026-06-27: Roll Active Code Back to b6535f641
+## 2026-06-27: Historical Rollback to b6535f641
 
 Decision:
 
-Restore the active source/config state to commit `b6535f641`
-(`Fix GCS training progress header alignment`).
+At that time, restore the source/config state to commit `b6535f641`
+(`Fix GCS training progress header alignment`). This historical rollback is
+superseded by the 2026-07-06 rollback to `424ab1c86`.
 
 Scope:
 
-The active code baseline is the 5-25-3 K56 mainline at `b6535f641`. Later
+The active code baseline at that time was the 5-25-3 K56 mainline at
+`b6535f641`. Later
 commits, including duplicate/spurious/ranking losses, GT3/GT4/GT5 follow-up
 losses, Q18/Q20/dataref configs, Count Head, count-guided decode, side-aux
 guards, GT4-hard diagnostics, paper-generation scripts, and their helper
@@ -1549,8 +1869,8 @@ the documentation as old conclusions.
 
 Mainline or experiment:
 
-Current mainline rollback decision. Later experiment sections remain historical
-records.
+Superseded historical rollback decision. Later experiment sections remain
+historical records.
 
 ## 2026-06-21: Roll Active Code Back to 50999d6af
 
