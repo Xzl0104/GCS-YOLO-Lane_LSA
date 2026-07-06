@@ -44,6 +44,9 @@ class GCSLoss(nn.Module):
         "gt5_short_point_valid_loss",
         "cnt_bound_5under",
         "cnt_score",
+        "query_count_ce_loss",
+        "query_count_acc",
+        "query_count_pred_mean",
     )
 
     def __init__(
@@ -100,6 +103,9 @@ class GCSLoss(nn.Module):
         match_min_overlap: int | None = None,
         match_max_x_dist: float | None = None,
         match_gate_px: float | None = None,
+        query_count_ce: float | None = None,
+        query_count_min_lanes: int | None = None,
+        query_count_max_lanes: int | None = None,
         image_size=None,
     ):
         """Initialize GCS-YOLO-Lane loss weights and Hungarian matcher."""
@@ -129,6 +135,20 @@ class GCSLoss(nn.Module):
         self.spurious_neg_gain = float(
             lambda_spurious_neg if lambda_spurious_neg is not None else self._arg(args, "gcs_spurious_neg", 0.0)
         )
+        self.query_count_ce_gain = float(
+            query_count_ce if query_count_ce is not None else self._arg(args, "gcs_query_count_ce", 0.0)
+        )
+        self.query_count_min_lanes = int(
+            query_count_min_lanes
+            if query_count_min_lanes is not None
+            else self._arg(args, "gcs_query_count_min_lanes", 2)
+        )
+        self.query_count_max_lanes = int(
+            query_count_max_lanes
+            if query_count_max_lanes is not None
+            else self._arg(args, "gcs_query_count_max_lanes", 5)
+        )
+        self.query_count_classes = self.query_count_max_lanes - self.query_count_min_lanes + 1
         self.count_boundary_gt4_weight = float(
             count_boundary_gt4_weight
             if count_boundary_gt4_weight is not None
@@ -236,6 +256,22 @@ class GCSLoss(nn.Module):
         )
         if self.count_under5_min_lanes < 1:
             raise ValueError(f"gcs_count_under5_min_lanes must be >= 1, got {self.count_under5_min_lanes}.")
+        if self.query_count_min_lanes <= 0:
+            raise ValueError(f"gcs_query_count_min_lanes must be > 0, got {self.query_count_min_lanes}.")
+        if self.query_count_max_lanes < self.query_count_min_lanes:
+            raise ValueError(
+                "gcs_query_count_max_lanes must be >= gcs_query_count_min_lanes, "
+                f"got {self.query_count_max_lanes} < {self.query_count_min_lanes}."
+            )
+        if (self.query_count_min_lanes, self.query_count_max_lanes) != (2, 5):
+            raise ValueError(
+                "query Count Head currently supports the fixed 2..5 lane-count contract, "
+                f"got {self.query_count_min_lanes}..{self.query_count_max_lanes}."
+            )
+        if self.query_count_classes != 4:
+            raise ValueError(f"gcs_query_count_classes must be 4 for 2..5 lanes, got {self.query_count_classes}.")
+        if self.query_count_ce_gain < 0.0:
+            raise ValueError(f"gcs_query_count_ce must be >= 0, got {self.query_count_ce_gain}.")
         if self.count_boundary_margin34 < 0.0:
             raise ValueError(f"gcs_count_boundary_margin34 must be >= 0, got {self.count_boundary_margin34}.")
         if self.count_boundary_margin45 < 0.0:
@@ -736,6 +772,46 @@ class GCSLoss(nn.Module):
         """Cardinality loss that aligns summed existence probability with GT lane count."""
         return self.count_losses(pred_logits, batch, gt_valid)[0]
 
+    def query_count_ce_loss(
+        self,
+        preds: dict[str, torch.Tensor],
+        batch: dict,
+        gt_valid: list[torch.Tensor],
+        target_count: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Return query-mode explicit count CE and classifier diagnostics."""
+        pred_count_logits = preds.get("pred_count_logits")
+        pred_points = preds["pred_points"]
+
+        if pred_count_logits is None:
+            zero = self._zero_like(pred_points)
+            return zero, zero, zero
+
+        if pred_count_logits.ndim != 2:
+            raise ValueError(f"pred_count_logits must have shape B x C, got {tuple(pred_count_logits.shape)}.")
+
+        expected_classes = int(self.query_count_classes)
+        if pred_count_logits.shape[1] != expected_classes:
+            raise ValueError(
+                f"pred_count_logits C must be {expected_classes}, got {pred_count_logits.shape[1]}."
+            )
+
+        if target_count is None:
+            pred_logits = preds["pred_logits"]
+            if pred_logits.ndim == 3 and pred_logits.shape[-1] == 1:
+                pred_logits = pred_logits.squeeze(-1)
+            target_count = self.target_lane_count(pred_logits, batch, gt_valid)
+
+        label = target_count.round().long() - int(self.query_count_min_lanes)
+        label = label.clamp(0, expected_classes - 1)
+
+        loss = F.cross_entropy(pred_count_logits, label)
+        pred_cls = pred_count_logits.detach().argmax(dim=1)
+        acc = (pred_cls == label).float().mean()
+        pred_count_mean = (pred_cls.float() + float(self.query_count_min_lanes)).mean()
+
+        return loss, acc, pred_count_mean
+
     def count_boundary_loss(
         self, count_score: torch.Tensor, target: torch.Tensor, return_details: bool = False
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
@@ -1064,6 +1140,12 @@ class GCSLoss(nn.Module):
         ) = self.count_losses(
             pred_logits, batch, gt_valid, target=gt_lanes
         )
+        query_count_ce_loss, query_count_acc, query_count_pred_mean = self.query_count_ce_loss(
+            preds,
+            batch,
+            gt_valid,
+            target_count=gt_lanes,
+        )
         (
             spurious_neg_loss,
             spurious_negative_count,
@@ -1104,6 +1186,8 @@ class GCSLoss(nn.Module):
         )
         if self.count_boundary_gain != 0.0:
             total = total + self.count_boundary_gain * count_boundary_loss
+        if self.query_count_ce_gain != 0.0:
+            total = total + self.query_count_ce_gain * query_count_ce_loss
         if self.spurious_neg_gain != 0.0:
             total = total + self.spurious_neg_gain * self.spurious_neg_weight * spurious_neg_loss
         loss_items = torch.stack(
@@ -1136,6 +1220,9 @@ class GCSLoss(nn.Module):
                 gt5_short_point_valid_loss.detach(),
                 cnt_bound_5under.detach(),
                 cnt_score.detach(),
+                query_count_ce_loss.detach(),
+                query_count_acc.detach(),
+                query_count_pred_mean.detach(),
             )
         )
         return total, loss_items

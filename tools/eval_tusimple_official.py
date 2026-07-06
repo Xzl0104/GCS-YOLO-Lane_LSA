@@ -104,6 +104,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--count-aware-min-k", type=int, default=3, help="Minimum k_hat for --count-aware-topk.")
     parser.add_argument("--count-aware-max-k", type=int, default=5, help="Maximum k_hat for --count-aware-topk.")
     parser.add_argument("--count-aware-length-norm", type=float, default=12.0, help="Visible-point count that saturates count-aware length quality.")
+    parser.add_argument(
+        "--count-mode",
+        choices=("score_sum", "count_logits"),
+        default="score_sum",
+        help="Count source for query count-aware top-k.",
+    )
     parser.add_argument("--max-images", type=int, default=0, help="Limit number of GT records. 0 means all.")
     parser.add_argument("--warmup", type=int, default=20, help="Number of untimed warmup forwards.")
     parser.add_argument("--device", default="0", help="Inference device, e.g. 0 or cpu.")
@@ -202,6 +208,7 @@ def _apply_query_decode_yaml(args: argparse.Namespace, decode_yaml_cfg: dict) ->
     args.count_aware_min_k = int(decode_yaml_cfg["count_aware_min_k"])
     args.count_aware_max_k = int(decode_yaml_cfg["count_aware_max_k"])
     args.count_aware_length_norm = float(decode_yaml_cfg["count_aware_length_norm"])
+    args.count_mode = str(decode_yaml_cfg.get("count_mode", "score_sum"))
 
 
 def resolve_pred_json_decode_contract(args: argparse.Namespace) -> tuple[str, dict | None] | None:
@@ -281,6 +288,7 @@ def generate_predictions(
     count_aware_min_k: int = 3,
     count_aware_max_k: int = 5,
     count_aware_length_norm: float = 12.0,
+    count_mode: str = "score_sum",
     valid_before_maxdet: bool = False,
     decode_mode: str = "auto",
     decode_yaml_cfg: dict | None = None,
@@ -307,6 +315,7 @@ def generate_predictions(
             count_aware_min_k = int(decode_yaml_cfg["count_aware_min_k"])
             count_aware_max_k = int(decode_yaml_cfg["count_aware_max_k"])
             count_aware_length_norm = float(decode_yaml_cfg["count_aware_length_norm"])
+            count_mode = str(decode_yaml_cfg.get("count_mode", "score_sum"))
     else:
         decode_mode = resolve_decode_mode(decode_mode, model)
     if str(decode_mode) == "ordered_slot" and query_decode_defaults is not None:
@@ -322,6 +331,7 @@ def generate_predictions(
                 "count_aware_min_k": count_aware_min_k,
                 "count_aware_max_k": count_aware_max_k,
                 "count_aware_length_norm": count_aware_length_norm,
+                "count_mode": count_mode,
             },
             context="TuSimple official eval",
             defaults=query_decode_defaults,
@@ -388,10 +398,12 @@ def generate_predictions(
             ordered_slot_order_stats["ordered_slot_order_violation_images"] += int(order_diag["has_order_violation"])
         else:
             pred_valid = preds.get("pred_valid_logits")
+            pred_count_logits = preds.get("pred_count_logits")
             lanes = decode_gcs_predictions(
                 preds["pred_points"][0],
                 preds["pred_logits"][0],
                 pred_valid_logits=pred_valid[0] if pred_valid is not None else None,
+                pred_count_logits=pred_count_logits[0] if pred_count_logits is not None else None,
                 image_shape=original_shape,
                 score_thr=conf,
                 point_valid_thr=point_valid_thr,
@@ -403,6 +415,7 @@ def generate_predictions(
                 count_aware_min_k=count_aware_min_k,
                 count_aware_max_k=count_aware_max_k,
                 count_aware_length_norm=count_aware_length_norm,
+                count_mode=count_mode,
             )
         tusimple_lanes = gcs_lanes_to_tusimple_lanes(lanes, record["h_samples"], image_shape=original_shape)
         t2 = time.perf_counter()
@@ -455,22 +468,34 @@ def evaluate_official(args: argparse.Namespace) -> dict:
         pred_path = Path(pred_json)
         pred_records = _limit_records(read_tusimple_json_lines(pred_path), args.max_images)
     else:
+        query_conf = float(getattr(args, "conf", 0.25))
+        query_point_valid_thr = float(getattr(args, "point_valid_thr", 0.5))
+        query_nms_dist_px = float(getattr(args, "nms_dist_px", 18.0))
+        query_max_det = int(getattr(args, "max_det", 8))
+        query_min_points = int(getattr(args, "min_points", 6))
+        query_valid_before_maxdet = bool(getattr(args, "valid_before_maxdet", False))
+        query_count_aware_topk = bool(getattr(args, "count_aware_topk", False))
+        query_count_aware_min_k = int(getattr(args, "count_aware_min_k", 3))
+        query_count_aware_max_k = int(getattr(args, "count_aware_max_k", 5))
+        query_count_aware_length_norm = float(getattr(args, "count_aware_length_norm", 12.0))
+        query_count_mode = str(getattr(args, "count_mode", "score_sum"))
         pred_records, timing, active_decode_mode, ordered_slot_order_stats = generate_predictions(
             weights=args.weights,
             archive_root=archive_root,
             split=args.split,
             gt_records=gt_records,
             imgsz=imgsz,
-            conf=args.conf,
-            point_valid_thr=args.point_valid_thr,
-            nms_dist_px=args.nms_dist_px,
-            max_det=args.max_det,
-            min_points=args.min_points,
-            valid_before_maxdet=args.valid_before_maxdet,
-            count_aware_topk=args.count_aware_topk,
-            count_aware_min_k=args.count_aware_min_k,
-            count_aware_max_k=args.count_aware_max_k,
-            count_aware_length_norm=args.count_aware_length_norm,
+            conf=query_conf,
+            point_valid_thr=query_point_valid_thr,
+            nms_dist_px=query_nms_dist_px,
+            max_det=query_max_det,
+            min_points=query_min_points,
+            valid_before_maxdet=query_valid_before_maxdet,
+            count_aware_topk=query_count_aware_topk,
+            count_aware_min_k=query_count_aware_min_k,
+            count_aware_max_k=query_count_aware_max_k,
+            count_aware_length_norm=query_count_aware_length_norm,
+            count_mode=query_count_mode,
             decode_mode=args.decode_mode,
             decode_yaml_cfg=decode_yaml_cfg,
             gcs_min_lanes=int(getattr(args, "gcs_min_lanes", 2)),
@@ -486,19 +511,31 @@ def evaluate_official(args: argparse.Namespace) -> dict:
             query_decode_defaults=ORDERED_SLOT_QUERY_ONLY_DEFAULTS,
         )
         if active_decode_mode != "ordered_slot":
-            warn_max_det_mismatch(args.weights, max_det=args.max_det, context="TuSimple official eval")
+            warn_max_det_mismatch(args.weights, max_det=query_max_det, context="TuSimple official eval")
+
+    query_conf = float(getattr(args, "conf", 0.25))
+    query_point_valid_thr = float(getattr(args, "point_valid_thr", 0.5))
+    query_nms_dist_px = float(getattr(args, "nms_dist_px", 18.0))
+    query_max_det = int(getattr(args, "max_det", 8))
+    query_min_points = int(getattr(args, "min_points", 6))
+    query_valid_before_maxdet = bool(getattr(args, "valid_before_maxdet", False))
+    query_count_aware_topk = bool(getattr(args, "count_aware_topk", False))
+    query_count_aware_min_k = int(getattr(args, "count_aware_min_k", 3))
+    query_count_aware_max_k = int(getattr(args, "count_aware_max_k", 5))
+    query_count_aware_length_norm = float(getattr(args, "count_aware_length_norm", 12.0))
+    query_count_mode = str(getattr(args, "count_mode", "score_sum"))
 
     save_dir = resolve_save_dir(
         args.save_dir,
         args.weights,
         args.split,
-        args.conf,
-        args.point_valid_thr,
-        args.nms_dist_px,
-        args.max_det,
-        args.min_points,
-        count_aware_topk=args.count_aware_topk,
-        valid_before_maxdet=args.valid_before_maxdet,
+        query_conf,
+        query_point_valid_thr,
+        query_nms_dist_px,
+        query_max_det,
+        query_min_points,
+        count_aware_topk=query_count_aware_topk,
+        valid_before_maxdet=query_valid_before_maxdet,
         decode_mode=active_decode_mode,
     )
     save_dir.mkdir(parents=True, exist_ok=True)
@@ -581,16 +618,17 @@ def evaluate_official(args: argparse.Namespace) -> dict:
         config.update(
             {
                 "schema": "query_decode_v1",
-                "conf": float(args.conf),
-                "point_valid_thr": float(args.point_valid_thr),
-                "nms_dist_px": float(args.nms_dist_px),
-                "max_det": int(args.max_det),
-                "min_points": int(args.min_points),
-                "valid_before_maxdet": bool(args.valid_before_maxdet),
-                "count_aware_topk": bool(args.count_aware_topk),
-                "count_aware_min_k": int(args.count_aware_min_k),
-                "count_aware_max_k": int(args.count_aware_max_k),
-                "count_aware_length_norm": float(args.count_aware_length_norm),
+                "conf": query_conf,
+                "point_valid_thr": query_point_valid_thr,
+                "nms_dist_px": query_nms_dist_px,
+                "max_det": query_max_det,
+                "min_points": query_min_points,
+                "valid_before_maxdet": query_valid_before_maxdet,
+                "count_aware_topk": query_count_aware_topk,
+                "count_aware_min_k": query_count_aware_min_k,
+                "count_aware_max_k": query_count_aware_max_k,
+                "count_aware_length_norm": query_count_aware_length_norm,
+                "count_mode": query_count_mode,
             }
         )
 

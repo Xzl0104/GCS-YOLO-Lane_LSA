@@ -72,6 +72,9 @@ class GCSLaneTrainer(BaseTrainer):
         "gt5_short_point_valid_loss",
         "cnt_bound_5under",
         "cnt_score",
+        "query_count_ce_loss",
+        "query_count_acc",
+        "query_count_pred_mean",
     )
     # Keep tqdm headers within BaseTrainer's 11-character progress columns.
     progress_loss_names = (
@@ -103,6 +106,9 @@ class GCSLaneTrainer(BaseTrainer):
         "gt5s_pv",
         "cnt5under",
         "cnt_score2",
+        "qcnt_ce",
+        "qcnt_acc",
+        "qcnt_pred",
     )
     # YOLO11 backbone -> GCS-YOLO-Lane backbone. LSEM is inserted after old
     # layers 4 and 6, so all later backbone layers must be shifted explicitly.
@@ -1049,12 +1055,13 @@ class GCSLaneTrainer(BaseTrainer):
             "gcs_official_max_dets": [5, 6, 8],
             "gcs_official_min_points": [4, 5, 6],
             "gcs_official_valid_before_maxdet": False,
+            "gcs_official_count_modes": ["score_sum"],
         }
         if ordered_slot:
-            sweep_arg_values = {
-                name: getattr(self.args, name, default)
-                for name, default in official_query_defaults.items()
-            }
+            sweep_arg_values = {}
+            for name, default in official_query_defaults.items():
+                value = getattr(self.args, name, default)
+                sweep_arg_values[name] = default if value is None else value
             raise_for_ordered_slot_query_args(
                 sweep_arg_values,
                 official_query_defaults,
@@ -1083,6 +1090,11 @@ class GCSLaneTrainer(BaseTrainer):
             min_points = self._official_int_list(
                 getattr(self.args, "gcs_official_min_points", None), official_query_defaults["gcs_official_min_points"]
             )
+            count_modes = sorted(
+                {str(x) for x in getattr(self.args, "gcs_official_count_modes", None) or official_query_defaults["gcs_official_count_modes"]}
+            )
+        if ordered_slot:
+            count_modes = ["score_sum"]
         return SimpleNamespace(
             dataset="tusimple",
             archive_root=str(getattr(self.args, "gcs_official_archive_root", "archive") or "archive"),
@@ -1097,6 +1109,7 @@ class GCSLaneTrainer(BaseTrainer):
             nms_dist_pxs=nms_dist_pxs,
             max_dets=max_dets,
             min_points=min_points,
+            count_modes=count_modes,
             gcs_min_lanes=int(getattr(self.args, "gcs_min_lanes", 2)),
             gcs_max_lanes=int(getattr(self.args, "gcs_max_lanes", 5)),
             gcs_num_slots=int(getattr(self.args, "gcs_num_slots", 5)),

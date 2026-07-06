@@ -64,6 +64,7 @@ ORDERED_SLOT_QUERY_ONLY_DEFAULTS = {
     "count_aware_min_k": 3,
     "count_aware_max_k": 5,
     "count_aware_length_norm": 12.0,
+    "count_modes": ["score_sum"],
 }
 QUERY_ONLY_ROW_KEYS = (
     "conf",
@@ -75,6 +76,7 @@ QUERY_ONLY_ROW_KEYS = (
     "count_aware_min_k",
     "count_aware_max_k",
     "count_aware_length_norm",
+    "count_mode",
 )
 
 
@@ -154,6 +156,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--count-aware-min-k", type=int, default=3, help="Minimum k_hat for --count-aware-topk.")
     parser.add_argument("--count-aware-max-k", type=int, default=5, help="Maximum k_hat for --count-aware-topk.")
     parser.add_argument("--count-aware-length-norm", type=float, default=12.0, help="Visible-point count that saturates count-aware length quality.")
+    parser.add_argument(
+        "--count-modes",
+        nargs="+",
+        choices=("score_sum", "count_logits"),
+        default=["score_sum"],
+        help="Count source for query count-aware top-k sweep.",
+    )
     parser.add_argument("--max-images", type=int, default=0, help="Limit number of GT records. 0 means all.")
     parser.add_argument("--warmup", type=int, default=20, help="Number of untimed warmup forwards.")
     parser.add_argument("--device", default="0", help="Inference device, e.g. 0 or cpu.")
@@ -226,6 +235,7 @@ def _combo_key(combo: dict) -> tuple:
         float(combo["nms_dist_px"]),
         int(combo["max_det"]),
         int(combo["min_points"]),
+        str(combo.get("count_mode", "score_sum")),
     )
 
 
@@ -260,6 +270,7 @@ def build_combos(args: argparse.Namespace, decode_yaml_cfg: dict | None = None) 
     count_aware_min_k = int(getattr(args, "count_aware_min_k", 3))
     count_aware_max_k = int(getattr(args, "count_aware_max_k", 5))
     count_aware_length_norm = float(getattr(args, "count_aware_length_norm", 12.0))
+    count_modes = sorted({str(x) for x in getattr(args, "count_modes", ["score_sum"])})
     valid_before_maxdet = bool(getattr(args, "valid_before_maxdet", False))
     if count_aware_topk:
         if count_aware_min_k < 0 or count_aware_max_k < 0 or count_aware_min_k > count_aware_max_k:
@@ -269,12 +280,13 @@ def build_combos(args: argparse.Namespace, decode_yaml_cfg: dict | None = None) 
             )
         if count_aware_length_norm <= 0.0:
             raise ValueError(f"count-aware length norm must be > 0, got {count_aware_length_norm}.")
-    for conf, point_valid_thr, nms_dist_px, max_det, min_points in product(
+    for conf, point_valid_thr, nms_dist_px, max_det, min_points, count_mode in product(
         sorted({float(x) for x in args.confs}),
         sorted({float(x) for x in args.point_valid_thrs}),
         sorted({float(x) for x in args.nms_dist_pxs}),
         sorted({int(x) for x in args.max_dets}),
         sorted({int(x) for x in args.min_points}),
+        count_modes,
     ):
         if point_valid_thr < 0.0 or point_valid_thr > 1.0:
             raise ValueError(f"point-valid thresholds must be in [0, 1], got {point_valid_thr}.")
@@ -296,6 +308,7 @@ def build_combos(args: argparse.Namespace, decode_yaml_cfg: dict | None = None) 
                 "count_aware_min_k": count_aware_min_k,
                 "count_aware_max_k": count_aware_max_k,
                 "count_aware_length_norm": count_aware_length_norm,
+                "count_mode": count_mode,
             }
         )
     if not combos:
@@ -311,7 +324,14 @@ def select_best(rows: list[dict]) -> dict:
 def _row_sort_key(row: dict) -> tuple:
     if row.get("decode_mode") == "ordered_slot":
         return ("ordered_slot", 0.0, 0.0, 0, 0)
-    return (float(row["conf"]), float(row["point_valid_thr"]), float(row["nms_dist_px"]), int(row["max_det"]), int(row["min_points"]))
+    return (
+        float(row["conf"]),
+        float(row["point_valid_thr"]),
+        float(row["nms_dist_px"]),
+        int(row["max_det"]),
+        int(row["min_points"]),
+        str(row.get("count_mode", "score_sum")),
+    )
 
 
 def write_csv(path: Path, rows: list[dict]) -> None:
@@ -330,6 +350,7 @@ def write_csv(path: Path, rows: list[dict]) -> None:
         "count_aware_min_k",
         "count_aware_max_k",
         "count_aware_length_norm",
+        "count_mode",
         "strict_order_valid",
         "ordered_slot_order_violations",
         "ordered_slot_order_violation_images",
@@ -400,6 +421,7 @@ def sweep(args: argparse.Namespace) -> dict:
             args.count_aware_min_k = int(decode_yaml_cfg["count_aware_min_k"])
             args.count_aware_max_k = int(decode_yaml_cfg["count_aware_max_k"])
             args.count_aware_length_norm = float(decode_yaml_cfg["count_aware_length_norm"])
+            args.count_modes = [str(decode_yaml_cfg.get("count_mode", "score_sum"))]
     else:
         args.decode_mode = resolve_decode_mode(getattr(args, "decode_mode", "auto"), model)
     if str(getattr(args, "decode_mode", "query")) == "ordered_slot":
@@ -462,10 +484,12 @@ def sweep(args: argparse.Namespace) -> dict:
                 stats["ordered_slot_order_violation_images"] += int(order_diag["has_order_violation"])
             else:
                 pred_valid = preds.get("pred_valid_logits")
+                pred_count_logits = preds.get("pred_count_logits")
                 lanes = decode_gcs_predictions(
                     preds["pred_points"][0],
                     preds["pred_logits"][0],
                     pred_valid_logits=pred_valid[0] if pred_valid is not None else None,
+                    pred_count_logits=pred_count_logits[0] if pred_count_logits is not None else None,
                     image_shape=original_shape,
                     score_thr=combo["conf"],
                     point_valid_thr=combo["point_valid_thr"],
@@ -477,6 +501,7 @@ def sweep(args: argparse.Namespace) -> dict:
                     count_aware_min_k=combo["count_aware_min_k"],
                     count_aware_max_k=combo["count_aware_max_k"],
                     count_aware_length_norm=combo["count_aware_length_norm"],
+                    count_mode=combo["count_mode"],
                 )
             tusimple_lanes = gcs_lanes_to_tusimple_lanes(lanes, record["h_samples"], image_shape=original_shape)
             combo_records[_combo_key(combo)].append(
@@ -595,6 +620,7 @@ def sweep(args: argparse.Namespace) -> dict:
                 "count_aware_min_k": int(getattr(args, "count_aware_min_k", 3)),
                 "count_aware_max_k": int(getattr(args, "count_aware_max_k", 5)),
                 "count_aware_length_norm": float(getattr(args, "count_aware_length_norm", 12.0)),
+                "count_modes": [str(x) for x in sorted({str(x) for x in getattr(args, "count_modes", ["score_sum"])})],
             }
         )
 

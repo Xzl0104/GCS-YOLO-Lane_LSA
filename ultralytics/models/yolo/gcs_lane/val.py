@@ -52,6 +52,9 @@ LOSS_NAMES = (
     "gt5_short_point_valid_loss",
     "cnt_bound_5under",
     "cnt_score",
+    "query_count_ce_loss",
+    "query_count_acc",
+    "query_count_pred_mean",
 )
 LOSS_GAIN_ARGS = (
     "gcs_exist",
@@ -82,6 +85,9 @@ LOSS_GAIN_ARGS = (
     None,
     None,
     None,
+    "gcs_query_count_ce",
+    None,
+    None,
 )
 DEFAULT_LOSS_GAINS = (
     2.0,
@@ -91,6 +97,9 @@ DEFAULT_LOSS_GAINS = (
     0.1,
     0.2,
     0.2,
+    0.0,
+    0.0,
+    0.0,
     0.0,
     0.0,
     0.0,

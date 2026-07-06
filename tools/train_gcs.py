@@ -233,6 +233,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=0.35,
         help="Margin around the 4/5 boundary: GT4 upper=4+margin, GT5 lower=5-margin.",
     )
+    parser.add_argument("--gcs-query-count-ce", type=float, default=0.0)
+    parser.add_argument("--gcs-query-count-min-lanes", type=int, default=2)
+    parser.add_argument("--gcs-query-count-max-lanes", type=int, default=5)
     parser.add_argument(
         "--gcs-count-ce",
         nargs="?",
@@ -551,6 +554,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--gcs-official-nms-dist-pxs", nargs="+", type=float, default=[0.0, 18.0, 30.0, 50.0])
     parser.add_argument("--gcs-official-max-dets", nargs="+", type=int, default=[5, 6, 8])
     parser.add_argument("--gcs-official-min-points", nargs="+", type=int, default=[4, 5, 6])
+    parser.add_argument(
+        "--gcs-official-count-modes",
+        nargs="+",
+        choices=("score_sum", "count_logits"),
+        default=["score_sum"],
+        help="Count source modes for training-time query official-val sweeps.",
+    )
     official_valid_group = parser.add_mutually_exclusive_group()
     official_valid_group.add_argument(
         "--gcs-official-valid-before-maxdet",
@@ -728,6 +738,9 @@ def main() -> None:
         "gcs_count_boundary_gt5_under_weight": args.gcs_count_boundary_gt5_under_weight,
         "gcs_count_boundary_margin34": args.gcs_count_boundary_margin34,
         "gcs_count_boundary_margin45": args.gcs_count_boundary_margin45,
+        "gcs_query_count_ce": args.gcs_query_count_ce,
+        "gcs_query_count_min_lanes": args.gcs_query_count_min_lanes,
+        "gcs_query_count_max_lanes": args.gcs_query_count_max_lanes,
         "gcs_count_ce": args.gcs_count_ce,
         "gcs_interval": args.gcs_interval,
         "gcs_order": args.gcs_order,
@@ -807,6 +820,7 @@ def main() -> None:
         "gcs_official_nms_dist_pxs": args.gcs_official_nms_dist_pxs,
         "gcs_official_max_dets": args.gcs_official_max_dets,
         "gcs_official_min_points": args.gcs_official_min_points,
+        "gcs_official_count_modes": args.gcs_official_count_modes,
         "gcs_official_score_fp_weight": args.gcs_official_score_fp_weight,
         "gcs_official_score_fn_weight": args.gcs_official_score_fn_weight,
         "gcs_official_half": args.gcs_official_half,

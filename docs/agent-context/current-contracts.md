@@ -13,6 +13,12 @@ this branch:    Q=12, K=56, fixed_y=[710/720, 160/720]
 
 Do not silently import later mainline mechanisms such as Count Head, Quality Head, Survival Head, or near-miss mining into this branch unless a future task explicitly asks for that algorithm change. The branch now includes the 2026-06-27 user-requested, default-off `count_boundary_loss` for adjacent GT3/GT4/GT5 count-score boundaries; this is not a Count Head or decode change.
 
+The 2026-07-06 user-requested query-mode explicit Count Head is active only as
+a default-off optional query ablation. It is enabled only by the dedicated
+query-count YAML and emits `pred_count_logits: B x 4` for the fixed 2/3/4/5
+lane-count classes. The default query YAML still emits no `pred_count_logits`,
+and ordered-slot keeps its existing count/slot logic unchanged.
+
 The branch also includes the 2026-06-27 user-requested, default-off `gcs_hard_sampling` train-only sampler for short-visible GT3/GT4/GT5 and 0601 samples. It changes only the training dataloader sampling frequency through `WeightedRandomSampler`; it does not change labels, validation/test dataloaders, point/smooth/curve losses, decode, or official metrics.
 
 The branch also includes the 2026-06-27 user-requested, default-off `gcs_spurious_neg` loss for E3-lite. It uses the training Hungarian matcher indices only to select unmatched short duplicate-like queries near matched queries, then adds an extra target-zero BCE on their `pred_logits`. The GT-count weighting extension keeps the old default behavior with `gcs_spurious_gt3_weight=1.0`, `gcs_spurious_gt4_weight=1.0`, `gcs_spurious_gt5_weight=1.0`, and `gcs_spurious_disable_gt5=False`, while allowing GT3-or-sparser, GT4, and GT5-or-denser samples to carry different spurious-negative weights. The 2026-06-28 `gcs_spurious_gt_protect` extension is also default-off and only removes GT-close candidate queries from this extra negative BCE. It does not change data sampling, dataset labels, matcher logic, point/smooth/curve losses, decode, NMS, or official metrics.
@@ -349,6 +355,17 @@ pred_logits: B x 12
 pred_valid_logits: B x 12 x 56
 ```
 
+The optional query-count model
+`ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-count.yaml` additionally
+emits:
+
+```text
+pred_count_logits: B x 4
+```
+
+This optional output is default-off and uses class mapping
+`0->2`, `1->3`, `2->4`, `3->5` lanes.
+
 ## Loss Contract
 
 Default logged loss items on the active `424ab1c86` rollback state include:
@@ -382,7 +399,15 @@ gt5_short_pos_anchor_count
 gt5_short_point_valid_loss
 cnt_bound_5under
 cnt_score
+query_count_ce_loss
+query_count_acc
+query_count_pred_mean
 ```
+
+`query_count_ce_loss` is active only when a query model emits
+`pred_count_logits` and `gcs_query_count_ce > 0`; the default gain is `0.0`.
+When logits are absent, the three query-count log items are zero for old-model
+compatibility.
 
 Post-`424ab1c86` log items such as `short_side_geom_loss`, `far_spur_loss`,
 `farspur_if_loss`, `rank_topk_loss`, `shortside_*`, `rank_*`,
@@ -737,6 +762,12 @@ decode uses `sum(sigmoid(pred_logits))` to choose a dynamic final lane count
 and keeps the quality-best post-conf, post-NMS lanes. This does not change
 training, labels, losses, model outputs, official metrics, Count Head, Quality
 Head, Survival Head, or default decode behavior.
+
+For the optional query Count Head, query decode can explicitly use
+`--count-mode count_logits` with `--count-aware-topk`. This uses
+`argmax(pred_count_logits)+2` as the count-aware `k_hat` for the fixed 2..5
+class range. The default `--count-mode score_sum` preserves the historical
+score-sum count source.
 
 The branch includes a default-off query-mode decode ablation
 `valid_before_maxdet`. When explicitly enabled with

@@ -2,6 +2,36 @@
 
 This file records decisions for branch `codex/5-25-3-k56`.
 
+## 2026-07-06: Add default-off query Count Head
+
+Decision:
+
+Add an explicit query-mode Count Head only as a user-requested, default-off
+ablation. The default query YAML remains unchanged, ordered-slot keeps its
+existing count/slot contract, and query Count Head decode is used only when
+`--count-aware-topk --count-mode count_logits` is explicitly selected.
+
+Implementation scope:
+
+- `GCSLaneHead` accepts tail argument `query_count_head=False`; when enabled in
+  query mode it creates `query_count_mlp` and emits `pred_count_logits: B x 4`.
+- New YAML `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-count.yaml`
+  enables the optional query Count Head under the current Q12/K56 fixed-y
+  contract.
+- `GCSLoss` logs `query_count_ce_loss`, `query_count_acc`, and
+  `query_count_pred_mean`; the CE term contributes only when
+  `gcs_query_count_ce > 0`.
+- Query official eval/sweep can use `count_logits` as the count-aware top-k
+  source, while `score_sum` remains the default count source.
+
+Validation:
+
+Local Python compile passed for changed Python files. The focused
+`tools/check_gcs_query_count_head.py` contract check passed with 31 loss items.
+CPU model shape checks passed for default query, query-count, and ordered-slot
+YAMLs with `--imgsz 544 960`. `tools/check_ordered_slot_contracts.py
+--skip-git` and `tools/check_gcs_valid_before_maxdet.py` passed.
+
 ## 2026-07-06: Roll Active Code Back to 424ab1c86
 
 Decision:

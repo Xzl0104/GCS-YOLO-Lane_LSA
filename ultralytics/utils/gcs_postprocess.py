@@ -191,6 +191,7 @@ def decode_gcs_predictions(
     pred_points: torch.Tensor,
     pred_logits: torch.Tensor,
     pred_valid_logits: torch.Tensor | None = None,
+    pred_count_logits: torch.Tensor | None = None,
     image_shape: tuple[int, int] | None = None,
     score_thr: float = 0.5,
     point_valid_thr: float = 0.5,
@@ -202,6 +203,7 @@ def decode_gcs_predictions(
     count_aware_min_k: int = 3,
     count_aware_max_k: int = 5,
     count_aware_length_norm: float = 12.0,
+    count_mode: str = "score_sum",
 ) -> list[dict]:
     """Decode ``pred_points`` and ``pred_logits`` into ordered lane point sequences.
 
@@ -221,6 +223,9 @@ def decode_gcs_predictions(
         count_aware_min_k: Minimum dynamic lane count when count-aware top-k is enabled.
         count_aware_max_k: Maximum dynamic lane count when count-aware top-k is enabled.
         count_aware_length_norm: Visible-point count that saturates the count-aware length factor.
+        count_mode: Count source for count-aware top-k. ``score_sum`` preserves the historical
+            sum(sigmoid(pred_logits)) behavior with the configured k range; ``count_logits`` uses
+            the query Count Head's fixed 2/3/4/5 class mapping.
 
     Returns:
         A list of dictionaries with score, query index, normalized points, and optional pixel points.
@@ -252,7 +257,24 @@ def decode_gcs_predictions(
             count_aware_max_k,
             count_aware_length_norm,
         )
-        count_aware_k = _count_aware_k_hat(float(scores.sum()), min_k=min_k, max_k=max_k)
+        count_mode = str(count_mode or "score_sum")
+        if count_mode == "count_logits":
+            if pred_count_logits is None:
+                raise ValueError("count_mode='count_logits' requires pred_count_logits.")
+            count_logits = pred_count_logits.detach().float().cpu().reshape(-1)
+            count_logits_min_k = 2
+            count_logits_max_k = 5
+            expected = count_logits_max_k - count_logits_min_k + 1
+            if count_logits.numel() != expected:
+                raise ValueError(
+                    f"pred_count_logits must have {expected} classes for range [{count_logits_min_k}, {count_logits_max_k}], "
+                    f"got {count_logits.numel()}."
+                )
+            count_aware_k = int(count_logits.argmax().item()) + count_logits_min_k
+        elif count_mode == "score_sum":
+            count_aware_k = _count_aware_k_hat(float(scores.sum()), min_k=min_k, max_k=max_k)
+        else:
+            raise ValueError(f"Unsupported count_mode={count_mode!r}.")
     else:
         length_norm = float(count_aware_length_norm)
     point_valid_scores = pred_valid_logits.detach().float().cpu().sigmoid() if pred_valid_logits is not None else None
@@ -340,6 +362,8 @@ def decode_gcs_predictions(
             "score": float(score),
             "query": int(query_idx),
             "points_norm": lane_norm,
+            "count_mode": str(count_mode or "score_sum"),
+            "decoded_count_k": int(count_aware_k) if count_aware_k is not None else -1,
         }
         visible_mask = None
         if point_valid_scores is not None:

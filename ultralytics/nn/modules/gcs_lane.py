@@ -214,6 +214,7 @@ class GCSLaneHead(nn.Module):
         min_lanes=2,
         max_lanes=5,
         count_classes=None,
+        query_count_head: bool = False,
     ):
         """Initialize the GCS lane query decoder and training-only auxiliary heads."""
         super().__init__()
@@ -331,6 +332,13 @@ class GCSLaneHead(nn.Module):
             nn.ReLU(inplace=True),
             nn.Linear(c1, 1),
         )
+        self.query_count_head = self.gcs_mode == "query" and bool(query_count_head)
+        if self.query_count_head:
+            self.query_count_mlp = nn.Sequential(
+                nn.Linear(c1, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, self.count_classes),
+            )
         if self.gcs_mode == "ordered_slot":
             self.start_mlp = nn.Sequential(
                 nn.Linear(c1, c1),
@@ -364,6 +372,8 @@ class GCSLaneHead(nn.Module):
         self._init_point_valid_refine_head()
         if self.gcs_mode == "ordered_slot":
             self._init_interval_heads()
+        if self.query_count_head:
+            self._init_query_count_head()
 
     def _build_fixed_y_anchors(self):
         """Build shared bottom-to-top y anchors for fixed-y x-only prediction."""
@@ -430,6 +440,12 @@ class GCSLaneHead(nn.Module):
             final = mlp[-1]
             nn.init.normal_(final.weight, mean=0.0, std=1e-3)
             nn.init.zeros_(final.bias)
+
+    def _init_query_count_head(self):
+        """Initialize query-mode explicit count logits near neutral."""
+        final = self.query_count_mlp[-1]
+        nn.init.normal_(final.weight, mean=0.0, std=1e-3)
+        nn.init.zeros_(final.bias)
 
     def _sample_point_features(self, xs, points):
         """Sample high-resolution image features at normalized point coordinates.
@@ -625,6 +641,8 @@ class GCSLaneHead(nn.Module):
             "pred_logits": pred_logits,
             "pred_valid_logits": pred_valid_logits,
         }
+        if getattr(self, "query_count_head", False):
+            out["pred_count_logits"] = self.query_count_mlp(hs.mean(dim=1))
         if self.gcs_mode == "ordered_slot":
             out["pred_exist_logits"] = pred_logits
             out["pred_start_logits"] = self.start_mlp(hs).view(b, self.num_queries, self.num_points)
