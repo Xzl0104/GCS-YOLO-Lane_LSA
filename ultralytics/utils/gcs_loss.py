@@ -338,6 +338,23 @@ class GCSLoss(nn.Module):
             if point_valid_pos_weight_max is not None
             else self._arg(args, "gcs_point_valid_pos_weight_max", 10.0)
         )
+        self.short_geom_gain = float(self._arg(args, "gcs_short_geom", 0.0))
+        self.short_geom_visible_thr = int(self._arg(args, "gcs_short_geom_visible_thr", 10))
+        self.short_geom_gt5_weight = float(self._arg(args, "gcs_short_geom_gt5_weight", 2.0))
+        self.short_geom_max_weight = float(self._arg(args, "gcs_short_geom_max_weight", 3.0))
+        self.short_geom_curve = float(self._arg(args, "gcs_short_geom_curve", 1.0))
+
+        if self.short_geom_gain < 0.0:
+            raise ValueError(f"gcs_short_geom must be >= 0, got {self.short_geom_gain}.")
+        if self.short_geom_visible_thr < 0:
+            raise ValueError(f"gcs_short_geom_visible_thr must be >= 0, got {self.short_geom_visible_thr}.")
+        if self.short_geom_gt5_weight < 1.0:
+            raise ValueError(f"gcs_short_geom_gt5_weight must be >= 1, got {self.short_geom_gt5_weight}.")
+        if self.short_geom_max_weight < 1.0:
+            raise ValueError(f"gcs_short_geom_max_weight must be >= 1, got {self.short_geom_max_weight}.")
+        if self.short_geom_curve < 0.0:
+            raise ValueError(f"gcs_short_geom_curve must be >= 0, got {self.short_geom_curve}.")
+
         self.exist_quality_alpha = float(
             exist_quality_alpha if exist_quality_alpha is not None else self._arg(args, "gcs_exist_quality_alpha", 1.0)
         )
@@ -570,33 +587,122 @@ class GCSLoss(nn.Module):
             loss = loss * focal_weight
         return loss.mean()
 
+    def _short_geom_lane_weights(
+        self,
+        gt_valid_b: torch.Tensor,
+        gt_count_b: torch.Tensor | int | float,
+    ) -> torch.Tensor:
+        """Return one geometry weight per GT lane."""
+        device = gt_valid_b.device
+        dtype = gt_valid_b.dtype
+        n = int(gt_valid_b.shape[0])
+
+        if n == 0:
+            return torch.ones((0,), device=device, dtype=dtype)
+
+        weights = torch.ones((n,), device=device, dtype=dtype)
+
+        if float(self.short_geom_gain) <= 0.0:
+            return weights
+
+        gt_count = int(round(float(torch.as_tensor(gt_count_b).detach().cpu().item())))
+        if gt_count != 5:
+            return weights
+
+        visible_counts = gt_valid_b.float().sum(dim=1)
+        short_mask = visible_counts <= float(self.short_geom_visible_thr)
+
+        if bool(short_mask.any()):
+            boost = 1.0 + float(self.short_geom_gain) * (float(self.short_geom_gt5_weight) - 1.0)
+            weights[short_mask] = boost
+
+        return weights.clamp(min=1.0, max=float(self.short_geom_max_weight))
+
     def point_loss(
         self,
         pred_points: torch.Tensor,
         gt_points: list[torch.Tensor],
         gt_valid: list[torch.Tensor],
         indices: list[tuple[torch.Tensor, torch.Tensor]],
+        gt_lanes: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Aspect-weighted L1 point loss on Hungarian-matched lane point sequences."""
+        """Aspect-weighted L1 point loss with optional GT5 short-visible lane weighting."""
+        short_geom_enabled = (
+            float(self.short_geom_gain) > 0.0
+            and int(self.short_geom_visible_thr) > 0
+            and float(self.short_geom_gt5_weight) > 1.0
+        )
+        if not short_geom_enabled:
+            losses = []
+            device, dtype = pred_points.device, pred_points.dtype
+            for b, (src_idx, tgt_idx) in enumerate(indices):
+                if src_idx.numel() == 0:
+                    continue
+                pred = pred_points[b, src_idx]
+                target = gt_points[b].to(device=device, dtype=dtype)[tgt_idx]
+                valid = gt_valid[b].to(device=device, dtype=dtype)[tgt_idx]
+
+                losses.append(
+                    aspect_weighted_l1_point_loss(
+                        pred,
+                        target,
+                        valid > 0.5,
+                        image_size=self.image_size,
+                        y_weight=1.0,
+                        x_only=False,
+                    )
+                )
+
+            return torch.stack(losses).mean() if losses else self._zero_like(pred_points)
+
         losses = []
         device, dtype = pred_points.device, pred_points.dtype
+        scale = self._scale_for(pred_points).view(1, 1, 2)
+
         for b, (src_idx, tgt_idx) in enumerate(indices):
             if src_idx.numel() == 0:
                 continue
-            pred = pred_points[b, src_idx]
-            target = gt_points[b].to(device=device, dtype=dtype)[tgt_idx]
-            valid = gt_valid[b].to(device=device, dtype=dtype)[tgt_idx]
 
-            losses.append(
-                aspect_weighted_l1_point_loss(
-                    pred,
-                    target,
-                    valid > 0.5,
-                    image_size=self.image_size,
-                    y_weight=1.0,
-                    x_only=False,
+            src_idx = src_idx.to(device=device, dtype=torch.long)
+            tgt_idx = tgt_idx.to(device=device, dtype=torch.long)
+
+            pred = pred_points[b, src_idx]
+            target_all = gt_points[b].to(device=device, dtype=dtype)
+            valid_all = gt_valid[b].to(device=device, dtype=dtype)
+
+            target = target_all[tgt_idx]
+            valid = valid_all[tgt_idx]
+
+            if gt_lanes is not None:
+                all_lane_weights = self._short_geom_lane_weights(valid_all, gt_lanes[b])
+                lane_weights = all_lane_weights[tgt_idx].to(device=device, dtype=dtype)
+            else:
+                lane_weights = torch.ones((pred.shape[0],), device=device, dtype=dtype)
+
+            mask = (valid > 0.5).to(dtype=dtype)
+            valid_counts = mask.sum(dim=1)
+            active = valid_counts > 0
+            boosted = lane_weights > 1.0 + 1e-6
+            active_boosted = boosted & active
+            if not bool(active_boosted.any()):
+                losses.append(
+                    aspect_weighted_l1_point_loss(
+                        pred,
+                        target,
+                        valid > 0.5,
+                        image_size=self.image_size,
+                        y_weight=1.0,
+                        x_only=False,
+                    )
                 )
-            )
+                continue
+
+            point_err = ((pred - target).abs() * scale).sum(dim=-1)
+            lane_loss = (point_err * mask).sum(dim=1) / valid_counts.clamp_min(1.0)
+
+            lane_loss = lane_loss[active]
+            lane_weights = lane_weights[active]
+            losses.append((lane_loss * lane_weights).sum() / lane_weights.sum().clamp_min(1.0))
 
         return torch.stack(losses).mean() if losses else self._zero_like(pred_points)
 
@@ -702,10 +808,44 @@ class GCSLoss(nn.Module):
         gt_points: list[torch.Tensor],
         gt_valid: list[torch.Tensor],
         indices: list[tuple[torch.Tensor, torch.Tensor]],
+        gt_lanes: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Adaptive curvature-aware loss with GT-curvature weighting."""
+        """Adaptive curvature-aware loss with optional GT5 short-visible lane weighting."""
         if pred_points.shape[2] < 3:
             return self._zero_like(pred_points)
+
+        short_curve_enabled = (
+            float(self.short_geom_gain) > 0.0
+            and float(self.short_geom_curve) > 0.0
+            and int(self.short_geom_visible_thr) > 0
+            and float(self.short_geom_gt5_weight) > 1.0
+        )
+        if not short_curve_enabled:
+            losses = []
+            device, dtype = pred_points.device, pred_points.dtype
+            scale = self._pixel_scale_for(pred_points)
+            for b, (src_idx, tgt_idx) in enumerate(indices):
+                if src_idx.numel() == 0:
+                    continue
+
+                pred = pred_points[b, src_idx]
+                target = gt_points[b].to(device=device, dtype=dtype)[tgt_idx]
+                valid = gt_valid[b].to(device=device, dtype=dtype)[tgt_idx]
+                triplet_valid = valid[:, 2:] * valid[:, 1:-1] * valid[:, :-2]
+                valid_sum = triplet_valid.sum().clamp_min(1.0)
+
+                pred_px = pred * scale
+                target_px = target * scale
+                pred_lap = pred_px[:, 2:] - 2.0 * pred_px[:, 1:-1] + pred_px[:, :-2]
+                gt_lap = target_px[:, 2:] - 2.0 * target_px[:, 1:-1] + target_px[:, :-2]
+                gt_curve_mag = torch.norm(gt_lap.detach(), dim=-1)
+                weight = (1.0 + self.curve_alpha * gt_curve_mag).clamp(max=self.curve_weight_max)
+
+                loss = F.smooth_l1_loss(pred_lap, gt_lap, reduction="none").sum(dim=-1)
+                loss = loss * triplet_valid * weight
+                losses.append(loss.sum() / valid_sum)
+
+            return torch.stack(losses).mean() if losses else self._zero_like(pred_points)
 
         losses = []
         device, dtype = pred_points.device, pred_points.dtype
@@ -714,22 +854,50 @@ class GCSLoss(nn.Module):
             if src_idx.numel() == 0:
                 continue
 
+            src_idx = src_idx.to(device=device, dtype=torch.long)
+            tgt_idx = tgt_idx.to(device=device, dtype=torch.long)
+
             pred = pred_points[b, src_idx]
-            target = gt_points[b].to(device=device, dtype=dtype)[tgt_idx]
-            valid = gt_valid[b].to(device=device, dtype=dtype)[tgt_idx]
+            target_all = gt_points[b].to(device=device, dtype=dtype)
+            valid_all = gt_valid[b].to(device=device, dtype=dtype)
+
+            target = target_all[tgt_idx]
+            valid = valid_all[tgt_idx]
+
             triplet_valid = valid[:, 2:] * valid[:, 1:-1] * valid[:, :-2]
-            valid_sum = triplet_valid.sum().clamp_min(1.0)
 
             pred_px = pred * scale
             target_px = target * scale
+
             pred_lap = pred_px[:, 2:] - 2.0 * pred_px[:, 1:-1] + pred_px[:, :-2]
             gt_lap = target_px[:, 2:] - 2.0 * target_px[:, 1:-1] + target_px[:, :-2]
+
             gt_curve_mag = torch.norm(gt_lap.detach(), dim=-1)
-            weight = (1.0 + self.curve_alpha * gt_curve_mag).clamp(max=self.curve_weight_max)
+            curve_weight = (1.0 + self.curve_alpha * gt_curve_mag).clamp(max=self.curve_weight_max)
 
             loss = F.smooth_l1_loss(pred_lap, gt_lap, reduction="none").sum(dim=-1)
-            loss = loss * triplet_valid * weight
-            losses.append(loss.sum() / valid_sum)
+            loss = loss * triplet_valid * curve_weight
+            triplet_counts = triplet_valid.sum(dim=1)
+            active = triplet_counts > 0
+
+            if gt_lanes is not None and float(self.short_geom_curve) > 0.0:
+                all_lane_weights = self._short_geom_lane_weights(valid_all, gt_lanes[b])
+                base_weights = all_lane_weights[tgt_idx].to(device=device, dtype=dtype)
+                lane_weights = 1.0 + float(self.short_geom_curve) * (base_weights - 1.0)
+            else:
+                lane_weights = torch.ones((pred.shape[0],), device=device, dtype=dtype)
+
+            boosted = lane_weights > 1.0 + 1e-6
+            active_boosted = boosted & active
+            if not bool(active_boosted.any()):
+                valid_sum = triplet_valid.sum().clamp_min(1.0)
+                losses.append(loss.sum() / valid_sum)
+                continue
+
+            lane_curve_loss = loss.sum(dim=1) / triplet_counts.clamp_min(1.0)
+            lane_curve_loss = lane_curve_loss[active]
+            lane_weights = lane_weights[active]
+            losses.append((lane_curve_loss * lane_weights).sum() / lane_weights.sum().clamp_min(1.0))
 
         return torch.stack(losses).mean() if losses else self._zero_like(pred_points)
 
@@ -1120,8 +1288,8 @@ class GCSLoss(nn.Module):
 
         indices = self.matcher(pred_points, pred_logits, gt_points, gt_valid)
         exist_loss = self.exist_loss(pred_logits, pred_points, pred_valid_logits, gt_points, gt_valid, indices)
-        point_loss = self.point_loss(pred_points, gt_points, gt_valid, indices)
         gt_lanes = self.target_lane_count(pred_logits, batch, gt_valid)
+        point_loss = self.point_loss(pred_points, gt_points, gt_valid, indices, gt_lanes=gt_lanes)
         (
             point_valid_loss,
             gt5_short_pos_count,
@@ -1129,7 +1297,7 @@ class GCSLoss(nn.Module):
             gt5_short_point_valid_loss,
         ) = self.point_valid_loss(pred_valid_logits, pred_points, gt_valid, indices, gt_lanes=gt_lanes, return_details=True)
         smooth_loss = self.smooth_loss(pred_points, gt_valid, indices)
-        curve_loss = self.curve_loss(pred_points, gt_points, gt_valid, indices)
+        curve_loss = self.curve_loss(pred_points, gt_points, gt_valid, indices, gt_lanes=gt_lanes)
         (
             count_loss,
             count_under5_loss,

@@ -300,12 +300,13 @@ Historical q12-k56 experiment docs are old records. Preserve them, but do not le
 
 Active source/config is rolled back to commit `424ab1c86` (`Add
 valid-before-maxdet decode option`). Its algorithm contract remains the
-5-25-3 K56 mainline through that commit: no later Count Head,
+5-25-3 K56 mainline through that commit: no later mainline Count Head,
 Q18/Q20/dataref, lane-balanced, valid-repair, side-aux, short-side hardset,
 `gcs_short_side_geom`, `gcs_far_spurious_neg`, ignore-first ranking/raw-rescue,
-or count-contract diagnostic tooling is active. Later commits and notes are
-preserved only as legacy experiment conclusions in the docs. They are not
-active CLI/config/loss/tool behavior.
+or count-contract diagnostic tooling is active. The only Count Head exception is
+the 2026-07-06 user-requested, default-off query Count Head ablation documented
+above. Later commits and notes are preserved only as legacy experiment
+conclusions in the docs. They are not active CLI/config/loss/tool behavior.
 
 ## Label Contract
 
@@ -577,6 +578,16 @@ curve, mask, edge, dataset, dataloader, matcher, decode, NMS, or official
 metrics. `gt5_short_pos_count`, `gt5_short_pos_anchor_count`, and
 `gt5_short_point_valid_loss` are diagnostics for the rescued anchors.
 
+`gcs_short_geom=0.0` keeps the default query point/curve geometry losses
+unchanged. When explicitly enabled, `gcs_short_geom` applies only inside
+training loss calculation for Hungarian-matched images with
+`GT lane count == 5`, only to GT lanes whose visible anchor count is at or
+below `gcs_short_geom_visible_thr`, and only by lane-level weighting inside
+`point_loss` and `curve_loss`. It does not change model outputs, matcher
+assignment, smooth loss, point-valid BCE targets, mask/edge losses, dataset,
+dataloader, decode, NMS, official metrics, Count Head, or loss item count.
+The first-version geometry boost has no side-lane/order assumption.
+
 `spurious_neg_loss` is disabled by default through `gcs_spurious_neg=0.0`.
 When enabled, it requires `pred_valid_logits` and applies only to unmatched
 queries with visible-anchor count in `[2, gcs_spurious_max_points]`, at least
@@ -768,6 +779,13 @@ For the optional query Count Head, query decode can explicitly use
 `argmax(pred_count_logits)+2` as the count-aware `k_hat` for the fixed 2..5
 class range. The default `--count-mode score_sum` preserves the historical
 score-sum count source.
+
+For diagnosis only, `tools/eval_tusimple_official.py --oracle-count` can force
+query count-aware top-k to use `k_hat = GT lane count` through
+`count_mode=oracle_gt`. This mode intentionally uses GT during decode, so its
+outputs are not formal official results, cannot be used for threshold or
+checkpoint selection, and are only valid for isolating whether lane-count
+estimation is the bottleneck. It must remain explicit and default-off.
 
 The branch includes a default-off query-mode decode ablation
 `valid_before_maxdet`. When explicitly enabled with

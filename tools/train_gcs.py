@@ -449,6 +449,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=1.0,
         help="Extra point-valid BCE multiplier for visible anchors of matched short GT5 lanes.",
     )
+    parser.add_argument("--gcs-short-geom", type=float, default=0.0)
+    parser.add_argument("--gcs-short-geom-visible-thr", type=int, default=10)
+    parser.add_argument("--gcs-short-geom-gt5-weight", type=float, default=2.0)
+    parser.add_argument("--gcs-short-geom-max-weight", type=float, default=3.0)
+    parser.add_argument("--gcs-short-geom-curve", type=float, default=1.0)
     parser.add_argument("--gcs-exist-pos-weight", type=float, default=1.0)
     parser.add_argument("--gcs-exist-focal-gamma", type=float, default=0.0, help="Optional focal gamma for existence BCE. 0 disables focal weighting.")
     parser.add_argument(
@@ -780,6 +785,11 @@ def main() -> None:
         "gcs_spurious_gt_protect_mode": args.gcs_spurious_gt_protect_mode,
         "gcs_gt5_short_visible_thr": args.gcs_gt5_short_visible_thr,
         "gcs_gt5_short_point_valid_weight": args.gcs_gt5_short_point_valid_weight,
+        "gcs_short_geom": args.gcs_short_geom,
+        "gcs_short_geom_visible_thr": args.gcs_short_geom_visible_thr,
+        "gcs_short_geom_gt5_weight": args.gcs_short_geom_gt5_weight,
+        "gcs_short_geom_max_weight": args.gcs_short_geom_max_weight,
+        "gcs_short_geom_curve": args.gcs_short_geom_curve,
         "gcs_exist_pos_weight": args.gcs_exist_pos_weight,
         "gcs_exist_focal_gamma": args.gcs_exist_focal_gamma,
         "gcs_exist_focal_alpha": args.gcs_exist_focal_alpha,
