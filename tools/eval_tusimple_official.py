@@ -105,10 +105,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--count-aware-max-k", type=int, default=5, help="Maximum k_hat for --count-aware-topk.")
     parser.add_argument("--count-aware-length-norm", type=float, default=12.0, help="Visible-point count that saturates count-aware length quality.")
     parser.add_argument(
+        "--count-aware-extra-margin",
+        type=int,
+        default=0,
+        help="Extra lanes to keep above k_hat for count-aware top-k, capped by --max-det.",
+    )
+    parser.add_argument(
         "--count-mode",
         choices=("score_sum", "count_logits"),
         default="score_sum",
         help="Count source for query count-aware top-k.",
+    )
+    parser.add_argument(
+        "--oracle-count",
+        action="store_true",
+        help="Diagnostic only: force query count-aware top-k k_hat to the GT lane count for each image.",
     )
     parser.add_argument("--max-images", type=int, default=0, help="Limit number of GT records. 0 means all.")
     parser.add_argument("--warmup", type=int, default=20, help="Number of untimed warmup forwards.")
@@ -163,8 +174,10 @@ def resolve_save_dir(
     nms_dist_px: float,
     max_det: int,
     min_points: int,
+    count_aware_extra_margin: int = 0,
     count_aware_topk: bool = False,
     valid_before_maxdet: bool = False,
+    oracle_count: bool = False,
     decode_mode: str = "auto",
 ) -> Path:
     if save_dir is not None and str(save_dir).strip():
@@ -173,10 +186,13 @@ def resolve_save_dir(
         tag = f"official_{split}_ordered_slot"
     else:
         count_tag = "_catopk" if count_aware_topk else ""
+        if count_aware_topk and int(count_aware_extra_margin) > 0:
+            count_tag += f"_extra{int(count_aware_extra_margin)}"
+        oracle_tag = "_oraclecount" if oracle_count else ""
         valid_tag = "_validbeforemaxdet" if valid_before_maxdet else ""
         tag = (
             f"official_{split}_conf{float(conf):.4g}_pvalid{float(point_valid_thr):.4g}_"
-            f"nms{float(nms_dist_px):.4g}_maxdet{int(max_det)}_minp{int(min_points)}{count_tag}{valid_tag}"
+            f"nms{float(nms_dist_px):.4g}_maxdet{int(max_det)}_minp{int(min_points)}{count_tag}{oracle_tag}{valid_tag}"
         ).replace(".", "p")
     run_dir = _weight_run_dir(weights)
     if run_dir is not None:
@@ -208,6 +224,7 @@ def _apply_query_decode_yaml(args: argparse.Namespace, decode_yaml_cfg: dict) ->
     args.count_aware_min_k = int(decode_yaml_cfg["count_aware_min_k"])
     args.count_aware_max_k = int(decode_yaml_cfg["count_aware_max_k"])
     args.count_aware_length_norm = float(decode_yaml_cfg["count_aware_length_norm"])
+    args.count_aware_extra_margin = int(decode_yaml_cfg.get("count_aware_extra_margin", 0))
     args.count_mode = str(decode_yaml_cfg.get("count_mode", "score_sum"))
 
 
@@ -250,7 +267,7 @@ def _count_diagnostics(pred_records: list[dict], gt_records: list[dict]) -> dict
     pairs: list[tuple[int, int]] = []
     for pred in pred_records:
         gt = gt_by_raw[str(pred["raw_file"])]
-        gt_count = sum(1 for lane in gt.get("lanes", []) if any(float(x) >= 0.0 for x in lane))
+        gt_count = _gt_lane_count(gt)
         pairs.append((gt_count, len(pred.get("lanes", []))))
     n = max(len(pairs), 1)
     correct = sum(1 for gt, pred in pairs if gt == pred)
@@ -265,6 +282,10 @@ def _count_diagnostics(pred_records: list[dict], gt_records: list[dict]) -> dict
         "gt_lanes_hist": {str(k): int(v) for k, v in sorted(Counter(gt for gt, _ in pairs).items())},
         "count_confusion": {f"{gt}->{pred}": int(v) for (gt, pred), v in sorted(Counter(pairs).items())},
     }
+
+
+def _gt_lane_count(record: dict) -> int:
+    return sum(1 for lane in record.get("lanes", []) if any(float(x) >= 0.0 for x in lane))
 
 
 @torch.inference_mode()
@@ -288,7 +309,9 @@ def generate_predictions(
     count_aware_min_k: int = 3,
     count_aware_max_k: int = 5,
     count_aware_length_norm: float = 12.0,
+    count_aware_extra_margin: int = 0,
     count_mode: str = "score_sum",
+    oracle_count: bool = False,
     valid_before_maxdet: bool = False,
     decode_mode: str = "auto",
     decode_yaml_cfg: dict | None = None,
@@ -315,9 +338,15 @@ def generate_predictions(
             count_aware_min_k = int(decode_yaml_cfg["count_aware_min_k"])
             count_aware_max_k = int(decode_yaml_cfg["count_aware_max_k"])
             count_aware_length_norm = float(decode_yaml_cfg["count_aware_length_norm"])
+            count_aware_extra_margin = int(decode_yaml_cfg.get("count_aware_extra_margin", 0))
             count_mode = str(decode_yaml_cfg.get("count_mode", "score_sum"))
     else:
         decode_mode = resolve_decode_mode(decode_mode, model)
+    if oracle_count:
+        if str(decode_mode) == "ordered_slot":
+            raise RuntimeError("--oracle-count is query-decode diagnostic only and is not valid for ordered_slot.")
+        count_aware_topk = True
+        count_mode = "oracle_gt"
     if str(decode_mode) == "ordered_slot" and query_decode_defaults is not None:
         guard_no_query_decode_args_for_ordered_slot(
             {
@@ -331,6 +360,7 @@ def generate_predictions(
                 "count_aware_min_k": count_aware_min_k,
                 "count_aware_max_k": count_aware_max_k,
                 "count_aware_length_norm": count_aware_length_norm,
+                "count_aware_extra_margin": count_aware_extra_margin,
                 "count_mode": count_mode,
             },
             context="TuSimple official eval",
@@ -404,6 +434,7 @@ def generate_predictions(
                 preds["pred_logits"][0],
                 pred_valid_logits=pred_valid[0] if pred_valid is not None else None,
                 pred_count_logits=pred_count_logits[0] if pred_count_logits is not None else None,
+                oracle_count=_gt_lane_count(record) if oracle_count else None,
                 image_shape=original_shape,
                 score_thr=conf,
                 point_valid_thr=point_valid_thr,
@@ -415,6 +446,7 @@ def generate_predictions(
                 count_aware_min_k=count_aware_min_k,
                 count_aware_max_k=count_aware_max_k,
                 count_aware_length_norm=count_aware_length_norm,
+                count_aware_extra_margin=count_aware_extra_margin,
                 count_mode=count_mode,
             )
         tusimple_lanes = gcs_lanes_to_tusimple_lanes(lanes, record["h_samples"], image_shape=original_shape)
@@ -465,6 +497,8 @@ def evaluate_official(args: argparse.Namespace) -> dict:
         if yaml_decode_mode == "query":
             _apply_query_decode_yaml(args, decode_yaml_cfg)
     if pred_json:
+        if bool(getattr(args, "oracle_count", False)):
+            raise RuntimeError("--oracle-count requires model inference and cannot be used with --pred-json.")
         pred_path = Path(pred_json)
         pred_records = _limit_records(read_tusimple_json_lines(pred_path), args.max_images)
     else:
@@ -478,7 +512,12 @@ def evaluate_official(args: argparse.Namespace) -> dict:
         query_count_aware_min_k = int(getattr(args, "count_aware_min_k", 3))
         query_count_aware_max_k = int(getattr(args, "count_aware_max_k", 5))
         query_count_aware_length_norm = float(getattr(args, "count_aware_length_norm", 12.0))
+        query_count_aware_extra_margin = int(getattr(args, "count_aware_extra_margin", 0))
         query_count_mode = str(getattr(args, "count_mode", "score_sum"))
+        query_oracle_count = bool(getattr(args, "oracle_count", False))
+        if query_oracle_count:
+            query_count_aware_topk = True
+            query_count_mode = "oracle_gt"
         pred_records, timing, active_decode_mode, ordered_slot_order_stats = generate_predictions(
             weights=args.weights,
             archive_root=archive_root,
@@ -495,7 +534,9 @@ def evaluate_official(args: argparse.Namespace) -> dict:
             count_aware_min_k=query_count_aware_min_k,
             count_aware_max_k=query_count_aware_max_k,
             count_aware_length_norm=query_count_aware_length_norm,
+            count_aware_extra_margin=query_count_aware_extra_margin,
             count_mode=query_count_mode,
+            oracle_count=query_oracle_count,
             decode_mode=args.decode_mode,
             decode_yaml_cfg=decode_yaml_cfg,
             gcs_min_lanes=int(getattr(args, "gcs_min_lanes", 2)),
@@ -523,7 +564,12 @@ def evaluate_official(args: argparse.Namespace) -> dict:
     query_count_aware_min_k = int(getattr(args, "count_aware_min_k", 3))
     query_count_aware_max_k = int(getattr(args, "count_aware_max_k", 5))
     query_count_aware_length_norm = float(getattr(args, "count_aware_length_norm", 12.0))
+    query_count_aware_extra_margin = int(getattr(args, "count_aware_extra_margin", 0))
     query_count_mode = str(getattr(args, "count_mode", "score_sum"))
+    query_oracle_count = bool(getattr(args, "oracle_count", False))
+    if query_oracle_count:
+        query_count_aware_topk = True
+        query_count_mode = "oracle_gt"
 
     save_dir = resolve_save_dir(
         args.save_dir,
@@ -534,8 +580,10 @@ def evaluate_official(args: argparse.Namespace) -> dict:
         query_nms_dist_px,
         query_max_det,
         query_min_points,
+        count_aware_extra_margin=query_count_aware_extra_margin,
         count_aware_topk=query_count_aware_topk,
         valid_before_maxdet=query_valid_before_maxdet,
+        oracle_count=query_oracle_count,
         decode_mode=active_decode_mode,
     )
     save_dir.mkdir(parents=True, exist_ok=True)
@@ -628,7 +676,11 @@ def evaluate_official(args: argparse.Namespace) -> dict:
                 "count_aware_min_k": query_count_aware_min_k,
                 "count_aware_max_k": query_count_aware_max_k,
                 "count_aware_length_norm": query_count_aware_length_norm,
+                "count_aware_extra_margin": query_count_aware_extra_margin,
                 "count_mode": query_count_mode,
+                "oracle_count": query_oracle_count,
+                "uses_gt_count_for_decode": query_oracle_count,
+                "diagnostic_only": query_oracle_count,
             }
         )
 

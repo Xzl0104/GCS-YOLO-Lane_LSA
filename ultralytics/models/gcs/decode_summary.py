@@ -23,10 +23,13 @@ QUERY_DECODE_KEYS = frozenset(
         "count_aware_min_k",
         "count_aware_max_k",
         "count_aware_length_norm",
+        "count_aware_extra_margin",
         "count_mode",
     }
 )
-QUERY_SWEEP_DECODE_KEYS = frozenset({"confs", "point_valid_thrs", "nms_dist_pxs", "max_dets", "count_modes"})
+QUERY_SWEEP_DECODE_KEYS = frozenset(
+    {"confs", "point_valid_thrs", "nms_dist_pxs", "max_dets", "count_aware_extra_margins", "count_modes"}
+)
 ORDERED_SLOT_QUERY_ONLY_KEYS = QUERY_DECODE_KEYS | QUERY_SWEEP_DECODE_KEYS
 ORDERED_SLOT_QUERY_DECODE_DEFAULTS = {
     "conf": 0.25,
@@ -39,6 +42,7 @@ ORDERED_SLOT_QUERY_DECODE_DEFAULTS = {
     "count_aware_min_k": 3,
     "count_aware_max_k": 5,
     "count_aware_length_norm": 12.0,
+    "count_aware_extra_margin": 0,
     "count_mode": "score_sum",
 }
 
@@ -289,6 +293,7 @@ def query_decode_cfg(best_row: Mapping[str, Any], valid_before_maxdet: Any = Non
         "count_aware_min_k": int(best_row.get("count_aware_min_k", 3) or 3),
         "count_aware_max_k": int(best_row.get("count_aware_max_k", 5) or 5),
         "count_aware_length_norm": float(best_row.get("count_aware_length_norm", 12.0) or 12.0),
+        "count_aware_extra_margin": int(best_row.get("count_aware_extra_margin", 0) or 0),
         "count_mode": str(best_row.get("count_mode", "score_sum") or "score_sum"),
     }
     validate_decode_yaml_for_model(cfg, model_mode="query")
@@ -355,10 +360,17 @@ def validate_decode_yaml_for_model(decode_cfg: Mapping[str, Any], model_mode: st
     if model_mode == "query":
         if schema != QUERY_DECODE_SCHEMA:
             raise RuntimeError(f"Invalid query schema={schema!r}. Expected {QUERY_DECODE_SCHEMA}.")
-        required = QUERY_DECODE_KEYS - {"valid_before_maxdet", "count_mode"}
+        required = QUERY_DECODE_KEYS - {"valid_before_maxdet", "count_mode", "count_aware_extra_margin"}
         missing = sorted(required.difference(decode_cfg))
         if missing:
             raise RuntimeError(f"Invalid query decode yaml: missing keys {missing}.")
+        count_mode = str(decode_cfg.get("count_mode", "score_sum") or "score_sum")
+        if count_mode not in {"score_sum", "count_logits"}:
+            raise RuntimeError(
+                f"Invalid query decode yaml: count_mode={count_mode!r}. "
+                "Supported formal count modes are 'score_sum' and 'count_logits'. "
+                "Use --oracle-count for diagnostic GT-count decode."
+            )
         return
 
     raise RuntimeError(f"Unsupported model_mode={model_mode!r} for decode yaml validation.")

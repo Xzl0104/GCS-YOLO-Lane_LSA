@@ -2,7 +2,7 @@
 
 This is the current GCS-YOLO-Lane mainline branch. It imports the historical `5-25-3.zip` algorithm and adapts only the TuSimple fixed-y contract.
 
-Active source/config is rolled back to commit `424ab1c869f0a02556d8b6b6a44c27e5585e47c0` (`Add valid-before-maxdet decode option`). Its active algorithm contract remains the 5-25-3 K56 mainline with no later Count Head, Q18/Q20/dataref, lane-balanced, valid-repair, side-aux, short-side hardset, `gcs_short_side_geom`, `gcs_far_spurious_neg`, or count-contract/ranking mechanisms active. Explicit branch-local additions before or at this commit are exceptions: default-off `count_boundary_loss`, default-off train-only `gcs_hard_sampling`, default-off E3-lite `gcs_spurious_neg`, training-time `official_best` checkpoint selection, and default-off `valid_before_maxdet` query decode. Results and mechanisms from commits after `424ab1c86` are retained below as legacy experiment conclusions only; they do not describe currently available CLI flags, loss items, diagnostic scripts, model outputs, configs, or selected candidates unless a future task explicitly restores them.
+Active source/config is rolled back to commit `424ab1c869f0a02556d8b6b6a44c27e5585e47c0` (`Add valid-before-maxdet decode option`). Its active algorithm contract remains the 5-25-3 K56 mainline with no later mainline Count Head, Q18/Q20/dataref, lane-balanced, valid-repair, side-aux, short-side hardset, `gcs_short_side_geom`, `gcs_far_spurious_neg`, or count-contract/ranking mechanisms active. Explicit branch-local additions before or at this commit are exceptions: default-off `count_boundary_loss`, default-off train-only `gcs_hard_sampling`, default-off E3-lite `gcs_spurious_neg`, training-time `official_best` checkpoint selection, and default-off `valid_before_maxdet` query decode. The 2026-07-06 user-requested query Count Head is a separate default-off ablation enabled only by `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-count.yaml`. Results and mechanisms from commits after `424ab1c86` are retained below as legacy experiment conclusions only; they do not describe currently available CLI flags, loss items, diagnostic scripts, model outputs, configs, or selected candidates unless a future task explicitly restores them.
 
 ## Contract
 
@@ -23,7 +23,7 @@ The 56 fixed-y anchors are TuSimple official h-samples `710, 700, 690, ..., 160`
 
 Compatibility paths `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml` and `data/tusimple_gcs_fixed_y_k56_960x544.yaml` keep the same K56 contract for old run records. New training commands should use the mainline paths above.
 
-The 5-25-3 algorithm body is intentionally not upgraded to later mainline Count Head, Quality Head, Survival Head, or near-miss machinery. The only active Count Boundary, hard-sampling, spurious-negative, official-best, and valid-before-maxdet behavior is the explicit branch-local default-off/protocol work recorded in `docs/agent-context/current-contracts.md`.
+The 5-25-3 algorithm body is intentionally not upgraded to later mainline Count Head, Quality Head, Survival Head, or near-miss machinery. The only active Count Boundary, hard-sampling, spurious-negative, official-best, valid-before-maxdet, and optional query Count Head behavior is the explicit branch-local default-off/protocol work recorded in `docs/agent-context/current-contracts.md`.
 
 ## Legacy Post-424 Diagnostics
 

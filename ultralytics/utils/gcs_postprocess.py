@@ -129,18 +129,21 @@ def lane_nms(
     return torch.tensor(keep, dtype=torch.long, device=points.device)
 
 
-def _validate_count_aware_topk(min_k: int, max_k: int, length_norm: float) -> tuple[int, int, float]:
+def _validate_count_aware_topk(min_k: int, max_k: int, length_norm: float, extra_margin: int = 0) -> tuple[int, int, float, int]:
     """Validate count-aware top-k controls and return normalized values."""
     min_k = int(min_k)
     max_k = int(max_k)
     length_norm = float(length_norm)
+    extra_margin = int(extra_margin)
     if min_k < 0 or max_k < 0:
         raise ValueError(f"count-aware k bounds must be >= 0, got min_k={min_k}, max_k={max_k}.")
     if min_k > max_k:
         raise ValueError(f"count-aware min_k must be <= max_k, got min_k={min_k}, max_k={max_k}.")
     if length_norm <= 0.0:
         raise ValueError(f"count-aware length_norm must be > 0, got {length_norm}.")
-    return min_k, max_k, length_norm
+    if extra_margin < 0:
+        raise ValueError(f"count-aware extra_margin must be >= 0, got {extra_margin}.")
+    return min_k, max_k, length_norm, extra_margin
 
 
 def _count_aware_k_hat(count_score: float, min_k: int, max_k: int) -> int:
@@ -192,6 +195,7 @@ def decode_gcs_predictions(
     pred_logits: torch.Tensor,
     pred_valid_logits: torch.Tensor | None = None,
     pred_count_logits: torch.Tensor | None = None,
+    oracle_count: int | None = None,
     image_shape: tuple[int, int] | None = None,
     score_thr: float = 0.5,
     point_valid_thr: float = 0.5,
@@ -203,6 +207,7 @@ def decode_gcs_predictions(
     count_aware_min_k: int = 3,
     count_aware_max_k: int = 5,
     count_aware_length_norm: float = 12.0,
+    count_aware_extra_margin: int = 0,
     count_mode: str = "score_sum",
 ) -> list[dict]:
     """Decode ``pred_points`` and ``pred_logits`` into ordered lane point sequences.
@@ -212,6 +217,7 @@ def decode_gcs_predictions(
         pred_logits: Q existence logits for the lane queries.
         pred_valid_logits: Optional Q x K visibility logits. When present, decoded lanes keep full K points
             for metrics but drawing/export uses the longest visible contiguous point run.
+        oracle_count: Optional GT lane count used only with diagnostic ``count_mode='oracle_gt'``.
         image_shape: Optional original image shape as (height, width). If provided, pixel points are added.
         score_thr: Existence probability threshold.
         point_valid_thr: Per-point visibility probability threshold.
@@ -223,9 +229,11 @@ def decode_gcs_predictions(
         count_aware_min_k: Minimum dynamic lane count when count-aware top-k is enabled.
         count_aware_max_k: Maximum dynamic lane count when count-aware top-k is enabled.
         count_aware_length_norm: Visible-point count that saturates the count-aware length factor.
+        count_aware_extra_margin: Extra hypotheses to keep above ``k_hat`` before capping by ``max_det``.
         count_mode: Count source for count-aware top-k. ``score_sum`` preserves the historical
             sum(sigmoid(pred_logits)) behavior with the configured k range; ``count_logits`` uses
-            the query Count Head's fixed 2/3/4/5 class mapping.
+            the query Count Head's fixed 2/3/4/5 class mapping; ``oracle_gt`` uses the supplied
+            GT lane count for diagnostic-only evaluation.
 
     Returns:
         A list of dictionaries with score, query index, normalized points, and optional pixel points.
@@ -251,11 +259,13 @@ def decode_gcs_predictions(
     points = pred_points.detach().float().cpu().clamp(0.0, 1.0)
     scores = pred_logits.detach().float().cpu().sigmoid()
     count_aware_k = None
+    count_aware_base_k = None
     if count_aware_topk:
-        min_k, max_k, length_norm = _validate_count_aware_topk(
+        min_k, max_k, length_norm, extra_margin = _validate_count_aware_topk(
             count_aware_min_k,
             count_aware_max_k,
             count_aware_length_norm,
+            count_aware_extra_margin,
         )
         count_mode = str(count_mode or "score_sum")
         if count_mode == "count_logits":
@@ -271,12 +281,23 @@ def decode_gcs_predictions(
                     f"got {count_logits.numel()}."
                 )
             count_aware_k = int(count_logits.argmax().item()) + count_logits_min_k
+        elif count_mode == "oracle_gt":
+            if oracle_count is None:
+                raise ValueError("count_mode='oracle_gt' requires oracle_count.")
+            count_aware_k = int(oracle_count)
+            if count_aware_k < 0:
+                raise ValueError(f"oracle_count must be >= 0, got {count_aware_k}.")
         elif count_mode == "score_sum":
             count_aware_k = _count_aware_k_hat(float(scores.sum()), min_k=min_k, max_k=max_k)
         else:
             raise ValueError(f"Unsupported count_mode={count_mode!r}.")
+        count_aware_base_k = int(count_aware_k)
+        count_aware_k = int(count_aware_k) + int(extra_margin)
+        if max_det is not None and int(max_det) > 0:
+            count_aware_k = min(int(count_aware_k), int(max_det))
     else:
         length_norm = float(count_aware_length_norm)
+        extra_margin = int(count_aware_extra_margin)
     point_valid_scores = pred_valid_logits.detach().float().cpu().sigmoid() if pred_valid_logits is not None else None
     query_indices = torch.arange(points.shape[0], dtype=torch.long)
 
@@ -364,6 +385,8 @@ def decode_gcs_predictions(
             "points_norm": lane_norm,
             "count_mode": str(count_mode or "score_sum"),
             "decoded_count_k": int(count_aware_k) if count_aware_k is not None else -1,
+            "decoded_count_base_k": int(count_aware_base_k) if count_aware_base_k is not None else -1,
+            "count_aware_extra_margin": int(extra_margin),
         }
         visible_mask = None
         if point_valid_scores is not None:

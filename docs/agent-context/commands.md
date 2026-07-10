@@ -24,7 +24,7 @@ fixed_y_end:   160 / 720 = 0.2222222222222222
 
 The q12-k56-named model/data files are compatibility paths for old experiment records and keep the same K56 fixed-y contract. New commands should use the mainline paths above.
 
-The 5-25-3 branch now includes explicit branch-local `--gcs-official-best` training-time checkpoint selection. It does not include later mainline Count/Quality/Survival, near-miss, or K56 candidate machinery. It also includes branch-local TuSimple official eval/sweep helpers: `tools/eval_tusimple_official.py` and `tools/sweep_tusimple_official.py`.
+The 5-25-3 branch now includes explicit branch-local `--gcs-official-best` training-time checkpoint selection. It does not include later mainline Count/Quality/Survival, near-miss, or K56 candidate machinery. The only Count Head available on this branch is the 2026-07-06 user-requested, default-off query Count Head ablation enabled by `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-count.yaml`. It also includes branch-local TuSimple official eval/sweep helpers: `tools/eval_tusimple_official.py` and `tools/sweep_tusimple_official.py`.
 
 Active source/config is rolled back to commit `424ab1c86` (`Add
 valid-before-maxdet decode option`). Sections below that mention
@@ -34,6 +34,60 @@ post-`424ab1c86` mechanisms such as short-side hardset diagnostics,
 configs, Count Head, count-guided decode, side-aux, or GT4-hard diagnostics
 are legacy experiment records only. They are not commands for the current code
 state unless a future task explicitly restores those commits.
+
+## Query Count Head CE0.5 Run
+
+The default-off query Count Head ablation is launched through:
+
+```bash
+bash scripts/run_query_count_head_ce05_v1.sh
+```
+
+As of 2026-07-07 the script's default `RUN_NAME` is
+`query_count_head_ce05_fixedbest_sweep2520_v1`. It trains the query-count YAML
+with `--gcs-query-count-ce 0.5`, disables the old score-sum count losses, uses
+training-time `--gcs-official-best` with fixed official-val decode
+`conf=0.005`, `point_valid_thr=0.45`, `nms_dist_px=0`, `max_det=5`,
+`min_points=2`, and then runs a post-train official-val sweep over
+`weights/official_best.pt`. Keep all selection on official-val.
+
+Completed predecessor result:
+
+```text
+run = query_count_head_ce05_v1
+selected weights = runs/gcs_lane/query_count_head_ce05_v1/weights/official_best.pt
+selected decode = runs/gcs_lane/query_count_head_ce05_v1/weights/official_best_decode.yaml
+selected official-val ACC = 0.968473
+selected official-val FP = 0.015152
+selected official-val FN = 0.011938
+selected official-val count_acc = 0.931129
+```
+
+The post-train `best.pt` val sweep
+`runs/gcs_lane/query_count_head_ce05_v1_best_val_sweep_valid_before_maxdet_b/tusimple_official_sweep_summary.json`
+is weaker on official-val (`ACC=0.967679`, `FP=0.032553`,
+`FN=0.015152`, `count_acc=0.906336`) and must not replace the training-time
+official-best selection.
+
+Reporting-only official-test summaries:
+
+```text
+official_best test = runs/gcs_lane/query_count_head_ce05_v1_official_test_official_best_decode/tusimple_official_summary.json
+official_best test ACC = 0.964862
+official_best test FP = 0.033914
+official_best test FN = 0.024473
+official_best test count_acc = 0.874191
+
+best.pt sweep-threshold test = runs/gcs_lane/query_count_head_ce05_v1_best_official_test_from_val_sweep_valid_before_maxdet_b/tusimple_official_summary.json
+best.pt sweep-threshold test ACC = 0.964518
+best.pt sweep-threshold test FP = 0.037653
+best.pt sweep-threshold test FN = 0.026779
+best.pt sweep-threshold test count_acc = 0.836089
+```
+
+These test values are reporting-only. Do not use them for thresholds,
+checkpoint choice, NMS, `max_det`, `min_points`, count mode, count-aware top-k,
+or loss-gain tuning.
 
 ## Full Remote Training
 

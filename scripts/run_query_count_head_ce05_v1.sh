@@ -4,7 +4,7 @@ set -euo pipefail
 # Run from the repository root on the remote CUDA server.
 # Override variables from the shell when needed, e.g. BATCH=16 DEVICE=1 bash scripts/run_query_count_head_ce05_v1.sh
 
-RUN_NAME="${RUN_NAME:-query_count_head_ce05_v1}"
+RUN_NAME="${RUN_NAME:-query_count_head_ce05_fixedbest_sweep2520_v1}"
 PROJECT="${PROJECT:-runs/gcs_lane}"
 MODEL="${MODEL:-ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-count.yaml}"
 DATA="${DATA:-data/tusimple_gcs_fixed_y_960x544.yaml}"

@@ -400,6 +400,9 @@ gt5_short_pos_anchor_count
 gt5_short_point_valid_loss
 cnt_bound_5under
 cnt_score
+boundary_pseudo_neg_loss
+boundary_pseudo_count
+boundary_pseudo_score_mean
 query_count_ce_loss
 query_count_acc
 query_count_pred_mean
@@ -443,6 +446,24 @@ lower/upper, and GT5 lower boundaries. `gcs_count_boundary_gt5_under_weight`
 defaults to `None`, which follows `gcs_count_boundary_gt5_weight`; setting it
 allows only the GT5 undercount boundary weight to be changed. `cnt_bound_5under`
 logs the unweighted GT5 undercount boundary term.
+
+`boundary_pseudo_neg_loss` is disabled by default through
+`gcs_boundary_pseudo_neg=0.0`. When enabled, it requires `pred_valid_logits`
+and applies only to unmatched queries on images whose GT lane count equals
+`gcs_boundary_pseudo_gt_count`. Candidate queries must have predicted-visible
+anchor count in `[gcs_boundary_pseudo_min_valid, gcs_boundary_pseudo_visible_thr]`,
+existence score at least `gcs_boundary_pseudo_score_thr`, nearest GT lane equal
+to the leftmost or rightmost GT lane, and nearest-GT mean x distance at least
+`gcs_boundary_pseudo_dist_thr`. `gcs_boundary_pseudo_envelope_margin_px=-1.0`
+preserves the old mask. When set to a non-negative margin, the envelope gate is
+computed on query/GT common-visible anchors. For each such anchor, the left and
+right GT envelope is the minimum and maximum valid GT x at that fixed-y anchor.
+A left-boundary candidate must have at least
+`gcs_boundary_pseudo_envelope_ratio_thr` of common-visible anchors left of
+`left_env_x - margin`; a right-boundary candidate must have at least that ratio
+right of `right_env_x + margin`. This changes only the training loss candidate
+mask; it does not change model outputs, matcher assignment, labels, decode,
+NMS, or official metrics.
 
 ### Legacy Post-424 Loss And Diagnostic Records
 

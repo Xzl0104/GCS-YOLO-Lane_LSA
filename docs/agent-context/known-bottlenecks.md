@@ -37,26 +37,269 @@ diagnostic scripts, configs, model outputs, or active selected candidates.
 - It includes explicit training-time `official_best` checkpoint preservation for official-val selection.
 - It does not include post-`424ab1c86` short-side hardset/count-contract diagnostics, later mainline `diagnose_gcs_gt5.py`, Count/Quality/Boundary diagnostics, Survival, or near-miss machinery.
 
-## 2026-07-06 Pending Artifact Sync: shortside025_farspur005_rank002
+## 2026-07-11 Boundary Pseudo-Negative Mask Bottleneck
+
+The completed B1 run
+`query_alpha05_gt5short_geom_w2_bneg005_nocount_v1` is diagnostic-only and
+must not be promoted.
+
+```text
+G1 official_best val:
+ACC/FP/FN = 0.973071 / 0.014784 / 0.009642
+GT4 4->3/4->5 = 1 / 0
+GT5 5->4/5->5/5->6 = 1 / 69 / 4
+GT5 visible<=10 raw has_match20/30 = 0.886792 / 0.924528
+GT5 visible<=10 raw p90 APE = 19.372219 px
+
+B1 official_best val:
+ACC/FP/FN = 0.972100 / 0.012259 / 0.008724
+GT4 4->3/4->5 = 1 / 1
+GT5 5->4/5->5/5->6 = 2 / 72 / 0
+GT5 visible<=10 raw has_match20/30 = 0.849057 / 0.924528
+GT5 visible<=10 raw p90 APE = 25.399066 px
+
+B1 train last20:
+train/boundary_pseudo_count mean = 0.011274
+val/boundary_pseudo_count mean = 0.500000
+spurious_neg_loss/count = 0
+```
+
+Supported bottleneck:
+
+- The current pseudo-negative mask is too broad for true GT5 short/side
+  candidates. It suppresses selected-row GT5 overcount but worsens raw short
+  geometry and GT4/GT5 count shape.
+- `GT5 5->6=0` on B1 official-val is not sufficient promotion evidence
+  because the selected decode uses `max_det=5`; the B1 `best.pt` validation
+  row with `max_det=6` still shows `GT5 5->6=8`.
+- The diagnostic should be read as "unmatched is not enough to define a pseudo
+  lane." A target-zero existence term needs a clear-far or outside-GT-envelope
+  condition, not just Hungarian-unmatched status.
+
+Smallest safe next action:
+
+Do not run `gcs_boundary_pseudo_neg=0.1`. If continuing the line, shrink the
+negative mask before increasing pressure: try a validation-only B1-mask-v2
+with a smaller gain such as `0.02`, larger distance-to-all-GT threshold such
+as `80 px`, stricter `min_valid=4`, optional `score_thr=0.2`, and continued
+matched-query exclusion. In parallel or as the next branch, design a narrower
+matched GT4/GT5 short-positive rescue so true short lanes are protected before
+more unmatched negatives are applied.
+
+## 2026-07-09 Exist-Quality Alpha Ablation Bottleneck
+
+The completed global existence-target ablations are diagnostic-only. They show
+that hardening matched existence targets raises GT5 raw scores, but global
+relaxation does not solve the selected official-val candidate problem.
+
+```text
+E1 = query_exist_quality_alpha05_v1
+gcs_exist_quality_alpha = 0.5
+official-val ACC/FP/FN = 0.969860 / 0.024197 / 0.012856
+count_acc_4/5 = 0.924242 / 0.891892
+GT5 confusion includes 5->4=1, 5->5=66, 5->6=7
+
+E2 = query_exist_quality_alpha00_v1
+gcs_exist_quality_alpha = 0.0
+official-val ACC/FP/FN = 0.967784 / 0.020845 / 0.015152
+count_acc_4/5 = 0.954545 / 0.972973
+GT5 confusion includes 5->4=2, 5->5=72
+```
+
+Raw Q12 diagnostics on the canonical 363-image official-val split:
+
+```text
+GT5 visible<=10 raw-best score mean:
+alpha05 = 0.631605
+alpha00 = 0.896660
+
+GT5 fifth-lane raw-best score mean:
+alpha05 = 0.928582
+alpha00 = 0.997159
+
+query 10/11 vs GT5 fifth-lane score mean:
+alpha05 = 0.492548
+alpha00 = 0.559448
+```
+
+Supported bottleneck:
+
+- `gcs_exist_quality_alpha=1.0`-style quality suppression can depress true GT5
+  short/side existence scores.
+- Completely disabling quality-aware targets is too blunt: it raises scores
+  but worsens official-val ACC and FN compared with alpha `0.5`, and it does
+  not produce the expected "GT5 recall up, FP up" pattern on validation.
+- E1's wider keygrid ACC-best row (`0.970634`) is not target-aligned because it
+  increases FP and GT5 `5->6` while dropping `count_acc_5` to `0.824324`.
+
+Smallest safe next action:
+
+Use a selective relaxation rather than a global alpha change: target GT5
+short-side or weak-visible matched positives, keep full official-val selection,
+and add an explicit overcount guard so lifted scores do not become extra sixth
+lanes.
+
+## 2026-07-07 Query Count Head CE0.5 Non-Promotion
+
+The completed `query_count_head_ce05_v1` run is diagnostic-only, not a
+promoted candidate.
+
+Training-time official-best selected:
+
+```text
+weights = runs/gcs_lane/query_count_head_ce05_v1/weights/official_best.pt
+decode = runs/gcs_lane/query_count_head_ce05_v1/weights/official_best_decode.yaml
+source_epoch = 191
+conf = 0.005
+point_valid_thr = 0.45
+nms_dist_px = 0.0
+max_det = 5
+min_points = 2
+valid_before_maxdet = true
+count_aware_topk = false
+count_mode = score_sum
+official-val ACC = 0.968473
+official-val FP = 0.015152
+official-val FN = 0.011938
+official-val count_acc = 0.931129
+official-val count_acc_4 = 0.893939
+official-val count_acc_5 = 0.891892
+```
+
+The competing `best.pt` post-train official-val sweep is weaker:
+
+```text
+sweep = runs/gcs_lane/query_count_head_ce05_v1_best_val_sweep_valid_before_maxdet_b/tusimple_official_sweep_summary.json
+weights = runs/gcs_lane/query_count_head_ce05_v1/weights/best.pt
+best decode = conf=0.003, point_valid_thr=0.6, nms_dist_px=0.0, max_det=6, min_points=5, valid_before_maxdet=true, count_aware_topk=false, count_mode=score_sum
+official-val ACC = 0.967679
+official-val FP = 0.032553
+official-val FN = 0.015152
+official-val count_acc = 0.906336
+official-val count_acc_4 = 0.893939
+official-val count_acc_5 = 0.770270
+```
+
+The explicit `count_logits` count-aware diagnostic improves lane-count
+accuracy but not the target official ACC/FN tradeoff:
+
+```text
+val sweep = runs/gcs_lane/query_count_head_ce05_v1_best_val_sweep_valid_before_maxdet_catopk_count_logits/tusimple_official_sweep_summary.json
+test summary = runs/gcs_lane/query_count_head_ce05_v1_best_official_test_from_val_catopk_count_logits/tusimple_official_summary.json
+decode = conf=0.003, point_valid_thr=0.6, nms_dist_px=0.0, max_det=5, min_points=3, valid_before_maxdet=true, count_aware_topk=true, count_mode=count_logits
+official-val ACC/FP/FN = 0.967562 / 0.019330 / 0.015152
+official-val count_acc = 0.975207
+official-val count_acc_4/5 = 0.954545 / 0.959459
+official-test ACC/FP/FN = 0.964362 / 0.026582 / 0.028696
+official-test count_acc = 0.889288
+official-test count_acc_4/5 = 0.591880 / 0.847100
+```
+
+Reporting-only official test confirms no promotion signal:
+
+```text
+official_best test = runs/gcs_lane/query_count_head_ce05_v1_official_test_official_best_decode/tusimple_official_summary.json
+official_best test ACC = 0.964862
+official_best test FP = 0.033914
+official_best test FN = 0.024473
+official_best test count_acc = 0.874191
+official_best test count_acc_4 = 0.617521
+official_best test count_acc_5 = 0.855888
+
+best.pt sweep-threshold test = runs/gcs_lane/query_count_head_ce05_v1_best_official_test_from_val_sweep_valid_before_maxdet_b/tusimple_official_summary.json
+best.pt sweep-threshold test ACC = 0.964518
+best.pt sweep-threshold test FP = 0.037653
+best.pt sweep-threshold test FN = 0.026779
+best.pt sweep-threshold test count_acc = 0.836089
+best.pt sweep-threshold test count_acc_4 = 0.566239
+best.pt sweep-threshold test count_acc_5 = 0.667838
+```
+
+User-requested oracle-count diagnostic on the same selected
+`official_best.pt` and `official_best_decode.yaml` test surface:
+
+```text
+oracle-count summary = runs/gcs_lane/query_count_head_ce05_v1_official_test_official_best_decode_oracle_count/tusimple_official_summary.json
+oracle change = query count-aware top-k uses k_hat = GT lane count
+decode = conf=0.005, point_valid_thr=0.45, nms_dist_px=0.0, max_det=5, min_points=2, valid_before_maxdet=true
+official_test_acc = 0.963987
+official_test_FP = 0.022172
+official_test_FN = 0.027318
+official_test_count_acc = 0.938893
+official_test_count_acc_4 = 0.814103
+official_test_count_acc_5 = 0.855888
+count_confusion = 2->2=5, 3->2=1, 3->3=1739, 4->3=87, 4->4=381, 5->3=13, 5->4=69, 5->5=487
+```
+
+Supported interpretation:
+
+- Use `official_best.pt` plus `official_best_decode.yaml` for any reporting of
+  this run; do not replace it with generic `best.pt` or the post-train
+  `best.pt` sweep.
+- The explicit query Count Head CE0.5 training signal did not close the main
+  test-side gap. Its reporting-only official-test ACC is below the historical
+  reporting-only E1 count-boundary and spurious-lite valid-before results
+  around `0.965428` to `0.965483`.
+- The generic `best.pt` sweep has a clear GT5 retention risk
+  (`count_acc_5=0.770270` on official-val and `0.667838` on reporting-only
+  test), so it should not be used as a fallback.
+- The count-logits diagnostic raises official-val `count_acc` to `0.975207`,
+  but official-val ACC stays below the selected score-sum surface and
+  reporting-only test ACC/FN are worse than the Count Head official-best
+  score-sum test.
+- The oracle-count test is diagnostic-only because it uses GT during decode.
+  It proves that perfect test-time lane count alone does not improve this
+  artifact's official-test ACC: count accuracy improves by `+0.064702`, but ACC
+  drops by `0.000875` and FN rises by `0.002845`. The unchanged GT4/GT5
+  undercount (`4->3=87`, `5->3=13`, `5->4=69`) points away from Count Head as
+  the dominant remaining bottleneck and toward missing/low-ranked/filtered true
+  4th/5th-lane candidates.
+- Do not tune thresholds, checkpoint choice, count mode, count-aware top-k,
+  `max_det`, `min_points`, NMS, or loss gains from either official-test
+  summary.
+
+## 2026-07-09 shortside025_farspur005_rank002 Non-Promotion
 
 The completed experiment named
-`gcs_yolo_lane_s_q12_k56_shortside025_farspur005_rank002_v1` cannot be analyzed
-from the current local workspace state because its exact artifacts are not
-available locally and the remote server was not reachable during the review
-attempt.
+`gcs_yolo_lane_s_q12_k56_shortside025_farspur005_rank002_v1` is now readable
+from the remote server and is diagnostic-only, not a promoted candidate.
 
-This is an evidence-sync bottleneck, not an algorithm conclusion:
+```text
+training-time official_best:
+source_epoch = 35
+decode = conf=0.005, point_valid_thr=0.5, nms_dist_px=50.0, max_det=6, min_points=4, valid_before_maxdet=false
+official-val ACC/FP/FN = 0.968554 / 0.035078 / 0.018595
+count_acc_4/5 = 0.818182 / 0.972973
+count_confusion includes 4->5=11, 5->4=1, 5->6=1
 
-- Do not promote or reject the run until its `args.yaml`, `results.csv`,
-  `weights/official_best_decode.yaml`, `weights/official_best_sweep.json`,
-  363-image official-val sweep summary, and reporting-only official test
-  summary are available.
-- Do not infer this run's behavior from `shortsidegeom025`, older
-  `gcs_far_spurious_neg=0.05` far-spur runs, or rank-only GT4/GT5 ablations;
-  those are adjacent but different contracts.
-- Keep test closed for tuning. If the test summary exists, it is reporting-only
-  evidence after official-val selection and must not drive threshold,
-  checkpoint, NMS, or loss-weight changes.
+external official_best val sweep:
+decode = conf=0.003, point_valid_thr=0.6, nms_dist_px=18.0, max_det=6, min_points=4, valid_before_maxdet=true
+official-val ACC/FP/FN = 0.969366 / 0.034573 / 0.016988
+count_acc_4/5 = 0.803030 / 0.986486
+count_confusion includes 3->4=13, 3->5=2, 4->5=12, 5->6=1
+
+reporting-only test:
+official-test ACC/FP/FN = 0.964823 / 0.041643 / 0.025971
+count_acc_4/5 = 0.549145 / 0.852373
+count_confusion includes 4->5=122, 5->4=30, 5->6=42
+```
+
+Supported bottleneck:
+
+- The run keeps validation GT5 retention relatively high, but this comes with
+  poor GT4 count shape and high FP.
+- The reporting-only test confirms the validation warning: GT4 false-fifth
+  and sixth-lane overcount remain severe.
+- This does not justify continuing broad rank/farspur/shortside pressure. The
+  remaining problem is still selective candidate quality/ranking for true
+  4th/5th lanes under a guard against false extra lanes.
+
+Smallest safe next action:
+
+Do not tune thresholds, checkpoint choice, NMS, rank weight, farspur weight, or
+shortside settings from this report. Use only as diagnostic evidence when
+designing a narrower GT5 short/weak-visible rescue with explicit overcount
+protection.
 
 ## 2026-06-28 Hard-Sampling Short0601 Tradeoff
 

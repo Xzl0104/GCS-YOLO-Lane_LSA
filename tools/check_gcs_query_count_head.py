@@ -15,6 +15,7 @@ if str(ROOT) not in sys.path:
 os.chdir(ROOT)
 
 from tools.sweep_tusimple_official import build_combos  # noqa: E402
+from ultralytics.models.gcs.decode_summary import validate_decode_yaml_for_model  # noqa: E402
 from ultralytics.nn.modules import GCSLaneHead  # noqa: E402
 from ultralytics.nn.tasks import GCSLaneModel  # noqa: E402
 from ultralytics.utils.gcs_loss import GCSLoss  # noqa: E402
@@ -159,6 +160,23 @@ def check_decode_count_modes() -> None:
     if len(default_lanes) != len(score_sum_lanes) or len(score_sum_lanes) != 5:
         raise AssertionError("score_sum count-aware behavior changed.")
 
+    score_sum_logits = torch.tensor([_logit(0.90), _logit(0.85), _logit(0.80), _logit(0.75), _logit(0.10)])
+    score_sum_common = dict(common)
+    score_sum_common["pred_logits"] = score_sum_logits
+    score_sum_base = decode_gcs_predictions(
+        **score_sum_common,
+        count_mode="score_sum",
+    )
+    score_sum_margin = decode_gcs_predictions(
+        **score_sum_common,
+        count_mode="score_sum",
+        count_aware_extra_margin=1,
+    )
+    if len(score_sum_base) != 3 or len(score_sum_margin) != 4:
+        raise AssertionError(
+            f"score_sum extra margin should keep 3 -> 4 lanes, got {len(score_sum_base)} -> {len(score_sum_margin)}."
+        )
+
     count_logits = torch.tensor([0.0, 5.0, 0.0, 0.0], dtype=torch.float32)
     count_logits_lanes = decode_gcs_predictions(
         **common,
@@ -169,6 +187,31 @@ def check_decode_count_modes() -> None:
         raise AssertionError(f"count_logits mode should keep k_hat=3 lanes, got {len(count_logits_lanes)}.")
     if any(int(x.get("decoded_count_k", -1)) != 3 for x in count_logits_lanes):
         raise AssertionError("decoded lanes did not record decoded_count_k=3.")
+
+    count_logits_margin_lanes = decode_gcs_predictions(
+        **common,
+        pred_count_logits=count_logits,
+        count_mode="count_logits",
+        count_aware_extra_margin=1,
+    )
+    if len(count_logits_margin_lanes) != 4:
+        raise AssertionError(f"count_logits margin=1 should keep k_hat+1=4 lanes, got {len(count_logits_margin_lanes)}.")
+    if any(int(x.get("decoded_count_base_k", -1)) != 3 for x in count_logits_margin_lanes):
+        raise AssertionError("decoded lanes did not record decoded_count_base_k=3 for count_logits margin.")
+    if any(int(x.get("decoded_count_k", -1)) != 4 for x in count_logits_margin_lanes):
+        raise AssertionError("decoded lanes did not record decoded_count_k=4 for count_logits margin.")
+
+    count_logits_capped_lanes = decode_gcs_predictions(
+        **common,
+        pred_count_logits=count_logits,
+        count_mode="count_logits",
+        count_aware_extra_margin=3,
+        max_det=4,
+    )
+    if len(count_logits_capped_lanes) != 4:
+        raise AssertionError(f"count_logits margin must be capped by max_det=4, got {len(count_logits_capped_lanes)}.")
+    if any(int(x.get("decoded_count_k", -1)) != 4 for x in count_logits_capped_lanes):
+        raise AssertionError("decoded lanes did not record max_det-capped decoded_count_k=4.")
 
     try:
         decode_gcs_predictions(**common, count_mode="count_logits")
@@ -206,12 +249,67 @@ def check_sweep_combos() -> None:
             count_aware_min_k=2,
             count_aware_max_k=5,
             count_aware_length_norm=12.0,
+            count_aware_extra_margins=[0, 1, 2],
             count_modes=["score_sum", "count_logits"],
         )
     )
     modes = {combo["count_mode"] for combo in combos}
-    if modes != {"score_sum", "count_logits"} or len(combos) != 2:
+    margins = {combo["count_aware_extra_margin"] for combo in combos}
+    if modes != {"score_sum", "count_logits"} or margins != {0, 1, 2} or len(combos) != 6:
         raise AssertionError(f"sweep combos did not preserve both count modes: {combos!r}.")
+
+    try:
+        build_combos(
+            Namespace(
+                decode_mode="query",
+                confs=[0.01],
+                point_valid_thrs=[0.5],
+                nms_dist_pxs=[0.0],
+                max_dets=[5],
+                min_points=[2],
+                valid_before_maxdet=False,
+                count_aware_topk=False,
+                count_aware_min_k=2,
+                count_aware_max_k=5,
+                count_aware_length_norm=12.0,
+                count_aware_extra_margins=[-1],
+                count_modes=["score_sum"],
+            )
+        )
+    except ValueError as exc:
+        if "extra margins" not in str(exc):
+            raise
+    else:
+        raise AssertionError("negative count-aware extra margins must fail even when count-aware top-k is off.")
+
+
+def check_decode_yaml_compatibility() -> None:
+    old_query_yaml = {
+        "schema": "query_decode_v1",
+        "decode_mode": "query",
+        "conf": 0.003,
+        "point_valid_thr": 0.5,
+        "nms_dist_px": 0.0,
+        "max_det": 6,
+        "min_points": 5,
+        "valid_before_maxdet": True,
+        "count_aware_topk": False,
+        "count_aware_min_k": 3,
+        "count_aware_max_k": 5,
+        "count_aware_length_norm": 12.0,
+        "count_mode": "score_sum",
+    }
+    validate_decode_yaml_for_model(old_query_yaml, model_mode="query")
+
+    bad_query_yaml = dict(old_query_yaml)
+    bad_query_yaml["count_mode"] = "oracle_gt"
+    try:
+        validate_decode_yaml_for_model(bad_query_yaml, model_mode="query")
+    except RuntimeError as exc:
+        if "Use --oracle-count" not in str(exc):
+            raise
+    else:
+        raise AssertionError("query decode yaml must reject diagnostic-only count_mode='oracle_gt'.")
 
 
 def main() -> None:
@@ -219,6 +317,7 @@ def main() -> None:
     check_loss()
     check_decode_count_modes()
     check_sweep_combos()
+    check_decode_yaml_compatibility()
     print(json.dumps({"status": "ok", "loss_items": len(GCSLoss.loss_names)}, indent=2))
 
 

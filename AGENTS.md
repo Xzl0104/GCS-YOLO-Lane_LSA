@@ -9,9 +9,9 @@
 
 This branch is the current GCS-YOLO-Lane mainline, imported from the historical `5-25-3.zip` algorithm.
 
-The branch keeps the historical 5-25-3 algorithm body, the TuSimple fixed-y contract, the explicit default-off `count_boundary_loss`, the explicit default-off train-only `gcs_hard_sampling`, the default-off `gcs_spurious_neg`, the training-time `official_best` protocol additions, and the default-off `valid_before_maxdet` decode option requested on this branch.
+The branch keeps the historical 5-25-3 algorithm body, the TuSimple fixed-y contract, the explicit default-off `count_boundary_loss`, the explicit default-off train-only `gcs_hard_sampling`, the default-off `gcs_spurious_neg`, the training-time `official_best` protocol additions, the default-off `valid_before_maxdet` decode option requested on this branch, and the 2026-07-06 user-requested default-off query Count Head ablation.
 
-It is not the current mainline Count Head / Quality Head branch. Current behavior is governed by `docs/agent-context/current-contracts.md`.
+It is not the current mainline Count Head / Quality Head branch; the optional query Count Head is a branch-local default-off ablation only. Current behavior is governed by `docs/agent-context/current-contracts.md`.
 
 ## Required Context
 
@@ -105,11 +105,11 @@ The K56 labels must be regenerated from original TuSimple JSON and images, not r
 
 Historical q12-k56 experiment notes and compatibility paths must stay as old records. They do not override the active 5-25-3 K56 mainline contract.
 
-The active source/config is rolled back to commit `424ab1c869f0a02556d8b6b6a44c27e5585e47c0` (`Add valid-before-maxdet decode option`). Its algorithm contract remains the 5-25-3 K56 mainline with no later short-side hardset diagnostics, `gcs_short_side_geom`, `gcs_far_spurious_neg`, ignore-first/ranking/count-contract tooling, Count Head, Q18/Q20/dataref, lane-balanced, valid-repair, or side-aux experiment mechanisms active. Later commits and their documentation are legacy conclusions only unless a future task explicitly re-enables those mechanisms.
+The active source/config is rolled back to commit `424ab1c869f0a02556d8b6b6a44c27e5585e47c0` (`Add valid-before-maxdet decode option`). Its algorithm contract remains the 5-25-3 K56 mainline with no later short-side hardset diagnostics, `gcs_short_side_geom`, `gcs_far_spurious_neg`, ignore-first/ranking/count-contract tooling, later mainline Count Head, Q18/Q20/dataref, lane-balanced, valid-repair, or side-aux experiment mechanisms active. Later commits and their documentation are legacy conclusions only unless a future task explicitly re-enables those mechanisms.
 
 ## Branch Scope
 
-Do not silently import later mainline mechanisms into this branch. In particular, do not add Count Head, Quality Head, Survival Head, near-miss mining, or mainline K56 candidate scripts unless a future task explicitly asks for that algorithm change. The only active Count Boundary mechanism is the 2026-06-27 user-requested, default-off `count_boundary_loss`. The only active hard sampler is the 2026-06-27 user-requested, default-off train-only `gcs_hard_sampling`. The only active spurious-negative mechanism is the branch-local default-off `gcs_spurious_neg` contract recorded in `docs/agent-context/current-contracts.md`. Post-`424ab1c86` short-side hardset diagnostics, `gcs_short_side_geom`, `gcs_far_spurious_neg`, `gcs_farspur_*`, `gcs_shortside_*`, `gcs_rank_*`, and count-contract diagnostic tooling are legacy records only.
+Do not silently import later mainline mechanisms into this branch. In particular, do not add later mainline Count Head, Quality Head, Survival Head, near-miss mining, or mainline K56 candidate scripts unless a future task explicitly asks for that algorithm change. The only active Count Boundary mechanism is the 2026-06-27 user-requested, default-off `count_boundary_loss`. The only active hard sampler is the 2026-06-27 user-requested, default-off train-only `gcs_hard_sampling`. The only active spurious-negative mechanism is the branch-local default-off `gcs_spurious_neg` contract recorded in `docs/agent-context/current-contracts.md`. The only query Count Head mechanism is the 2026-07-06 user-requested, default-off ablation enabled by `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-count.yaml`; default query and ordered-slot behavior remain unchanged. Post-`424ab1c86` short-side hardset diagnostics, `gcs_short_side_geom`, `gcs_far_spurious_neg`, `gcs_farspur_*`, `gcs_shortside_*`, `gcs_rank_*`, and count-contract diagnostic tooling are legacy records only.
 
 Training-time `official_best` checkpoint preservation is now an explicit protocol change requested on 2026-06-27. It is selection/evaluation tooling only, not an algorithm-body change.
 
@@ -126,6 +126,15 @@ pred_valid_logits: B x 12 x 56
 aux_mask_logits: B x 2 x H x W
 aux_edge_logits: B x 1 x H x W
 ```
+
+The optional query-count YAML additionally emits:
+
+```text
+pred_count_logits: B x 4
+```
+
+The default query YAML must not emit `pred_count_logits`, and ordered-slot keeps
+its existing count/slot output contract.
 
 ## Loss Contract
 

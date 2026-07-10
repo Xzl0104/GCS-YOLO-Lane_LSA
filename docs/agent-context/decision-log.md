@@ -2,6 +2,379 @@
 
 This file records decisions for branch `codex/5-25-3-k56`.
 
+## 2026-07-11: Reject boundary_pseudo_neg B1 as promotion
+
+Decision:
+
+Do not promote `query_alpha05_gt5short_geom_w2_bneg005_nocount_v1`, and do
+not continue directly to `gcs_boundary_pseudo_neg=0.1`. Keep G1
+`query_alpha05_gt5short_geom_w2_v1` as the stronger validation reference for
+this line. The B1 result is diagnostic evidence that the current boundary
+pseudo-negative mask can suppress some extra GT5 lanes, but it is too broad
+and hurts GT5 short-lane raw geometry.
+
+Official-val evidence:
+
+```text
+G1 official_best val:
+ACC/FP/FN = 0.973071 / 0.014784 / 0.009642
+GT4 4->3/4->5 = 1 / 0
+GT5 5->4/5->5/5->6 = 1 / 69 / 4
+GT5 visible<=10 raw has_match20/30 = 0.886792 / 0.924528
+GT5 visible<=10 raw p90 APE = 19.372219 px
+
+B1 official_best val:
+ACC/FP/FN = 0.972100 / 0.012259 / 0.008724
+GT4 4->3/4->5 = 1 / 1
+GT5 5->4/5->5/5->6 = 2 / 72 / 0
+GT5 visible<=10 raw has_match20/30 = 0.849057 / 0.924528
+GT5 visible<=10 raw p90 APE = 25.399066 px
+```
+
+Reporting-only test evidence is not selection input, but it shows residual
+generalization risk. B1 official-best test reaches `ACC=0.966277`,
+`FP=0.028906`, and `FN=0.025431`, while GT5 still has `5->4=82` and
+`5->5=469`. The companion B1 `best.pt` row is not the candidate: its
+official-val `GT5 5->6=8`, `count_acc_5=0.864865`, and reporting-only test
+`GT5 5->6=30` show a clear overcount risk.
+
+Why:
+
+- B1 improves validation FP/FN and removes selected-row `GT5 5->6`, but it
+  lowers the primary official-val ACC versus G1.
+- The selected-row `5->6=0` is partly tied to `max_det=5`; it is not enough
+  evidence that the training-side pseudo-negative objective solved overcount.
+- GT5 short raw geometry regresses: `has_match20` falls and p90 APE worsens
+  by about `+6.03 px`.
+- Train diagnostics do not show a useful GT4 benefit: train `GT4 4->3` stays
+  `2`, while train `GT4 4->5` worsens from `27` to `31`.
+
+Next action:
+
+Do not use final test for tuning. If this line continues, either shrink the
+pseudo-negative mask first (`gcs_boundary_pseudo_neg=0.02`, larger
+distance-to-all-GT threshold such as `80 px`, stricter `min_valid=4`, and an
+optional score threshold such as `0.2`) or move to a narrower matched
+GT4/GT5 short-positive rescue. Any follow-up must use training-time
+`official_best`, canonical 363-image official-val, and train/val hard
+diagnostics before any reporting-only test.
+
+## 2026-07-09: Keep Count Head default-off and stop count-first direction
+
+Decision:
+
+Do not promote the query Count Head line, the `count_logits` count-aware decode,
+or `gcs_yolo_lane_s_q12_k56_shortside025_farspur005_rank002_v1` as the next
+algorithm direction. Keep the query Count Head implementation only as a
+default-off, reproducibility-preserving ablation. The next experiment should
+target selective GT5 short/weak-visible matched-positive score relaxation with
+an explicit overcount guard, not a global count head or global existence-alpha
+change.
+
+Integrated evidence:
+
+```text
+query_count_head_ce05_v1 official_best test:
+ACC/FP/FN = 0.964862 / 0.033914 / 0.024473
+count_acc_4/5 = 0.617521 / 0.855888
+
+query_count_head best.pt + count_logits count-aware official-val:
+ACC/FP/FN = 0.967562 / 0.019330 / 0.015152
+count_acc = 0.975207
+count_acc_4/5 = 0.954545 / 0.959459
+
+query_count_head best.pt + count_logits count-aware reporting-only test:
+ACC/FP/FN = 0.964362 / 0.026582 / 0.028696
+count_acc_4/5 = 0.591880 / 0.847100
+
+query_count_head official_best + oracle-count reporting-only test:
+ACC/FP/FN = 0.963987 / 0.022172 / 0.027318
+count_acc = 0.938893
+
+shortside025_farspur005_rank002 official_best official-val:
+ACC/FP/FN = 0.968554 / 0.035078 / 0.018595
+count_acc_4/5 = 0.818182 / 0.972973
+
+shortside025_farspur005_rank002 external official-best val sweep:
+ACC/FP/FN = 0.969366 / 0.034573 / 0.016988
+count_acc_4/5 = 0.803030 / 0.986486
+count_confusion includes 4->5=12, 5->6=1
+
+shortside025_farspur005_rank002 reporting-only test:
+ACC/FP/FN = 0.964823 / 0.041643 / 0.025971
+count_acc_4/5 = 0.549145 / 0.852373
+count_confusion includes 4->5=122, 5->4=30, 5->6=42
+```
+
+Why:
+
+- `count_logits` improves count accuracy on official-val, but it does not
+  improve official ACC and it increases FN on reporting-only test versus the
+  Count Head official-best score-sum decode.
+- Oracle count improves count accuracy and FP but still lowers ACC and raises
+  FN. This rules against lane-count estimation as the dominant bottleneck for
+  the current artifact.
+- `rank002` preserves some GT5 count on validation but fails GT4 and FP badly;
+  the reporting-only test has severe GT4 false-fifth and sixth-lane behavior.
+- The `alpha=0.0` experiment proves raw GT5 scores can be raised, but the
+  global change loses official-val ACC/FN. The useful signal is selective
+  score rescue, not global count selection.
+
+Next action:
+
+Do not run more final tests or tune thresholds from these reports. If the line
+continues, run a validation-only selective relaxation experiment for GT5
+short-side or weak-visible matched positives, paired with a guard against
+extra sixth lanes and GT4 false-fifth growth. Use training-time
+`official_best`, the canonical 363-image official-val split, and train/val
+diagnostics before any reporting-only test.
+
+## 2026-07-09: Reject global exist-quality-alpha relaxation as next path
+
+Decision:
+
+Do not promote either global query existence-target ablation as the next
+algorithm direction. The experiment supports that hard labels
+(`gcs_exist_quality_alpha=0.0`) raise GT5 raw existence scores, especially on
+short-visible lanes, but it does not support the expected end-to-end pattern
+that GT5 recall improves while FP rises. Across the shared 360 official-val
+sweep keys, alpha `0.0` is consistently lower on official ACC and higher on
+FN than alpha `0.5`, while FP is lower, not higher.
+
+Experiment scope:
+
+```text
+E1 = query_exist_quality_alpha05_v1
+gcs_exist_quality_alpha = 0.5
+batch = 32
+scale = 0.15
+erasing = 0.10
+mosaic = 0.0
+gcs_count = 0.0
+gcs_count_under5 = 0.0
+gcs_count_boundary = 0.0
+gcs_spurious_neg = 0.0
+gcs_official_best = true
+gcs_official_valid_before_maxdet = true
+
+E2 = query_exist_quality_alpha00_v1
+gcs_exist_quality_alpha = 0.0
+same remaining training/loss scope as E1
+```
+
+Primary training-time official-best evidence:
+
+```text
+E1 official_best:
+weights = runs/gcs_lane/query_exist_quality_alpha05_v1/weights/official_best.pt
+decode = conf=0.005, point_valid_thr=0.5, nms_dist_px=0.0, max_det=6, min_points=6, valid_before_maxdet=true
+source_epoch = 145
+official-val ACC = 0.969860
+official-val FP = 0.024197
+official-val FN = 0.012856
+count_acc_4 = 0.924242
+count_acc_5 = 0.891892
+count_confusion = 3->3=215, 3->4=8, 4->3=1, 4->4=61, 4->5=4, 5->4=1, 5->5=66, 5->6=7
+
+E2 official_best:
+weights = runs/gcs_lane/query_exist_quality_alpha00_v1/weights/official_best.pt
+decode = conf=0.005, point_valid_thr=0.5, nms_dist_px=30.0, max_det=5, min_points=4, valid_before_maxdet=true
+source_epoch = 197
+official-val ACC = 0.967784
+official-val FP = 0.020845
+official-val FN = 0.015152
+count_acc_4 = 0.954545
+count_acc_5 = 0.972973
+count_confusion = 3->3=217, 3->4=6, 4->3=1, 4->4=63, 4->5=2, 5->4=2, 5->5=72
+```
+
+Raw official-val diagnostic evidence:
+
+```text
+diagnostic script = tools/diagnose_tusimple_raw_q12_filters.py
+split = canonical 363-image official-val
+E1 output = runs/gcs_lane/query_exist_quality_alpha05_v1/raw_q12_filters_official_best_decode
+E2 output = runs/gcs_lane/query_exist_quality_alpha00_v1/raw_q12_filters_official_best_decode
+
+GT5 visible<=10 raw-best exist score mean:
+E1 = 0.631605 over 53 lanes
+E2 = 0.896660 over 53 lanes
+
+GT5 fifth lane raw-best exist score mean:
+E1 = 0.928582 over 74 lanes
+E2 = 0.997159 over 74 lanes
+
+query 10/11 against GT5 fifth lane score mean:
+E1 = 0.492548 over 148 query-lane pairs
+E2 = 0.559448 over 148 query-lane pairs
+
+query 10/11 best-geometry score mean per GT5 fifth lane:
+E1 = 0.729697 over 74 lanes
+E2 = 0.876093 over 74 lanes
+```
+
+Interpretation:
+
+- Supported: lowering/removing quality-aware existence suppression raises GT5
+  raw scores. The strongest evidence is E2's higher short-visible GT5 raw-best
+  score and higher query 10/11 score against the GT5 fifth lane.
+- Not supported: global hard existence labels improve the selected candidate.
+  E2 has worse official-val ACC and FN than E1, and the shared-key sweep
+  comparison shows the same pattern rather than a selected-decode artifact.
+- Not supported: fully closing quality-aware existence causes the expected FP
+  explosion. E2's selected FP is lower than E1's, and across common sweep keys
+  alpha `0.0` has lower FP on average.
+- E1's wider post-train keygrid has an ACC-best row at `0.970634`, but this
+  row worsens the target shape (`FP=0.026492`, `count_acc_5=0.824324`,
+  `5->6=11`). It is not a better answer to the GT5/short-side question.
+
+Next action:
+
+Do not continue by globally setting `gcs_exist_quality_alpha=0.0`. If this line
+continues, make it selective: apply a score/target relaxation only to GT5
+short-side or weak-visible matched positives, and pair it with a guard that
+prevents the extra GT5 score mass from turning into sixth-lane overcount.
+Select only on official-val; no final-test tuning was used for this decision.
+
+## 2026-07-07: Close query_count_head_ce05_v1 as diagnostic
+
+Decision:
+
+Do not promote `query_count_head_ce05_v1`. The valid selection surface favors
+the training-time official-best artifact, and the post-train `best.pt` sweep is
+weaker on official-val. Both official-test runs are reporting-only evidence and
+must not drive threshold, checkpoint, NMS, `max_det`, `min_points`,
+`valid_before_maxdet`, count-mode, or loss-gain changes.
+
+Selected official-val artifact:
+
+```text
+run = query_count_head_ce05_v1
+weights = runs/gcs_lane/query_count_head_ce05_v1/weights/official_best.pt
+decode = runs/gcs_lane/query_count_head_ce05_v1/weights/official_best_decode.yaml
+source_epoch = 191
+conf = 0.005
+point_valid_thr = 0.45
+nms_dist_px = 0.0
+max_det = 5
+min_points = 2
+valid_before_maxdet = true
+count_aware_topk = false
+count_mode = score_sum
+official-val ACC = 0.968473
+official-val FP = 0.015152
+official-val FN = 0.011938
+official-val score = 0.967931
+official-val count_acc = 0.931129
+official-val count_acc_4 = 0.893939
+official-val count_acc_5 = 0.891892
+```
+
+Rejected comparison surface:
+
+```text
+best.pt val sweep = runs/gcs_lane/query_count_head_ce05_v1_best_val_sweep_valid_before_maxdet_b/tusimple_official_sweep_summary.json
+weights = runs/gcs_lane/query_count_head_ce05_v1/weights/best.pt
+conf = 0.003
+point_valid_thr = 0.6
+nms_dist_px = 0.0
+max_det = 6
+min_points = 5
+valid_before_maxdet = true
+count_aware_topk = false
+count_mode = score_sum
+official-val ACC = 0.967679
+official-val FP = 0.032553
+official-val FN = 0.015152
+official-val score = 0.966725
+official-val count_acc = 0.906336
+official-val count_acc_4 = 0.893939
+official-val count_acc_5 = 0.770270
+```
+
+Count-logits count-aware diagnostic on the generic `best.pt` surface:
+
+```text
+val sweep = runs/gcs_lane/query_count_head_ce05_v1_best_val_sweep_valid_before_maxdet_catopk_count_logits/tusimple_official_sweep_summary.json
+test summary = runs/gcs_lane/query_count_head_ce05_v1_best_official_test_from_val_catopk_count_logits/tusimple_official_summary.json
+decode = conf=0.003, point_valid_thr=0.6, nms_dist_px=0.0, max_det=5, min_points=3, valid_before_maxdet=true, count_aware_topk=true, count_mode=count_logits
+official-val ACC/FP/FN = 0.967562 / 0.019330 / 0.015152
+official-val count_acc = 0.975207
+official-val count_acc_4/5 = 0.954545 / 0.959459
+official-test ACC/FP/FN = 0.964362 / 0.026582 / 0.028696
+official-test count_acc = 0.889288
+official-test count_acc_4/5 = 0.591880 / 0.847100
+```
+
+Reporting-only official-test evidence:
+
+```text
+official_best test summary = runs/gcs_lane/query_count_head_ce05_v1_official_test_official_best_decode/tusimple_official_summary.json
+official_best test ACC = 0.964862
+official_best test FP = 0.033914
+official_best test FN = 0.024473
+official_best test score = 0.963694
+official_best test count_acc = 0.874191
+official_best test count_acc_2/3/4/5 = 0.200000 / 0.951149 / 0.617521 / 0.855888
+
+best.pt sweep-threshold test summary = runs/gcs_lane/query_count_head_ce05_v1_best_official_test_from_val_sweep_valid_before_maxdet_b/tusimple_official_summary.json
+best.pt sweep-threshold test ACC = 0.964518
+best.pt sweep-threshold test FP = 0.037653
+best.pt sweep-threshold test FN = 0.026779
+best.pt sweep-threshold test score = 0.963229
+best.pt sweep-threshold test count_acc = 0.836089
+best.pt sweep-threshold test count_acc_2/3/4/5 = 0.200000 / 0.965517 / 0.566239 / 0.667838
+```
+
+Oracle-count diagnostic requested on the same official-test surface:
+
+```text
+oracle-count test summary = runs/gcs_lane/query_count_head_ce05_v1_official_test_official_best_decode_oracle_count/tusimple_official_summary.json
+weights = runs/gcs_lane/query_count_head_ce05_v1/weights/official_best.pt
+decode base = runs/gcs_lane/query_count_head_ce05_v1/weights/official_best_decode.yaml
+oracle change = query count-aware top-k uses k_hat = GT lane count
+conf = 0.005
+point_valid_thr = 0.45
+nms_dist_px = 0.0
+max_det = 5
+min_points = 2
+valid_before_maxdet = true
+count_aware_topk = true
+count_mode = oracle_gt
+official_test_acc = 0.963987
+official_test_FP = 0.022172
+official_test_FN = 0.027318
+official_test_score = 0.962997
+test_count_acc = 0.938893
+test_count_acc_2/3/4/5 = 1.000000 / 0.999425 / 0.814103 / 0.855888
+count_confusion = 2->2=5, 3->2=1, 3->3=1739, 4->3=87, 4->4=381, 5->3=13, 5->4=69, 5->5=487
+```
+
+Supported interpretation:
+
+- `official_best.pt` is better than the generic `best.pt` sweep on the valid
+  official-val selection surface and also on reporting-only official test.
+- The explicit query Count Head CE0.5 line did not produce a promotable result;
+  its reporting-only official-test ACC is below the stronger historical
+  reporting-only records around `0.965428` to `0.965483`.
+- The selected decode does not use count-aware top-k, so this result is not
+  evidence for promoting `--count-aware-topk --count-mode count_logits`.
+- The count-logits diagnostic improves official-val count accuracy, but its
+  official-val ACC remains below the official-best score-sum surface and its
+  reporting-only test ACC/FN are worse than the official-best score-sum test.
+  This is diagnostic evidence, not a promotion path.
+- The oracle-count diagnostic is not a formal score because it uses GT during
+  decode. It sharply improves test count accuracy (`0.874191 -> 0.938893`) and
+  lowers FP (`0.033914 -> 0.022172`), but official-test ACC drops
+  (`0.964862 -> 0.963987`) and FN rises (`0.024473 -> 0.027318`). GT4/GT5
+  undercount is not rescued (`4->3=87`, `5->3=13`, `5->4=69` remain). This
+  rules out lane-count estimation as the dominant remaining test bottleneck
+  for this artifact; the residual problem is candidate quality/ranking or
+  point-valid filtering of true 4th/5th lanes.
+- Keep the query Count Head implementation available as a default-off ablation,
+  but close `query_count_head_ce05_v1` as diagnostic evidence unless a future
+  official-val-selected experiment changes the conclusion.
+
 ## 2026-07-06: Add default-off query Count Head
 
 Decision:
@@ -77,55 +450,63 @@ Validation target:
 - Run `tools/check_gcs_valid_before_maxdet.py` because the target boundary is
   the valid-before-maxdet commit.
 
-## 2026-07-06: Blocked artifact sync for shortside025_farspur005_rank002
+## 2026-07-09: Reject shortside025_farspur005_rank002 after artifact sync
 
 Decision:
 
-Do not record a promotion or rejection conclusion for
-`gcs_yolo_lane_s_q12_k56_shortside025_farspur005_rank002_v1` until the exact
-artifact package is available locally or readable from the remote server.
+Reject `gcs_yolo_lane_s_q12_k56_shortside025_farspur005_rank002_v1` as a
+promotion path. The previously missing artifact package is now readable on the
+remote server, and the exact run fails official-val before considering its
+reporting-only test.
 
-Evidence status:
-
-- The intended run combines `gcs_shortside_rawmatch_boost=0.25`,
-  `gcs_farspur_ignore_first=True`, `gcs_farspur_weight=0.005`,
-  `gcs_rank_topk_weight=0.02`, and likely
-  `gcs_rank_pos_scope=gt4gt5_matched`.
-- Local searches in `runs/`, `.tmp/`, and `docs/` found no exact artifacts for
-  `gcs_yolo_lane_s_q12_k56_shortside025_farspur005_rank002_v1`.
-- The local artifact scan did not find an `args.yaml` with the full intended
-  three-knob combination.
-- Read-only SSH attempts to `gcs-ebcloud-lane` failed with
-  `Connection closed by 198.18.0.55 port 31343`, so the remote run directory,
-  363-image official-val sweep summary, and reporting-only official test
-  summary could not be verified in this session.
-
-Do not infer this run's result from adjacent experiments:
-
-- `shortsidegeom025` used `gcs_short_side_geom=0.25`, not
-  `gcs_shortside_rawmatch_boost=0.25`.
-- Earlier `farspur005` records used the older `gcs_far_spurious_neg=0.05`,
-  not the ignore-first `gcs_farspur_weight=0.005` contract.
-- The rank-pair and full duplicate-ignore ablations used
-  `gcs_rank_topk_weight=0.02`, but they are not the three-knob combination.
-
-Required evidence before analysis:
+Artifacts checked:
 
 ```text
 runs/gcs_lane/gcs_yolo_lane_s_q12_k56_shortside025_farspur005_rank002_v1/args.yaml
 runs/gcs_lane/gcs_yolo_lane_s_q12_k56_shortside025_farspur005_rank002_v1/results.csv
 runs/gcs_lane/gcs_yolo_lane_s_q12_k56_shortside025_farspur005_rank002_v1/weights/official_best_decode.yaml
 runs/gcs_lane/gcs_yolo_lane_s_q12_k56_shortside025_farspur005_rank002_v1/weights/official_best_sweep.json
-<matching 363-image official-val sweep>/tusimple_official_sweep_summary.json
-<matching official test report>/tusimple_official_summary.json
+runs/gcs_lane/gcs_yolo_lane_s_q12_k56_shortside025_farspur005_rank002_v1_official_best_val_sweep_valid_before_maxdet_b/tusimple_official_sweep_summary.json
+runs/gcs_lane/gcs_yolo_lane_s_q12_k56_shortside025_farspur005_rank002_v1_official_test_best_from_val_b/tusimple_official_summary.json
 ```
+
+Evidence:
+
+```text
+training-time official_best:
+source_epoch = 35
+decode = conf=0.005, point_valid_thr=0.5, nms_dist_px=50.0, max_det=6, min_points=4, valid_before_maxdet=false
+official-val ACC/FP/FN = 0.968554 / 0.035078 / 0.018595
+count_acc_4/5 = 0.818182 / 0.972973
+count_confusion includes 4->5=11, 5->4=1, 5->6=1
+
+external official_best val sweep:
+decode = conf=0.003, point_valid_thr=0.6, nms_dist_px=18.0, max_det=6, min_points=4, valid_before_maxdet=true
+official-val ACC/FP/FN = 0.969366 / 0.034573 / 0.016988
+count_acc_4/5 = 0.803030 / 0.986486
+count_confusion includes 3->4=13, 3->5=2, 4->5=12, 5->6=1
+
+reporting-only test from the external official-val decode:
+official-test ACC/FP/FN = 0.964823 / 0.041643 / 0.025971
+count_acc_4/5 = 0.549145 / 0.852373
+count_confusion includes 4->5=122, 5->4=30, 5->6=42
+```
+
+Why:
+
+- The run preserves GT5 better than the failed rank-pair variants on
+  official-val, but it fails GT4 count and FP badly.
+- The external validation sweep does not repair the issue: `4->5` remains
+  worse than the spurious-lite/E1 direction, and FP remains high.
+- The reporting-only test confirms the validation warning with severe GT4
+  false-fifth and sixth-lane behavior.
 
 Next action:
 
-First restore remote access or copy the minimal evidence package above into the
-workspace. Then rerun the experiment review and `gcs_integrator` synthesis.
-Until then, do not tune thresholds, checkpoint choice, NMS, rank weight,
-farspur weight, or shortside settings from this unavailable test report.
+Do not tune thresholds, checkpoint choice, NMS, rank weight, farspur weight, or
+shortside settings from this report. Treat it as another diagnostic showing
+that broad GT4/GT5 ranking/shortside pressure can move count shape but does not
+solve the candidate-quality and overcount tradeoff.
 
 ## 2026-07-06: Reject GT4/GT5 ranking pair and duplicate-ignore ablations
 

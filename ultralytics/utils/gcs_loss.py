@@ -353,6 +353,12 @@ class GCSLoss(nn.Module):
         self.boundary_pseudo_min_valid = int(self._arg(args, "gcs_boundary_pseudo_min_valid", 3))
         self.boundary_pseudo_gt_count = int(self._arg(args, "gcs_boundary_pseudo_gt_count", 5))
         self.boundary_pseudo_score_thr = float(self._arg(args, "gcs_boundary_pseudo_score_thr", 0.0))
+        self.boundary_pseudo_envelope_margin_px = float(
+            self._arg(args, "gcs_boundary_pseudo_envelope_margin_px", -1.0)
+        )
+        self.boundary_pseudo_envelope_ratio_thr = float(
+            self._arg(args, "gcs_boundary_pseudo_envelope_ratio_thr", 0.75)
+        )
 
         if self.short_geom_gain < 0.0:
             raise ValueError(f"gcs_short_geom must be >= 0, got {self.short_geom_gain}.")
@@ -378,6 +384,10 @@ class GCSLoss(nn.Module):
             raise ValueError("gcs_boundary_pseudo_gt_count must be >= 0.")
         if self.boundary_pseudo_score_thr < 0.0:
             raise ValueError("gcs_boundary_pseudo_score_thr must be >= 0.")
+        if self.boundary_pseudo_envelope_margin_px < -1.0:
+            raise ValueError("gcs_boundary_pseudo_envelope_margin_px must be >= -1.0.")
+        if not (0.0 <= self.boundary_pseudo_envelope_ratio_thr <= 1.0):
+            raise ValueError("gcs_boundary_pseudo_envelope_ratio_thr must be in [0, 1].")
 
         self.exist_quality_alpha = float(
             exist_quality_alpha if exist_quality_alpha is not None else self._arg(args, "gcs_exist_quality_alpha", 1.0)
@@ -1060,6 +1070,39 @@ class GCSLoss(nn.Module):
         denom = valid.float().sum(dim=1).clamp_min(1.0)
         return (x_px * valid.float()).sum(dim=1) / denom
 
+    def _query_outside_gt_envelope_ratio(
+        self,
+        pred_points_q: torch.Tensor,
+        pred_visible_q: torch.Tensor,
+        gt_points_b: torch.Tensor,
+        gt_valid_b: torch.Tensor,
+        width: float,
+        *,
+        side: str,
+        margin: float,
+    ) -> torch.Tensor:
+        """Return outside-envelope ratio over query/GT common visible anchors."""
+        device = pred_points_q.device
+        dtype = pred_points_q.dtype
+        q_visible = pred_visible_q > 0.5
+        gt_visible = gt_valid_b > 0.5
+        env_valid = q_visible & gt_visible.any(dim=0)
+        if int(env_valid.sum().item()) < int(self.boundary_pseudo_min_valid):
+            return torch.tensor(float("nan"), device=device, dtype=dtype)
+
+        pred_x = pred_points_q[:, 0] * float(width)
+        gt_x = gt_points_b[..., 0] * float(width)
+        left_env_x = gt_x.masked_fill(~gt_visible, float("inf")).min(dim=0).values
+        right_env_x = gt_x.masked_fill(~gt_visible, float("-inf")).max(dim=0).values
+
+        if side == "left":
+            outside = pred_x[env_valid] < (left_env_x[env_valid] - float(margin))
+        elif side == "right":
+            outside = pred_x[env_valid] > (right_env_x[env_valid] + float(margin))
+        else:
+            raise ValueError(f"side must be 'left' or 'right', got {side!r}.")
+        return outside.float().mean()
+
     def _query_to_gt_lane_dist_px(
         self,
         pred_points_q: torch.Tensor,
@@ -1184,6 +1227,22 @@ class GCSLoss(nn.Module):
                     continue
                 if nearest_dist < float(self.boundary_pseudo_dist_thr):
                     continue
+                if float(self.boundary_pseudo_envelope_margin_px) >= 0.0:
+                    margin = float(self.boundary_pseudo_envelope_margin_px)
+                    side = "left" if nearest_gt == left_gt else "right"
+                    outside_ratio = self._query_outside_gt_envelope_ratio(
+                        points[b, q],
+                        q_valid,
+                        gt_points_b,
+                        gt_valid_b,
+                        width,
+                        side=side,
+                        margin=margin,
+                    )
+                    if not bool(torch.isfinite(outside_ratio)):
+                        continue
+                    if float(outside_ratio.detach().cpu().item()) < float(self.boundary_pseudo_envelope_ratio_thr):
+                        continue
 
                 selected.append(q)
                 selected_scores.append(exist_prob[b, q].to(device=device, dtype=dtype))

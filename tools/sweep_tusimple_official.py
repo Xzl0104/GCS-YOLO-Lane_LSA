@@ -64,6 +64,7 @@ ORDERED_SLOT_QUERY_ONLY_DEFAULTS = {
     "count_aware_min_k": 3,
     "count_aware_max_k": 5,
     "count_aware_length_norm": 12.0,
+    "count_aware_extra_margins": [0],
     "count_modes": ["score_sum"],
 }
 QUERY_ONLY_ROW_KEYS = (
@@ -76,6 +77,7 @@ QUERY_ONLY_ROW_KEYS = (
     "count_aware_min_k",
     "count_aware_max_k",
     "count_aware_length_norm",
+    "count_aware_extra_margin",
     "count_mode",
 )
 
@@ -157,6 +159,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--count-aware-max-k", type=int, default=5, help="Maximum k_hat for --count-aware-topk.")
     parser.add_argument("--count-aware-length-norm", type=float, default=12.0, help="Visible-point count that saturates count-aware length quality.")
     parser.add_argument(
+        "--count-aware-extra-margins",
+        nargs="+",
+        type=int,
+        default=[0],
+        help="Extra lanes to keep above k_hat for count-aware top-k, capped by max_det.",
+    )
+    parser.add_argument(
         "--count-modes",
         nargs="+",
         choices=("score_sum", "count_logits"),
@@ -201,6 +210,7 @@ def resolve_save_dir(
     weights: str | Path,
     split: str,
     count_aware_topk: bool = False,
+    count_aware_extra_margins: list[int] | tuple[int, ...] | None = None,
     valid_before_maxdet: bool = False,
     decode_mode: str = "auto",
 ) -> Path:
@@ -212,6 +222,9 @@ def resolve_save_dir(
         suffix = ""
         if count_aware_topk:
             suffix += "_count_aware_topk"
+            margins = sorted({int(x) for x in (count_aware_extra_margins or [0])})
+            if margins != [0]:
+                suffix += "_extra_margin"
         if valid_before_maxdet:
             suffix += "_valid_before_maxdet"
     run_dir = _weight_run_dir(weights)
@@ -236,6 +249,7 @@ def _combo_key(combo: dict) -> tuple:
         int(combo["max_det"]),
         int(combo["min_points"]),
         str(combo.get("count_mode", "score_sum")),
+        int(combo.get("count_aware_extra_margin", 0)),
     )
 
 
@@ -270,8 +284,11 @@ def build_combos(args: argparse.Namespace, decode_yaml_cfg: dict | None = None) 
     count_aware_min_k = int(getattr(args, "count_aware_min_k", 3))
     count_aware_max_k = int(getattr(args, "count_aware_max_k", 5))
     count_aware_length_norm = float(getattr(args, "count_aware_length_norm", 12.0))
+    count_aware_extra_margins = sorted({int(x) for x in getattr(args, "count_aware_extra_margins", [0])})
     count_modes = sorted({str(x) for x in getattr(args, "count_modes", ["score_sum"])})
     valid_before_maxdet = bool(getattr(args, "valid_before_maxdet", False))
+    if any(int(x) < 0 for x in count_aware_extra_margins):
+        raise ValueError(f"count-aware extra margins must be >= 0, got {count_aware_extra_margins}.")
     if count_aware_topk:
         if count_aware_min_k < 0 or count_aware_max_k < 0 or count_aware_min_k > count_aware_max_k:
             raise ValueError(
@@ -280,13 +297,16 @@ def build_combos(args: argparse.Namespace, decode_yaml_cfg: dict | None = None) 
             )
         if count_aware_length_norm <= 0.0:
             raise ValueError(f"count-aware length norm must be > 0, got {count_aware_length_norm}.")
-    for conf, point_valid_thr, nms_dist_px, max_det, min_points, count_mode in product(
+    else:
+        count_aware_extra_margins = [0]
+    for conf, point_valid_thr, nms_dist_px, max_det, min_points, count_mode, count_aware_extra_margin in product(
         sorted({float(x) for x in args.confs}),
         sorted({float(x) for x in args.point_valid_thrs}),
         sorted({float(x) for x in args.nms_dist_pxs}),
         sorted({int(x) for x in args.max_dets}),
         sorted({int(x) for x in args.min_points}),
         count_modes,
+        count_aware_extra_margins,
     ):
         if point_valid_thr < 0.0 or point_valid_thr > 1.0:
             raise ValueError(f"point-valid thresholds must be in [0, 1], got {point_valid_thr}.")
@@ -308,6 +328,7 @@ def build_combos(args: argparse.Namespace, decode_yaml_cfg: dict | None = None) 
                 "count_aware_min_k": count_aware_min_k,
                 "count_aware_max_k": count_aware_max_k,
                 "count_aware_length_norm": count_aware_length_norm,
+                "count_aware_extra_margin": int(count_aware_extra_margin),
                 "count_mode": count_mode,
             }
         )
@@ -331,6 +352,7 @@ def _row_sort_key(row: dict) -> tuple:
         int(row["max_det"]),
         int(row["min_points"]),
         str(row.get("count_mode", "score_sum")),
+        int(row.get("count_aware_extra_margin", 0)),
     )
 
 
@@ -350,6 +372,7 @@ def write_csv(path: Path, rows: list[dict]) -> None:
         "count_aware_min_k",
         "count_aware_max_k",
         "count_aware_length_norm",
+        "count_aware_extra_margin",
         "count_mode",
         "strict_order_valid",
         "ordered_slot_order_violations",
@@ -421,6 +444,7 @@ def sweep(args: argparse.Namespace) -> dict:
             args.count_aware_min_k = int(decode_yaml_cfg["count_aware_min_k"])
             args.count_aware_max_k = int(decode_yaml_cfg["count_aware_max_k"])
             args.count_aware_length_norm = float(decode_yaml_cfg["count_aware_length_norm"])
+            args.count_aware_extra_margins = [int(decode_yaml_cfg.get("count_aware_extra_margin", 0))]
             args.count_modes = [str(decode_yaml_cfg.get("count_mode", "score_sum"))]
     else:
         args.decode_mode = resolve_decode_mode(getattr(args, "decode_mode", "auto"), model)
@@ -501,6 +525,7 @@ def sweep(args: argparse.Namespace) -> dict:
                     count_aware_min_k=combo["count_aware_min_k"],
                     count_aware_max_k=combo["count_aware_max_k"],
                     count_aware_length_norm=combo["count_aware_length_norm"],
+                    count_aware_extra_margin=combo["count_aware_extra_margin"],
                     count_mode=combo["count_mode"],
                 )
             tusimple_lanes = gcs_lanes_to_tusimple_lanes(lanes, record["h_samples"], image_shape=original_shape)
@@ -545,11 +570,15 @@ def sweep(args: argparse.Namespace) -> dict:
 
     rows = sorted(rows, key=_row_sort_key)
     best = select_best(rows)
+    effective_count_aware_extra_margins = sorted(
+        {int(combo.get("count_aware_extra_margin", 0)) for combo in combos if combo.get("decode_mode") == "query"}
+    )
     save_dir = resolve_save_dir(
         args.save_dir,
         args.weights,
         args.split,
         count_aware_topk=bool(getattr(args, "count_aware_topk", False)),
+        count_aware_extra_margins=effective_count_aware_extra_margins,
         valid_before_maxdet=bool(getattr(args, "valid_before_maxdet", False)),
         decode_mode=str(getattr(args, "decode_mode", "query")),
     )
@@ -620,6 +649,7 @@ def sweep(args: argparse.Namespace) -> dict:
                 "count_aware_min_k": int(getattr(args, "count_aware_min_k", 3)),
                 "count_aware_max_k": int(getattr(args, "count_aware_max_k", 5)),
                 "count_aware_length_norm": float(getattr(args, "count_aware_length_norm", 12.0)),
+                "count_aware_extra_margins": effective_count_aware_extra_margins,
                 "count_modes": [str(x) for x in sorted({str(x) for x in getattr(args, "count_modes", ["score_sum"])})],
             }
         )

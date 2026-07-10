@@ -6,7 +6,7 @@ This branch is the current mainline source import of `5-25-3.zip` with a K56 TuS
 
 - Keep the 5-25-3 algorithm body unchanged unless a future task explicitly asks for an algorithm change.
 - Only change code/config needed for Q=12/K=56, `fixed_y_start=710/720`, `fixed_y_end=160/720`, `--imgsz 544 960`, and the K56 data/model YAMLs.
-- Do not import later mainline Count Head, Quality Head, Survival Head, near-miss, or K56 candidate machinery.
+- Do not import later mainline Count Head, Quality Head, Survival Head, near-miss, or K56 candidate machinery. The only Count Head exception is the 2026-07-06 user-requested, default-off query Count Head ablation documented in `current-contracts.md`.
 - The only active Count Boundary mechanism is the 2026-06-27 user-requested, default-off `count_boundary_loss` on `sum(sigmoid(pred_logits))`; keep it separate from Count Head and decode changes.
 - The active train-only hard-sampling mechanism is the 2026-06-27 user-requested, default-off `gcs_hard_sampling`; keep it limited to the training dataloader and do not change labels, validation/test dataloaders, point loss, smooth loss, curve loss, decode, or official metrics.
 - The active E3-lite spurious negative mechanism is the 2026-06-27 user-requested, default-off `gcs_spurious_neg`; keep it limited to an extra `GCSLoss` BCE term on selected unmatched short duplicate-like queries and do not change data sampling, matcher logic, point loss, smooth loss, curve loss, decode, or official metrics.
@@ -24,7 +24,7 @@ This branch is the current mainline source import of `5-25-3.zip` with a K56 TuS
 Active source/config is rolled back to commit `424ab1c86` (`Add
 valid-before-maxdet decode option`). Post-`424ab1c86` mechanisms such as
 short-side hardset diagnostics, `gcs_short_side_geom`, `gcs_far_spurious_neg`,
-ignore-first/ranking/shortside count-contract tooling, Count Head,
+ignore-first/ranking/shortside count-contract tooling, later mainline Count Head,
 Q18/Q20/dataref, lane-balanced or valid-repair objectives, side-aux checks, and
 their diagnostic helpers are legacy records only and are not available in the
 current code unless a future task explicitly restores them. The branch-local
@@ -86,6 +86,16 @@ pred_exist_logits: B x 5
 The ordered-slot count classes are formal 2/3/4/5 classes:
 `count_label = num_lanes - 2`, and decode uses
 `argmax(pred_count_logits) + 2`.
+
+The optional query Count Head ablation adds only:
+
+```text
+pred_count_logits: B x 4
+```
+
+for query models built from
+`ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-count.yaml`. The default
+query YAML still emits no `pred_count_logits`.
 
 ## Validation Order
 
