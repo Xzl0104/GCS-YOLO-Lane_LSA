@@ -74,7 +74,7 @@ if [[ "${VALID_BEFORE_MAXDET}" == "1" || "${VALID_BEFORE_MAXDET}" == "true" ]]; 
   SWEEP_ARGS+=(--valid-before-maxdet)
 fi
 
-python tools/sweep_tusimple_official.py \
+python tools/sweep_tusimple_official_cached.py \
   --archive-root "${ARCHIVE_ROOT}" \
   --split val \
   --gt-json "${GT_JSON}" \

@@ -173,7 +173,7 @@ run_val_sweep() {
     exit 2
   fi
 
-  python tools/sweep_tusimple_official.py \
+  python tools/sweep_tusimple_official_cached.py \
     --archive-root "${ARCHIVE_ROOT}" \
     --split val \
     --gt-json "${GT_JSON}" \

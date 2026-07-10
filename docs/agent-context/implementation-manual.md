@@ -56,6 +56,7 @@ gcs_tools/label_utils.py
 tools/convert_tusimple_to_gcs.py
 tools/train_gcs.py
 tools/eval_tusimple_official.py
+tools/sweep_tusimple_official_cached.py
 tools/sweep_tusimple_official.py
 tools/check_model.py
 ultralytics/utils/gcs_fixed_y.py
@@ -109,6 +110,7 @@ For changes to training-time official checkpoint selection, also compile:
 
 ```text
 tools/train_gcs.py
+tools/sweep_tusimple_official_cached.py
 tools/sweep_tusimple_official.py
 ultralytics/models/yolo/gcs_lane/train.py
 ultralytics/engine/trainer.py

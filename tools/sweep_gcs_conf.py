@@ -37,7 +37,7 @@ def assert_legacy_query_conf_sweep_model(model: torch.nn.Module) -> str:
         raise RuntimeError(
             "tools/sweep_gcs_conf.py is a legacy query-threshold sweep tool. "
             "It must not be used with ordered_slot checkpoints because ordered_slot does not use "
-            "conf/NMS/topk decoding. Use tools/sweep_tusimple_official.py or "
+            "conf/NMS/topk decoding. Use tools/sweep_tusimple_official_cached.py or "
             "tools/eval_tusimple_official.py with --decode-mode auto instead."
         )
     return model_mode

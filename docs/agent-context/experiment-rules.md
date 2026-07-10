@@ -18,12 +18,14 @@ Do not:
 
 Use official-val for threshold, checkpoint, postprocess, and run selection. Do not choose the final checkpoint only from `val/total_loss`, internal `val/f1`, or `best.pt` provenance unless that checkpoint is also selected by official-val evidence.
 
-For formal TuSimple training, enable periodic training-time official-val selection. The training hook writes:
+For formal TuSimple training, enable periodic training-time official-val selection. The training hook uses `tools/sweep_tusimple_official_cached.py` and writes:
 
 ```text
 weights/official_best.pt
 weights/official_best_sweep.json
 weights/official_best_decode.yaml
+official_sweeps/epoch*/prediction_cache/manifest.json
+official_sweeps/epoch*/prediction_cache/predictions.pt
 ```
 
 Checkpoint/decode selection priority:

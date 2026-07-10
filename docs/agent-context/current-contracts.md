@@ -130,8 +130,9 @@ by `ordered_slot_eval_contract_hardening_v1` below:
   diagnostic/debug exports may use `left_to_right` postprocessing.
 - `tools/sweep_gcs_conf.py` is a legacy query-threshold sweep tool and fails
   fast for ordered-slot checkpoints. Ordered-slot checkpoints must use
-  `tools/sweep_tusimple_official.py` or `tools/eval_tusimple_official.py` with
-  auto decode.
+  `tools/sweep_tusimple_official_cached.py`,
+  `tools/sweep_tusimple_official.py`, or `tools/eval_tusimple_official.py`
+  with auto decode. Current threshold sweeps should prefer the cached helper.
 - ordered-slot official sweep JSON rows must not contain query-only keys such
   as `conf`, `point_valid_thr`, `nms_dist_px`, `max_det`, `min_points`, or
   `count_aware_*`. CSV output may keep fixed query-only columns, but
@@ -819,8 +820,12 @@ change training, labels, losses, model outputs, official metrics, Count Head,
 Quality Head, Survival Head, or default decode behavior.
 
 This branch includes `tools/eval_tusimple_official.py`,
-`tools/sweep_tusimple_official.py`, `gcs_tools/tusimple_official_eval.py`, and
-explicit training-time `official_best` checkpoint preservation. The
+`tools/sweep_tusimple_official_cached.py`, `tools/sweep_tusimple_official.py`,
+`gcs_tools/tusimple_official_eval.py`, and explicit training-time
+`official_best` checkpoint preservation. Current official-val threshold
+selection, including training-time `official_best`, uses the cached sweep path
+and records per-sweep prediction caches without changing decode, metrics,
+model outputs, losses, labels, or checkpoint-selection priority. The
 post-`424ab1c86` `tools/diagnose_gcs_count_contract.py` diagnostic is legacy
 only and is not present in the active rollback code. The branch still does not include
 `tools/diagnose_tusimple_count_confusion.py`, `tools/diagnose_gcs_gt5.py`, or

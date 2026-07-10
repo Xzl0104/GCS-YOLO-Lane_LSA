@@ -2,6 +2,33 @@
 
 This file records decisions for branch `codex/5-25-3-k56`.
 
+## 2026-07-10: Use cached official-val sweep for threshold selection
+
+Decision:
+
+Use `tools/sweep_tusimple_official_cached.py` for current official-val
+threshold sweeps, including training-time `--gcs-official-best` selection.
+Keep `tools/sweep_tusimple_official.py` as the direct compatibility helper and
+shared implementation source for sweep grid construction, row writing, and
+selection helpers.
+
+Why:
+
+- Cached sweep forwards each checkpoint once on the canonical official-val
+  images, then evaluates all decode threshold combinations from saved
+  predictions.
+- This keeps threshold/checkpoint selection on official-val while avoiding
+  repeated model inference for every threshold row.
+- Training-time `official_best` now writes a per-epoch
+  `official_sweeps/epoch*/prediction_cache/` so each epoch summary points to
+  the cache generated from that epoch's `last.pt`.
+
+Scope:
+
+This is a selection/tooling protocol change only. It does not change the model,
+losses, labels, decode formulas, official metrics, final-test policy, or
+official-best selection priority.
+
 ## 2026-07-11: Reject boundary_pseudo_neg B1 as promotion
 
 Decision:

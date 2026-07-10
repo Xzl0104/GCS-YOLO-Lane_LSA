@@ -14,7 +14,8 @@ The model is expected to output lane instances as ordered 2D point sequences, no
 - Inference entry: `tools/infer_gcs.py`
 - Custom GCS eval: `tools/eval_gcs.py`
 - TuSimple official eval: `tools/eval_tusimple_official.py`
-- TuSimple official sweep: `tools/sweep_tusimple_official.py`
+- TuSimple official cached sweep: `tools/sweep_tusimple_official_cached.py`
+- TuSimple official direct sweep compatibility helper: `tools/sweep_tusimple_official.py`
 - Model shape check: `tools/check_model.py`
 
 ## Current Branch Direction
@@ -45,7 +46,7 @@ The official-val subset is aligned with the current validation split and must st
 
 The K56 labels keep the same split sizes and align fixed-y anchors exactly to TuSimple official h-samples `710..160`, descending by `10` pixels.
 
-Official TuSimple Accuracy evaluation needs the original TuSimple archive layout, not only the fixed-y converted dataset. This branch includes `tools/eval_tusimple_official.py`, `tools/sweep_tusimple_official.py`, and `gcs_tools/tusimple_official_eval.py` for official-val evaluation and threshold sweeps. It also includes the explicit 2026-06-27 training-time `official_best` checkpoint-selection hook. Use official-val for checkpoint, threshold, and postprocess selection, and use test only once for the selected candidate.
+Official TuSimple Accuracy evaluation needs the original TuSimple archive layout, not only the fixed-y converted dataset. This branch includes `tools/eval_tusimple_official.py`, `tools/sweep_tusimple_official_cached.py`, `tools/sweep_tusimple_official.py`, and `gcs_tools/tusimple_official_eval.py` for official-val evaluation and threshold sweeps. Current threshold sweeps, including training-time `official_best`, should use the cached sweep path so each checkpoint is forwarded once and all decode thresholds are evaluated from the saved predictions. It also includes the explicit 2026-06-27 training-time `official_best` checkpoint-selection hook. Use official-val for checkpoint, threshold, and postprocess selection, and use test only once for the selected candidate.
 
 Required test archive shape:
 

@@ -231,6 +231,10 @@ def _normalize_decode_mode_name(decode_mode: str | None) -> str:
     return mode
 
 
+def _ordered_slot_runtime_context(args: argparse.Namespace) -> str:
+    return str(getattr(args, "ordered_slot_runtime_context", "official_sweep") or "official_sweep")
+
+
 def _weights_fingerprint(weights: str | Path) -> dict[str, Any]:
     path = Path(weights)
     out: dict[str, Any] = {"path": str(path.resolve())}
@@ -902,7 +906,7 @@ def cached_sweep_ordered_slot(
     gt_by_raw = {str(record["raw_file"]): record for record in gt_records}
     state = _new_state()
     order_stats = {"ordered_slot_order_violations": 0, "ordered_slot_order_violation_images": 0}
-    ordered_slot_runtime_cfg = ordered_slot_decode_runtime_config(context="official_sweep")
+    ordered_slot_runtime_cfg = ordered_slot_decode_runtime_config(context=_ordered_slot_runtime_context(args))
     ordered_params = ordered_slot_decode_params(args, decode_yaml_cfg)
 
     t0 = time.perf_counter()
@@ -973,7 +977,7 @@ def _config_for_summary(
         **gt_contract,
     }
     if str(decode_mode) == "ordered_slot":
-        runtime_cfg = ordered_slot_decode_runtime_config(context="official_sweep")
+        runtime_cfg = ordered_slot_decode_runtime_config(context=_ordered_slot_runtime_context(args))
         ordered_params = ordered_slot_decode_params(args, decode_yaml_cfg)
         effective_decode = build_ordered_slot_decode_summary(
             min_lanes=ordered_params["min_lanes"],
@@ -1028,7 +1032,10 @@ def _config_for_summary(
 def sweep(args: argparse.Namespace) -> dict[str, Any]:
     args.split = validate_search_split(args.split)
     reject_tusimple_test_search_gt_json(args.gt_json, context="TuSimple cached official sweep")
-    if bool(args.cache_only) and bool(args.sweep_only):
+    cache_only = bool(getattr(args, "cache_only", False))
+    sweep_only = bool(getattr(args, "sweep_only", False))
+    rebuild_cache = bool(getattr(args, "rebuild_cache", False))
+    if cache_only and sweep_only:
         raise ValueError("--cache-only and --sweep-only are mutually exclusive.")
 
     decode_yaml_cfg = _load_decode_yaml_for_sweep(args)
@@ -1044,10 +1051,10 @@ def sweep(args: argparse.Namespace) -> dict[str, Any]:
         allow_noncanonical_gt=bool(getattr(args, "allow_noncanonical_gt", False)),
     )
     imgsz = normalize_imgsz(args.imgsz, dataset=args.dataset)
-    cache_dir = resolve_cache_dir(args.cache_dir, args.weights, args.split)
+    cache_dir = resolve_cache_dir(getattr(args, "cache_dir", None), args.weights, args.split)
 
     requested_mode = _normalize_decode_mode_name(getattr(args, "decode_mode", "auto"))
-    manifest = None if bool(args.rebuild_cache) else _read_manifest(cache_dir)
+    manifest = None if rebuild_cache else _read_manifest(cache_dir)
     mismatch_reasons = _cache_mismatch_reasons(
         manifest,
         args=args,
@@ -1060,7 +1067,7 @@ def sweep(args: argparse.Namespace) -> dict[str, Any]:
     )
     cache_rebuilt = False
     if mismatch_reasons:
-        if bool(args.sweep_only):
+        if sweep_only:
             raise RuntimeError(f"Prediction cache is not usable for this sweep: {mismatch_reasons}")
         manifest = build_prediction_cache(
             args=args,
@@ -1077,7 +1084,7 @@ def sweep(args: argparse.Namespace) -> dict[str, Any]:
     assert manifest is not None
     args.decode_mode = str(manifest["decode_mode"]) if requested_mode == "auto" else requested_mode
 
-    if bool(args.cache_only):
+    if cache_only:
         print(json.dumps({"cache_dir": str(cache_dir.resolve()), "rebuilt": cache_rebuilt, "manifest": manifest}, indent=2))
         return {"cache_dir": str(cache_dir.resolve()), "rebuilt": cache_rebuilt, "manifest": manifest}
 

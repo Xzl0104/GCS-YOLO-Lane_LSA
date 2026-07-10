@@ -1128,6 +1128,11 @@ class GCSLaneTrainer(BaseTrainer):
             half=bool(getattr(self.args, "gcs_official_half", False)),
             runtime_ms=1.0,
             save_dir=str(save_dir),
+            cache_dir=str(save_dir / "prediction_cache"),
+            rebuild_cache=True,
+            cache_only=False,
+            sweep_only=False,
+            allow_cache_weight_mismatch=False,
             ordered_slot_runtime_context="training_official_best" if ordered_slot else "official_sweep",
             score_fp_weight=float(getattr(self.args, "gcs_official_score_fp_weight", 0.02) or 0.02),
             score_fn_weight=float(getattr(self.args, "gcs_official_score_fn_weight", 0.02) or 0.02),
@@ -1187,11 +1192,11 @@ class GCSLaneTrainer(BaseTrainer):
         if not self.last.exists():
             raise FileNotFoundError(f"Cannot run official-best selection because {self.last} does not exist.")
 
-        from tools.sweep_tusimple_official import sweep
+        from tools.sweep_tusimple_official_cached import sweep
 
         epoch_num = int(self.epoch) + 1
         sweep_dir = self.save_dir / "official_sweeps" / f"epoch{epoch_num:03d}"
-        LOGGER.info(f"Running TuSimple official-val sweep for checkpoint selection at epoch {epoch_num}...")
+        LOGGER.info(f"Running cached TuSimple official-val sweep for checkpoint selection at epoch {epoch_num}...")
         output = sweep(self._official_sweep_args(sweep_dir))
         best = dict(output["best"])
         new_key = self._official_best_key(best, epoch_num)

@@ -32,7 +32,7 @@ diagnostic scripts, configs, model outputs, or active selected candidates.
 
 - Local validation can check parser defaults, YAML contracts, fixed-y anchors, model output shape, and sample labels.
 - Formal training and official-val evaluation should run on the remote CUDA server.
-- This branch includes `tools/eval_tusimple_official.py` and `tools/sweep_tusimple_official.py` for official-val and final TuSimple test evaluation.
+- This branch includes `tools/eval_tusimple_official.py`, `tools/sweep_tusimple_official_cached.py`, and `tools/sweep_tusimple_official.py` for official-val and final TuSimple test evaluation. Current threshold sweeps should use the cached helper.
 - The active rollback code does not include `tools/diagnose_tusimple_count_confusion.py`.
 - It includes explicit training-time `official_best` checkpoint preservation for official-val selection.
 - It does not include post-`424ab1c86` short-side hardset/count-contract diagnostics, later mainline `diagnose_gcs_gt5.py`, Count/Quality/Boundary diagnostics, Survival, or near-miss machinery.

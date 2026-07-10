@@ -24,7 +24,7 @@ fixed_y_end:   160 / 720 = 0.2222222222222222
 
 The q12-k56-named model/data files are compatibility paths for old experiment records and keep the same K56 fixed-y contract. New commands should use the mainline paths above.
 
-The 5-25-3 branch now includes explicit branch-local `--gcs-official-best` training-time checkpoint selection. It does not include later mainline Count/Quality/Survival, near-miss, or K56 candidate machinery. The only Count Head available on this branch is the 2026-07-06 user-requested, default-off query Count Head ablation enabled by `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-count.yaml`. It also includes branch-local TuSimple official eval/sweep helpers: `tools/eval_tusimple_official.py` and `tools/sweep_tusimple_official.py`.
+The 5-25-3 branch now includes explicit branch-local `--gcs-official-best` training-time checkpoint selection. It does not include later mainline Count/Quality/Survival, near-miss, or K56 candidate machinery. The only Count Head available on this branch is the 2026-07-06 user-requested, default-off query Count Head ablation enabled by `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-count.yaml`. It also includes branch-local TuSimple official eval/sweep helpers: `tools/eval_tusimple_official.py`, `tools/sweep_tusimple_official_cached.py`, and `tools/sweep_tusimple_official.py`. New threshold scans should use the cached helper.
 
 Active source/config is rolled back to commit `424ab1c86` (`Add
 valid-before-maxdet decode option`). Sections below that mention
@@ -332,7 +332,7 @@ user gate; the best individual limits were `max_acc=0.970530`,
 
 ## Training-Time Official-Best Selection
 
-Formal TuSimple training must not select the final checkpoint from `val/total_loss`, internal `val/f1`, or generic `weights/best.pt` alone. Use `--gcs-official-best` so training runs a lightweight official-val sweep every 5 epochs and again on the final/early-stop epoch.
+Formal TuSimple training must not select the final checkpoint from `val/total_loss`, internal `val/f1`, or generic `weights/best.pt` alone. Use `--gcs-official-best` so training runs a cached official-val sweep every 5 epochs and again on the final/early-stop epoch.
 
 The selected artifacts are:
 
@@ -341,6 +341,8 @@ weights/official_best.pt
 weights/official_best_sweep.json
 weights/official_best_decode.yaml
 official_sweeps/epoch*/tusimple_official_sweep_summary.json
+official_sweeps/epoch*/prediction_cache/manifest.json
+official_sweeps/epoch*/prediction_cache/predictions.pt
 ```
 
 `official_best_decode.yaml` is schema-specific. Query checkpoints write
@@ -1710,10 +1712,11 @@ python tools/eval_gcs.py \
 
 Use `val` for threshold and postprocess selection. The comparable official-val
 surface is the canonical 363-image GT JSON; do not use `train_val.json` or
-`label_data_0313.json` as replacement validation GT:
+`label_data_0313.json` as replacement validation GT. Use the cached sweep
+helper for current threshold scans:
 
 ```bash
-python tools/sweep_tusimple_official.py \
+python tools/sweep_tusimple_official_cached.py \
   --archive-root archive/TUSimple \
   --split val \
   --gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
@@ -1730,7 +1733,7 @@ Default-off count-aware top-k postprocess ablation uses the same official-val
 surface and must be selected on validation only:
 
 ```bash
-python tools/sweep_tusimple_official.py \
+python tools/sweep_tusimple_official_cached.py \
   --archive-root archive/TUSimple \
   --split val \
   --gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
@@ -2114,7 +2117,7 @@ This branch was imported from `5-25-3.zip` and includes standalone TuSimple offi
 Official-val threshold sweeps are allowed only on validation data:
 
 ```bash
-python tools/sweep_tusimple_official.py \
+python tools/sweep_tusimple_official_cached.py \
   --weights <weights.pt> \
   --split val \
   --archive-root archive/TUSimple \
