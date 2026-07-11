@@ -226,6 +226,7 @@ CFG_FLOAT_KEYS = frozenset(
         "gcs_spurious_gt_protect_margin_px",
         "gcs_gt5_short_point_valid_weight",
         "gcs_short_geom",
+        "gcs_short_geom_gt4_weight",
         "gcs_short_geom_gt5_weight",
         "gcs_short_geom_max_weight",
         "gcs_short_geom_curve",

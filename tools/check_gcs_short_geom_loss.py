@@ -31,7 +31,7 @@ def test_short_geom_lane_weights_gt5_short() -> None:
     gt_valid[4, :8] = 1
 
     weights = loss._short_geom_lane_weights(gt_valid, torch.tensor(5))
-    if not weights[4] > 1.0:
+    if not torch.allclose(weights[4], torch.tensor(2.0)):
         raise AssertionError(f"short GT5 lane should be boosted, got weights={weights.tolist()}.")
     if not weights[:4].eq(1.0).all():
         raise AssertionError(f"non-short GT5 lanes should stay 1.0, got weights={weights.tolist()}.")
@@ -47,7 +47,95 @@ def test_short_geom_lane_weights_non_gt5_no_boost() -> None:
 
     weights = loss._short_geom_lane_weights(gt_valid, torch.tensor(4))
     if not weights.eq(1.0).all():
-        raise AssertionError(f"non-GT5 image should not be boosted, got weights={weights.tolist()}.")
+        raise AssertionError(f"GT4 default weight should not boost lanes, got weights={weights.tolist()}.")
+
+
+def test_short_geom_rejects_gt4_weight_below_one() -> None:
+    try:
+        GCSLoss({"gcs_imgsz": [544, 960], "gcs_short_geom": 1.0, "gcs_short_geom_gt4_weight": 0.5})
+    except ValueError as exc:
+        if "gcs_short_geom_gt4_weight" not in str(exc):
+            raise AssertionError(f"unexpected ValueError for gt4 weight: {exc}") from exc
+        return
+    raise AssertionError("gcs_short_geom_gt4_weight < 1.0 should raise ValueError.")
+
+
+def test_short_geom_lane_weights_gt4_short_enabled() -> None:
+    loss = GCSLoss(
+        {
+            "gcs_imgsz": [544, 960],
+            "gcs_short_geom": 1.0,
+            "gcs_short_geom_visible_thr": 20,
+            "gcs_short_geom_gt4_weight": 1.5,
+            "gcs_short_geom_gt5_weight": 2.0,
+        }
+    )
+    gt_valid = torch.zeros(4, 56)
+    gt_valid[0, :21] = 1
+    gt_valid[1, :30] = 1
+    gt_valid[2, :20] = 1
+    gt_valid[3, :8] = 1
+
+    weights = loss._short_geom_lane_weights(gt_valid, torch.tensor(4))
+    expected = torch.tensor([1.0, 1.0, 1.5, 1.5])
+    if not torch.allclose(weights.cpu(), expected):
+        raise AssertionError(f"GT4 short lanes should use gt4 boost, got weights={weights.tolist()}.")
+
+
+def test_short_geom_lane_weights_gt3_no_boost() -> None:
+    loss = GCSLoss(
+        {
+            "gcs_imgsz": [544, 960],
+            "gcs_short_geom": 1.0,
+            "gcs_short_geom_visible_thr": 20,
+            "gcs_short_geom_gt4_weight": 1.5,
+            "gcs_short_geom_gt5_weight": 2.0,
+        }
+    )
+    gt_valid = torch.zeros(3, 56)
+    gt_valid[0, :8] = 1
+    gt_valid[1, :20] = 1
+    gt_valid[2, :21] = 1
+
+    weights = loss._short_geom_lane_weights(gt_valid, torch.tensor(3))
+    if not weights.eq(1.0).all():
+        raise AssertionError(f"GT3 lanes should not be boosted, got weights={weights.tolist()}.")
+
+
+def test_short_geom_lane_weights_visible_gt20_no_boost() -> None:
+    loss = GCSLoss(
+        {
+            "gcs_imgsz": [544, 960],
+            "gcs_short_geom": 1.0,
+            "gcs_short_geom_visible_thr": 20,
+            "gcs_short_geom_gt4_weight": 1.5,
+            "gcs_short_geom_gt5_weight": 2.0,
+        }
+    )
+    gt_valid = torch.zeros(5, 56)
+    gt_valid[:, :21] = 1
+
+    weights = loss._short_geom_lane_weights(gt_valid, torch.tensor(5))
+    if not weights.eq(1.0).all():
+        raise AssertionError(f"visible_count > 20 lanes should not be boosted, got weights={weights.tolist()}.")
+
+
+def test_short_geom_lane_weights_max_cap() -> None:
+    loss = GCSLoss(
+        {
+            "gcs_imgsz": [544, 960],
+            "gcs_short_geom": 2.0,
+            "gcs_short_geom_visible_thr": 20,
+            "gcs_short_geom_gt4_weight": 3.0,
+            "gcs_short_geom_max_weight": 2.5,
+        }
+    )
+    gt_valid = torch.zeros(4, 56)
+    gt_valid[3, :20] = 1
+
+    weights = loss._short_geom_lane_weights(gt_valid, torch.tensor(4))
+    if not torch.allclose(weights[3], torch.tensor(2.5)):
+        raise AssertionError(f"short geometry max cap should apply, got weights={weights.tolist()}.")
 
 
 def test_short_geom_default_point_loss_matches_visible_point_average() -> None:
@@ -196,6 +284,38 @@ def test_short_geom_point_loss_uses_lane_level_weighting() -> None:
     if not torch.allclose(got, expected, atol=1e-6):
         raise AssertionError(
             f"enabled point_loss lane-level mismatch: got={float(got):.8f}, expected={float(expected):.8f}."
+        )
+
+
+def test_short_geom_point_loss_uses_gt4_lane_level_weighting() -> None:
+    loss = GCSLoss(
+        {
+            "gcs_imgsz": [544, 960],
+            "gcs_short_geom": 1.0,
+            "gcs_short_geom_visible_thr": 20,
+            "gcs_short_geom_gt4_weight": 1.5,
+            "gcs_short_geom_gt5_weight": 1.0,
+        }
+    )
+    k = 56
+    pred_points = torch.zeros(1, 2, k, 2)
+    gt_points = [torch.zeros(4, k, 2)]
+    gt_valid_b = torch.zeros(4, k)
+    gt_valid_b[0, :] = 1.0
+    gt_valid_b[3, :20] = 1.0
+    gt_valid = [gt_valid_b]
+    pred_points[0, 0, :, 0] = 0.1
+    pred_points[0, 1, :20, 0] = 0.5
+    indices = [(torch.tensor([0, 1]), torch.tensor([0, 3]))]
+
+    got = loss.point_loss(pred_points, gt_points, gt_valid, indices, gt_lanes=torch.tensor([4]))
+    expected = pred_points.new_tensor((0.1 + 0.5 * 1.5) / 2.5)
+    anchor_level = pred_points.new_tensor((56.0 * 0.1 + 20.0 * 0.5 * 1.5) / (56.0 + 20.0))
+    if torch.allclose(got, anchor_level, atol=1e-6):
+        raise AssertionError(f"GT4 point_loss used anchor-level weighting: got={float(got):.8f}.")
+    if not torch.allclose(got, expected, atol=1e-6):
+        raise AssertionError(
+            f"GT4 enabled point_loss lane-level mismatch: got={float(got):.8f}, expected={float(expected):.8f}."
         )
 
 
@@ -354,6 +474,39 @@ def test_short_geom_curve_loss_uses_lane_level_weighting() -> None:
         )
 
 
+def test_short_geom_curve_loss_uses_gt4_lane_level_weighting() -> None:
+    loss = GCSLoss(
+        {
+            "gcs_imgsz": [544, 960],
+            "gcs_short_geom": 1.0,
+            "gcs_short_geom_curve": 1.0,
+            "gcs_short_geom_visible_thr": 20,
+            "gcs_short_geom_gt4_weight": 1.5,
+            "gcs_short_geom_gt5_weight": 1.0,
+        }
+    )
+    k = 58
+    pred_points = torch.zeros(1, 2, k, 2)
+    gt_points = [torch.zeros(4, k, 2)]
+    gt_valid_b = torch.zeros(4, k)
+    gt_valid_b[0, :] = 1.0
+    gt_valid_b[3, :20] = 1.0
+    gt_valid = [gt_valid_b]
+    pred_points[0, 0, :, 0] = _quadratic_x_with_laplacian_px(k, 0.2**0.5)
+    pred_points[0, 1, :, 0] = _quadratic_x_with_laplacian_px(k, 1.0)
+    indices = [(torch.tensor([0, 1]), torch.tensor([0, 3]))]
+
+    got = loss.curve_loss(pred_points, gt_points, gt_valid, indices, gt_lanes=torch.tensor([4]))
+    expected = pred_points.new_tensor((0.1 + 0.5 * 1.5) / 2.5)
+    triplet_level = pred_points.new_tensor((56.0 * 0.1 + 18.0 * 0.5 * 1.5) / (56.0 + 18.0))
+    if torch.allclose(got, triplet_level, atol=1e-5):
+        raise AssertionError(f"GT4 curve_loss used triplet-level weighting: got={float(got):.8f}.")
+    if not torch.allclose(got, expected, atol=1e-5):
+        raise AssertionError(
+            f"GT4 enabled curve_loss lane-level mismatch: got={float(got):.8f}, expected={float(expected):.8f}."
+        )
+
+
 def test_short_geom_enabled_losses_keep_gt5_no_short_old_aggregation() -> None:
     off_loss = GCSLoss({"gcs_imgsz": [544, 960], "gcs_short_geom": 0.0})
     on_loss = GCSLoss(
@@ -473,20 +626,27 @@ def test_short_geom_forward_keeps_loss_items_stable() -> None:
 def main() -> None:
     test_short_geom_lane_weights_gt5_short()
     test_short_geom_lane_weights_non_gt5_no_boost()
+    test_short_geom_rejects_gt4_weight_below_one()
+    test_short_geom_lane_weights_gt4_short_enabled()
+    test_short_geom_lane_weights_gt3_no_boost()
+    test_short_geom_lane_weights_visible_gt20_no_boost()
+    test_short_geom_lane_weights_max_cap()
     test_short_geom_default_point_loss_matches_visible_point_average()
     test_short_geom_default_point_loss_matches_old_path_with_no_valid_image()
     test_short_geom_enabled_point_loss_keeps_gt4_no_boost_old_aggregation()
     test_short_geom_enabled_point_loss_keeps_boosted_inactive_old_aggregation()
     test_short_geom_point_loss_uses_lane_level_weighting()
+    test_short_geom_point_loss_uses_gt4_lane_level_weighting()
     test_short_geom_enabled_point_loss_keeps_no_valid_zero_in_batch_mean()
     test_short_geom_default_curve_loss_keeps_no_triplet_zero_in_batch_mean()
     test_short_geom_enabled_curve_loss_keeps_gt4_no_boost_old_aggregation()
     test_short_geom_enabled_curve_loss_keeps_boosted_inactive_old_aggregation()
     test_short_geom_curve_loss_uses_lane_level_weighting()
+    test_short_geom_curve_loss_uses_gt4_lane_level_weighting()
     test_short_geom_enabled_losses_keep_gt5_no_short_old_aggregation()
     test_short_geom_enabled_curve_loss_keeps_no_triplet_zero_in_batch_mean()
     test_short_geom_forward_keeps_loss_items_stable()
-    print(json.dumps({"status": "ok", "tests": 15}, indent=2))
+    print(json.dumps({"status": "ok", "tests": 22}, indent=2))
 
 
 if __name__ == "__main__":

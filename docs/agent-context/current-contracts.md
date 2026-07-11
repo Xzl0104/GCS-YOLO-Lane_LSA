@@ -602,13 +602,15 @@ metrics. `gt5_short_pos_count`, `gt5_short_pos_anchor_count`, and
 
 `gcs_short_geom=0.0` keeps the default query point/curve geometry losses
 unchanged. When explicitly enabled, `gcs_short_geom` applies only inside
-training loss calculation for Hungarian-matched images with
-`GT lane count == 5`, only to GT lanes whose visible anchor count is at or
+training loss calculation for Hungarian-matched images with `GT lane count == 4`
+or `GT lane count == 5`, only to GT lanes whose visible anchor count is at or
 below `gcs_short_geom_visible_thr`, and only by lane-level weighting inside
-`point_loss` and `curve_loss`. It does not change model outputs, matcher
+`point_loss` and `curve_loss`. The GT4 path is default-off through
+`gcs_short_geom_gt4_weight=1.0`; GT5 keeps the existing
+`gcs_short_geom_gt5_weight` behavior. It does not change model outputs, matcher
 assignment, smooth loss, point-valid BCE targets, mask/edge losses, dataset,
 dataloader, decode, NMS, official metrics, Count Head, or loss item count.
-The first-version geometry boost has no side-lane/order assumption.
+The geometry boost has no side-lane/order assumption.
 
 `spurious_neg_loss` is disabled by default through `gcs_spurious_neg=0.0`.
 When enabled, it requires `pred_valid_logits` and applies only to unmatched
@@ -796,18 +798,31 @@ and keeps the quality-best post-conf, post-NMS lanes. This does not change
 training, labels, losses, model outputs, official metrics, Count Head, Quality
 Head, Survival Head, or default decode behavior.
 
+The query count-aware top-k ablation also supports a default-zero extra margin
+for validation/evaluation sweeps. `--count-aware-extra-margin` in
+`tools/eval_tusimple_official.py` and `--count-aware-extra-margins` in
+`tools/sweep_tusimple_official.py` / `tools/sweep_tusimple_official_cached.py`
+keep `keep_k = min(k_hat + extra_margin, max_det)` lanes after the normal
+count-aware `k_hat` estimate. The default `0` preserves the old behavior.
+This is decode-only and does not change training, labels, losses, model
+outputs, Count Head availability, or official metric formulas.
+
 For the optional query Count Head, query decode can explicitly use
 `--count-mode count_logits` with `--count-aware-topk`. This uses
 `argmax(pred_count_logits)+2` as the count-aware `k_hat` for the fixed 2..5
 class range. The default `--count-mode score_sum` preserves the historical
-score-sum count source.
+score-sum count source. `count_logits` is valid only for checkpoints whose
+query model actually emits `pred_count_logits`; default query checkpoints
+without the query Count Head must use `score_sum` or leave count-aware top-k
+disabled.
 
 For diagnosis only, `tools/eval_tusimple_official.py --oracle-count` can force
-query count-aware top-k to use `k_hat = GT lane count` through
-`count_mode=oracle_gt`. This mode intentionally uses GT during decode, so its
-outputs are not formal official results, cannot be used for threshold or
-checkpoint selection, and are only valid for isolating whether lane-count
-estimation is the bottleneck. It must remain explicit and default-off.
+query count-aware top-k to use `k_hat = GT lane count` internally. This mode
+intentionally uses GT during decode, so its outputs are not formal official
+results, cannot be used for threshold or checkpoint selection, and are only
+valid for isolating whether lane-count estimation is the bottleneck. It must
+remain explicit and default-off; `oracle_gt` is not a formal public
+`--count-mode` or decode-yaml count mode.
 
 The branch includes a default-off query-mode decode ablation
 `valid_before_maxdet`. When explicitly enabled with

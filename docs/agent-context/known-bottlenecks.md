@@ -62,6 +62,39 @@ B1 train last20:
 train/boundary_pseudo_count mean = 0.011274
 val/boundary_pseudo_count mean = 0.500000
 spurious_neg_loss/count = 0
+
+B1-v2 protocol-miss result:
+run = query_alpha05_gt5short_geom_w2_bneg005_nocount_v2
+actual envelope margin = gcs_boundary_pseudo_envelope_margin_px -1.0
+actual pseudo config = neg 0.05, dist_thr 60, min_valid 3, score_thr 0.0
+official_best source_epoch = 180
+official_best val ACC/FP/FN = 0.969401 / 0.024334 / 0.016070
+official_best val GT4 4->3/4->5 = 1 / 5
+official_best val GT5 5->4/5->5/5->6 = 2 / 72 / 0
+max_det=6 equal-ACC rows show GT5 5->6 = 4..6, so selected 5->6=0 is capped
+GT5 visible<=10 raw has_match20/30 = 0.754717 / 0.792453
+GT5 visible<=10 raw p90 APE = 35.917850 px
+best.pt val ACC/FP/FN = 0.966980 / 0.035537 / 0.017906
+reporting-only official_best test ACC/FP/FN = 0.965566 / 0.036137 / 0.026869
+reporting-only official_best test GT4 4->5 = 100
+reporting-only official_best test GT5 5->4/5->5 = 54 / 497
+train GT4->5 diagnostic over train label_data_0313/0531/0601 = 45 + 6 + 23 = 74
+
+Mask-v2/envelope result:
+run = query_alpha05_gt5short_geom_w2_bneg002_env30_nocount_v1
+actual pseudo config = neg 0.02, dist_thr 80, min_valid 4, score_thr 0.2,
+  envelope_margin_px 30, envelope_ratio_thr 0.75
+official_best source_epoch = 220
+official_best val ACC/FP/FN = 0.973330 / 0.015748 / 0.009642
+official_best val GT4 4->3/4->5 = 2 / 0
+official_best val GT5 5->4/5->5/5->6 = 1 / 73 / 0
+max_det=6 equal-ACC rows also keep GT5 5->6 = 0
+GT5 visible<=10 raw has_match20/30 = 0.754717 / 0.811321
+GT5 visible<=10 raw p90 APE = 36.550196 px
+train GT4->5 diagnostic over train label_data_0313/0531/0601 = 29 + 2 + 7 = 38
+reporting-only official_best test ACC/FP/FN = 0.966780 / 0.028732 / 0.023544
+reporting-only official_best test GT4 4->5 = 90
+reporting-only official_best test GT5 5->4/5->5 = 43 / 507
 ```
 
 Supported bottleneck:
@@ -69,6 +102,29 @@ Supported bottleneck:
 - The current pseudo-negative mask is too broad for true GT5 short/side
   candidates. It suppresses selected-row GT5 overcount but worsens raw short
   geometry and GT4/GT5 count shape.
+- `query_alpha05_gt5short_geom_w2_bneg005_nocount_v2` is not evidence that
+  the outside-envelope protection failed. The run did not enable the envelope
+  protection at all (`gcs_boundary_pseudo_envelope_margin_px=-1.0`) and also
+  kept the broader/harder B1-style settings (`0.05`, `60 px`, `min_valid=3`,
+  `score_thr=0.0`) instead of the intended smaller mask-v2 settings.
+- The v2 result fails every serious promotion gate versus G1: lower
+  official-val ACC, worse FP/FN, worse GT4 `4->5`, worse GT5 `5->4`, no
+  robust GT5 `5->6` gain once `max_det=6` is allowed, and much worse
+  GT5-visible<=10 raw geometry.
+- The true mask-v2/envelope run fixes the main selected official-val
+  count-shape problem: it is slightly above G1 on ACC, keeps FN equal to G1,
+  removes official-val GT4 `4->5`, and removes GT5 `5->6` even when
+  `max_det=6` is allowed. It should be read as a real validation count-shape
+  improvement over B1/v2.
+- It still fails the short-geometry and train-count diagnostic gates. GT5
+  visible<=10 raw p90 APE is worse than both G1 and B1, and train GT4->5 is
+  still higher than the earlier 27->31 warning band. Therefore the result is
+  not a clean final promotion despite the higher official-val ACC.
+- The mask-v2 loss is almost inactive late in training
+  (`val/boundary_pseudo_count=0` and train last20 near zero), so the result
+  does not prove that adding more pseudo-negative pressure will help. The next
+  bottleneck is protecting/repairing true short-lane geometry, not simply
+  increasing boundary pseudo-negative gain.
 - `GT5 5->6=0` on B1 official-val is not sufficient promotion evidence
   because the selected decode uses `max_det=5`; the B1 `best.pt` validation
   row with `max_det=6` still shows `GT5 5->6=8`.
@@ -82,9 +138,75 @@ Do not run `gcs_boundary_pseudo_neg=0.1`. If continuing the line, shrink the
 negative mask before increasing pressure: try a validation-only B1-mask-v2
 with a smaller gain such as `0.02`, larger distance-to-all-GT threshold such
 as `80 px`, stricter `min_valid=4`, optional `score_thr=0.2`, and continued
-matched-query exclusion. In parallel or as the next branch, design a narrower
-matched GT4/GT5 short-positive rescue so true short lanes are protected before
-more unmatched negatives are applied.
+matched-query exclusion. Use
+`scripts/run_query_alpha05_gt5short_geom_w2_bneg002_env30_nocount_v1.sh` with
+its default `RUN_TESTS=0`; only enable reporting-only test after official-val,
+raw-Q12 short-GT5 geometry, and train GT4->5 diagnostics pass. In parallel or
+as the next branch, design a narrower matched GT4/GT5 short-positive rescue so
+true short lanes are protected before more unmatched negatives are applied.
+
+## 2026-07-11 G1 Count-Aware Extra-Margin Diagnostic
+
+The G1 GT5-short-geometry artifact
+`query_alpha05_gt5short_geom_w2_v1` remains the selected/reference surface for
+this line. Count-aware extra-margin is useful as default-off decode tooling,
+but the G1 `score_sum` proxy sweep is diagnostic-only and does not replace the
+no-count-aware official-best decode.
+
+```text
+G1 artifact:
+model = ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml
+gcs_query_count_ce = 0.0
+pred_count_logits / query Count Head keys = absent
+
+fixed official-val decode:
+weights = runs/gcs_lane/query_alpha05_gt5short_geom_w2_v1/weights/official_best.pt
+conf = 0.003
+point_valid_thr = 0.5
+nms_dist_px = 0
+max_det = 6
+min_points = 5
+valid_before_maxdet = true
+```
+
+Official-val comparison:
+
+```text
+no count-aware:
+ACC/FP/FN = 0.973071 / 0.014784 / 0.009642
+GT5 5->4/5->5/5->6 = 1 / 69 / 4
+
+score_sum k:
+ACC/FP/FN = 0.972632 / 0.007668 / 0.011019
+GT5 5->4/5->5/5->6 = 8 / 66 / 0
+
+score_sum k+1:
+ACC/FP/FN = 0.973069 / 0.014325 / 0.009642
+GT5 5->4/5->5/5->6 = 1 / 70 / 3
+
+score_sum k+2:
+ACC/FP/FN = 0.973069 / 0.014784 / 0.009642
+GT5 5->4/5->5/5->6 = 1 / 69 / 4
+```
+
+Supported bottleneck:
+
+- Hard count-aware top-k is still risky even after G1 geometry improves.
+  `score_sum k` removes sixth-lane overcount but creates GT5 undercount and
+  raises FN.
+- `score_sum k+1` has the only useful shape signal: one fewer GT5 `5->6`,
+  one more GT5 `5->5`, slightly lower FP, and unchanged FN. The official ACC
+  is still a near tie below the no-count-aware baseline, so it is not a
+  promotable decode.
+- `score_sum k+2` adds no meaningful change over no-count-aware.
+- The result does not answer whether a learned query Count Head is useful
+  after G1, because this checkpoint has no `pred_count_logits`.
+
+Smallest safe next action:
+
+Do not run final test or reselect G1 decode from this proxy. If count-aware is
+revisited, use a G1-compatible query-count checkpoint and run official-val-only
+`count_logits k/k+1/k+2`, with gates on GT5 `5->6`, official ACC, FN, and FP.
 
 ## 2026-07-09 Exist-Quality Alpha Ablation Bottleneck
 

@@ -343,6 +343,7 @@ class GCSLoss(nn.Module):
         )
         self.short_geom_gain = float(self._arg(args, "gcs_short_geom", 0.0))
         self.short_geom_visible_thr = int(self._arg(args, "gcs_short_geom_visible_thr", 10))
+        self.short_geom_gt4_weight = float(self._arg(args, "gcs_short_geom_gt4_weight", 1.0))
         self.short_geom_gt5_weight = float(self._arg(args, "gcs_short_geom_gt5_weight", 2.0))
         self.short_geom_max_weight = float(self._arg(args, "gcs_short_geom_max_weight", 3.0))
         self.short_geom_curve = float(self._arg(args, "gcs_short_geom_curve", 1.0))
@@ -364,6 +365,8 @@ class GCSLoss(nn.Module):
             raise ValueError(f"gcs_short_geom must be >= 0, got {self.short_geom_gain}.")
         if self.short_geom_visible_thr < 0:
             raise ValueError(f"gcs_short_geom_visible_thr must be >= 0, got {self.short_geom_visible_thr}.")
+        if self.short_geom_gt4_weight < 1.0:
+            raise ValueError(f"gcs_short_geom_gt4_weight must be >= 1, got {self.short_geom_gt4_weight}.")
         if self.short_geom_gt5_weight < 1.0:
             raise ValueError(f"gcs_short_geom_gt5_weight must be >= 1, got {self.short_geom_gt5_weight}.")
         if self.short_geom_max_weight < 1.0:
@@ -640,15 +643,20 @@ class GCSLoss(nn.Module):
             return weights
 
         gt_count = int(round(float(torch.as_tensor(gt_count_b).detach().cpu().item())))
-        if gt_count != 5:
+        if gt_count == 4:
+            target_weight = self.short_geom_gt4_weight
+        elif gt_count == 5:
+            target_weight = self.short_geom_gt5_weight
+        else:
+            return weights
+        if float(target_weight) <= 1.0:
             return weights
 
         visible_counts = gt_valid_b.float().sum(dim=1)
         short_mask = visible_counts <= float(self.short_geom_visible_thr)
 
-        if bool(short_mask.any()):
-            boost = 1.0 + float(self.short_geom_gain) * (float(self.short_geom_gt5_weight) - 1.0)
-            weights[short_mask] = boost
+        boost = 1.0 + float(self.short_geom_gain) * (float(target_weight) - 1.0)
+        weights[short_mask] = boost
 
         return weights.clamp(min=1.0, max=float(self.short_geom_max_weight))
 
@@ -660,11 +668,11 @@ class GCSLoss(nn.Module):
         indices: list[tuple[torch.Tensor, torch.Tensor]],
         gt_lanes: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Aspect-weighted L1 point loss with optional GT5 short-visible lane weighting."""
+        """Aspect-weighted L1 point loss with optional GT4/GT5 short-visible lane weighting."""
         short_geom_enabled = (
             float(self.short_geom_gain) > 0.0
             and int(self.short_geom_visible_thr) > 0
-            and float(self.short_geom_gt5_weight) > 1.0
+            and max(float(self.short_geom_gt4_weight), float(self.short_geom_gt5_weight)) > 1.0
         )
         if not short_geom_enabled:
             losses = []
@@ -844,7 +852,7 @@ class GCSLoss(nn.Module):
         indices: list[tuple[torch.Tensor, torch.Tensor]],
         gt_lanes: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Adaptive curvature-aware loss with optional GT5 short-visible lane weighting."""
+        """Adaptive curvature-aware loss with optional GT4/GT5 short-visible lane weighting."""
         if pred_points.shape[2] < 3:
             return self._zero_like(pred_points)
 
@@ -852,7 +860,7 @@ class GCSLoss(nn.Module):
             float(self.short_geom_gain) > 0.0
             and float(self.short_geom_curve) > 0.0
             and int(self.short_geom_visible_thr) > 0
-            and float(self.short_geom_gt5_weight) > 1.0
+            and max(float(self.short_geom_gt4_weight), float(self.short_geom_gt5_weight)) > 1.0
         )
         if not short_curve_enabled:
             losses = []

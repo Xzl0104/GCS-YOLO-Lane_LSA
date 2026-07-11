@@ -451,6 +451,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--gcs-short-geom", type=float, default=0.0)
     parser.add_argument("--gcs-short-geom-visible-thr", type=int, default=10)
+    parser.add_argument("--gcs-short-geom-gt4-weight", type=float, default=1.0)
     parser.add_argument("--gcs-short-geom-gt5-weight", type=float, default=2.0)
     parser.add_argument("--gcs-short-geom-max-weight", type=float, default=3.0)
     parser.add_argument("--gcs-short-geom-curve", type=float, default=1.0)
@@ -796,6 +797,7 @@ def main() -> None:
         "gcs_gt5_short_point_valid_weight": args.gcs_gt5_short_point_valid_weight,
         "gcs_short_geom": args.gcs_short_geom,
         "gcs_short_geom_visible_thr": args.gcs_short_geom_visible_thr,
+        "gcs_short_geom_gt4_weight": args.gcs_short_geom_gt4_weight,
         "gcs_short_geom_gt5_weight": args.gcs_short_geom_gt5_weight,
         "gcs_short_geom_max_weight": args.gcs_short_geom_max_weight,
         "gcs_short_geom_curve": args.gcs_short_geom_curve,

@@ -1750,13 +1750,44 @@ python tools/sweep_tusimple_official_cached.py \
   --count-aware-min-k 3 \
   --count-aware-max-k 5 \
   --count-aware-length-norm 12 \
+  --count-aware-extra-margins 0 \
   --save-dir runs/gcs_lane/gcs_yolo_lane_s_q12_k56_boundary_shortpv_spurious_v1_official_val363_sweep_countaware
 ```
 
 Compare this only against the matching normal official-val sweep for the same
 E3 `best.pt`, focusing on `official_acc`, `count_acc_4`, `count_acc_5`,
 `official_FP`, and `official_FN`. The sweep summary records
-`count_aware_topk`.
+`count_aware_topk` and `count_aware_extra_margins`.
+
+For the 2026-07-11 G1 GT5-short-geometry follow-up, the validation-only
+count-aware extra-margin proxy sweep used the fixed G1 `official_best.pt`
+decode row and swept only `score_sum` margins:
+
+```bash
+python tools/sweep_tusimple_official_cached.py \
+  --archive-root archive/TUSimple \
+  --split val \
+  --gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
+  --weights runs/gcs_lane/query_alpha05_gt5short_geom_w2_v1/weights/official_best.pt \
+  --imgsz 544 960 \
+  --device 0 \
+  --half \
+  --confs 0.003 \
+  --point-valid-thrs 0.5 \
+  --nms-dist-pxs 0 \
+  --max-dets 6 \
+  --min-points 5 \
+  --valid-before-maxdet \
+  --count-aware-topk \
+  --count-modes score_sum \
+  --count-aware-extra-margins 0 1 2 \
+  --save-dir runs/gcs_lane/query_alpha05_gt5short_geom_w2_v1_official_best_val_score_sum_catopk_extra_margin
+```
+
+This G1 checkpoint does not emit `pred_count_logits`, so
+`--count-modes count_logits` is invalid for it. True `count_logits k/k+1/k+2`
+requires a query-count checkpoint built from
+`ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-count.yaml`.
 
 Default-off valid-before-maxdet query decode uses the same official-val
 surface and must be selected on validation only:

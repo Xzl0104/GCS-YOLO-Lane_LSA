@@ -29,6 +29,174 @@ This is a selection/tooling protocol change only. It does not change the model,
 losses, labels, decode formulas, official metrics, final-test policy, or
 official-best selection priority.
 
+## 2026-07-11: Keep G1 count-aware extra-margin as diagnostic only
+
+Decision:
+
+Add `count_aware_extra_margin` as a default-off query decode/sweep control,
+but do not promote the G1 count-aware margin result and do not run final test
+from it. The selected/reference G1 decode remains the no-count-aware
+`official_best.pt` row.
+
+Implementation scope:
+
+```text
+eval CLI = --count-aware-extra-margin
+sweep CLI = --count-aware-extra-margins
+decode rule = keep_k = min(k_hat + extra_margin, max_det)
+default = 0
+formal count modes = score_sum, count_logits
+diagnostic GT-count mode = --oracle-count only
+```
+
+This is decode/evaluation tooling only. It does not change training, labels,
+losses, model outputs, Count Head availability, official metrics, or the
+default decode path. `oracle_gt` is not a public formal `--count-mode` or
+decode-yaml value.
+
+G1 artifact check:
+
+```text
+run = query_alpha05_gt5short_geom_w2_v1
+model = ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml
+gcs_query_count_ce = 0.0
+checkpoint count-related keys = 0
+```
+
+Therefore `count_logits k/k+1/k+2` cannot run on the current G1 artifact. G1
+can only test the `score_sum` count-aware proxy unless a query-count model is
+trained.
+
+Official-val-only evidence on the fixed G1 `official_best.pt` decode
+(`conf=0.003`, `point_valid_thr=0.5`, `nms_dist_px=0`, `max_det=6`,
+`min_points=5`, `valid_before_maxdet=true`):
+
+```text
+no count-aware baseline:
+ACC/FP/FN = 0.973071 / 0.014784 / 0.009642
+GT5 5->4/5->5/5->6 = 1 / 69 / 4
+
+score_sum k, extra_margin=0:
+ACC/FP/FN = 0.972632 / 0.007668 / 0.011019
+GT5 5->4/5->5/5->6 = 8 / 66 / 0
+
+score_sum k+1, extra_margin=1:
+ACC/FP/FN = 0.973069 / 0.014325 / 0.009642
+GT5 5->4/5->5/5->6 = 1 / 70 / 3
+
+score_sum k+2, extra_margin=2:
+ACC/FP/FN = 0.973069 / 0.014784 / 0.009642
+GT5 5->4/5->5/5->6 = 1 / 69 / 4
+```
+
+Why:
+
+- `score_sum k` is too hard; it lowers FP but raises FN and GT5 undercount.
+- `score_sum k+1` is only a near tie with a one-image GT5 `5->6` reduction and
+  slightly lower FP. It does not beat the no-count-aware baseline on official
+  ACC.
+- `score_sum k+2` collapses back to the baseline count shape.
+- This proxy sweep does not establish that true `count_logits` is useful after
+  G1 geometry; that requires a checkpoint emitting `pred_count_logits`.
+
+Next action:
+
+Do not run final test or reselect G1 decode from this proxy. If count-aware is
+revisited, train/evaluate a query-count version of the G1 geometry setup and
+run `count_logits k/k+1/k+2` on canonical official-val only.
+
+## 2026-07-11: Reject boundary_pseudo_neg v2 protocol-miss result
+
+Decision:
+
+Do not promote `query_alpha05_gt5short_geom_w2_bneg005_nocount_v2`. Do not
+treat it as evidence that outside-GT-envelope protection failed, because the
+actual training args disabled the envelope guard:
+
+```text
+gcs_boundary_pseudo_envelope_margin_px = -1.0
+gcs_boundary_pseudo_neg = 0.05
+gcs_boundary_pseudo_dist_thr = 60
+gcs_boundary_pseudo_min_valid = 3
+gcs_boundary_pseudo_score_thr = 0.0
+```
+
+Official-val evidence:
+
+```text
+selected weights = weights/official_best.pt
+source_epoch = 180
+decode = conf=0.001, point_valid_thr=0.6, nms_dist_px=18.0, max_det=5,
+         min_points=2, valid_before_maxdet=true, count_mode=score_sum
+official-val ACC/FP/FN = 0.969401 / 0.024334 / 0.016070
+count_acc_4/5 = 0.909091 / 0.972973
+count_confusion = 3->3=216, 3->4=7, 4->3=1, 4->4=60, 4->5=5,
+                  5->4=2, 5->5=72
+```
+
+Compared with G1 (`ACC=0.973071`, `FP=0.014784`, `FN=0.009642`,
+`4->5=0`, `5->4=1`, `GT5 visible<=10 p90 APE=19.372219 px`), v2 is worse on
+primary ACC, FP, FN, GT4 false-fifth, GT5 undercount, and short-GT5 raw
+geometry. The v2 raw-Q12 diagnostic reports:
+
+```text
+GT5 visible<=10 lanes = 53
+has_match20/30/40 = 0.754717 / 0.792453 / 0.886792
+p90 APE = 35.917850 px
+```
+
+The selected row has `GT5 5->6=0`, but equal-ACC `max_det=6` rows show
+`GT5 5->6=4..6`, so the apparent sixth-lane improvement is still tied to the
+`max_det=5` cap and is not a robust training-side fix. The generic `best.pt`
+surface is weaker (`ACC=0.966980`, `FP=0.035537`, `FN=0.017906`) and must not
+replace `official_best.pt`.
+
+Reporting-only official test is not selection input, but it confirms the
+generalization risk:
+
+```text
+official_best test ACC/FP/FN = 0.965566 / 0.036137 / 0.026869
+test count_acc_4/5 = 0.598291 / 0.873462
+test count_confusion includes 4->5=100 and 5->4=54
+```
+
+Train-only diagnostic on the three TuSimple train JSON files, using the
+selected official-best decode and `target_gt_count=4`, `target_pred_count=5`,
+found:
+
+```text
+label_data_0313 GT4->5 images = 45
+label_data_0531 GT4->5 images = 6
+label_data_0601 GT4->5 images = 23
+total = 74
+```
+
+Why:
+
+- The intended mask-v2 command was not run. The envelope guard stayed disabled,
+  and the mask remained broader/harder than the proposed `neg=0.02`,
+  `dist_thr=80`, `min_valid=4`, `score_thr=0.2`, `envelope_margin=30` setup.
+- The run fails every serious promotion gate: not close to G1 on official-val
+  ACC/FP/FN, GT4 `4->5` grows, GT5 `5->4` grows, selected `5->6=0` is not
+  robust under `max_det=6`, and GT5 visible<=10 geometry regresses badly.
+- `gcs_gt5_short_visible_thr=0` kept GT5 short point-valid rescue off, so the
+  broad pseudo-negative pressure was not paired with a compensating positive
+  protection for true short fifth lanes.
+
+Next action:
+
+If the boundary-pseudo line continues, rerun the actual mask-v2/envelope
+experiment with the envelope margin explicitly passed in the script/command:
+`gcs_boundary_pseudo_neg=0.02`, `dist_thr=80`, `min_valid=4`,
+`score_thr=0.2`, `envelope_margin_px=30`, and
+`envelope_ratio_thr=0.75`. The local protocol entry is
+`scripts/run_query_alpha05_gt5short_geom_w2_bneg002_env30_nocount_v1.sh`;
+it defaults to `RUN_TESTS=0`, so it should run training and cached
+official-val sweeps first. Keep selection on canonical 363-image official-val,
+run cached sweeps for both `official_best.pt` and `best.pt`, and require the
+raw-Q12 short-GT5 geometry and train GT4->5 diagnostics to pass before enabling
+`RUN_TESTS=1` for reporting-only test.
+
 ## 2026-07-11: Reject boundary_pseudo_neg B1 as promotion
 
 Decision:

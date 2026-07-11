@@ -176,8 +176,9 @@ gcs_spurious_gt_protect_margin_px: 5.0 # (float) better-matched protection margi
 gcs_spurious_gt_protect_mode: better_matched # (str) GT-aware protection policy
 gcs_gt5_short_visible_thr: 0 # (int) matched GT5 lanes with visible_count <= this get point-valid positive rescue; 0 disables
 gcs_gt5_short_point_valid_weight: 1.0 # (float) point-valid BCE multiplier for visible anchors of rescued short GT5 lanes
-gcs_short_geom: 0.0 # (float) lane-level point/curve boost gain for matched GT5 short-visible lanes; 0 disables
-gcs_short_geom_visible_thr: 10 # (int) visible anchor threshold for GT5 short geometry boost
+gcs_short_geom: 0.0 # (float) lane-level point/curve boost gain for matched GT4/GT5 short-visible lanes; 0 disables
+gcs_short_geom_visible_thr: 10 # (int) visible anchor threshold for GT4/GT5 short geometry boost
+gcs_short_geom_gt4_weight: 1.0 # (float) default-off GT4 short geometry boost
 gcs_short_geom_gt5_weight: 2.0 # (float) target lane weight when gcs_short_geom=1.0
 gcs_short_geom_max_weight: 3.0 # (float) maximum clamped lane weight for short geometry boost
 gcs_short_geom_curve: 1.0 # (float) fraction of short geometry lane boost applied to curve_loss
