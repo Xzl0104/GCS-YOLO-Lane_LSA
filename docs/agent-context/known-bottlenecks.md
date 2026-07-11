@@ -134,16 +134,43 @@ Supported bottleneck:
 
 Smallest safe next action:
 
-Do not run `gcs_boundary_pseudo_neg=0.1`. If continuing the line, shrink the
-negative mask before increasing pressure: try a validation-only B1-mask-v2
-with a smaller gain such as `0.02`, larger distance-to-all-GT threshold such
-as `80 px`, stricter `min_valid=4`, optional `score_thr=0.2`, and continued
-matched-query exclusion. Use
-`scripts/run_query_alpha05_gt5short_geom_w2_bneg002_env30_nocount_v1.sh` with
-its default `RUN_TESTS=0`; only enable reporting-only test after official-val,
-raw-Q12 short-GT5 geometry, and train GT4->5 diagnostics pass. In parallel or
-as the next branch, design a narrower matched GT4/GT5 short-positive rescue so
-true short lanes are protected before more unmatched negatives are applied.
+Do not increase boundary pseudo-negative pressure. Keep the env30 mask-v2
+settings as the boundary mask guard, but move the next ablation to matched
+weak-positive geometry rescue because the remaining failures are upstream
+candidate-quality problems, not simple threshold/NMS/max-det/min-points
+failures.
+
+Run one official-val-only remote experiment through
+`scripts/run_query_alpha05_gt4gt5weak_geom_w15w2_env30_nocount_v1.sh` with its
+default `RUN_TESTS=0`. The intended change relative to env30 is:
+
+```text
+gcs_short_geom = 1.0
+gcs_short_geom_visible_thr = 20
+gcs_short_geom_gt4_weight = 1.5
+gcs_short_geom_gt5_weight = 2.0
+gcs_short_geom_max_weight = 3.0
+gcs_short_geom_curve = 1.0
+gcs_gt5_short_visible_thr = 10
+gcs_gt5_short_point_valid_weight = 1.25
+```
+
+The env30 boundary mask stays:
+
+```text
+gcs_boundary_pseudo_neg = 0.02
+gcs_boundary_pseudo_dist_thr = 80
+gcs_boundary_pseudo_min_valid = 4
+gcs_boundary_pseudo_score_thr = 0.2
+gcs_boundary_pseudo_envelope_margin_px = 30
+gcs_boundary_pseudo_envelope_ratio_thr = 0.75
+```
+
+Promotion gates: beat or tie env30 official-val ACC/FN, do not regress GT4
+`4->5`, GT5 `5->4`, or GT5 `5->6` under `max_det=6`, improve GT5
+visible<=10 raw geometry versus p90 APE `36.550196 px`, and reduce train
+GT4->5 below `38`. Keep official test closed until those official-val and
+train/val diagnostics pass.
 
 ## 2026-07-11 G1 Count-Aware Extra-Margin Diagnostic
 

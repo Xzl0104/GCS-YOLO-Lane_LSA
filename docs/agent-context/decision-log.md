@@ -2,6 +2,78 @@
 
 This file records decisions for branch `codex/5-25-3-k56`.
 
+## 2026-07-12: Move from env30 boundary mask to GT4/GT5 weak-positive rescue
+
+Decision:
+
+Keep the env30 boundary-pseudo mask as the current boundary guard, but do not
+increase or broaden boundary pseudo-negative pressure. The next experiment in
+this line is a matched weak-positive rescue for true GT4/GT5 short-visible
+lanes, using point/curve geometry weighting plus a small GT5 point-valid
+rescue.
+
+Official-val evidence for env30:
+
+```text
+run = query_alpha05_gt5short_geom_w2_bneg002_env30_nocount_v1
+official_best val ACC/FP/FN = 0.973330 / 0.015748 / 0.009642
+official_best val GT4 4->3/4->5 = 2 / 0
+official_best val GT5 5->4/5->5/5->6 = 1 / 73 / 0
+max_det=6 equal-ACC rows also keep GT5 5->6 = 0
+GT5 visible<=10 raw has_match20/30 = 0.754717 / 0.811321
+GT5 visible<=10 raw p90 APE = 36.550196 px
+train GT4->5 over label_data_0313/0531/0601 = 29 + 2 + 7 = 38
+```
+
+Why:
+
+- The env30 run is real evidence that the narrower outside-envelope mask fixes
+  the selected official-val count-shape issue better than broad B1/v2.
+- It is not clean promotion evidence because raw GT5 short geometry is weak
+  and train GT4->5 remains high.
+- The undercount diagnostic indicates missing GT4/GT5 lanes are often
+  `geometry_bad`, `score_low`, or `valid_low` before final postprocess, so
+  changing only `conf`, NMS, `max_det`, or `min_points` is unlikely to solve
+  the target test-ACC gap.
+- More pseudo-negative pressure risks suppressing true weak-visible side
+  lanes before their geometry and validity are repaired.
+
+Next experiment:
+
+Use `scripts/run_query_alpha05_gt4gt5weak_geom_w15w2_env30_nocount_v1.sh` with
+default `RUN_TESTS=0`. The intended active weak-positive settings are:
+
+```text
+gcs_short_geom = 1.0
+gcs_short_geom_visible_thr = 20
+gcs_short_geom_gt4_weight = 1.5
+gcs_short_geom_gt5_weight = 2.0
+gcs_short_geom_max_weight = 3.0
+gcs_short_geom_curve = 1.0
+gcs_gt5_short_visible_thr = 10
+gcs_gt5_short_point_valid_weight = 1.25
+```
+
+The env30 boundary mask remains:
+
+```text
+gcs_boundary_pseudo_neg = 0.02
+gcs_boundary_pseudo_dist_thr = 80
+gcs_boundary_pseudo_min_valid = 4
+gcs_boundary_pseudo_score_thr = 0.2
+gcs_boundary_pseudo_envelope_margin_px = 30
+gcs_boundary_pseudo_envelope_ratio_thr = 0.75
+```
+
+Promotion gates:
+
+- official-val ACC/FN must beat or tie env30;
+- GT4 `4->5`, GT5 `5->4`, and GT5 `5->6` under `max_det=6` must not regress;
+- GT5 visible<=10 raw geometry must improve versus p90 APE `36.550196 px`;
+- train GT4->5 must drop below `38`;
+- official test remains closed until official-val and train/val diagnostics
+  pass, and any later test is reporting-only.
+
 ## 2026-07-10: Use cached official-val sweep for threshold selection
 
 Decision:

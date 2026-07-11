@@ -89,6 +89,74 @@ These test values are reporting-only. Do not use them for thresholds,
 checkpoint choice, NMS, `max_det`, `min_points`, count mode, count-aware top-k,
 or loss-gain tuning.
 
+## Query Alpha05 GT4/GT5 Weak Geometry Env30 Run
+
+The next official-val-only experiment after the env30 boundary-mask diagnostic
+is:
+
+```bash
+cd /root/GCS-YOLO-Lane_LSA_5-25-3-k56
+source /root/miniconda3/etc/profile.d/conda.sh
+conda activate ssh_lane
+bash scripts/run_query_alpha05_gt4gt5weak_geom_w15w2_env30_nocount_v1.sh
+```
+
+The script default run name is:
+
+```text
+query_alpha05_gt4gt5weak_geom_w15w2_env30_nocount_v1
+```
+
+Its purpose is to keep the env30 boundary mask while rescuing matched weak
+GT4/GT5 lanes. Do not use it as a test-tuning script. By default,
+`RUN_TESTS=0`, and the script runs training-time `official_best`, post-train
+cached official-val sweeps for both `weights/official_best.pt` and
+`weights/best.pt`, plus validation raw-Q12 diagnostics.
+
+Core weak-positive settings:
+
+```text
+gcs_short_geom = 1.0
+gcs_short_geom_visible_thr = 20
+gcs_short_geom_gt4_weight = 1.5
+gcs_short_geom_gt5_weight = 2.0
+gcs_short_geom_max_weight = 3.0
+gcs_short_geom_curve = 1.0
+gcs_gt5_short_visible_thr = 10
+gcs_gt5_short_point_valid_weight = 1.25
+```
+
+Retained env30 boundary-mask settings:
+
+```text
+gcs_boundary_pseudo_neg = 0.02
+gcs_boundary_pseudo_dist_thr = 80
+gcs_boundary_pseudo_min_valid = 4
+gcs_boundary_pseudo_score_thr = 0.2
+gcs_boundary_pseudo_envelope_margin_px = 30
+gcs_boundary_pseudo_envelope_ratio_thr = 0.75
+```
+
+Primary gates before any reporting-only test:
+
+```text
+official-val ACC/FN >= env30 or tied within noise
+GT4 4->5 must not regress
+GT5 5->4 must not regress
+GT5 5->6 must not regress under max_det=6
+GT5 visible<=10 raw p90 APE must improve versus 36.550196 px
+train GT4->5 must drop below 38
+```
+
+If reusing an existing run directory after training, use `RUN_TRAIN=0`. If a
+sweep or diagnostic directory already exists and must be regenerated, set only
+the relevant overwrite flag:
+
+```bash
+RUN_TRAIN=0 OVERWRITE_SWEEPS=1 OVERWRITE_DIAGNOSTICS=1 \
+bash scripts/run_query_alpha05_gt4gt5weak_geom_w15w2_env30_nocount_v1.sh
+```
+
 ## Full Remote Training
 
 Use the remote RTX 4090 environment for formal training:
