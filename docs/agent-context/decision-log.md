@@ -40,18 +40,26 @@ Why:
 
 Next experiment:
 
-Use `scripts/run_query_alpha05_gt4gt5weak_geom_w15w2_env30_nocount_v1.sh` with
+Use `scripts/run_query_alpha05_gt4gt5_tiered_geom_gt4pv12_env30_nocount_v1.sh` with
 default `RUN_TESTS=0`. The intended active weak-positive settings are:
 
 ```text
 gcs_short_geom = 1.0
-gcs_short_geom_visible_thr = 20
-gcs_short_geom_gt4_weight = 1.5
-gcs_short_geom_gt5_weight = 2.0
+gcs_short_geom_tiered = true
+gcs_short_geom_gt4_ultra_visible_thr = 10
+gcs_short_geom_gt4_ultra_weight = 1.35
+gcs_short_geom_gt4_mid_visible_thr = 20
+gcs_short_geom_gt4_mid_weight = 1.0
+gcs_short_geom_gt5_ultra_visible_thr = 10
+gcs_short_geom_gt5_ultra_weight = 2.25
+gcs_short_geom_gt5_mid_visible_thr = 20
+gcs_short_geom_gt5_mid_weight = 1.5
 gcs_short_geom_max_weight = 3.0
 gcs_short_geom_curve = 1.0
+gcs_gt4_short_visible_thr = 10
+gcs_gt4_short_point_valid_weight = 1.2
 gcs_gt5_short_visible_thr = 10
-gcs_gt5_short_point_valid_weight = 1.25
+gcs_gt5_short_point_valid_weight = 1.5
 ```
 
 The env30 boundary mask remains:

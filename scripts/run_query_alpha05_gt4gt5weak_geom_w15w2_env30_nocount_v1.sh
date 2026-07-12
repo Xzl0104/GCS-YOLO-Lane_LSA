@@ -36,6 +36,25 @@ DIAG_WARMUP="${DIAG_WARMUP:-20}"
 DIAG_MATCH_THR_PX="${DIAG_MATCH_THR_PX:-20}"
 DIAG_MATCH_MIN_OVERLAP="${DIAG_MATCH_MIN_OVERLAP:-3}"
 DIAG_SHORT_VISIBLE_MAX="${DIAG_SHORT_VISIBLE_MAX:-10}"
+SHORT_GEOM="${SHORT_GEOM:-1.0}"
+SHORT_GEOM_VISIBLE_THR="${SHORT_GEOM_VISIBLE_THR:-20}"
+SHORT_GEOM_GT4_WEIGHT="${SHORT_GEOM_GT4_WEIGHT:-1.5}"
+SHORT_GEOM_GT5_WEIGHT="${SHORT_GEOM_GT5_WEIGHT:-2.0}"
+SHORT_GEOM_MAX_WEIGHT="${SHORT_GEOM_MAX_WEIGHT:-3.0}"
+SHORT_GEOM_CURVE="${SHORT_GEOM_CURVE:-1.0}"
+SHORT_GEOM_TIERED="${SHORT_GEOM_TIERED:-0}"
+SHORT_GEOM_GT4_ULTRA_VISIBLE_THR="${SHORT_GEOM_GT4_ULTRA_VISIBLE_THR:-10}"
+SHORT_GEOM_GT4_ULTRA_WEIGHT="${SHORT_GEOM_GT4_ULTRA_WEIGHT:-1.0}"
+SHORT_GEOM_GT4_MID_VISIBLE_THR="${SHORT_GEOM_GT4_MID_VISIBLE_THR:-20}"
+SHORT_GEOM_GT4_MID_WEIGHT="${SHORT_GEOM_GT4_MID_WEIGHT:-1.0}"
+SHORT_GEOM_GT5_ULTRA_VISIBLE_THR="${SHORT_GEOM_GT5_ULTRA_VISIBLE_THR:-10}"
+SHORT_GEOM_GT5_ULTRA_WEIGHT="${SHORT_GEOM_GT5_ULTRA_WEIGHT:-1.0}"
+SHORT_GEOM_GT5_MID_VISIBLE_THR="${SHORT_GEOM_GT5_MID_VISIBLE_THR:-20}"
+SHORT_GEOM_GT5_MID_WEIGHT="${SHORT_GEOM_GT5_MID_WEIGHT:-1.0}"
+GT4_SHORT_VISIBLE_THR="${GT4_SHORT_VISIBLE_THR:-0}"
+GT4_SHORT_POINT_VALID_WEIGHT="${GT4_SHORT_POINT_VALID_WEIGHT:-1.0}"
+GT5_SHORT_VISIBLE_THR="${GT5_SHORT_VISIBLE_THR:-10}"
+GT5_SHORT_POINT_VALID_WEIGHT="${GT5_SHORT_POINT_VALID_WEIGHT:-1.25}"
 
 OFFICIAL_CONFS="${OFFICIAL_CONFS:-0.001 0.003 0.005 0.008 0.01 0.02}"
 OFFICIAL_POINT_VALID_THRS="${OFFICIAL_POINT_VALID_THRS:-0.45 0.50 0.55 0.60}"
@@ -105,6 +124,21 @@ if is_true "${HALF}"; then
   SWEEP_HALF_ARGS=(--half)
 fi
 
+SHORT_GEOM_TIERED_ARGS=()
+if is_true "${SHORT_GEOM_TIERED}"; then
+  SHORT_GEOM_TIERED_ARGS=(
+    --gcs-short-geom-tiered
+    --gcs-short-geom-gt4-ultra-visible-thr "${SHORT_GEOM_GT4_ULTRA_VISIBLE_THR}"
+    --gcs-short-geom-gt4-ultra-weight "${SHORT_GEOM_GT4_ULTRA_WEIGHT}"
+    --gcs-short-geom-gt4-mid-visible-thr "${SHORT_GEOM_GT4_MID_VISIBLE_THR}"
+    --gcs-short-geom-gt4-mid-weight "${SHORT_GEOM_GT4_MID_WEIGHT}"
+    --gcs-short-geom-gt5-ultra-visible-thr "${SHORT_GEOM_GT5_ULTRA_VISIBLE_THR}"
+    --gcs-short-geom-gt5-ultra-weight "${SHORT_GEOM_GT5_ULTRA_WEIGHT}"
+    --gcs-short-geom-gt5-mid-visible-thr "${SHORT_GEOM_GT5_MID_VISIBLE_THR}"
+    --gcs-short-geom-gt5-mid-weight "${SHORT_GEOM_GT5_MID_WEIGHT}"
+  )
+fi
+
 OFFICIAL_BEST_SWEEP_DIR="${OFFICIAL_BEST_SWEEP_DIR:-${PROJECT}/${RUN_NAME}_official_best_val_sweep_${DECODE_TAG}}"
 BEST_SWEEP_DIR="${BEST_SWEEP_DIR:-${PROJECT}/${RUN_NAME}_best_val_sweep_${DECODE_TAG}}"
 OFFICIAL_BEST_TEST_DIR="${OFFICIAL_BEST_TEST_DIR:-${PROJECT}/${RUN_NAME}_official_best_test_from_val_sweep_${DECODE_TAG}}"
@@ -140,14 +174,17 @@ run_train() {
     --gcs-count-under5 0.0 \
     --gcs-count-boundary 0.0 \
     --gcs-query-count-ce 0.0 \
-    --gcs-short-geom 1.0 \
-    --gcs-short-geom-visible-thr 20 \
-    --gcs-short-geom-gt4-weight 1.5 \
-    --gcs-short-geom-gt5-weight 2.0 \
-    --gcs-short-geom-max-weight 3.0 \
-    --gcs-short-geom-curve 1.0 \
-    --gcs-gt5-short-visible-thr 10 \
-    --gcs-gt5-short-point-valid-weight 1.25 \
+    --gcs-short-geom "${SHORT_GEOM}" \
+    --gcs-short-geom-visible-thr "${SHORT_GEOM_VISIBLE_THR}" \
+    --gcs-short-geom-gt4-weight "${SHORT_GEOM_GT4_WEIGHT}" \
+    --gcs-short-geom-gt5-weight "${SHORT_GEOM_GT5_WEIGHT}" \
+    --gcs-short-geom-max-weight "${SHORT_GEOM_MAX_WEIGHT}" \
+    --gcs-short-geom-curve "${SHORT_GEOM_CURVE}" \
+    "${SHORT_GEOM_TIERED_ARGS[@]}" \
+    --gcs-gt4-short-visible-thr "${GT4_SHORT_VISIBLE_THR}" \
+    --gcs-gt4-short-point-valid-weight "${GT4_SHORT_POINT_VALID_WEIGHT}" \
+    --gcs-gt5-short-visible-thr "${GT5_SHORT_VISIBLE_THR}" \
+    --gcs-gt5-short-point-valid-weight "${GT5_SHORT_POINT_VALID_WEIGHT}" \
     --gcs-boundary-pseudo-neg 0.02 \
     --gcs-boundary-pseudo-visible-thr 10 \
     --gcs-boundary-pseudo-dist-thr 80 \
@@ -403,7 +440,16 @@ write_protocol_summary() {
     "${BEST_WEIGHTS}" "${BEST_SWEEP_DIR}" "${BEST_TEST_DIR}" \
     "${OFFICIAL_BEST_VAL_DIAG_DIR}" "${BEST_VAL_DIAG_DIR}" \
     "${OFFICIAL_BEST_TEST_DIAG_DIR}" "${BEST_TEST_DIAG_DIR}" \
-    "${PROTOCOL_SUMMARY}" <<'PY'
+    "${PROTOCOL_SUMMARY}" \
+    "${SHORT_GEOM}" "${SHORT_GEOM_VISIBLE_THR}" \
+    "${SHORT_GEOM_GT4_WEIGHT}" "${SHORT_GEOM_GT5_WEIGHT}" \
+    "${SHORT_GEOM_MAX_WEIGHT}" "${SHORT_GEOM_CURVE}" "${SHORT_GEOM_TIERED}" \
+    "${SHORT_GEOM_GT4_ULTRA_VISIBLE_THR}" "${SHORT_GEOM_GT4_ULTRA_WEIGHT}" \
+    "${SHORT_GEOM_GT4_MID_VISIBLE_THR}" "${SHORT_GEOM_GT4_MID_WEIGHT}" \
+    "${SHORT_GEOM_GT5_ULTRA_VISIBLE_THR}" "${SHORT_GEOM_GT5_ULTRA_WEIGHT}" \
+    "${SHORT_GEOM_GT5_MID_VISIBLE_THR}" "${SHORT_GEOM_GT5_MID_WEIGHT}" \
+    "${GT4_SHORT_VISIBLE_THR}" "${GT4_SHORT_POINT_VALID_WEIGHT}" \
+    "${GT5_SHORT_VISIBLE_THR}" "${GT5_SHORT_POINT_VALID_WEIGHT}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -421,7 +467,30 @@ from pathlib import Path
     official_best_test_diag_dir,
     best_test_diag_dir,
     protocol_summary,
+    short_geom,
+    short_geom_visible_thr,
+    short_geom_gt4_weight,
+    short_geom_gt5_weight,
+    short_geom_max_weight,
+    short_geom_curve,
+    short_geom_tiered,
+    short_geom_gt4_ultra_visible_thr,
+    short_geom_gt4_ultra_weight,
+    short_geom_gt4_mid_visible_thr,
+    short_geom_gt4_mid_weight,
+    short_geom_gt5_ultra_visible_thr,
+    short_geom_gt5_ultra_weight,
+    short_geom_gt5_mid_visible_thr,
+    short_geom_gt5_mid_weight,
+    gt4_short_visible_thr,
+    gt4_short_point_valid_weight,
+    gt5_short_visible_thr,
+    gt5_short_point_valid_weight,
 ) = sys.argv[1:]
+
+
+def as_bool(value: str) -> bool:
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def load_json(path: str) -> dict:
@@ -465,14 +534,25 @@ output = {
     "test_diagnostic_usage": "reporting_only_with_allow_test_oracle_not_for_selection",
     "best_pt_test_role": "reporting_only_not_selection",
     "weak_positive_geom_params": {
-        "gcs_short_geom": 1.0,
-        "gcs_short_geom_visible_thr": 20,
-        "gcs_short_geom_gt4_weight": 1.5,
-        "gcs_short_geom_gt5_weight": 2.0,
-        "gcs_short_geom_max_weight": 3.0,
-        "gcs_short_geom_curve": 1.0,
-        "gcs_gt5_short_visible_thr": 10,
-        "gcs_gt5_short_point_valid_weight": 1.25,
+        "gcs_short_geom": float(short_geom),
+        "gcs_short_geom_visible_thr": int(short_geom_visible_thr),
+        "gcs_short_geom_gt4_weight": float(short_geom_gt4_weight),
+        "gcs_short_geom_gt5_weight": float(short_geom_gt5_weight),
+        "gcs_short_geom_max_weight": float(short_geom_max_weight),
+        "gcs_short_geom_curve": float(short_geom_curve),
+        "gcs_short_geom_tiered": as_bool(short_geom_tiered),
+        "gcs_short_geom_gt4_ultra_visible_thr": int(short_geom_gt4_ultra_visible_thr),
+        "gcs_short_geom_gt4_ultra_weight": float(short_geom_gt4_ultra_weight),
+        "gcs_short_geom_gt4_mid_visible_thr": int(short_geom_gt4_mid_visible_thr),
+        "gcs_short_geom_gt4_mid_weight": float(short_geom_gt4_mid_weight),
+        "gcs_short_geom_gt5_ultra_visible_thr": int(short_geom_gt5_ultra_visible_thr),
+        "gcs_short_geom_gt5_ultra_weight": float(short_geom_gt5_ultra_weight),
+        "gcs_short_geom_gt5_mid_visible_thr": int(short_geom_gt5_mid_visible_thr),
+        "gcs_short_geom_gt5_mid_weight": float(short_geom_gt5_mid_weight),
+        "gcs_gt4_short_visible_thr": int(gt4_short_visible_thr),
+        "gcs_gt4_short_point_valid_weight": float(gt4_short_point_valid_weight),
+        "gcs_gt5_short_visible_thr": int(gt5_short_visible_thr),
+        "gcs_gt5_short_point_valid_weight": float(gt5_short_point_valid_weight),
     },
     "mask_v2_params": {
         "gcs_boundary_pseudo_neg": 0.02,
@@ -505,7 +585,7 @@ PY
 }
 
 echo "Run name: ${RUN_NAME}"
-echo "Weak-positive geometry params: short_geom=1.0 visible_thr=20 gt4_weight=1.5 gt5_weight=2.0 max_weight=3.0 curve=1.0 gt5_point_valid_weight=1.25"
+echo "Weak-positive geometry params: short_geom=${SHORT_GEOM} visible_thr=${SHORT_GEOM_VISIBLE_THR} gt4_weight=${SHORT_GEOM_GT4_WEIGHT} gt5_weight=${SHORT_GEOM_GT5_WEIGHT} max_weight=${SHORT_GEOM_MAX_WEIGHT} curve=${SHORT_GEOM_CURVE} tiered=${SHORT_GEOM_TIERED} gt4_ultra=${SHORT_GEOM_GT4_ULTRA_VISIBLE_THR}/${SHORT_GEOM_GT4_ULTRA_WEIGHT} gt4_mid=${SHORT_GEOM_GT4_MID_VISIBLE_THR}/${SHORT_GEOM_GT4_MID_WEIGHT} gt5_ultra=${SHORT_GEOM_GT5_ULTRA_VISIBLE_THR}/${SHORT_GEOM_GT5_ULTRA_WEIGHT} gt5_mid=${SHORT_GEOM_GT5_MID_VISIBLE_THR}/${SHORT_GEOM_GT5_MID_WEIGHT} gt4_point_valid=${GT4_SHORT_VISIBLE_THR}/${GT4_SHORT_POINT_VALID_WEIGHT} gt5_point_valid=${GT5_SHORT_VISIBLE_THR}/${GT5_SHORT_POINT_VALID_WEIGHT}"
 echo "Mask-v2 boundary pseudo params: neg=0.02 dist_thr=80 min_valid=4 score_thr=0.2 envelope_margin_px=30 envelope_ratio_thr=0.75"
 echo "Selection GT: ${GT_JSON}"
 echo "Training-time official_best and post-train sweeps use tools/sweep_tusimple_official_cached.py."

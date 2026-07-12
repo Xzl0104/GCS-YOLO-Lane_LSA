@@ -407,6 +407,9 @@ boundary_pseudo_score_mean
 query_count_ce_loss
 query_count_acc
 query_count_pred_mean
+gt4_short_pos_count
+gt4_short_pos_anchor_count
+gt4_short_point_valid_loss
 ```
 
 `query_count_ce_loss` is active only when a query model emits
@@ -589,16 +592,22 @@ Hungarian ultra-short rawmatch base boost is not blocked by
 Hungarian raw-close matches are reported separately through
 `shortside_hungarian_rawmatch_candidate_count`.
 
-`gcs_gt5_short_visible_thr=0` and
-`gcs_gt5_short_point_valid_weight=1.0` keep GT5 short point-valid rescue
+`gcs_gt4_short_visible_thr=0`,
+`gcs_gt4_short_point_valid_weight=1.0`,
+`gcs_gt5_short_visible_thr=0`, and
+`gcs_gt5_short_point_valid_weight=1.0` keep GT4/GT5 short point-valid rescue
 effectively disabled by default. When enabled, the point-valid BCE keeps the
-same global target structure, applies only on images with `GT lane count == 5`,
-only on Hungarian-matched GT lanes whose visible anchor count is at or below
-the threshold, and only multiplies the BCE weight for visible
-`target_valid == 1` anchors. It does not change point regression, smooth,
-curve, mask, edge, dataset, dataloader, matcher, decode, NMS, or official
-metrics. `gt5_short_pos_count`, `gt5_short_pos_anchor_count`, and
-`gt5_short_point_valid_loss` are diagnostics for the rescued anchors.
+same global target structure, applies only during training, only on images
+with `GT lane count == 4` or `GT lane count == 5`, only on Hungarian-matched GT
+lanes whose visible anchor count is at or below that GT-count-specific
+threshold, and only multiplies the BCE weight for visible `target_valid == 1`
+anchors. It does not change point regression, smooth, curve, mask, edge,
+dataset, dataloader, matcher, decode, NMS, official metrics, or validation loss
+weighting. `gt5_short_pos_count`, `gt5_short_pos_anchor_count`,
+`gt5_short_point_valid_loss`, `gt4_short_pos_count`,
+`gt4_short_pos_anchor_count`, and `gt4_short_point_valid_loss` are diagnostics
+for the rescued anchors. The GT4 diagnostics are appended after the historical
+loss columns to preserve old log-column positions.
 
 `gcs_short_geom=0.0` keeps the default query point/curve geometry losses
 unchanged. When explicitly enabled, `gcs_short_geom` applies only inside
@@ -611,6 +620,15 @@ below `gcs_short_geom_visible_thr`, and only by lane-level weighting inside
 assignment, smooth loss, point-valid BCE targets, mask/edge losses, dataset,
 dataloader, decode, NMS, official metrics, Count Head, or loss item count.
 The geometry boost has no side-lane/order assumption.
+
+`gcs_short_geom_tiered=False` preserves the legacy single-threshold
+`gcs_short_geom_visible_thr` path above. When explicitly enabled, the helper
+selects lane weights by GT lane count and visible-count tier:
+GT4 ultra/mid and GT5 ultra/mid thresholds and weights. Tier weights default to
+`1.0`, so enabling tiered mode without explicit tier weights still produces no
+extra boost. The tiered path still only changes lane-level weighting in
+`point_loss` and `curve_loss`; it does not change point-valid rescue, matcher,
+decode, official metrics, outputs, or loss item count.
 
 `spurious_neg_loss` is disabled by default through `gcs_spurious_neg=0.0`.
 When enabled, it requires `pred_valid_logits` and applies only to unmatched

@@ -174,6 +174,8 @@ gcs_spurious_gt_protect_px: 25.0 # (float) maximum mean x distance in pixels for
 gcs_spurious_gt_protect_min_overlap: 3 # (int) minimum overlapping anchors with a GT lane for protection
 gcs_spurious_gt_protect_margin_px: 5.0 # (float) better-matched protection margin in pixels
 gcs_spurious_gt_protect_mode: better_matched # (str) GT-aware protection policy
+gcs_gt4_short_visible_thr: 0 # (int) matched GT4 lanes with visible_count <= this get point-valid positive rescue; 0 disables
+gcs_gt4_short_point_valid_weight: 1.0 # (float) point-valid BCE multiplier for visible anchors of rescued short GT4 lanes
 gcs_gt5_short_visible_thr: 0 # (int) matched GT5 lanes with visible_count <= this get point-valid positive rescue; 0 disables
 gcs_gt5_short_point_valid_weight: 1.0 # (float) point-valid BCE multiplier for visible anchors of rescued short GT5 lanes
 gcs_short_geom: 0.0 # (float) lane-level point/curve boost gain for matched GT4/GT5 short-visible lanes; 0 disables
@@ -182,6 +184,15 @@ gcs_short_geom_gt4_weight: 1.0 # (float) default-off GT4 short geometry boost
 gcs_short_geom_gt5_weight: 2.0 # (float) target lane weight when gcs_short_geom=1.0
 gcs_short_geom_max_weight: 3.0 # (float) maximum clamped lane weight for short geometry boost
 gcs_short_geom_curve: 1.0 # (float) fraction of short geometry lane boost applied to curve_loss
+gcs_short_geom_tiered: False # (bool) use gt-count and visible-count tiered short geometry weights; False preserves legacy single threshold
+gcs_short_geom_gt4_ultra_visible_thr: 10 # (int) tiered GT4 ultra-short visible threshold
+gcs_short_geom_gt4_ultra_weight: 1.0 # (float) tiered GT4 ultra-short lane weight; 1 disables boost
+gcs_short_geom_gt4_mid_visible_thr: 20 # (int) tiered GT4 mid-short visible threshold
+gcs_short_geom_gt4_mid_weight: 1.0 # (float) tiered GT4 mid-short lane weight; 1 disables boost
+gcs_short_geom_gt5_ultra_visible_thr: 10 # (int) tiered GT5 ultra-short visible threshold
+gcs_short_geom_gt5_ultra_weight: 1.0 # (float) tiered GT5 ultra-short lane weight; 1 disables boost
+gcs_short_geom_gt5_mid_visible_thr: 20 # (int) tiered GT5 mid-short visible threshold
+gcs_short_geom_gt5_mid_weight: 1.0 # (float) tiered GT5 mid-short lane weight; 1 disables boost
 gcs_boundary_pseudo_neg: 0.0 # (float) extra BCE negative loss gain for GT5 short far boundary pseudo lanes; 0 disables
 gcs_boundary_pseudo_visible_thr: 10 # (int) maximum predicted visible anchors for boundary pseudo negatives
 gcs_boundary_pseudo_dist_thr: 60.0 # (float) minimum mean x distance in pixels from nearest GT lane

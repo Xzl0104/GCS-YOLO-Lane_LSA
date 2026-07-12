@@ -58,6 +58,9 @@ LOSS_NAMES = (
     "query_count_ce_loss",
     "query_count_acc",
     "query_count_pred_mean",
+    "gt4_short_pos_count",
+    "gt4_short_pos_anchor_count",
+    "gt4_short_point_valid_loss",
 )
 LOSS_GAIN_ARGS = (
     "gcs_exist",
@@ -94,6 +97,9 @@ LOSS_GAIN_ARGS = (
     "gcs_query_count_ce",
     None,
     None,
+    None,
+    None,
+    None,
 )
 DEFAULT_LOSS_GAINS = (
     2.0,
@@ -103,6 +109,9 @@ DEFAULT_LOSS_GAINS = (
     0.1,
     0.2,
     0.2,
+    0.0,
+    0.0,
+    0.0,
     0.0,
     0.0,
     0.0,

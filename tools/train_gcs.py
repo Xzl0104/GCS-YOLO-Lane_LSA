@@ -449,12 +449,33 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=1.0,
         help="Extra point-valid BCE multiplier for visible anchors of matched short GT5 lanes.",
     )
+    parser.add_argument(
+        "--gcs-gt4-short-visible-thr",
+        type=int,
+        default=0,
+        help="Boost matched GT4 lane point-valid positives when visible_count <= this threshold. 0 disables.",
+    )
+    parser.add_argument(
+        "--gcs-gt4-short-point-valid-weight",
+        type=float,
+        default=1.0,
+        help="Extra point-valid BCE multiplier for visible anchors of matched short GT4 lanes.",
+    )
     parser.add_argument("--gcs-short-geom", type=float, default=0.0)
     parser.add_argument("--gcs-short-geom-visible-thr", type=int, default=10)
     parser.add_argument("--gcs-short-geom-gt4-weight", type=float, default=1.0)
     parser.add_argument("--gcs-short-geom-gt5-weight", type=float, default=2.0)
     parser.add_argument("--gcs-short-geom-max-weight", type=float, default=3.0)
     parser.add_argument("--gcs-short-geom-curve", type=float, default=1.0)
+    parser.add_argument("--gcs-short-geom-tiered", action="store_true")
+    parser.add_argument("--gcs-short-geom-gt4-ultra-visible-thr", type=int, default=10)
+    parser.add_argument("--gcs-short-geom-gt4-ultra-weight", type=float, default=1.0)
+    parser.add_argument("--gcs-short-geom-gt4-mid-visible-thr", type=int, default=20)
+    parser.add_argument("--gcs-short-geom-gt4-mid-weight", type=float, default=1.0)
+    parser.add_argument("--gcs-short-geom-gt5-ultra-visible-thr", type=int, default=10)
+    parser.add_argument("--gcs-short-geom-gt5-ultra-weight", type=float, default=1.0)
+    parser.add_argument("--gcs-short-geom-gt5-mid-visible-thr", type=int, default=20)
+    parser.add_argument("--gcs-short-geom-gt5-mid-weight", type=float, default=1.0)
     parser.add_argument("--gcs-boundary-pseudo-neg", type=float, default=0.0)
     parser.add_argument("--gcs-boundary-pseudo-visible-thr", type=int, default=10)
     parser.add_argument("--gcs-boundary-pseudo-dist-thr", type=float, default=60.0)
@@ -795,12 +816,23 @@ def main() -> None:
         "gcs_spurious_gt_protect_mode": args.gcs_spurious_gt_protect_mode,
         "gcs_gt5_short_visible_thr": args.gcs_gt5_short_visible_thr,
         "gcs_gt5_short_point_valid_weight": args.gcs_gt5_short_point_valid_weight,
+        "gcs_gt4_short_visible_thr": args.gcs_gt4_short_visible_thr,
+        "gcs_gt4_short_point_valid_weight": args.gcs_gt4_short_point_valid_weight,
         "gcs_short_geom": args.gcs_short_geom,
         "gcs_short_geom_visible_thr": args.gcs_short_geom_visible_thr,
         "gcs_short_geom_gt4_weight": args.gcs_short_geom_gt4_weight,
         "gcs_short_geom_gt5_weight": args.gcs_short_geom_gt5_weight,
         "gcs_short_geom_max_weight": args.gcs_short_geom_max_weight,
         "gcs_short_geom_curve": args.gcs_short_geom_curve,
+        "gcs_short_geom_tiered": args.gcs_short_geom_tiered,
+        "gcs_short_geom_gt4_ultra_visible_thr": args.gcs_short_geom_gt4_ultra_visible_thr,
+        "gcs_short_geom_gt4_ultra_weight": args.gcs_short_geom_gt4_ultra_weight,
+        "gcs_short_geom_gt4_mid_visible_thr": args.gcs_short_geom_gt4_mid_visible_thr,
+        "gcs_short_geom_gt4_mid_weight": args.gcs_short_geom_gt4_mid_weight,
+        "gcs_short_geom_gt5_ultra_visible_thr": args.gcs_short_geom_gt5_ultra_visible_thr,
+        "gcs_short_geom_gt5_ultra_weight": args.gcs_short_geom_gt5_ultra_weight,
+        "gcs_short_geom_gt5_mid_visible_thr": args.gcs_short_geom_gt5_mid_visible_thr,
+        "gcs_short_geom_gt5_mid_weight": args.gcs_short_geom_gt5_mid_weight,
         "gcs_boundary_pseudo_neg": args.gcs_boundary_pseudo_neg,
         "gcs_boundary_pseudo_visible_thr": args.gcs_boundary_pseudo_visible_thr,
         "gcs_boundary_pseudo_dist_thr": args.gcs_boundary_pseudo_dist_thr,

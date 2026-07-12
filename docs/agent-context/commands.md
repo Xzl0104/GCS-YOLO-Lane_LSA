@@ -89,7 +89,7 @@ These test values are reporting-only. Do not use them for thresholds,
 checkpoint choice, NMS, `max_det`, `min_points`, count mode, count-aware top-k,
 or loss-gain tuning.
 
-## Query Alpha05 GT4/GT5 Weak Geometry Env30 Run
+## Query Alpha05 GT4/GT5 Tiered Geometry Env30 Run
 
 The next official-val-only experiment after the env30 boundary-mask diagnostic
 is:
@@ -98,13 +98,13 @@ is:
 cd /root/GCS-YOLO-Lane_LSA_5-25-3-k56
 source /root/miniconda3/etc/profile.d/conda.sh
 conda activate ssh_lane
-bash scripts/run_query_alpha05_gt4gt5weak_geom_w15w2_env30_nocount_v1.sh
+bash scripts/run_query_alpha05_gt4gt5_tiered_geom_gt4pv12_env30_nocount_v1.sh
 ```
 
 The script default run name is:
 
 ```text
-query_alpha05_gt4gt5weak_geom_w15w2_env30_nocount_v1
+query_alpha05_gt4gt5_tiered_geom_gt4pv12_env30_nocount_v1
 ```
 
 Its purpose is to keep the env30 boundary mask while rescuing matched weak
@@ -113,17 +113,38 @@ GT4/GT5 lanes. Do not use it as a test-tuning script. By default,
 cached official-val sweeps for both `weights/official_best.pt` and
 `weights/best.pt`, plus validation raw-Q12 diagnostics.
 
+When a candidate has already passed the official-val gates and the user
+explicitly wants the reporting-only full protocol, use:
+
+```bash
+bash scripts/run_query_alpha05_gt4gt5_tiered_geom_gt4pv12_env30_nocount_full_protocol_v1.sh
+```
+
+This wrapper keeps the same tiered GT4/GT5 and env30 parameters, but defaults
+`RUN_TESTS=1`, `RUN_DIAGNOSTICS=1`, and `RUN_TEST_DIAGNOSTICS=1`. It still
+selects thresholds only from cached official-val sweeps; TEST ACC and TEST
+raw-Q12 diagnostics are reporting-only and must not be used to choose
+thresholds, checkpoints, decode settings, or loss gains.
+
 Core weak-positive settings:
 
 ```text
 gcs_short_geom = 1.0
-gcs_short_geom_visible_thr = 20
-gcs_short_geom_gt4_weight = 1.5
-gcs_short_geom_gt5_weight = 2.0
+gcs_short_geom_tiered = true
+gcs_short_geom_gt4_ultra_visible_thr = 10
+gcs_short_geom_gt4_ultra_weight = 1.35
+gcs_short_geom_gt4_mid_visible_thr = 20
+gcs_short_geom_gt4_mid_weight = 1.0
+gcs_short_geom_gt5_ultra_visible_thr = 10
+gcs_short_geom_gt5_ultra_weight = 2.25
+gcs_short_geom_gt5_mid_visible_thr = 20
+gcs_short_geom_gt5_mid_weight = 1.5
 gcs_short_geom_max_weight = 3.0
 gcs_short_geom_curve = 1.0
+gcs_gt4_short_visible_thr = 10
+gcs_gt4_short_point_valid_weight = 1.2
 gcs_gt5_short_visible_thr = 10
-gcs_gt5_short_point_valid_weight = 1.25
+gcs_gt5_short_point_valid_weight = 1.5
 ```
 
 Retained env30 boundary-mask settings:
@@ -154,8 +175,17 @@ the relevant overwrite flag:
 
 ```bash
 RUN_TRAIN=0 OVERWRITE_SWEEPS=1 OVERWRITE_DIAGNOSTICS=1 \
-bash scripts/run_query_alpha05_gt4gt5weak_geom_w15w2_env30_nocount_v1.sh
+bash scripts/run_query_alpha05_gt4gt5_tiered_geom_gt4pv12_env30_nocount_v1.sh
 ```
+
+The previous tiered GT5-only point-valid wrapper
+`scripts/run_query_alpha05_gt4gt5_tiered_geom_env30_nocount_v1.sh`
+remains available for reproducing the tiered-geometry + GT5PV setup without
+GT4 point-valid rescue.
+
+The previous non-tiered script
+`scripts/run_query_alpha05_gt4gt5weak_geom_w15w2_env30_nocount_v1.sh`
+remains available for reproducing the legacy single-threshold w15/w2 run.
 
 ## Full Remote Training
 
