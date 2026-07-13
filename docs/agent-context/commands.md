@@ -89,10 +89,11 @@ These test values are reporting-only. Do not use them for thresholds,
 checkpoint choice, NMS, `max_det`, `min_points`, count mode, count-aware top-k,
 or loss-gain tuning.
 
-## Query Alpha05 GT4/GT5 Tiered Geometry Env30 Run
+## Query Alpha05 GT4/GT5 Tiered Geometry Env30 Rejected Run
 
-The next official-val-only experiment after the env30 boundary-mask diagnostic
-is:
+The tiered GT4/GT5 + GT4 point-valid follow-up after the env30
+boundary-mask diagnostic has been completed and rejected. Keep these commands
+only for reproduction or audit:
 
 ```bash
 cd /root/GCS-YOLO-Lane_LSA_5-25-3-k56
@@ -107,24 +108,37 @@ The script default run name is:
 query_alpha05_gt4gt5_tiered_geom_gt4pv12_env30_nocount_v1
 ```
 
-Its purpose is to keep the env30 boundary mask while rescuing matched weak
-GT4/GT5 lanes. Do not use it as a test-tuning script. By default,
+Its purpose was to keep the env30 boundary mask while rescuing matched weak
+GT4/GT5 lanes. It did not pass the official-val gates and must not be used as
+the next promotion path or as a test-tuning script. By default,
 `RUN_TESTS=0`, and the script runs training-time `official_best`, post-train
 cached official-val sweeps for both `weights/official_best.pt` and
 `weights/best.pt`, plus validation raw-Q12 diagnostics.
 
-When a candidate has already passed the official-val gates and the user
-explicitly wants the reporting-only full protocol, use:
+The reporting-only full-protocol wrapper has also been run and rejected:
 
 ```bash
 bash scripts/run_query_alpha05_gt4gt5_tiered_geom_gt4pv12_env30_nocount_full_protocol_v1.sh
 ```
 
 This wrapper keeps the same tiered GT4/GT5 and env30 parameters, but defaults
-`RUN_TESTS=1`, `RUN_DIAGNOSTICS=1`, and `RUN_TEST_DIAGNOSTICS=1`. It still
-selects thresholds only from cached official-val sweeps; TEST ACC and TEST
-raw-Q12 diagnostics are reporting-only and must not be used to choose
-thresholds, checkpoints, decode settings, or loss gains.
+`RUN_TESTS=1`, `RUN_DIAGNOSTICS=1`, and `RUN_TEST_DIAGNOSTICS=1`. It selected
+thresholds only from cached official-val sweeps; TEST ACC and TEST raw-Q12
+diagnostics are reporting-only and must not be used to choose thresholds,
+checkpoints, decode settings, or loss gains. For ordinary training or a new
+ablation launch, use the non-full wrapper with default `RUN_TESTS=0`; reserve
+the full-protocol wrapper only for reproducing/reporting a candidate that was
+already selected on official-val.
+
+Rejected result:
+
+```text
+run = query_alpha05_gt4gt5_tiered_geom_gt4pv12_env30_nocount_full_protocol_v1
+official_best val ACC/FP/FN = 0.971182 / 0.023370 / 0.012397
+official_best reporting-only test ACC/FP/FN = 0.966118 / 0.034280 / 0.023934
+env30 reference val ACC/FP/FN = 0.973330 / 0.015748 / 0.009642
+env30 reference reporting-only test ACC/FP/FN = 0.966780 / 0.028732 / 0.023544
+```
 
 Core weak-positive settings:
 
@@ -158,7 +172,7 @@ gcs_boundary_pseudo_envelope_margin_px = 30
 gcs_boundary_pseudo_envelope_ratio_thr = 0.75
 ```
 
-Primary gates before any reporting-only test:
+Primary gates that the rejected run failed:
 
 ```text
 official-val ACC/FN >= env30 or tied within noise
@@ -168,6 +182,14 @@ GT5 5->6 must not regress under max_det=6
 GT5 visible<=10 raw p90 APE must improve versus 36.550196 px
 train GT4->5 must drop below 38
 ```
+
+Current action after rejection: return to env30 as the reference. Do not
+increase GT4 point-valid rescue, GT4 short-geometry weights, or GT5 mid-short
+weights. The next trainable candidate should either be a smaller GT5-only
+ultra-short rescue with GT4 rescue disabled, or a hardset-driven
+candidate-geometry coverage experiment for train/val short GT4/GT5 lanes.
+Any follow-up must pass official-val gates before another reporting-only TEST
+run.
 
 If reusing an existing run directory after training, use `RUN_TRAIN=0`. If a
 sweep or diagnostic directory already exists and must be regenerated, set only

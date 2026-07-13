@@ -395,6 +395,25 @@ def test_loss_log_item_names_and_forward_length_stable() -> None:
         raise AssertionError("GCSLoss.forward produced non-finite values for short point-valid contract check.")
 
 
+def test_short_point_valid_weights_reject_suppression_values() -> None:
+    for key in ("gcs_gt4_short_point_valid_weight", "gcs_gt5_short_point_valid_weight"):
+        try:
+            GCSLoss({"gcs_imgsz": [544, 960], key: 0.5})
+        except ValueError as exc:
+            if "must be >= 1.0" not in str(exc):
+                raise AssertionError(f"{key} raised the wrong validation error: {exc}") from exc
+        else:
+            raise AssertionError(f"{key}=0.5 should fail because short point-valid weights are rescue-only.")
+
+    GCSLoss(
+        {
+            "gcs_imgsz": [544, 960],
+            "gcs_gt4_short_point_valid_weight": 1.0,
+            "gcs_gt5_short_point_valid_weight": 1.0,
+        }
+    )
+
+
 def test_gcs_model_loss_syncs_cached_criterion_training_state() -> None:
     model = GCSLaneModel("ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml", verbose=False)
     model.args = {
@@ -446,6 +465,7 @@ TESTS = (
     test_gt3_no_weight_even_when_gt4_gt5_enabled,
     test_gt4_gt5_enabled_branch_by_gt_count,
     test_loss_log_item_names_and_forward_length_stable,
+    test_short_point_valid_weights_reject_suppression_values,
     test_gcs_model_loss_syncs_cached_criterion_training_state,
 )
 

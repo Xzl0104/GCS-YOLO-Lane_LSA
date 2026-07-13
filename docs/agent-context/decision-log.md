@@ -2,15 +2,84 @@
 
 This file records decisions for branch `codex/5-25-3-k56`.
 
+## 2026-07-13: Reject tiered GT4/GT5 + GT4PV env30 full-protocol result
+
+Decision:
+
+Do not promote
+`query_alpha05_gt4gt5_tiered_geom_gt4pv12_env30_nocount_full_protocol_v1`,
+and do not continue by increasing GT4/GT5 weak-positive weights. Use the
+previous env30 mask-v2 result as the stronger reference for this line.
+
+Protocol:
+
+```text
+run = query_alpha05_gt4gt5_tiered_geom_gt4pv12_env30_nocount_full_protocol_v1
+primary checkpoint = weights/official_best.pt
+source_epoch = 202
+val/test decode = conf 0.001, point_valid_thr 0.55, nms_dist_px 0,
+  max_det 5, min_points 2, valid_before_maxdet true, count_mode score_sum
+```
+
+Official-val evidence:
+
+```text
+tiered official_best val ACC/FP/FN = 0.971182 / 0.023370 / 0.012397
+count_acc_3/4/5 = 0.946188 / 0.939394 / 0.986486
+count_confusion = 3->3 211, 3->4 12, 4->4 62, 4->5 4,
+                  5->4 1, 5->5 73
+
+env30 official_best val ACC/FP/FN = 0.973330 / 0.015748 / 0.009642
+count_confusion = 3->3 216, 3->4 7, 4->3 2, 4->4 64,
+                  5->4 1, 5->5 73
+```
+
+Reporting-only TEST evidence:
+
+```text
+tiered official_best test ACC/FP/FN = 0.966118 / 0.034280 / 0.023934
+count_acc_3/4/5 = 0.958621 / 0.568376 / 0.887522
+count_confusion includes 3->5 20, 4->3 87, 4->5 114,
+                         5->3 17, 5->4 47, 5->5 505
+
+env30 official_best test ACC/FP/FN = 0.966780 / 0.028732 / 0.023544
+count_confusion includes 3->5 8, 4->3 98, 4->5 90,
+                         5->3 19, 5->4 43, 5->5 507
+```
+
+Why:
+
+- The run fails before TEST: no official_best val sweep row reaches
+  `ACC >= 0.973`, and no row simultaneously matches env30's FP/FN ceiling.
+- GT4 point-valid rescue plus stronger tiered geometry reduces some GT4
+  undercount but turns it into GT3/GT4 overcount. On TEST, GT4 `4->5` grows
+  from env30's `90` to `114`, and GT3 `3->5` grows from `8` to `20`.
+- The intended short-GT5 geometry rescue did not work. Official-val
+  GT5 visible<=10 raw p90 APE worsens from env30's `36.550196 px` to
+  `51.347903 px`, with `has_match20` stuck at `0.754717`.
+- TEST raw-Q12 diagnostics show the remaining bottleneck is still true short
+  GT4/GT5 candidate quality, especially `0601|GT5` missing lanes and
+  `0530/0601|GT4` short/weak lanes, while overcount pressure increased.
+
+Next action:
+
+Do not tune thresholds, max-det, min-points, NMS, or TEST settings from this
+result. The next experiment should start from env30, remove GT4 point-valid
+rescue, avoid GT4 mid/ultra score inflation, and use a smaller GT5-only
+ultra-short geometry/valid rescue only if paired with an explicit official-val
+overcount gate. A stronger direction is hardset-driven candidate-geometry
+coverage for train/val short GT4/GT5 lanes rather than broader loss weights.
+
 ## 2026-07-12: Move from env30 boundary mask to GT4/GT5 weak-positive rescue
 
 Decision:
 
 Keep the env30 boundary-pseudo mask as the current boundary guard, but do not
-increase or broaden boundary pseudo-negative pressure. The next experiment in
-this line is a matched weak-positive rescue for true GT4/GT5 short-visible
-lanes, using point/curve geometry weighting plus a small GT5 point-valid
-rescue.
+increase or broaden boundary pseudo-negative pressure. At the time, this
+decision selected a matched weak-positive rescue for true GT4/GT5
+short-visible lanes, using point/curve geometry weighting plus a small GT5
+point-valid rescue. That follow-up has since been rejected by the 2026-07-13
+full-protocol result above.
 
 Official-val evidence for env30:
 
@@ -38,10 +107,16 @@ Why:
 - More pseudo-negative pressure risks suppressing true weak-visible side
   lanes before their geometry and validity are repaired.
 
-Next experiment:
+Follow-up status:
 
-Use `scripts/run_query_alpha05_gt4gt5_tiered_geom_gt4pv12_env30_nocount_v1.sh` with
-default `RUN_TESTS=0`. The intended active weak-positive settings are:
+The intended follow-up from this decision was implemented as
+`scripts/run_query_alpha05_gt4gt5_tiered_geom_gt4pv12_env30_nocount_v1.sh` and
+then run through the full protocol as
+`query_alpha05_gt4gt5_tiered_geom_gt4pv12_env30_nocount_full_protocol_v1`.
+The 2026-07-13 decision above rejects that result. Do not repeat this tiered
+GT4/GT5 + GT4 point-valid setup except for reproduction or audit.
+
+The superseded weak-positive settings were:
 
 ```text
 gcs_short_geom = 1.0
@@ -73,7 +148,7 @@ gcs_boundary_pseudo_envelope_margin_px = 30
 gcs_boundary_pseudo_envelope_ratio_thr = 0.75
 ```
 
-Promotion gates:
+Promotion gates used for that follow-up:
 
 - official-val ACC/FN must beat or tie env30;
 - GT4 `4->5`, GT5 `5->4`, and GT5 `5->6` under `max_det=6` must not regress;

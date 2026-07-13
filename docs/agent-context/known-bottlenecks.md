@@ -37,6 +37,60 @@ diagnostic scripts, configs, model outputs, or active selected candidates.
 - It includes explicit training-time `official_best` checkpoint preservation for official-val selection.
 - It does not include post-`424ab1c86` short-side hardset/count-contract diagnostics, later mainline `diagnose_gcs_gt5.py`, Count/Quality/Boundary diagnostics, Survival, or near-miss machinery.
 
+## 2026-07-13 Tiered GT4/GT5 Rescue Bottleneck
+
+The completed full-protocol run
+`query_alpha05_gt4gt5_tiered_geom_gt4pv12_env30_nocount_full_protocol_v1`
+is rejected as a promotion and should not be used as the next starting point.
+
+```text
+tiered official_best val:
+ACC/FP/FN = 0.971182 / 0.023370 / 0.012397
+GT3 3->4/3->5 = 12 / 0
+GT4 4->3/4->5 = 0 / 4
+GT5 5->4/5->5 = 1 / 73
+
+tiered official_best reporting-only test:
+ACC/FP/FN = 0.966118 / 0.034280 / 0.023934
+GT3 3->4/3->5 = 48 / 20
+GT4 4->3/4->5 = 87 / 114
+GT5 5->3/5->4/5->5 = 17 / 47 / 505
+
+env30 official_best reporting-only test reference:
+ACC/FP/FN = 0.966780 / 0.028732 / 0.023544
+GT3 3->4/3->5 = 50 / 8
+GT4 4->3/4->5 = 98 / 90
+GT5 5->3/5->4/5->5 = 19 / 43 / 507
+```
+
+Supported bottleneck:
+
+- The tiered rescue fails on official-val before considering TEST. Across the
+  864-row official_best val sweep, no row reaches `ACC >= 0.973`, and no row
+  matches env30 on both FP and FN.
+- The GT4/GT5 weak-positive rescue is too broad. It reduces some GT4
+  undercount but increases false extra lanes; TEST GT4 `4->5` rises by `+24`
+  versus env30 and GT3 `3->5` rises by `+12`.
+- The intended GT5 short geometry improvement did not occur. Official-val
+  GT5 visible<=10 raw p90 APE worsens to `51.347903 px` from env30's
+  `36.550196 px`, while `has_match20` stays at `0.754717`.
+- TEST raw-Q12 diagnostics show persistent candidate-quality failure for
+  short-visible lanes: GT4 visible<=10 has p90 APE `61.844274 px` and
+  point-valid recall@0.6 `0.379396`; GT5 visible<=10 has p90 APE
+  `65.861592 px` and point-valid recall@0.6 `0.698599`.
+- The TEST gap to `0.97` is not a pure count-estimation or decode-threshold
+  problem. The model needs better raw candidate geometry/validity for true
+  short GT4/GT5 lanes while reducing GT3/GT4 extra-lane pressure.
+
+Smallest safe next action:
+
+Return to env30 as the reference. Do not increase GT4 point-valid rescue,
+GT4 short-geometry weights, or GT5 mid-short weights. The next trainable
+candidate should either be a smaller GT5-only ultra-short rescue with GT4
+rescue disabled, or a hardset-driven candidate-geometry coverage experiment
+for train/val short GT4/GT5 lanes. Any follow-up must pass official-val gates
+before another reporting-only TEST run.
+
 ## 2026-07-11 Boundary Pseudo-Negative Mask Bottleneck
 
 The completed B1 run
@@ -135,35 +189,7 @@ Supported bottleneck:
 Smallest safe next action:
 
 Do not increase boundary pseudo-negative pressure. Keep the env30 mask-v2
-settings as the boundary mask guard, but move the next ablation to matched
-weak-positive geometry rescue because the remaining failures are upstream
-candidate-quality problems, not simple threshold/NMS/max-det/min-points
-failures.
-
-Run one official-val-only remote experiment through
-`scripts/run_query_alpha05_gt4gt5_tiered_geom_gt4pv12_env30_nocount_v1.sh` with its
-default `RUN_TESTS=0`. The intended change relative to env30 is:
-
-```text
-gcs_short_geom = 1.0
-gcs_short_geom_tiered = true
-gcs_short_geom_gt4_ultra_visible_thr = 10
-gcs_short_geom_gt4_ultra_weight = 1.35
-gcs_short_geom_gt4_mid_visible_thr = 20
-gcs_short_geom_gt4_mid_weight = 1.0
-gcs_short_geom_gt5_ultra_visible_thr = 10
-gcs_short_geom_gt5_ultra_weight = 2.25
-gcs_short_geom_gt5_mid_visible_thr = 20
-gcs_short_geom_gt5_mid_weight = 1.5
-gcs_short_geom_max_weight = 3.0
-gcs_short_geom_curve = 1.0
-gcs_gt4_short_visible_thr = 10
-gcs_gt4_short_point_valid_weight = 1.2
-gcs_gt5_short_visible_thr = 10
-gcs_gt5_short_point_valid_weight = 1.5
-```
-
-The env30 boundary mask stays:
+settings as the boundary mask guard:
 
 ```text
 gcs_boundary_pseudo_neg = 0.02
@@ -174,8 +200,17 @@ gcs_boundary_pseudo_envelope_margin_px = 30
 gcs_boundary_pseudo_envelope_ratio_thr = 0.75
 ```
 
-Promotion gates: beat or tie env30 official-val ACC/FN, do not regress GT4
-`4->5`, GT5 `5->4`, or GT5 `5->6` under `max_det=6`, improve GT5
+The previous recommendation to run the tiered GT4/GT5 + GT4 point-valid rescue
+has been executed and rejected by the 2026-07-13 full-protocol result. Do not
+use that rejected setup as the next starting point.
+
+The current smallest safe action is to return to env30 as the reference and
+avoid GT4 point-valid rescue, GT4 short-geometry inflation, and GT5 mid-short
+inflation. If another training run is justified, use either a smaller GT5-only
+ultra-short rescue with GT4 rescue disabled, or a hardset-driven
+candidate-geometry coverage experiment for train/val short GT4/GT5 lanes.
+Promotion gates remain: beat or tie env30 official-val ACC/FN, do not regress
+GT4 `4->5`, GT5 `5->4`, or GT5 `5->6` under `max_det=6`, improve GT5
 visible<=10 raw geometry versus p90 APE `36.550196 px`, and reduce train
 GT4->5 below `38`. Keep official test closed until those official-val and
 train/val diagnostics pass.

@@ -601,7 +601,9 @@ same global target structure, applies only during training, only on images
 with `GT lane count == 4` or `GT lane count == 5`, only on Hungarian-matched GT
 lanes whose visible anchor count is at or below that GT-count-specific
 threshold, and only multiplies the BCE weight for visible `target_valid == 1`
-anchors. It does not change point regression, smooth, curve, mask, edge,
+anchors. The GT4/GT5 short point-valid weights are rescue-only controls and
+must be `>= 1.0`; values below `1.0` are rejected instead of silently weakening
+visible positives. It does not change point regression, smooth, curve, mask, edge,
 dataset, dataloader, matcher, decode, NMS, official metrics, or validation loss
 weighting. `gt5_short_pos_count`, `gt5_short_pos_anchor_count`,
 `gt5_short_point_valid_loss`, `gt4_short_pos_count`,

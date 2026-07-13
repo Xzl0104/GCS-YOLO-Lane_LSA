@@ -333,16 +333,16 @@ class GCSLoss(nn.Module):
             raise ValueError(f"gcs_eval_point_valid_thr must be in [0, 1], got {self.eval_point_valid_thr}.")
         if self.gt4_short_visible_thr < 0:
             raise ValueError(f"gcs_gt4_short_visible_thr must be >= 0, got {self.gt4_short_visible_thr}.")
-        if self.gt4_short_point_valid_weight < 0.0:
+        if self.gt4_short_point_valid_weight < 1.0:
             raise ValueError(
-                "gcs_gt4_short_point_valid_weight must be >= 0, "
+                "gcs_gt4_short_point_valid_weight must be >= 1.0 for rescue-only behavior, "
                 f"got {self.gt4_short_point_valid_weight}."
             )
         if self.gt5_short_visible_thr < 0:
             raise ValueError(f"gcs_gt5_short_visible_thr must be >= 0, got {self.gt5_short_visible_thr}.")
-        if self.gt5_short_point_valid_weight < 0.0:
+        if self.gt5_short_point_valid_weight < 1.0:
             raise ValueError(
-                "gcs_gt5_short_point_valid_weight must be >= 0, "
+                "gcs_gt5_short_point_valid_weight must be >= 1.0 for rescue-only behavior, "
                 f"got {self.gt5_short_point_valid_weight}."
             )
         self.curve_alpha = float(curve_alpha if curve_alpha is not None else self._arg(args, "gcs_curve_alpha", 5.0))
