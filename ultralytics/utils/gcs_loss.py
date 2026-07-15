@@ -53,6 +53,9 @@ class GCSLoss(nn.Module):
         "gt4_short_pos_count",
         "gt4_short_pos_anchor_count",
         "gt4_short_point_valid_loss",
+        "final_extra_guard_loss",
+        "final_extra_guard_count",
+        "final_extra_guard_protected",
     )
 
     def __init__(
@@ -391,6 +394,16 @@ class GCSLoss(nn.Module):
         self.boundary_pseudo_envelope_ratio_thr = float(
             self._arg(args, "gcs_boundary_pseudo_envelope_ratio_thr", 0.75)
         )
+        self.final_extra_guard_gain = float(self._arg(args, "gcs_final_extra_guard", 0.0))
+        self.final_extra_guard_scope = self._parse_int_set(self._arg(args, "gcs_final_extra_guard_scope", "1,3,4,5,6,7,8"))
+        self.final_extra_guard_score_thr = float(self._arg(args, "gcs_final_extra_guard_score_thr", 0.15))
+        self.final_extra_guard_valid_thr = float(self._arg(args, "gcs_final_extra_guard_valid_thr", 0.55))
+        self.final_extra_guard_min_valid = int(self._arg(args, "gcs_final_extra_guard_min_valid", 2))
+        self.final_extra_guard_min_overlap = int(self._arg(args, "gcs_final_extra_guard_min_overlap", 3))
+        self.final_extra_guard_clear_far_px = float(self._arg(args, "gcs_final_extra_guard_clear_far_px", 50.0))
+        self.final_extra_guard_duplicate_px = float(self._arg(args, "gcs_final_extra_guard_duplicate_px", 30.0))
+        self.final_extra_guard_protect_px = float(self._arg(args, "gcs_final_extra_guard_protect_px", 30.0))
+        self.final_extra_guard_protect_acc = float(self._arg(args, "gcs_final_extra_guard_protect_acc", 0.85))
 
         if self.short_geom_gain < 0.0:
             raise ValueError(f"gcs_short_geom must be >= 0, got {self.short_geom_gain}.")
@@ -443,6 +456,26 @@ class GCSLoss(nn.Module):
             raise ValueError("gcs_boundary_pseudo_envelope_margin_px must be >= -1.0.")
         if not (0.0 <= self.boundary_pseudo_envelope_ratio_thr <= 1.0):
             raise ValueError("gcs_boundary_pseudo_envelope_ratio_thr must be in [0, 1].")
+        if self.final_extra_guard_gain < 0.0:
+            raise ValueError("gcs_final_extra_guard must be >= 0.")
+        if any(q < 0 for q in self.final_extra_guard_scope):
+            raise ValueError(f"gcs_final_extra_guard_scope contains negative query ids: {sorted(self.final_extra_guard_scope)}.")
+        if self.final_extra_guard_score_thr < 0.0:
+            raise ValueError("gcs_final_extra_guard_score_thr must be >= 0.")
+        if not (0.0 <= self.final_extra_guard_valid_thr <= 1.0):
+            raise ValueError("gcs_final_extra_guard_valid_thr must be in [0, 1].")
+        if self.final_extra_guard_min_valid < 1:
+            raise ValueError("gcs_final_extra_guard_min_valid must be >= 1.")
+        if self.final_extra_guard_min_overlap < 1:
+            raise ValueError("gcs_final_extra_guard_min_overlap must be >= 1.")
+        if self.final_extra_guard_clear_far_px < 0.0:
+            raise ValueError("gcs_final_extra_guard_clear_far_px must be >= 0.")
+        if self.final_extra_guard_duplicate_px < 0.0:
+            raise ValueError("gcs_final_extra_guard_duplicate_px must be >= 0.")
+        if self.final_extra_guard_protect_px < 0.0:
+            raise ValueError("gcs_final_extra_guard_protect_px must be >= 0.")
+        if not (0.0 <= self.final_extra_guard_protect_acc <= 1.0):
+            raise ValueError("gcs_final_extra_guard_protect_acc must be in [0, 1].")
 
         self.exist_quality_alpha = float(
             exist_quality_alpha if exist_quality_alpha is not None else self._arg(args, "gcs_exist_quality_alpha", 1.0)
@@ -529,6 +562,18 @@ class GCSLoss(nn.Module):
         if isinstance(value, str):
             return value.strip().lower() in {"1", "true", "yes", "y", "on"}
         return bool(value)
+
+    @staticmethod
+    def _parse_int_set(value) -> set[int]:
+        """Parse comma-separated query ids into a set."""
+        if value is None:
+            return set()
+        if isinstance(value, (list, tuple, set)):
+            return {int(x) for x in value}
+        text = str(value).strip()
+        if not text:
+            return set()
+        return {int(part.strip()) for part in text.split(",") if part.strip()}
 
     @staticmethod
     def _point_scale(image_size) -> tuple[float, float]:
@@ -1259,6 +1304,213 @@ class GCSLoss(nn.Module):
 
         return torch.stack(dists) if dists else torch.empty((0,), device=device, dtype=dtype)
 
+    @staticmethod
+    def _longest_contiguous_mask(mask: torch.Tensor) -> torch.Tensor:
+        """Keep only the longest contiguous true run in a 1D bool mask."""
+        if mask.ndim != 1:
+            raise ValueError(f"Expected a 1D valid mask, got shape {tuple(mask.shape)}.")
+        out = torch.zeros_like(mask, dtype=torch.bool)
+        best_start = -1
+        best_len = 0
+        cur_start = -1
+        cur_len = 0
+        values = mask.detach().to(dtype=torch.bool).tolist()
+        for i, value in enumerate(values):
+            if value:
+                if cur_len == 0:
+                    cur_start = i
+                cur_len += 1
+                if cur_len > best_len:
+                    best_start = cur_start
+                    best_len = cur_len
+            else:
+                cur_start = -1
+                cur_len = 0
+        if best_len > 0:
+            out[best_start : best_start + best_len] = True
+        return out
+
+    def _gt_line_acc_threshold_px(self, gt_points_g: torch.Tensor, gt_valid_g: torch.Tensor, width: float, height: float) -> torch.Tensor:
+        """Return TuSimple-like x-error threshold for one GT lane."""
+        valid = gt_valid_g > 0.5
+        if int(valid.sum().item()) <= 1:
+            return gt_points_g.new_tensor(20.0)
+        x = gt_points_g[valid, 0] * float(width)
+        y = gt_points_g[valid, 1] * float(height)
+        y_centered = y - y.mean()
+        denom = (y_centered * y_centered).sum().clamp_min(1e-12)
+        slope = ((x - x.mean()) * y_centered).sum() / denom
+        angle = torch.atan(slope)
+        return gt_points_g.new_tensor(20.0) / torch.cos(angle).abs().clamp_min(1e-12)
+
+    def _query_to_gt_ape_and_acc(
+        self,
+        pred_points_q: torch.Tensor,
+        pred_visible_q: torch.Tensor,
+        gt_points_b: torch.Tensor,
+        gt_valid_b: torch.Tensor,
+        width: float,
+        height: float,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return nearest GT APE and best TuSimple-like line accuracy for one query."""
+        device = pred_points_q.device
+        dtype = pred_points_q.dtype
+        pred_x_px = pred_points_q[:, 0] * float(width)
+        gt_x_px = gt_points_b[..., 0] * float(width)
+        min_overlap = int(self.final_extra_guard_min_overlap)
+
+        ape_values = []
+        acc_values = []
+        for g in range(gt_points_b.shape[0]):
+            gt_visible = gt_valid_b[g] > 0.5
+            gt_count = int(gt_visible.sum().item())
+            if gt_count <= 0:
+                continue
+            common = (pred_visible_q > 0.5) & gt_visible
+            if int(common.sum().item()) >= min_overlap:
+                ape = (pred_x_px[common] - gt_x_px[g, common]).abs().mean()
+            else:
+                ape = torch.tensor(float("inf"), device=device, dtype=dtype)
+
+            threshold = self._gt_line_acc_threshold_px(gt_points_b[g], gt_valid_b[g], width, height)
+            correct = torch.zeros((gt_count,), device=device, dtype=dtype)
+            gt_visible_idx = torch.nonzero(gt_visible, as_tuple=False).flatten()
+            pred_on_gt = pred_visible_q[gt_visible_idx] > 0.5
+            if bool(pred_on_gt.any()):
+                active_idx = gt_visible_idx[pred_on_gt]
+                dx = (pred_x_px[active_idx] - gt_x_px[g, active_idx]).abs()
+                correct[pred_on_gt] = (dx < threshold).to(dtype=dtype)
+            acc = correct.mean()
+            ape_values.append(ape)
+            acc_values.append(acc)
+
+        if not ape_values:
+            return (
+                torch.tensor(float("inf"), device=device, dtype=dtype),
+                torch.tensor(0.0, device=device, dtype=dtype),
+            )
+        return torch.stack(ape_values).min(), torch.stack(acc_values).max()
+
+    def final_extra_guard_loss(
+        self,
+        pred_points: torch.Tensor,
+        pred_logits: torch.Tensor,
+        pred_valid_logits: torch.Tensor | None,
+        gt_points: list[torch.Tensor],
+        gt_valid: list[torch.Tensor],
+        indices: list[tuple[torch.Tensor, torch.Tensor]],
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Training-only extra negative BCE for clear-far or duplicate-like final-query sources."""
+        zero = self._zero_like(pred_points)
+        if float(self.final_extra_guard_gain) <= 0.0 or not self.training:
+            scalar_zero = pred_logits.new_zeros(())
+            return zero, scalar_zero, scalar_zero
+        if pred_valid_logits is None:
+            raise ValueError(
+                "gcs_final_extra_guard requires preds['pred_valid_logits'] with shape B x Q x K; "
+                "disable --gcs-final-extra-guard or use a GCS head that emits per-point visibility logits."
+            )
+        if not self.final_extra_guard_scope:
+            scalar_zero = pred_logits.new_zeros(())
+            return zero, scalar_zero, scalar_zero
+
+        bsz, num_queries, _, _ = pred_points.shape
+        device = pred_points.device
+        dtype = pred_points.dtype
+        width, height = [float(x.detach().cpu().item()) for x in self._pixel_scale_for(pred_points).reshape(-1)]
+        valid_prob = pred_valid_logits.detach().sigmoid()
+        exist_prob = pred_logits.detach().sigmoid()
+        points = pred_points.detach()
+
+        selected_losses = []
+        selected_count = 0
+        protected_count = 0
+        scope = {int(q) for q in self.final_extra_guard_scope if 0 <= int(q) < num_queries}
+
+        for b in range(bsz):
+            src_idx, _ = indices[b]
+            src_idx = src_idx.to(device=device, dtype=torch.long)
+            matched = torch.zeros((num_queries,), device=device, dtype=torch.bool)
+            if src_idx.numel() > 0:
+                matched[src_idx] = True
+
+            gt_points_b = gt_points[b].detach().to(device=device, dtype=dtype)
+            gt_valid_b = gt_valid[b].detach().to(device=device, dtype=dtype)
+            if gt_points_b.numel() == 0:
+                continue
+            if gt_points_b.ndim != 3 or gt_points_b.shape[-1] != 2:
+                raise ValueError(f"Each GT lane tensor must have shape N x K x 2, got {tuple(gt_points_b.shape)}.")
+            if gt_valid_b.shape != gt_points_b.shape[:2]:
+                raise ValueError(
+                    f"GT valid mask must match GT lane first two dims, got {tuple(gt_valid_b.shape)} vs "
+                    f"{tuple(gt_points_b.shape[:2])}."
+                )
+
+            for q in sorted(scope):
+                if bool(matched[q]):
+                    continue
+                if float(exist_prob[b, q].detach().cpu().item()) < float(self.final_extra_guard_score_thr):
+                    continue
+
+                q_valid_raw = valid_prob[b, q] >= float(self.final_extra_guard_valid_thr)
+                q_valid = self._longest_contiguous_mask(q_valid_raw)
+                if int(q_valid.sum().item()) < int(self.final_extra_guard_min_valid):
+                    continue
+
+                nearest_gt_ape, line_acc = self._query_to_gt_ape_and_acc(
+                    points[b, q],
+                    q_valid,
+                    gt_points_b,
+                    gt_valid_b,
+                    width,
+                    height,
+                )
+
+                protected = False
+                if bool(torch.isfinite(nearest_gt_ape)) and float(nearest_gt_ape.detach().cpu().item()) <= float(
+                    self.final_extra_guard_protect_px
+                ):
+                    protected = True
+                if float(line_acc.detach().cpu().item()) >= float(self.final_extra_guard_protect_acc):
+                    protected = True
+                if protected:
+                    protected_count += 1
+                    continue
+
+                clear_far = (not bool(torch.isfinite(nearest_gt_ape))) or (
+                    float(nearest_gt_ape.detach().cpu().item()) >= float(self.final_extra_guard_clear_far_px)
+                )
+                duplicate_like = False
+                for mq in src_idx.tolist():
+                    mq_valid = valid_prob[b, mq] >= float(self.final_extra_guard_valid_thr)
+                    overlap = q_valid & mq_valid
+                    if int(overlap.sum().item()) < int(self.final_extra_guard_min_overlap):
+                        continue
+                    dx_px = (points[b, q, overlap, 0] - points[b, mq, overlap, 0]).abs() * float(width)
+                    if float(dx_px.mean().detach().cpu().item()) <= float(self.final_extra_guard_duplicate_px):
+                        duplicate_like = True
+                        break
+
+                if not (clear_far or duplicate_like):
+                    continue
+                selected_losses.append(
+                    F.binary_cross_entropy_with_logits(
+                        pred_logits[b, q],
+                        pred_logits.new_zeros(()),
+                        reduction="none",
+                    )
+                )
+                selected_count += 1
+
+        if not selected_losses:
+            scalar_zero = pred_logits.new_zeros(())
+            return zero, scalar_zero, pred_logits.new_tensor(float(protected_count))
+        return (
+            torch.stack(selected_losses).mean(),
+            pred_logits.new_tensor(float(selected_count)),
+            pred_logits.new_tensor(float(protected_count)),
+        )
+
     def boundary_pseudo_neg_loss(
         self,
         pred_points: torch.Tensor,
@@ -1712,6 +1964,14 @@ class GCSLoss(nn.Module):
         ) = self.spurious_negative_loss(
             pred_points, pred_logits, pred_valid_logits, indices, gt_lanes, gt_points, gt_valid
         )
+        final_extra_guard_loss, final_extra_guard_count, final_extra_guard_protected = self.final_extra_guard_loss(
+            pred_points,
+            pred_logits,
+            pred_valid_logits,
+            gt_points,
+            gt_valid,
+            indices,
+        )
 
         mask_loss = self._zero_like(pred_points)
         if "aux_mask_logits" in preds and "semantic_mask" in batch:
@@ -1742,6 +2002,8 @@ class GCSLoss(nn.Module):
             total = total + self.query_count_ce_gain * query_count_ce_loss
         if self.spurious_neg_gain != 0.0:
             total = total + self.spurious_neg_gain * self.spurious_neg_weight * spurious_neg_loss
+        if self.final_extra_guard_gain != 0.0:
+            total = total + self.final_extra_guard_gain * final_extra_guard_loss
         loss_items = torch.stack(
             (
                 exist_loss.detach(),
@@ -1781,6 +2043,9 @@ class GCSLoss(nn.Module):
                 gt4_short_pos_count.detach(),
                 gt4_short_pos_anchor_count.detach(),
                 gt4_short_point_valid_loss.detach(),
+                final_extra_guard_loss.detach(),
+                final_extra_guard_count.detach(),
+                final_extra_guard_protected.detach(),
             )
         )
         return total, loss_items

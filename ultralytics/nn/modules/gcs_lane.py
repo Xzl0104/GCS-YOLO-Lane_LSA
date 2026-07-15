@@ -1,6 +1,9 @@
 # Ultralytics AGPL-3.0 License - https://ultralytics.com/license
 """GCS-YOLO-Lane neural network modules."""
 
+import json
+from pathlib import Path
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -215,6 +218,8 @@ class GCSLaneHead(nn.Module):
         max_lanes=5,
         count_classes=None,
         query_count_head: bool = False,
+        reference_mode: str = "default",
+        reference_bank_path: str = "",
     ):
         """Initialize the GCS lane query decoder and training-only auxiliary heads."""
         super().__init__()
@@ -356,6 +361,14 @@ class GCSLaneHead(nn.Module):
                 nn.Linear(c1, self.count_classes),
             )
 
+        self.reference_mode = str(reference_mode).lower()
+        self.reference_bank_path = str(reference_bank_path or "")
+        if self.reference_mode not in {"default", "ultrashort_dataref"}:
+            raise ValueError(
+                f"GCSLaneHead reference_mode must be 'default' or 'ultrashort_dataref', "
+                f"got {reference_mode!r}."
+            )
+
         self.aux_mask = nn.Sequential(
             ConvBNAct(c1, c1, k=3),
             nn.Conv2d(c1, 2, kernel_size=1),
@@ -399,6 +412,9 @@ class GCSLaneHead(nn.Module):
         query a distinct spatial role while still letting the MLP learn large
         offsets when the image geometry requires it.
         """
+        if getattr(self, "reference_mode", "default") == "ultrashort_dataref":
+            return self._build_point_references_from_bank(self.reference_bank_path)
+
         y = self._build_fixed_y_anchors()
         bottom_x = torch.linspace(0.05, 0.95, self.num_queries)
         top_x = 0.5 + (bottom_x - 0.5) * 0.25
@@ -408,6 +424,43 @@ class GCSLaneHead(nn.Module):
             return torch.logit(x.clamp(1e-4, 1.0 - 1e-4))
         points = torch.stack((x, y[None].expand(self.num_queries, -1)), dim=-1)
         return torch.logit(points.clamp(1e-4, 1.0 - 1e-4))
+
+    def _build_point_references_from_bank(self, reference_bank_path: str):
+        """Load a controlled Q12 fixed-y reference bank and return reference logits."""
+        if self.point_mode != "fixed_y":
+            raise ValueError("GCSLaneHead ultrashort_dataref requires point_mode='fixed_y'.")
+        if not reference_bank_path:
+            raise ValueError("GCSLaneHead ultrashort_dataref requires a non-empty reference_bank_path.")
+        path = Path(reference_bank_path).expanduser()
+        if not path.is_file():
+            raise FileNotFoundError(f"GCSLaneHead reference bank not found: {path}")
+        bank = json.loads(path.read_text(encoding="utf-8"))
+        if bank.get("schema") != "gcs_q12_fixed_y_reference_bank_v1":
+            raise ValueError(f"Unsupported GCS reference bank schema: {bank.get('schema')!r}.")
+        if bank.get("point_mode") != "fixed_y":
+            raise ValueError(f"Unsupported GCS reference bank point_mode: {bank.get('point_mode')!r}.")
+        if int(bank.get("num_queries", -1)) != int(self.num_queries):
+            raise ValueError(
+                f"GCS reference bank num_queries mismatch: bank={bank.get('num_queries')} head={self.num_queries}."
+            )
+        if int(bank.get("num_points", -1)) != int(self.num_points):
+            raise ValueError(
+                f"GCS reference bank num_points mismatch: bank={bank.get('num_points')} head={self.num_points}."
+            )
+        if int(self.num_queries) != 12 or int(self.num_points) != 56:
+            raise ValueError("GCS ultrashort_dataref reference bank is only supported for Q12/K56.")
+        fixed_y = [int(v) for v in bank.get("fixed_y_px_desc", [])]
+        expected_fixed_y = list(range(710, 150, -10))
+        if fixed_y != expected_fixed_y:
+            raise ValueError(
+                f"GCS reference bank fixed_y_px_desc mismatch: expected {expected_fixed_y}, got {fixed_y}."
+            )
+        x = torch.as_tensor(bank.get("x_norm"), dtype=torch.float32)
+        if tuple(x.shape) != (int(self.num_queries), int(self.num_points)):
+            raise ValueError(f"GCS reference bank x_norm must have shape (12, 56), got {tuple(x.shape)}.")
+        if not torch.isfinite(x).all():
+            raise ValueError("GCS reference bank x_norm contains non-finite values.")
+        return torch.logit(x.clamp(1e-4, 1.0 - 1e-4))
 
     def _init_point_delta_head(self):
         """Initialize point deltas near zero while keeping point gradients live."""

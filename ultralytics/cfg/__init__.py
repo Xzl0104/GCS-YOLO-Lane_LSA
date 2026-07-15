@@ -235,6 +235,11 @@ CFG_FLOAT_KEYS = frozenset(
         "gcs_short_geom_gt4_mid_weight",
         "gcs_short_geom_gt5_ultra_weight",
         "gcs_short_geom_gt5_mid_weight",
+        "gcs_final_extra_guard",
+        "gcs_final_extra_guard_score_thr",
+        "gcs_final_extra_guard_clear_far_px",
+        "gcs_final_extra_guard_duplicate_px",
+        "gcs_final_extra_guard_protect_px",
         "gcs_exist_pos_weight",
         "gcs_exist_focal_gamma",
         "gcs_exist_focal_alpha",
@@ -297,6 +302,8 @@ CFG_FRACTION_KEYS = frozenset(
         "gcs_exist_quality_alpha",
         "gcs_exist_quality_floor",
         "gcs_eval_point_valid_thr",
+        "gcs_final_extra_guard_valid_thr",
+        "gcs_final_extra_guard_protect_acc",
     }
 )
 CFG_INT_KEYS = frozenset(
@@ -336,6 +343,8 @@ CFG_INT_KEYS = frozenset(
         "gcs_short_geom_gt4_mid_visible_thr",
         "gcs_short_geom_gt5_ultra_visible_thr",
         "gcs_short_geom_gt5_mid_visible_thr",
+        "gcs_final_extra_guard_min_valid",
+        "gcs_final_extra_guard_min_overlap",
         "gcs_hard_visible_thr",
         "gcs_hard_gt3_visible_thr",
     }

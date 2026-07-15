@@ -14,6 +14,27 @@ Do not:
 - compare runs under different protocols without saying so
 - claim improvement without official-val evidence
 
+## Recommendation Confidence Gate
+
+After analyzing experiment results, recommend a code/config/training change only
+when the available evidence supports the direction with at least 90% engineering
+confidence. The confidence statement must be grounded in concrete experiment
+results, comparable protocols, diagnostics, or failure traces, not intuition.
+
+If confidence is below 90%, or the current experiment evidence is insufficient
+to distinguish likely causes, do not present an implementation change as the next
+step. Instead, recommend the smallest additional experiment or diagnostic needed
+to decide. That recommendation must state:
+
+- what uncertainty the experiment resolves;
+- which official-val, train/val diagnostic, raw-candidate, count-confusion, or
+  failure-trace metrics to inspect;
+- what result would justify a later modification;
+- what result would reject that direction.
+
+For ambiguous results, the next action is evidence collection, not another blind
+loss-weight, decode, sampler, or architecture tweak.
+
 ## Selection Policy
 
 Use official-val for threshold, checkpoint, postprocess, and run selection. Do not choose the final checkpoint only from `val/total_loss`, internal `val/f1`, or `best.pt` provenance unless that checkpoint is also selected by official-val evidence.

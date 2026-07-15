@@ -37,6 +37,69 @@ diagnostic scripts, configs, model outputs, or active selected candidates.
 - It includes explicit training-time `official_best` checkpoint preservation for official-val selection.
 - It does not include post-`424ab1c86` short-side hardset/count-contract diagnostics, later mainline `diagnose_gcs_gt5.py`, Count/Quality/Boundary diagnostics, Survival, or near-miss machinery.
 
+## 2026-07-14 Tiered GT4/GT5 Full-Protocol v2 Bottleneck
+
+The completed run
+`query_alpha05_gt4gt5_tiered_geom_gt4pv12_env30_nocount_full_protocol_v2`
+is rejected as a promotion. It confirms that the full tiered GT4/GT5 rescue
+line is not the right path to push TEST ACC above `0.97`.
+
+```text
+v2 official_best val:
+ACC/FP/FN = 0.973049 / 0.014141 / 0.008724
+count_acc_3/4/5 = 0.982063 / 0.939394 / 0.918919
+GT4 4->3/4->5 = 2 / 2
+GT5 5->4/5->5/5->6 = 1 / 68 / 5
+
+env30 official_best val reference:
+ACC/FP/FN = 0.973330 / 0.015748 / 0.009642
+count_acc_3/4/5 = 0.968610 / 0.969697 / 0.986486
+GT4 4->3/4->5 = 2 / 0
+GT5 5->4/5->5/5->6 = 1 / 73 / 0
+
+v2 official_best reporting-only TEST:
+ACC/FP/FN = 0.966657 / 0.030799 / 0.024203
+count_acc_3/4/5 = 0.967816 / 0.600427 / 0.775044
+GT4 4->3/4->5/4->6 = 103 / 76 / 8
+GT5 5->3/5->4/5->5/5->6 = 15 / 63 / 441 / 50
+
+env30 official_best reporting-only TEST reference:
+ACC/FP/FN = 0.966780 / 0.028732 / 0.023544
+count_acc_3/4/5 = 0.964943 / 0.598291 / 0.891037
+GT4 4->3/4->5 = 98 / 90
+GT5 5->3/5->4/5->5 = 19 / 43 / 507
+```
+
+Supported bottleneck:
+
+- The intended v2 parameters were active: env30 boundary mask, tiered
+  GT4/GT5 geometry rescue, GT4 point-valid rescue, and GT5 point-valid rescue.
+  The failure is not a wrapper/argument mistake.
+- The run cannot be rescued by validation threshold selection. Its cached
+  official-val sweep has `864` rows, maximum `ACC=0.973049`, and zero rows at
+  or above env30's `0.973330`. No `ACC>=0.973` row removes GT4 `4->5`.
+- The official-val tradeoff is worse than env30 for count shape: GT4 false
+  fifth lanes reappear and GT5 sixth-lane predictions reappear under
+  `max_det=6`.
+- TEST remains below `0.97` because short-visible GT4/GT5 candidate quality is
+  still weak. Raw-Q12 TEST diagnostics report GT4 short p90 APE
+  `46.765210 px`, match20 `0.456897`, point-valid recall@0.6 `0.411905`;
+  GT5 short p90 APE `53.893844 px`, match20 `0.658996`,
+  point-valid recall@0.6 `0.738704`.
+- The filter trace reports `180` TEST images where candidate count is already
+  below GT count. This is upstream of final decode and is not solved by
+  changing `conf`, NMS, `max_det`, or `min_points`.
+
+Smallest safe next action:
+
+Return to env30 as the reference and stop this loss-weight escalation line.
+Do not increase GT4 point-valid rescue, GT4 short-geometry weights, GT5
+mid-short weights, or boundary pseudo-negative pressure. The next serious
+experiment should change candidate geometry coverage for train/official-val
+short GT4/GT5 lanes, for example through a hardset-driven reference/query
+coverage redesign, and must pass raw candidate gates before any reporting-only
+TEST run.
+
 ## 2026-07-13 Tiered GT4/GT5 Rescue Bottleneck
 
 The completed full-protocol run

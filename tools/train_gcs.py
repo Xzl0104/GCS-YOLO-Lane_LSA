@@ -485,6 +485,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--gcs-boundary-pseudo-score-thr", type=float, default=0.0)
     parser.add_argument("--gcs-boundary-pseudo-envelope-margin-px", type=float, default=-1.0)
     parser.add_argument("--gcs-boundary-pseudo-envelope-ratio-thr", type=float, default=0.75)
+    parser.add_argument("--gcs-final-extra-guard", type=float, default=0.0)
+    parser.add_argument("--gcs-final-extra-guard-scope", type=str, default="1,3,4,5,6,7,8")
+    parser.add_argument("--gcs-final-extra-guard-score-thr", type=float, default=0.15)
+    parser.add_argument("--gcs-final-extra-guard-valid-thr", type=float, default=0.55)
+    parser.add_argument("--gcs-final-extra-guard-min-valid", type=int, default=2)
+    parser.add_argument("--gcs-final-extra-guard-min-overlap", type=int, default=3)
+    parser.add_argument("--gcs-final-extra-guard-clear-far-px", type=float, default=50.0)
+    parser.add_argument("--gcs-final-extra-guard-duplicate-px", type=float, default=30.0)
+    parser.add_argument("--gcs-final-extra-guard-protect-px", type=float, default=30.0)
+    parser.add_argument("--gcs-final-extra-guard-protect-acc", type=float, default=0.85)
     parser.add_argument("--gcs-exist-pos-weight", type=float, default=1.0)
     parser.add_argument("--gcs-exist-focal-gamma", type=float, default=0.0, help="Optional focal gamma for existence BCE. 0 disables focal weighting.")
     parser.add_argument(
@@ -842,6 +852,16 @@ def main() -> None:
         "gcs_boundary_pseudo_score_thr": args.gcs_boundary_pseudo_score_thr,
         "gcs_boundary_pseudo_envelope_margin_px": args.gcs_boundary_pseudo_envelope_margin_px,
         "gcs_boundary_pseudo_envelope_ratio_thr": args.gcs_boundary_pseudo_envelope_ratio_thr,
+        "gcs_final_extra_guard": args.gcs_final_extra_guard,
+        "gcs_final_extra_guard_scope": args.gcs_final_extra_guard_scope,
+        "gcs_final_extra_guard_score_thr": args.gcs_final_extra_guard_score_thr,
+        "gcs_final_extra_guard_valid_thr": args.gcs_final_extra_guard_valid_thr,
+        "gcs_final_extra_guard_min_valid": args.gcs_final_extra_guard_min_valid,
+        "gcs_final_extra_guard_min_overlap": args.gcs_final_extra_guard_min_overlap,
+        "gcs_final_extra_guard_clear_far_px": args.gcs_final_extra_guard_clear_far_px,
+        "gcs_final_extra_guard_duplicate_px": args.gcs_final_extra_guard_duplicate_px,
+        "gcs_final_extra_guard_protect_px": args.gcs_final_extra_guard_protect_px,
+        "gcs_final_extra_guard_protect_acc": args.gcs_final_extra_guard_protect_acc,
         "gcs_exist_pos_weight": args.gcs_exist_pos_weight,
         "gcs_exist_focal_gamma": args.gcs_exist_focal_gamma,
         "gcs_exist_focal_alpha": args.gcs_exist_focal_alpha,

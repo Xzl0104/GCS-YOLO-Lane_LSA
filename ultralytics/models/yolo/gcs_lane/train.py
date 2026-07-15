@@ -81,6 +81,9 @@ class GCSLaneTrainer(BaseTrainer):
         "gt4_short_pos_count",
         "gt4_short_pos_anchor_count",
         "gt4_short_point_valid_loss",
+        "final_extra_guard_loss",
+        "final_extra_guard_count",
+        "final_extra_guard_protected",
     )
     # Keep tqdm headers within BaseTrainer's 11-character progress columns.
     progress_loss_names = (
@@ -121,6 +124,9 @@ class GCSLaneTrainer(BaseTrainer):
         "gt4s_cnt",
         "gt4s_anc",
         "gt4s_pv",
+        "xguard",
+        "xguard_n",
+        "xguard_p",
     )
     # YOLO11 backbone -> GCS-YOLO-Lane backbone. LSEM is inserted after old
     # layers 4 and 6, so all later backbone layers must be shifted explicitly.

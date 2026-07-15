@@ -244,6 +244,14 @@ Formal training should run on the remote CUDA server, not on the local 8GB GPU, 
 
 Use official-val for threshold, checkpoint, and postprocess selection. For formal TuSimple training, enable periodic training-time official-val selection and use `weights/official_best.pt` plus `weights/official_best_decode.yaml` as the selected candidate. Use test only once for final evaluation of a selected candidate.
 
+After analyzing experiment results, recommend implementation changes only when
+the evidence supports the direction with at least 90% engineering confidence.
+If confidence is lower or the result is ambiguous, recommend the smallest
+additional official-val/train-val diagnostic experiment needed to decide, with
+explicit metrics and pass/fail interpretation, rather than proposing a blind
+code/config/loss/decode change. See
+`docs/agent-context/experiment-rules.md`.
+
 Checkpoint selection priority is:
 
 1. maximum `official_acc`

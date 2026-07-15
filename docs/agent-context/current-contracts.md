@@ -19,6 +19,40 @@ query-count YAML and emits `pred_count_logits: B x 4` for the fixed 2/3/4/5
 lane-count classes. The default query YAML still emits no `pred_count_logits`,
 and ordered-slot keeps its existing count/slot logic unchanged.
 
+The 2026-07-15 user-requested `Q12-dataref-ultrashort-v1` reference-coverage
+candidate is a default-off Q12/K56 query-model ablation only. It is enabled
+only by
+`ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-ultrashort-dataref.yaml`
+with `reference_mode="ultrashort_dataref"` and the controlled bank
+`data/gcs_reference_banks/q12_ultrashort_env30_train_v1.json`. The mode name is
+intentionally not `dataref` to avoid confusion with legacy Q20/dataref notes.
+It changes only `point_reference_logits` initialization from a validated
+`gcs_q12_fixed_y_reference_bank_v1` JSON; it does not change loss, matcher,
+query binding cost, point-valid rescue, decode, official metrics, Count Head,
+Quality Head, Survival Head, or Q count. Training must not start unless the
+static reference coverage audit passes. The current regenerated v1 bank passes
+that static gate on the canonical 363-image official-val diagnostics; it is now
+eligible for training under the dedicated launch script, but it is not
+official-val ACC evidence until training and post-train diagnostics complete.
+
+The 2026-07-15 user-requested `Q12-dataref-ultrashort-v2` candidate is a
+second default-off Q12/K56 query-model ablation. It is enabled only by
+`ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-ultrashort-dataref-v2.yaml`
+and the controlled bank
+`data/gcs_reference_banks/q12_ultrashort_env30_train_v2.json`, whose canonical
+static coverage audit is
+`data/gcs_reference_banks/q12_ultrashort_env30_train_v2_reference_audit.json`.
+The generated run-copy audit remains
+`runs/gcs_lane/q12_ultrashort_env30_train_v2_reference_audit.json`. The v2
+builder parameterizes required replacement queries and per-query static
+penalties so `q4` can participate in the assignment search without hard-coding
+a mapping. Prototype shapes still come only from train diagnostics/GT; official
+val is used only for static assignment gate/audit. Training/test protocol for
+the v2 candidate is guarded by
+`scripts/run_query_alpha05_env30_q12_ultrashort_dataref_geom1_extraguard_v2.sh`,
+which runs final-query extra diagnostics on official-val and train before any
+reporting-only TEST run.
+
 The branch also includes the 2026-06-27 user-requested, default-off `gcs_hard_sampling` train-only sampler for short-visible GT3/GT4/GT5 and 0601 samples. It changes only the training dataloader sampling frequency through `WeightedRandomSampler`; it does not change labels, validation/test dataloaders, point/smooth/curve losses, decode, or official metrics.
 
 The branch also includes the 2026-06-27 user-requested, default-off `gcs_spurious_neg` loss for E3-lite. It uses the training Hungarian matcher indices only to select unmatched short duplicate-like queries near matched queries, then adds an extra target-zero BCE on their `pred_logits`. The GT-count weighting extension keeps the old default behavior with `gcs_spurious_gt3_weight=1.0`, `gcs_spurious_gt4_weight=1.0`, `gcs_spurious_gt5_weight=1.0`, and `gcs_spurious_disable_gt5=False`, while allowing GT3-or-sparser, GT4, and GT5-or-denser samples to carry different spurious-negative weights. The 2026-06-28 `gcs_spurious_gt_protect` extension is also default-off and only removes GT-close candidate queries from this extra negative BCE. It does not change data sampling, dataset labels, matcher logic, point/smooth/curve losses, decode, NMS, or official metrics.
@@ -410,12 +444,25 @@ query_count_pred_mean
 gt4_short_pos_count
 gt4_short_pos_anchor_count
 gt4_short_point_valid_loss
+final_extra_guard_loss
+final_extra_guard_count
+final_extra_guard_protected
 ```
 
 `query_count_ce_loss` is active only when a query model emits
 `pred_count_logits` and `gcs_query_count_ce > 0`; the default gain is `0.0`.
 When logits are absent, the three query-count log items are zero for old-model
 compatibility.
+
+`final_extra_guard_loss` is disabled by default through
+`gcs_final_extra_guard=0.0` and is train-only. When enabled, it uses the
+training Hungarian matcher only to select unmatched queries in
+`gcs_final_extra_guard_scope`, applies GT only inside the training loss, and
+adds target-zero BCE to clear-far or duplicate-like unmatched query logits.
+Hungarian-matched true lanes are never selected. GT-close or high
+TuSimple-like line-accuracy unmatched candidates are protected before
+clear-far/duplicate selection, so the term must not be used as TEST-time or
+inference decode logic.
 
 Post-`424ab1c86` log items such as `short_side_geom_loss`, `far_spur_loss`,
 `farspur_if_loss`, `rank_topk_loss`, `shortside_*`, `rank_*`,

@@ -35,6 +35,61 @@ configs, Count Head, count-guided decode, side-aux, or GT4-hard diagnostics
 are legacy experiment records only. They are not commands for the current code
 state unless a future task explicitly restores those commits.
 
+## Q12 Ultrashort Dataref v2 + Final Extra Guard Run
+
+The default-off v2 candidate is launched through:
+
+```bash
+bash scripts/run_query_alpha05_env30_q12_ultrashort_dataref_geom1_extraguard_v2.sh
+```
+
+The script's static reference gate uses the committed audit copy:
+
+```text
+data/gcs_reference_banks/q12_ultrashort_env30_train_v2_reference_audit.json
+```
+
+Default safety settings:
+
+```text
+RUN_TESTS=0
+ENFORCE_REFERENCE_GATE=1
+ENFORCE_FINAL_QUERY_EXTRA_GATE=1
+```
+
+The script enforces:
+
+```text
+static reference audit
+-> train with official_best
+-> official_best official-val sweep
+-> best.pt official-val sweep
+-> official_best and best.pt final-query extra diagnostics on official-val
+-> official_best train0601/train0531 final-query q4 diagnostics
+-> env30 baseline final-query diagnostics
+-> tools/check_gcs_final_query_extra_gate.py
+-> reporting-only TEST only when the gate passes and RUN_TESTS=1
+```
+
+Training keeps point-valid rescue disabled and uses only the intended
+env30+geom+small-extra-guard settings:
+
+```text
+gcs_gt4_short_point_valid_weight = 1.0
+gcs_gt5_short_point_valid_weight = 1.0
+gcs_short_geom = 1.0
+gcs_short_geom_gt4_weight = 1.0
+gcs_short_geom_gt5_weight = 2.0
+gcs_boundary_pseudo_neg = 0.02
+gcs_boundary_pseudo_envelope_margin_px = 30
+gcs_boundary_pseudo_envelope_ratio_thr = 0.75
+gcs_final_extra_guard = 0.02
+gcs_final_extra_guard_scope = 1,3,4,5,6,7,8
+```
+
+Do not use final-query extra diagnostics on TEST for selection. TEST remains
+reporting-only after the official-val/train gate passes.
+
 ## Query Count Head CE0.5 Run
 
 The default-off query Count Head ablation is launched through:

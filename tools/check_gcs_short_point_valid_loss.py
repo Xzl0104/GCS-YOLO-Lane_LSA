@@ -56,6 +56,9 @@ EXPECTED_LOSS_NAMES = (
     "gt4_short_pos_count",
     "gt4_short_pos_anchor_count",
     "gt4_short_point_valid_loss",
+    "final_extra_guard_loss",
+    "final_extra_guard_count",
+    "final_extra_guard_protected",
 )
 
 
@@ -393,6 +396,14 @@ def test_loss_log_item_names_and_forward_length_stable() -> None:
         )
     if not torch.isfinite(total) or not torch.isfinite(loss_items).all():
         raise AssertionError("GCSLoss.forward produced non-finite values for short point-valid contract check.")
+    for name in ("final_extra_guard_loss", "final_extra_guard_count", "final_extra_guard_protected"):
+        _assert_zero(f"default-off {name}", loss_items[GCSLoss.loss_names.index(name)])
+
+    eval_criterion = GCSLoss({"gcs_imgsz": [544, 960], "gcs_final_extra_guard": 0.02})
+    eval_criterion.eval()
+    _, eval_loss_items = eval_criterion(preds, batch)
+    for name in ("final_extra_guard_loss", "final_extra_guard_count", "final_extra_guard_protected"):
+        _assert_zero(f"eval-mode {name}", eval_loss_items[GCSLoss.loss_names.index(name)])
 
 
 def test_short_point_valid_weights_reject_suppression_values() -> None:

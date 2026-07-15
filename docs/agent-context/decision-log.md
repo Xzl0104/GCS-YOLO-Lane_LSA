@@ -2,6 +2,260 @@
 
 This file records decisions for branch `codex/5-25-3-k56`.
 
+## 2026-07-15: Add Q12 ultrashort dataref v2 and pre-TEST final-query extra gate
+
+Decision:
+
+Add a default-off `Q12-dataref-ultrashort-v2` candidate that lets `q4` enter
+the static reference assignment search, then protect TEST by requiring
+official-val/train final-query extra gates before any reporting-only TEST run.
+
+Implementation scope:
+
+- `tools/build_gcs_ultrashort_reference_bank.py` now supports
+  `--required-replace-queries` and `--query-static-penalty`; the default
+  replace set is `1,3,4,5,6,7,8,10`, with `4:0,10:2` static penalties.
+- New bank:
+  `data/gcs_reference_banks/q12_ultrashort_env30_train_v2.json`.
+- New canonical static audit:
+  `data/gcs_reference_banks/q12_ultrashort_env30_train_v2_reference_audit.json`.
+- Generated run-copy static audit:
+  `runs/gcs_lane/q12_ultrashort_env30_train_v2_reference_audit.json`.
+- New YAML:
+  `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-ultrashort-dataref-v2.yaml`.
+- New final-query extra gate checker:
+  `tools/check_gcs_final_query_extra_gate.py`.
+- New launch script:
+  `scripts/run_query_alpha05_env30_q12_ultrashort_dataref_geom1_extraguard_v2.sh`.
+- New default-off train-only loss term:
+  `gcs_final_extra_guard`.
+
+Static audit result:
+
+```text
+bank_sha256 = 873af15e0f4e25b7429390fad0730628d8411b5077df74367838521a83e372ba
+selected replacement queries = q3/q4/q6/q7/q8/q10
+hard target base p50/p90/match20 = 147.049 / 199.196 / 0.133333
+hard target new  p50/p90/match20 = 21.000 / 43.636 / 0.400000
+normal lane p50 delta = -4.046
+normal lane p90 delta = +0.557
+gate.pass = true
+```
+
+Protocol:
+
+- v2a (`q4` optional) and v2b (`q4` required) converged to the same selected
+  mapping and both passed the static gate.
+- Prototype shapes still come only from train diagnostics and train TuSimple
+  JSON; official-val is used only for static assignment/audit.
+- The final-query extra checker reads only `final_query_extra_summary.json`
+  from official-val/train diagnostics. It rejects TEST summaries by default
+  because those diagnostics use GT after decode.
+- `gcs_final_extra_guard` is training-only, default-off, and uses GT only
+  inside loss construction. It selects only unmatched query logits, protects
+  true-lane-like candidates before clear-far/duplicate selection, and must not
+  be moved into inference or TEST decode.
+
+Next action:
+
+Run the v2 script remotely. Keep `RUN_TESTS=0` until the static gate,
+official-best/best official-val sweeps, official-val final-query extra
+diagnostics, train0601/train0531 q4 diagnostics, and
+`tools/check_gcs_final_query_extra_gate.py` all pass. If the gate fails, do not
+run TEST.
+
+## 2026-07-15: Regenerate Q12 ultrashort dataref bank and pass static gate
+
+Decision:
+
+Add a default-off `Q12-dataref-ultrashort-v1` candidate that changes only Q12
+fixed-y `point_reference_logits` initialization from a small controlled
+reference-bank JSON. Do not train it unless the static official-val coverage
+gate passes.
+
+Implementation scope:
+
+- New builder:
+  `tools/build_gcs_ultrashort_reference_bank.py`.
+- New audit:
+  `tools/check_gcs_reference_bank_coverage.py`.
+- New controlled bank:
+  `data/gcs_reference_banks/q12_ultrashort_env30_train_v1.json`.
+- New model YAML:
+  `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-ultrashort-dataref.yaml`.
+- New launch script:
+  `scripts/run_query_alpha05_env30_q12_ultrashort_dataref_v1.sh`.
+- `GCSLaneHead` accepts `reference_mode="default|ultrashort_dataref"` and
+  `reference_bank_path` after `query_count_head`. The old default path remains
+  unchanged.
+
+Protocol:
+
+- Prototype shapes come from train hard lanes only.
+- Official-val diagnostics are static gate / assignment selection only; no
+  official-val lane geometry is used as a prototype.
+- Hard lane filtering uses `raw_has_match_20px is False` OR
+  `raw_best_valid_len@0.6 < min_points` OR
+  `point_valid_recall@0.6 < 0.75`.
+- `raw_best_valid_count@0.6` remains diagnostic only; contiguous
+  `raw_best_valid_len@0.6` is the survival field.
+- The mode name is `ultrashort_dataref`; do not add a generic `dataref` alias
+  because legacy Q20/dataref records have a different meaning.
+- No loss, matcher, query-binding cost, point-valid rescue, decode, Count
+  Head, Quality Head, Survival Head, or Q20/Q24 change is part of this
+  candidate.
+
+Static audit result after the first small-pool v1 attempt:
+
+```text
+audit = runs/gcs_lane/q12_ultrashort_env30_train_v1_val_reference_audit.json
+hard target base p50/p90/match20 = 147.049 / 199.196 / 0.133333
+hard target new  p50/p90/match20 = 37.100 / 50.767 / 0.333333
+normal lane p50 delta = +3.502
+gate.pass = false
+```
+
+That first bank was not trainable evidence. It used too small a medoid pool and
+left hard p50/p90 outside the required static gate.
+
+Regenerated static audit result:
+
+```text
+bank = data/gcs_reference_banks/q12_ultrashort_env30_train_v1.json
+bank_sha256 = e2c7afaa367983619f8f499033ddf92f47c7bab01a35a52c40908d03f99485d8
+audit = runs/gcs_lane/q12_ultrashort_env30_train_v1_val_reference_audit.json
+hard target base p50/p90/match20 = 147.049 / 199.196 / 0.133333
+hard target new  p50/p90/match20 = 20.125 / 43.636 / 0.466667
+normal lane p50 delta = -2.400
+normal lane p90 delta = +4.324
+gate.pass = true
+```
+
+Why:
+
+The builder now enumerates all train-hard prototype pairs for the fixed
+`2/2/2` group allocation, shortlists official-val hard-gate candidates, then
+fully audits normal-lane regression. Prototype shapes still come only from
+train hard lanes. The selected mapping replaces `q1/q3/q5/q6/q7/q8` and keeps
+`q0/q2/q9/q10/q11`; q10 was avoided because equivalent static-gate candidates
+exist without changing it.
+
+Next action:
+
+This bank is eligible for the first Q12-dataref-ultrashort training run through
+`scripts/run_query_alpha05_env30_q12_ultrashort_dataref_v1.sh`, which enforces
+the tracked static audit hash, audit schema, canonical GT path, and gate before
+launching training. The training run still must start from `yolo11s-seg.pt` and
+must not enable loss, matcher, query binding, point-valid rescue, decode, Count
+Head, Q20, or Q24 changes.
+
+## 2026-07-15: Add experiment recommendation confidence gate
+
+Decision:
+
+After experiment-result analysis, future agents must recommend code/config,
+training, decode, loss, sampler, or architecture changes only when the evidence
+supports the direction with at least 90% engineering confidence.
+
+Protocol:
+
+- The confidence must be grounded in comparable experiment results,
+  official-val evidence, train/val diagnostics, raw-candidate metrics,
+  count-confusion tables, or failure traces.
+- If confidence is below 90%, or the available experiment conclusion is
+  insufficient to isolate the cause, the next recommendation must be a
+  validation experiment or diagnostic, not an implementation change.
+- The proposed validation must name the uncertainty it resolves, the metrics to
+  inspect, the result that would justify the later modification, and the result
+  that would reject that direction.
+
+Why:
+
+The experiment chains recorded through 2026-07-14 include many narrow tradeoffs
+where a plausible next tweak can be wrong without targeted evidence. This rule
+prevents blind loss-weight, decode, sampler, or architecture changes and keeps
+every recommended modification tied to experiment support.
+
+## 2026-07-14: Reject tiered GT4/GT5 + GT4PV full-protocol v2
+
+Decision:
+
+Do not promote
+`query_alpha05_gt4gt5_tiered_geom_gt4pv12_env30_nocount_full_protocol_v2`.
+The run used the intended env30 mask, tiered geometry rescue, and GT4/GT5
+point-valid rescue parameters, but it still fails the official-val promotion
+gate and does not improve reporting-only TEST ACC versus env30.
+
+Protocol:
+
+```text
+run = query_alpha05_gt4gt5_tiered_geom_gt4pv12_env30_nocount_full_protocol_v2
+primary checkpoint = weights/official_best.pt
+selected val decode = conf 0.001, point_valid_thr 0.6, nms_dist_px 30,
+  max_det 6, min_points 2, valid_before_maxdet true
+```
+
+Official-val evidence:
+
+```text
+v2 official_best val ACC/FP/FN = 0.973049 / 0.014141 / 0.008724
+count_acc_3/4/5 = 0.982063 / 0.939394 / 0.918919
+count_confusion = 3->3 219, 3->4 4,
+                  4->3 2, 4->4 62, 4->5 2,
+                  5->4 1, 5->5 68, 5->6 5
+
+env30 official_best val ACC/FP/FN = 0.973330 / 0.015748 / 0.009642
+count_acc_3/4/5 = 0.968610 / 0.969697 / 0.986486
+count_confusion = 3->3 216, 3->4 7,
+                  4->3 2, 4->4 64,
+                  5->4 1, 5->5 73
+```
+
+Across the 864-row v2 official-val sweep, no row reaches env30's
+`ACC=0.973330`. Rows with `ACC >= 0.973` exist, but none removes GT4 `4->5`;
+the best `5->6=0` rows still keep GT4 `4->5=2` and stay below env30 ACC.
+
+Reporting-only TEST evidence:
+
+```text
+v2 official_best test ACC/FP/FN = 0.966657 / 0.030799 / 0.024203
+count_acc_3/4/5 = 0.967816 / 0.600427 / 0.775044
+count_confusion includes 3->4 46, 3->5 6,
+                         4->3 103, 4->5 76, 4->6 8,
+                         5->3 15, 5->4 63, 5->6 50
+
+env30 official_best test ACC/FP/FN = 0.966780 / 0.028732 / 0.023544
+count_acc_3/4/5 = 0.964943 / 0.598291 / 0.891037
+count_confusion includes 3->4 50, 3->5 8,
+                         4->3 98, 4->5 90,
+                         5->3 19, 5->4 43, 5->5 507
+```
+
+Why:
+
+- v2 is not a parameter or script failure; the intended new parameters were
+  active. It is an algorithm-direction failure for this loss-weighting line.
+- The official-val row improves FP/FN slightly versus env30 but loses primary
+  ACC and count shape. GT4 `4->5` regresses from `0` to `2`, and GT5 `5->6`
+  regresses from `0` to `5`.
+- TEST remains below the target `0.97`; the gap is not explained by threshold
+  choice. The raw-Q12 diagnostic still shows weak short-visible true-lane
+  candidates: TEST GT4 short p90 APE is `46.765210 px` with match20
+  `0.456897`, and TEST GT5 short p90 APE is `53.893844 px` with match20
+  `0.658996`.
+- Candidate/filter trace reports `180` TEST images where the candidate count
+  is already below GT count. This cannot be fixed by a different final
+  `conf`, NMS, `max_det`, or `min_points` row.
+
+Next action:
+
+Use env30 as the reference and stop increasing GT4 rescue, GT4 point-valid,
+GT5 mid-short rescue, or boundary pseudo-negative pressure. The next serious
+direction should be hardset-driven candidate-geometry coverage for train/val
+short GT4/GT5 lanes, not another small weight bump. Any new structure must
+first improve raw candidate recall/APE and point-valid survival on official-val
+diagnostics before a reporting-only TEST run.
+
 ## 2026-07-13: Reject tiered GT4/GT5 + GT4PV env30 full-protocol result
 
 Decision:
