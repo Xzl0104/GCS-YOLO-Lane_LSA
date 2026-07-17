@@ -7,7 +7,7 @@ import math
 import os
 import sys
 import time
-from collections import Counter, defaultdict
+from collections import defaultdict
 from pathlib import Path
 from statistics import median
 
@@ -31,8 +31,6 @@ from gcs_tools.tusimple_official_eval import (  # noqa: E402
 from tools.infer_gcs import load_gcs_model, preprocess_image, warn_max_det_mismatch  # noqa: E402
 from ultralytics.models.gcs.decode_summary import load_decode_yaml, validate_decode_yaml_for_model  # noqa: E402
 from ultralytics.models.gcs.mode_utils import resolve_decode_mode  # noqa: E402
-from ultralytics.nn.modules import GCSLaneHead  # noqa: E402
-from ultralytics.utils.gcs_matcher import GCSHungarianMatcher  # noqa: E402
 from ultralytics.utils.gcs_postprocess import (  # noqa: E402
     lane_nms,
     longest_contiguous_valid_mask,
@@ -85,12 +83,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--match-min-overlap", type=int, default=3, help="Minimum shared GT-visible samples for APE match.")
     parser.add_argument("--raw-match-thrs", nargs="+", type=float, default=[20.0, 30.0, 40.0])
     parser.add_argument("--short-visible-max", type=int, default=10, help="short-visible lane bucket threshold.")
-    parser.add_argument("--gcs-cost-point", type=float, default=5.0, help="Training-aligned Hungarian point cost.")
-    parser.add_argument("--gcs-cost-curve", type=float, default=0.05, help="Training-aligned Hungarian curve cost.")
-    parser.add_argument("--gcs-cost-exist", type=float, default=0.1, help="Training-aligned Hungarian existence cost.")
-    parser.add_argument("--gcs-match-min-overlap", type=int, default=2, help="Training Hungarian minimum GT valid anchors.")
-    parser.add_argument("--gcs-match-max-x-dist", type=float, default=0.0, help="Training Hungarian optional x-distance gate.")
-    parser.add_argument("--gcs-match-gate-px", type=float, default=160.0, help="Training Hungarian optional APE gate in pixels.")
     parser.add_argument("--max-images", type=int, default=0, help="Limit number of GT records. 0 means all.")
     parser.add_argument("--warmup", type=int, default=20, help="Number of untimed warmup forwards.")
     parser.add_argument("--device", default="0", help="Inference device, e.g. 0 or cpu.")
@@ -240,20 +232,6 @@ def _visible_bucket(visible: int, short_visible_max: int) -> str:
     return ">20"
 
 
-def _target_query_ids(gt_count: int, lane_order, visible: int, short_visible_max: int) -> tuple[int, ...]:
-    """Return the user-defined dedicated short-query target set for one hard lane."""
-    if lane_order in ("", None):
-        return ()
-    lane_order = int(lane_order)
-    if int(visible) > int(short_visible_max):
-        return ()
-    if int(gt_count) == 4 and lane_order in {1, 2, 3}:
-        return (6, 8, 10)
-    if int(gt_count) == 5 and lane_order in {0, 1, 2, 3}:
-        return (3,)
-    return ()
-
-
 def _interp_lane_xs(points_norm: np.ndarray, h_samples: list[float], image_shape: tuple[int, int]) -> np.ndarray:
     h, w = int(image_shape[0]), int(image_shape[1])
     points = np.asarray(points_norm, dtype=np.float32).reshape(-1, 2).copy()
@@ -278,102 +256,6 @@ def _ape_px(pred_xs: np.ndarray, gt_xs: list[float], min_overlap: int) -> tuple[
     if overlap < int(min_overlap):
         return float("inf"), overlap
     return float(np.mean(np.abs(pred[valid] - gt[valid]))), overlap
-
-
-def _find_gcs_head(model: torch.nn.Module) -> GCSLaneHead:
-    heads = [module for module in model.modules() if isinstance(module, GCSLaneHead)]
-    if not heads:
-        raise ValueError("Raw Q12 binding diagnostic requires a model containing GCSLaneHead.")
-    return heads[-1]
-
-
-def _head_reference_x_and_y(head: GCSLaneHead) -> tuple[torch.Tensor, torch.Tensor]:
-    point_ref = getattr(head, "point_reference_logits", None)
-    if point_ref is None:
-        raise ValueError("GCSLaneHead is missing point_reference_logits; cannot compute reference binding diagnostics.")
-    ref = point_ref.detach().float().cpu()
-    if ref.ndim == 2:
-        ref_x = ref.sigmoid()
-    elif ref.ndim == 3 and ref.shape[-1] == 2:
-        ref_x = ref[..., 0].sigmoid()
-    else:
-        raise ValueError(f"Unsupported point_reference_logits shape for binding diagnostic: {tuple(ref.shape)}.")
-    fixed_y = getattr(head, "fixed_y_anchors", None)
-    if fixed_y is None:
-        raise ValueError("GCSLaneHead is missing fixed_y_anchors; binding diagnostic requires fixed-y mode.")
-    ref_y = fixed_y.detach().float().cpu().reshape(-1)
-    if ref_x.ndim != 2 or ref_x.shape[1] != ref_y.numel():
-        raise ValueError(f"Reference x/y shape mismatch: ref_x={tuple(ref_x.shape)}, fixed_y={tuple(ref_y.shape)}.")
-    return ref_x, ref_y
-
-
-def _fixed_y_gt_tensors(
-    gt_lanes: list[tuple[int, list[float]]],
-    h_samples: list[float],
-    fixed_y_anchors: torch.Tensor,
-    image_shape: tuple[int, int],
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Build training-style fixed-y GT tensors from one TuSimple official record."""
-    h, w = int(image_shape[0]), int(image_shape[1])
-    fixed_y = fixed_y_anchors.detach().float().cpu().reshape(-1)
-    k = int(fixed_y.numel())
-    gt_points = torch.zeros((len(gt_lanes), k, 2), dtype=torch.float32)
-    gt_points[..., 1] = fixed_y.view(1, k)
-    gt_valid = torch.zeros((len(gt_lanes), k), dtype=torch.float32)
-    anchor_y_px = fixed_y.numpy().astype(np.float32) * float(h)
-    sample_y = np.asarray(h_samples, dtype=np.float32)
-
-    for lane_i, (_, lane) in enumerate(gt_lanes):
-        lane_x = np.asarray(lane, dtype=np.float32)
-        valid = (lane_x >= 0.0) & np.isfinite(lane_x) & np.isfinite(sample_y)
-        if int(valid.sum()) < 2:
-            continue
-        ys = sample_y[valid]
-        xs = lane_x[valid]
-        order = np.argsort(ys, kind="stable")
-        ys = ys[order]
-        xs = xs[order]
-        unique_ys, unique_idx = np.unique(np.round(ys, decimals=4), return_index=True)
-        if unique_ys.shape[0] < 2:
-            continue
-        unique_xs = xs[unique_idx]
-        in_range = (anchor_y_px >= float(unique_ys[0]) - 1e-3) & (anchor_y_px <= float(unique_ys[-1]) + 1e-3)
-        if not in_range.any():
-            continue
-        interp_x = np.interp(anchor_y_px[in_range], unique_ys, unique_xs)
-        valid_x = (interp_x >= 0.0) & (interp_x <= float(w - 1))
-        anchor_indices = np.flatnonzero(in_range)[valid_x]
-        if anchor_indices.size == 0:
-            continue
-        clipped_x = np.clip(interp_x[valid_x], 0.0, float(w - 1)) / float(w)
-        gt_points[lane_i, anchor_indices, 0] = torch.from_numpy(clipped_x.astype(np.float32))
-        gt_valid[lane_i, anchor_indices] = 1.0
-    return gt_points, gt_valid
-
-
-def _reference_ape_px(
-    ref_x: torch.Tensor,
-    gt_points: torch.Tensor,
-    gt_valid: torch.Tensor,
-    gt_index: int,
-    image_width: int,
-) -> list[float]:
-    """Return reference mean absolute x error in pixels for all queries against one GT lane."""
-    valid = gt_valid[int(gt_index)] > 0.5
-    if int(valid.sum().item()) == 0:
-        return [float("inf")] * int(ref_x.shape[0])
-    gt_x = gt_points[int(gt_index), :, 0]
-    ape = (ref_x[:, valid] - gt_x[valid].view(1, -1)).abs().mean(dim=1) * float(image_width)
-    return [float(x) for x in ape.tolist()]
-
-
-def _value_for_query(values: list[float], query_id) -> float | str:
-    if query_id in ("", None):
-        return ""
-    query_id = int(query_id)
-    if query_id < 0 or query_id >= len(values):
-        return ""
-    return float(values[query_id])
 
 
 def _valid_len(valid_scores_desc: torch.Tensor | None, thr: float, min_points: int) -> int:
@@ -674,100 +556,6 @@ def _summarize_groups(rows: list[dict], group_fields: list[str]) -> list[dict]:
     return out
 
 
-def _top_query_share(rows: list[dict], field: str) -> tuple[str | int, float | None]:
-    values = []
-    for row in rows:
-        value = row.get(field, "")
-        if value in ("", None):
-            continue
-        values.append(int(value))
-    if not values:
-        return "", None
-    counts = Counter(values)
-    top, count = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[0]
-    return int(top), round(float(count) / max(len(rows), 1), 6)
-
-
-def _bool_rate(rows: list[dict], field: str) -> float | None:
-    if not rows:
-        return None
-    return round(float(sum(1 for row in rows if bool(row.get(field)))) / float(len(rows)), 6)
-
-
-def _query_eq_rate(rows: list[dict], left: str, right: str) -> float | None:
-    if not rows:
-        return None
-    hits = 0
-    for row in rows:
-        lv = row.get(left, "")
-        rv = row.get(right, "")
-        if lv in ("", None) or rv in ("", None):
-            continue
-        hits += int(int(lv) == int(rv))
-    return round(float(hits) / float(len(rows)), 6)
-
-
-def _summarize_binding(rows: list[dict], short_visible_max: int) -> list[dict]:
-    groups: list[tuple[str, list[dict]]] = [("all_target_hard", rows)]
-    groups.extend(
-        [
-            (
-                f"GT4_visible<={int(short_visible_max)}_orders1-3",
-                [r for r in rows if int(r.get("gt_count", -1)) == 4],
-            ),
-            (
-                f"GT4_visible<={int(short_visible_max)}_center",
-                [r for r in rows if int(r.get("gt_count", -1)) == 4 and r.get("lane_position") == "center"],
-            ),
-            (
-                f"GT4_visible<={int(short_visible_max)}_right_side",
-                [r for r in rows if int(r.get("gt_count", -1)) == 4 and r.get("side_group") == "right_side"],
-            ),
-            (
-                f"GT5_visible<={int(short_visible_max)}_orders0-3",
-                [r for r in rows if int(r.get("gt_count", -1)) == 5],
-            ),
-            (
-                f"GT5_visible<={int(short_visible_max)}_left_side",
-                [r for r in rows if int(r.get("gt_count", -1)) == 5 and r.get("side_group") == "left_side"],
-            ),
-            (
-                f"GT5_visible<={int(short_visible_max)}_center",
-                [r for r in rows if int(r.get("gt_count", -1)) == 5 and r.get("lane_position") == "center"],
-            ),
-        ]
-    )
-
-    out = []
-    for name, items in groups:
-        if not items:
-            continue
-        top_raw, top_raw_share = _top_query_share(items, "raw_best_query_id")
-        top_hungarian, top_hungarian_share = _top_query_share(items, "hungarian_matched_query_id")
-        apes = [float(row["raw_best_ape_px"]) for row in items if math.isfinite(float(row["raw_best_ape_px"]))]
-        out.append(
-            {
-                "group": name,
-                "lanes": int(len(items)),
-                "top_raw_query": top_raw,
-                "top_raw_share": top_raw_share,
-                "top_hungarian_query": top_hungarian,
-                "top_hungarian_share": top_hungarian_share,
-                "raw_eq_hungarian_rate": _bool_rate(items, "raw_best_equals_hungarian"),
-                "nearest_ref_eq_raw_rate": _query_eq_rate(items, "nearest_reference_query_id", "raw_best_query_id"),
-                "nearest_ref_eq_hungarian_rate": _query_eq_rate(
-                    items,
-                    "nearest_reference_query_id",
-                    "hungarian_matched_query_id",
-                ),
-                "target_query_hit_rate": _bool_rate(items, "hungarian_in_target_queries"),
-                "ape_p50": None if not apes else round(float(median(apes)), 6),
-                "ape_p90": None if not apes else round(float(_percentile(apes, 90.0)), 6),
-            }
-        )
-    return out
-
-
 @torch.inference_mode()
 def main() -> None:
     args = parse_args()
@@ -793,17 +581,6 @@ def main() -> None:
 
     device_obj = select_device(args.device)
     model = load_gcs_model(args.weights, device=device_obj, half=args.half, gcs_imgsz=imgsz)
-    gcs_head = _find_gcs_head(model)
-    ref_x, fixed_y_anchors = _head_reference_x_and_y(gcs_head)
-    matcher = GCSHungarianMatcher(
-        cost_point=float(args.gcs_cost_point),
-        cost_curve=float(args.gcs_cost_curve),
-        cost_exist=float(args.gcs_cost_exist),
-        image_size=imgsz,
-        min_overlap=int(args.gcs_match_min_overlap),
-        max_x_dist=float(args.gcs_match_max_x_dist),
-        match_gate_px=float(args.gcs_match_gate_px),
-    )
     if args.decode_yaml:
         _, decode_yaml_cfg = load_decode_yaml(args.decode_yaml)
         decode_mode = resolve_decode_mode(decode_yaml_cfg.get("decode_mode"), model)
@@ -837,7 +614,6 @@ def main() -> None:
     query_rows: list[dict] = []
     image_rows: list[dict] = []
     hard_rows: list[dict] = []
-    hard_binding_rows: list[dict] = []
     infer_time_s = 0.0
     post_time_s = 0.0
     match_thrs = sorted({float(x) for x in args.raw_match_thrs} | {20.0, 30.0, 40.0})
@@ -885,13 +661,6 @@ def main() -> None:
         gt_count = int(len(valid_tusimple_lanes(record.get("lanes", []))))
         lane_positions = _lane_position_map(record)
         pred_raw_xs = [q["pred_xs"] for q in raw_queries]
-        raw_queries_by_id = {int(query["query"]): query for query in raw_queries}
-        gt_points_t, gt_valid_t = _fixed_y_gt_tensors(gt_lanes, h_samples, fixed_y_anchors, original_shape)
-        pred_points_t = preds["pred_points"].detach().float()
-        pred_logits_t = preds["pred_logits"].detach().float()
-        indices = matcher(pred_points_t, pred_logits_t, [gt_points_t], [gt_valid_t])
-        src_idx, tgt_idx = indices[0]
-        matched_by_gt = {int(t): int(s) for s, t in zip(src_idx.detach().cpu().tolist(), tgt_idx.detach().cpu().tolist())}
         final_pred_xs = [
             _interp_lane_xs(np.asarray(lane["points_norm"], dtype=np.float32), h_samples, original_shape)
             for lane in final_lanes
@@ -902,7 +671,7 @@ def main() -> None:
         missing_raw_apes = []
         missing_decoded_apes = []
 
-        for gt_list_idx, (gt_lane_id, gt_lane) in enumerate(gt_lanes):
+        for gt_lane_id, gt_lane in gt_lanes:
             best_ape, best_query_list_idx, best_overlap = _best_ape(pred_raw_xs, gt_lane, min_overlap=args.match_min_overlap)
             best_query = raw_queries[best_query_list_idx] if best_query_list_idx >= 0 else None
             decoded_best_ape, decoded_best_idx, decoded_best_overlap = _best_ape(
@@ -910,29 +679,9 @@ def main() -> None:
                 gt_lane,
                 min_overlap=args.match_min_overlap,
             )
-            matched_query_id = matched_by_gt.get(int(gt_list_idx), "")
-            matched_query = raw_queries_by_id.get(int(matched_query_id)) if matched_query_id != "" else None
-            if matched_query is None:
-                matched_ape, matched_overlap = "", ""
-            else:
-                matched_ape, matched_overlap = _ape_px(matched_query["pred_xs"], gt_lane, min_overlap=args.match_min_overlap)
-            ref_apes = _reference_ape_px(ref_x, gt_points_t, gt_valid_t, int(gt_list_idx), int(original_shape[1]))
-            if ref_apes and any(math.isfinite(float(x)) for x in ref_apes):
-                nearest_ref_query = int(min(range(len(ref_apes)), key=lambda q: ref_apes[q]))
-                nearest_ref_ape = float(ref_apes[nearest_ref_query])
-            else:
-                nearest_ref_query = ""
-                nearest_ref_ape = float("inf")
-            raw_best_query_id = "" if best_query is None else int(best_query["query"])
-            raw_best_reference_ape = _value_for_query(ref_apes, raw_best_query_id)
-            matched_reference_ape = _value_for_query(ref_apes, matched_query_id)
             visible = _visible_count(gt_lane)
             pos = lane_positions.get(int(gt_lane_id), {})
             visible_bucket = _visible_bucket(visible, args.short_visible_max)
-            targets = _target_query_ids(gt_count, pos.get("lane_order", ""), visible, args.short_visible_max)
-            raw_in_targets = bool(raw_best_query_id != "" and int(raw_best_query_id) in targets) if targets else ""
-            hungarian_in_targets = bool(matched_query_id != "" and int(matched_query_id) in targets) if targets else ""
-            raw_equals_hungarian = bool(raw_best_query_id != "" and matched_query_id != "" and int(raw_best_query_id) == int(matched_query_id))
             row = {
                 "raw_file": raw_file,
                 "date": date,
@@ -946,24 +695,13 @@ def main() -> None:
                 "visible_bucket": visible_bucket,
                 "short_visible_lane": bool(visible <= int(args.short_visible_max)),
                 "raw_best_ape_px": best_ape,
-                "raw_best_query_id": raw_best_query_id,
+                "raw_best_query_id": "" if best_query is None else int(best_query["query"]),
                 "raw_best_exist_score": "" if best_query is None else round(float(best_query["score"]), 8),
                 "raw_best_overlap": int(best_overlap),
                 "raw_best_valid_len@0.5": "" if best_query is None else int(best_query["valid_len_0.5"]),
                 "raw_best_valid_len@0.6": "" if best_query is None else int(best_query["valid_len_0.6"]),
                 "raw_best_valid_count@0.5": "" if best_query is None else int(best_query["valid_count_0.5"]),
                 "raw_best_valid_count@0.6": "" if best_query is None else int(best_query["valid_count_0.6"]),
-                "hungarian_matched_query_id": matched_query_id,
-                "hungarian_matched_ape_px": matched_ape,
-                "hungarian_matched_overlap": matched_overlap,
-                "nearest_reference_query_id": nearest_ref_query,
-                "nearest_reference_ape_px": nearest_ref_ape,
-                "raw_best_reference_ape_px": raw_best_reference_ape,
-                "matched_reference_ape_px": matched_reference_ape,
-                "target_query_ids": targets,
-                "raw_best_in_target_queries": raw_in_targets,
-                "hungarian_in_target_queries": hungarian_in_targets,
-                "raw_best_equals_hungarian": raw_equals_hungarian,
                 "pred_valid_points@0.5": "" if best_query is None else int(best_query["valid_len_0.5"]),
                 "pred_valid_points@0.6": "" if best_query is None else int(best_query["valid_len_0.6"]),
                 "point_valid_recall@0.5": ""
@@ -996,30 +734,6 @@ def main() -> None:
                 key = str(int(thr)) if float(thr).is_integer() else str(thr).replace(".", "p")
                 row[f"raw_has_match_{key}px"] = bool(best_ape <= float(thr))
             lane_rows.append(row)
-            if targets:
-                hard_binding_rows.append(
-                    {
-                        "raw_file": raw_file,
-                        "gt_count": gt_count,
-                        "gt_lane_id": int(gt_lane_id),
-                        "lane_order": pos.get("lane_order", ""),
-                        "lane_position": pos.get("lane_position", ""),
-                        "side_group": pos.get("side_group", ""),
-                        "visible_points_gt": int(visible),
-                        "raw_best_query_id": raw_best_query_id,
-                        "raw_best_ape_px": best_ape,
-                        "hungarian_matched_query_id": matched_query_id,
-                        "hungarian_matched_ape_px": matched_ape,
-                        "nearest_reference_query_id": nearest_ref_query,
-                        "nearest_reference_ape_px": nearest_ref_ape,
-                        "raw_best_reference_ape_px": raw_best_reference_ape,
-                        "matched_reference_ape_px": matched_reference_ape,
-                        "target_query_ids": targets,
-                        "raw_best_in_target_queries": raw_in_targets,
-                        "hungarian_in_target_queries": hungarian_in_targets,
-                        "raw_best_equals_hungarian": raw_equals_hungarian,
-                    }
-                )
 
             if bool(row["missing_at_match_thr"]):
                 missing_ids.append(int(gt_lane_id))
@@ -1097,17 +811,6 @@ def main() -> None:
         "raw_best_valid_len@0.6",
         "raw_best_valid_count@0.5",
         "raw_best_valid_count@0.6",
-        "hungarian_matched_query_id",
-        "hungarian_matched_ape_px",
-        "hungarian_matched_overlap",
-        "nearest_reference_query_id",
-        "nearest_reference_ape_px",
-        "raw_best_reference_ape_px",
-        "matched_reference_ape_px",
-        "target_query_ids",
-        "raw_best_in_target_queries",
-        "hungarian_in_target_queries",
-        "raw_best_equals_hungarian",
         "raw_has_match_20px",
         "raw_has_match_30px",
         "raw_has_match_40px",
@@ -1156,46 +859,10 @@ def main() -> None:
         "valid_count@0.5",
         "valid_count@0.6",
     ]
-    hard_binding_fields = [
-        "raw_file",
-        "gt_count",
-        "gt_lane_id",
-        "lane_order",
-        "lane_position",
-        "side_group",
-        "visible_points_gt",
-        "raw_best_query_id",
-        "raw_best_ape_px",
-        "hungarian_matched_query_id",
-        "hungarian_matched_ape_px",
-        "nearest_reference_query_id",
-        "nearest_reference_ape_px",
-        "raw_best_reference_ape_px",
-        "matched_reference_ape_px",
-        "target_query_ids",
-        "raw_best_in_target_queries",
-        "hungarian_in_target_queries",
-        "raw_best_equals_hungarian",
-    ]
-    binding_summary_fields = [
-        "group",
-        "lanes",
-        "top_raw_query",
-        "top_raw_share",
-        "top_hungarian_query",
-        "top_hungarian_share",
-        "raw_eq_hungarian_rate",
-        "nearest_ref_eq_raw_rate",
-        "nearest_ref_eq_hungarian_rate",
-        "target_query_hit_rate",
-        "ape_p50",
-        "ape_p90",
-    ]
     _write_csv(save_dir / "raw_gt_lane_diagnostics.csv", lane_rows, lane_fields)
     _write_csv(save_dir / "raw_query_gt_ape_long.csv", query_rows, query_fields)
     _write_csv(save_dir / "per_image_filter_trace.csv", image_rows, image_fields)
     _write_csv(save_dir / "hard_images_candidate_short.csv", hard_rows, image_fields)
-    _write_csv(save_dir / "hard_lane_query_binding.csv", hard_binding_rows, hard_binding_fields)
 
     point_valid_groups = _summarize_groups(lane_rows, ["gt_count", "lane_position"])
     point_valid_groups += _summarize_groups(lane_rows, ["gt_count", "side_group", "visible_bucket"])
@@ -1205,7 +872,6 @@ def main() -> None:
     raw_ape_groups += _summarize_groups(lane_rows, ["gt_count", "lane_position"])
     raw_ape_groups += _summarize_groups(lane_rows, ["date", "session"])
     raw_ape_groups += _summarize_groups(lane_rows, ["date", "gt_count", "visible_bucket"])
-    binding_summary = _summarize_binding(hard_binding_rows, args.short_visible_max)
 
     group_fields = [
         "gt_count",
@@ -1231,7 +897,6 @@ def main() -> None:
     ]
     _write_csv(save_dir / "point_valid_group_summary.csv", point_valid_groups, group_fields)
     _write_csv(save_dir / "raw_ape_group_summary.csv", raw_ape_groups, group_fields)
-    _write_csv(save_dir / "query_binding_summary.csv", binding_summary, binding_summary_fields)
 
     apes = [float(row["raw_best_ape_px"]) for row in lane_rows if math.isfinite(float(row["raw_best_ape_px"]))]
     n_lanes = max(len(lane_rows), 1)
@@ -1254,12 +919,6 @@ def main() -> None:
             "pool_max_det": None if int(args.pool_max_det) <= 0 else int(args.pool_max_det),
             "match_thr_px": float(args.match_thr_px),
             "match_min_overlap": int(args.match_min_overlap),
-            "gcs_cost_point": float(args.gcs_cost_point),
-            "gcs_cost_curve": float(args.gcs_cost_curve),
-            "gcs_cost_exist": float(args.gcs_cost_exist),
-            "gcs_match_min_overlap": int(args.gcs_match_min_overlap),
-            "gcs_match_max_x_dist": float(args.gcs_match_max_x_dist),
-            "gcs_match_gate_px": float(args.gcs_match_gate_px),
             "short_visible_max": int(args.short_visible_max),
             "max_images": int(args.max_images),
             "device": str(args.device),
@@ -1284,8 +943,6 @@ def main() -> None:
             "raw_query_gt_ape_long": str((save_dir / "raw_query_gt_ape_long.csv").resolve()),
             "per_image_filter_trace": str((save_dir / "per_image_filter_trace.csv").resolve()),
             "hard_images_candidate_short": str((save_dir / "hard_images_candidate_short.csv").resolve()),
-            "hard_lane_query_binding": str((save_dir / "hard_lane_query_binding.csv").resolve()),
-            "query_binding_summary": str((save_dir / "query_binding_summary.csv").resolve()),
             "point_valid_group_summary": str((save_dir / "point_valid_group_summary.csv").resolve()),
             "raw_ape_group_summary": str((save_dir / "raw_ape_group_summary.csv").resolve()),
         },

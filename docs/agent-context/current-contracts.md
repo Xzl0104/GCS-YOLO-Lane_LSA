@@ -2,6 +2,14 @@
 
 This file records the active contracts for branch `codex/5-25-3-k56`.
 
+Active source/config is the rollback state at commit `86c8fb31c` (`Add GT4
+GT5 weak geometry rescue run`). All later commits, files, commands, and
+experiment results after `86c8fb31c` are rejected legacy records unless a
+future task explicitly reopens them. The rolled-back worktree intentionally
+removes the post-86 tiered rescue scripts, Q12 ultrashort dataref YAMLs,
+reference banks, final-query extra guard/gate tools, and related diagnostics
+from active code.
+
 ## Branch Scope
 
 This branch imports the historical `5-25-3.zip` algorithm and changes only the TuSimple fixed-y contract:
@@ -19,49 +27,36 @@ query-count YAML and emits `pred_count_logits: B x 4` for the fixed 2/3/4/5
 lane-count classes. The default query YAML still emits no `pred_count_logits`,
 and ordered-slot keeps its existing count/slot logic unchanged.
 
-The 2026-07-15 user-requested `Q12-dataref-ultrashort-v1` reference-coverage
-candidate is a default-off Q12/K56 query-model ablation only. It is enabled
-only by
-`ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-ultrashort-dataref.yaml`
-with `reference_mode="ultrashort_dataref"` and the controlled bank
-`data/gcs_reference_banks/q12_ultrashort_env30_train_v1.json`. The mode name is
-intentionally not `dataref` to avoid confusion with legacy Q20/dataref notes.
-It changes only `point_reference_logits` initialization from a validated
-`gcs_q12_fixed_y_reference_bank_v1` JSON; it does not change loss, matcher,
-query binding cost, point-valid rescue, decode, official metrics, Count Head,
-Quality Head, Survival Head, or Q count. Training must not start unless the
-static reference coverage audit passes. The current regenerated v1 bank passes
-that static gate on the canonical 363-image official-val diagnostics; it is now
-eligible for training under the dedicated launch script, but it is not
-official-val ACC evidence until training and post-train diagnostics complete.
-
-The 2026-07-15 user-requested `Q12-dataref-ultrashort-v2` candidate is a
-second default-off Q12/K56 query-model ablation. It is enabled only by
-`ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-ultrashort-dataref-v2.yaml`
-and the controlled bank
-`data/gcs_reference_banks/q12_ultrashort_env30_train_v2.json`, whose canonical
-static coverage audit is
-`data/gcs_reference_banks/q12_ultrashort_env30_train_v2_reference_audit.json`.
-The generated run-copy audit remains
-`runs/gcs_lane/q12_ultrashort_env30_train_v2_reference_audit.json`. The v2
-builder parameterizes required replacement queries and per-query static
-penalties so `q4` can participate in the assignment search without hard-coding
-a mapping. Prototype shapes still come only from train diagnostics/GT; official
-val is used only for static assignment gate/audit. Training/test protocol for
-the v2 candidate is guarded by
-`scripts/run_query_alpha05_env30_q12_ultrashort_dataref_geom1_extraguard_v2.sh`,
-which runs final-query extra diagnostics on official-val and train before any
-reporting-only TEST run.
+Post-`86c8fb31c` Q12 ultrashort dataref variants are rejected legacy records,
+not active branch contracts. This includes `Q12-dataref-ultrashort-v1`,
+`Q12-dataref-ultrashort-v2`, and
+`Q12-dataref-ultrashort-q1q3protected-v1`, their YAMLs, reference banks,
+static audits, launch scripts, and final-query extra guard/gate diagnostics.
+They were removed from active code by the rollback. Their recorded outcomes
+remain useful only as negative evidence: v2 failed the official-val/train
+final-query gate (`0.972040/0.023691/0.011938`, GT4 false fifth and GT5
+false sixth regressions), and q1/q3-protected failed much earlier
+(`0.949375/0.113682/0.047980`, severe over-count). Do not relaunch, continue,
+or use TEST for these lines unless a future task explicitly reopens them with a
+new official-val/train gate.
 
 The branch also includes the 2026-06-27 user-requested, default-off `gcs_hard_sampling` train-only sampler for short-visible GT3/GT4/GT5 and 0601 samples. It changes only the training dataloader sampling frequency through `WeightedRandomSampler`; it does not change labels, validation/test dataloaders, point/smooth/curve losses, decode, or official metrics.
 
 The branch also includes the 2026-06-27 user-requested, default-off `gcs_spurious_neg` loss for E3-lite. It uses the training Hungarian matcher indices only to select unmatched short duplicate-like queries near matched queries, then adds an extra target-zero BCE on their `pred_logits`. The GT-count weighting extension keeps the old default behavior with `gcs_spurious_gt3_weight=1.0`, `gcs_spurious_gt4_weight=1.0`, `gcs_spurious_gt5_weight=1.0`, and `gcs_spurious_disable_gt5=False`, while allowing GT3-or-sparser, GT4, and GT5-or-denser samples to carry different spurious-negative weights. The 2026-06-28 `gcs_spurious_gt_protect` extension is also default-off and only removes GT-close candidate queries from this extra negative BCE. It does not change data sampling, dataset labels, matcher logic, point/smooth/curve losses, decode, NMS, or official metrics.
 
-Active source/config is rolled back to commit
-`424ab1c869f0a02556d8b6b6a44c27e5585e47c0` (`Add valid-before-maxdet decode
-option`). The following commits are old state for this rollback and their
-mechanisms, tools, commands, logs, and experiment results are legacy records
-only unless a future task explicitly re-enables them:
+The env30 rollback boundary also includes the default-off
+`gcs_gt5_short_visible_thr` / `gcs_gt5_short_point_valid_weight`,
+`gcs_short_geom`, `gcs_boundary_pseudo_neg`, cached official sweep protocol,
+and the two env30-family launch scripts first present at `86c8fb31c`:
+
+```text
+scripts/run_query_alpha05_gt5short_geom_w2_bneg002_env30_nocount_v1.sh
+scripts/run_query_alpha05_gt4gt5weak_geom_w15w2_env30_nocount_v1.sh
+```
+
+Earlier pre-env30 history around the old `424ab1c86` rollback remains useful
+only to interpret old logs. The following older mechanisms/tools are not part
+of the active `86c8fb31c` code state unless the exact active files expose them:
 
 - `436fcb616` (`Add GCS short-side hardset diagnostics`)
 - `f4c200bbe` (`Add default-off short-side geometry loss`)
@@ -333,15 +328,17 @@ All branch configs keep `Q=12`, `K=56`, fixed-y anchors `710/720 -> 160/720`, an
 
 Historical q12-k56 experiment docs are old records. Preserve them, but do not let them override the active 5-25-3 K56 mainline contract.
 
-Active source/config is rolled back to commit `424ab1c86` (`Add
-valid-before-maxdet decode option`). Its algorithm contract remains the
-5-25-3 K56 mainline through that commit: no later mainline Count Head,
-Q18/Q20/dataref, lane-balanced, valid-repair, side-aux, short-side hardset,
-`gcs_short_side_geom`, `gcs_far_spurious_neg`, ignore-first ranking/raw-rescue,
-or count-contract diagnostic tooling is active. The only Count Head exception is
-the 2026-07-06 user-requested, default-off query Count Head ablation documented
-above. Later commits and notes are preserved only as legacy experiment
-conclusions in the docs. They are not active CLI/config/loss/tool behavior.
+Active source/config is rolled back to commit `86c8fb31c` (`Add GT4 GT5 weak
+geometry rescue run`). Its algorithm contract remains the 5-25-3 K56 mainline
+through the env30 script boundary: the default-off query Count Head,
+`valid_before_maxdet`, GT5 short point-valid rescue, `gcs_short_geom`,
+`gcs_boundary_pseudo_neg`, cached official sweep protocol, and env30-family
+scripts are active. Post-`86c8fb31c` tiered rescue, Q12 ultrashort dataref,
+final-query extra guard/gate, router/selector, Q18/Q20/dataref,
+lane-balanced, valid-repair, side-aux, far-spurious, ranking/raw-rescue, or
+count-contract diagnostic tooling is rejected legacy material only. Later
+commits and notes are preserved only as failed experiment conclusions in the
+docs. They are not active CLI/config/loss/tool behavior.
 
 ## Label Contract
 
@@ -404,7 +401,7 @@ This optional output is default-off and uses class mapping
 
 ## Loss Contract
 
-Default logged loss items on the active `424ab1c86` rollback state include:
+Default logged loss items on the active `86c8fb31c` rollback state include:
 
 ```text
 exist_loss
@@ -441,12 +438,6 @@ boundary_pseudo_score_mean
 query_count_ce_loss
 query_count_acc
 query_count_pred_mean
-gt4_short_pos_count
-gt4_short_pos_anchor_count
-gt4_short_point_valid_loss
-final_extra_guard_loss
-final_extra_guard_count
-final_extra_guard_protected
 ```
 
 `query_count_ce_loss` is active only when a query model emits
@@ -454,20 +445,12 @@ final_extra_guard_protected
 When logits are absent, the three query-count log items are zero for old-model
 compatibility.
 
-`final_extra_guard_loss` is disabled by default through
-`gcs_final_extra_guard=0.0` and is train-only. When enabled, it uses the
-training Hungarian matcher only to select unmatched queries in
-`gcs_final_extra_guard_scope`, applies GT only inside the training loss, and
-adds target-zero BCE to clear-far or duplicate-like unmatched query logits.
-Hungarian-matched true lanes are never selected. GT-close or high
-TuSimple-like line-accuracy unmatched candidates are protected before
-clear-far/duplicate selection, so the term must not be used as TEST-time or
-inference decode logic.
-
-Post-`424ab1c86` log items such as `short_side_geom_loss`, `far_spur_loss`,
+Post-`86c8fb31c` log items such as `gt4_short_*`,
+`final_extra_guard_*`, tiered short-geometry diagnostics, ultrashort dataref
+diagnostics, router/selector diagnostics, `far_spur_loss`,
 `farspur_if_loss`, `rank_topk_loss`, `shortside_*`, `rank_*`,
-`base_exist_ignore_*`, and `clear_far_boundary_count` are legacy records only
-and are not emitted by the active rollback code.
+`base_exist_ignore_*`, and `clear_far_boundary_count` are rejected legacy
+records only and are not emitted by the active rollback code.
 
 For ordered-slot mode, standalone `OrderedSlotGCSLoss` defaults must match
 `ultralytics/cfg/default.yaml`: `gcs_count_ce=1.0`,

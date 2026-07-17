@@ -174,25 +174,14 @@ gcs_spurious_gt_protect_px: 25.0 # (float) maximum mean x distance in pixels for
 gcs_spurious_gt_protect_min_overlap: 3 # (int) minimum overlapping anchors with a GT lane for protection
 gcs_spurious_gt_protect_margin_px: 5.0 # (float) better-matched protection margin in pixels
 gcs_spurious_gt_protect_mode: better_matched # (str) GT-aware protection policy
-gcs_gt4_short_visible_thr: 0 # (int) matched GT4 lanes with visible_count <= this get point-valid positive rescue; 0 disables
-gcs_gt4_short_point_valid_weight: 1.0 # (float) point-valid BCE multiplier for visible anchors of rescued short GT4 lanes; must be >=1
 gcs_gt5_short_visible_thr: 0 # (int) matched GT5 lanes with visible_count <= this get point-valid positive rescue; 0 disables
-gcs_gt5_short_point_valid_weight: 1.0 # (float) point-valid BCE multiplier for visible anchors of rescued short GT5 lanes; must be >=1
+gcs_gt5_short_point_valid_weight: 1.0 # (float) point-valid BCE multiplier for visible anchors of rescued short GT5 lanes
 gcs_short_geom: 0.0 # (float) lane-level point/curve boost gain for matched GT4/GT5 short-visible lanes; 0 disables
 gcs_short_geom_visible_thr: 10 # (int) visible anchor threshold for GT4/GT5 short geometry boost
 gcs_short_geom_gt4_weight: 1.0 # (float) default-off GT4 short geometry boost
 gcs_short_geom_gt5_weight: 2.0 # (float) target lane weight when gcs_short_geom=1.0
 gcs_short_geom_max_weight: 3.0 # (float) maximum clamped lane weight for short geometry boost
 gcs_short_geom_curve: 1.0 # (float) fraction of short geometry lane boost applied to curve_loss
-gcs_short_geom_tiered: False # (bool) use gt-count and visible-count tiered short geometry weights; False preserves legacy single threshold
-gcs_short_geom_gt4_ultra_visible_thr: 10 # (int) tiered GT4 ultra-short visible threshold
-gcs_short_geom_gt4_ultra_weight: 1.0 # (float) tiered GT4 ultra-short lane weight; 1 disables boost
-gcs_short_geom_gt4_mid_visible_thr: 20 # (int) tiered GT4 mid-short visible threshold
-gcs_short_geom_gt4_mid_weight: 1.0 # (float) tiered GT4 mid-short lane weight; 1 disables boost
-gcs_short_geom_gt5_ultra_visible_thr: 10 # (int) tiered GT5 ultra-short visible threshold
-gcs_short_geom_gt5_ultra_weight: 1.0 # (float) tiered GT5 ultra-short lane weight; 1 disables boost
-gcs_short_geom_gt5_mid_visible_thr: 20 # (int) tiered GT5 mid-short visible threshold
-gcs_short_geom_gt5_mid_weight: 1.0 # (float) tiered GT5 mid-short lane weight; 1 disables boost
 gcs_boundary_pseudo_neg: 0.0 # (float) extra BCE negative loss gain for GT5 short far boundary pseudo lanes; 0 disables
 gcs_boundary_pseudo_visible_thr: 10 # (int) maximum predicted visible anchors for boundary pseudo negatives
 gcs_boundary_pseudo_dist_thr: 60.0 # (float) minimum mean x distance in pixels from nearest GT lane
@@ -202,16 +191,6 @@ gcs_boundary_pseudo_gt_count: 5 # (int) GT lane count targeted by boundary pseud
 gcs_boundary_pseudo_score_thr: 0.0 # (float) optional existence score floor for boundary pseudo negatives; 0 disables
 gcs_boundary_pseudo_envelope_margin_px: -1.0 # (float) require common-visible query anchors outside GT envelope by this margin; <0 disables
 gcs_boundary_pseudo_envelope_ratio_thr: 0.75 # (float) minimum common-visible anchor ratio outside GT envelope when envelope margin is enabled
-gcs_final_extra_guard: 0.0 # (float) train-only extra BCE negative loss gain for unmatched final-query extra sources; 0 disables
-gcs_final_extra_guard_scope: 1,3,4,5,6,7,8 # (str) comma-separated query ids eligible for the train-only final extra guard
-gcs_final_extra_guard_score_thr: 0.15 # (float) minimum unmatched query existence probability for final extra guard
-gcs_final_extra_guard_valid_thr: 0.55 # (float) per-anchor visibility threshold for final extra guard candidate spans
-gcs_final_extra_guard_min_valid: 2 # (int) minimum longest-contiguous valid anchors for final extra guard candidates
-gcs_final_extra_guard_min_overlap: 3 # (int) minimum anchor overlap for final extra guard GT/matched-query comparisons
-gcs_final_extra_guard_clear_far_px: 50.0 # (float) nearest-GT APE at or above this is clear-far for the train-only guard
-gcs_final_extra_guard_duplicate_px: 30.0 # (float) matched-query overlap mean x distance for duplicate-like extra candidates
-gcs_final_extra_guard_protect_px: 30.0 # (float) nearest-GT APE at or below this protects a true-lane-like unmatched query
-gcs_final_extra_guard_protect_acc: 0.85 # (float) TuSimple-like line accuracy at or above this protects a candidate
 gcs_exist_pos_weight: 1.0 # (float) positive query weight for GCS lane existence BCE
 gcs_exist_focal_gamma: 0.0 # (float) optional focal gamma for GCS existence BCE; 0 disables focal weighting
 gcs_exist_focal_alpha: -1.0 # (float) optional focal alpha for GCS existence BCE; set 0..1 to enable alpha weighting

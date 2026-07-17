@@ -564,16 +564,6 @@ class GCSLaneModel(DetectionModel):
         self.gcs_imgsz = self.yaml.get("gcs_imgsz") or self.yaml.get("image_shape") or self.yaml.get("imgsz")
         self.gcs_mode = str(self.yaml.get("gcs_mode", "query")).lower()
 
-    def loss(self, batch, preds=None):
-        """Compute GCS loss while keeping cached criterion train/eval state in sync with the model."""
-        if getattr(self, "criterion", None) is None:
-            self.criterion = self.init_criterion()
-
-        self.criterion.train(self.training)
-        if preds is None:
-            preds = self.forward(batch["img"])
-        return self.criterion(preds, batch)
-
     def init_criterion(self):
         """Initialize the structured lane loss instead of the YOLO detection loss."""
         head_mode = None
@@ -588,14 +578,10 @@ class GCSLaneModel(DetectionModel):
         if mode == "ordered_slot":
             from ultralytics.models.gcs.loss_ordered_slot import OrderedSlotGCSLoss
 
-            criterion = OrderedSlotGCSLoss(self)
-            criterion.train(self.training)
-            return criterion
+            return OrderedSlotGCSLoss(self)
         from ultralytics.utils.gcs_loss import GCSLoss
 
-        criterion = GCSLoss(self)
-        criterion.train(self.training)
-        return criterion
+        return GCSLoss(self)
 
 
 class OBBModel(DetectionModel):

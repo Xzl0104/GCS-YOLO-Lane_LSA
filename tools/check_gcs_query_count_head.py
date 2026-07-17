@@ -122,23 +122,14 @@ def check_loss() -> None:
         raise AssertionError(f"GCSLoss item length mismatch: {with_items.numel()} vs {len(GCSLoss.loss_names)}.")
     if not torch.isfinite(with_items).all():
         raise AssertionError("GCSLoss produced non-finite items with pred_count_logits.")
-    query_count_indices = [GCSLoss.loss_names.index(name) for name in (
-        "query_count_ce_loss",
-        "query_count_acc",
-        "query_count_pred_mean",
-    )]
-    if float(with_items[query_count_indices[0]]) <= 0.0:
-        raise AssertionError(
-            "query_count_ce_loss should be positive with logits present, "
-            f"got {float(with_items[query_count_indices[0]])}."
-        )
+    if float(with_items[-3]) <= 0.0:
+        raise AssertionError(f"query_count_ce_loss should be positive with logits present, got {float(with_items[-3])}.")
 
     _, without_items = criterion(_make_preds(include_count=False), batch)
     if int(without_items.numel()) != len(GCSLoss.loss_names):
         raise AssertionError(f"GCSLoss no-count item length mismatch: {without_items.numel()} vs {len(GCSLoss.loss_names)}.")
-    without_query_count = without_items[query_count_indices]
-    if not torch.allclose(without_query_count, torch.zeros_like(without_query_count)):
-        raise AssertionError(f"missing pred_count_logits should log zeros, got {without_query_count.tolist()}.")
+    if not torch.allclose(without_items[-3:], torch.zeros_like(without_items[-3:])):
+        raise AssertionError(f"missing pred_count_logits should log zeros, got {without_items[-3:].tolist()}.")
 
 
 def check_decode_count_modes() -> None:

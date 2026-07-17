@@ -449,33 +449,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=1.0,
         help="Extra point-valid BCE multiplier for visible anchors of matched short GT5 lanes.",
     )
-    parser.add_argument(
-        "--gcs-gt4-short-visible-thr",
-        type=int,
-        default=0,
-        help="Boost matched GT4 lane point-valid positives when visible_count <= this threshold. 0 disables.",
-    )
-    parser.add_argument(
-        "--gcs-gt4-short-point-valid-weight",
-        type=float,
-        default=1.0,
-        help="Extra point-valid BCE multiplier for visible anchors of matched short GT4 lanes.",
-    )
     parser.add_argument("--gcs-short-geom", type=float, default=0.0)
     parser.add_argument("--gcs-short-geom-visible-thr", type=int, default=10)
     parser.add_argument("--gcs-short-geom-gt4-weight", type=float, default=1.0)
     parser.add_argument("--gcs-short-geom-gt5-weight", type=float, default=2.0)
     parser.add_argument("--gcs-short-geom-max-weight", type=float, default=3.0)
     parser.add_argument("--gcs-short-geom-curve", type=float, default=1.0)
-    parser.add_argument("--gcs-short-geom-tiered", action="store_true")
-    parser.add_argument("--gcs-short-geom-gt4-ultra-visible-thr", type=int, default=10)
-    parser.add_argument("--gcs-short-geom-gt4-ultra-weight", type=float, default=1.0)
-    parser.add_argument("--gcs-short-geom-gt4-mid-visible-thr", type=int, default=20)
-    parser.add_argument("--gcs-short-geom-gt4-mid-weight", type=float, default=1.0)
-    parser.add_argument("--gcs-short-geom-gt5-ultra-visible-thr", type=int, default=10)
-    parser.add_argument("--gcs-short-geom-gt5-ultra-weight", type=float, default=1.0)
-    parser.add_argument("--gcs-short-geom-gt5-mid-visible-thr", type=int, default=20)
-    parser.add_argument("--gcs-short-geom-gt5-mid-weight", type=float, default=1.0)
     parser.add_argument("--gcs-boundary-pseudo-neg", type=float, default=0.0)
     parser.add_argument("--gcs-boundary-pseudo-visible-thr", type=int, default=10)
     parser.add_argument("--gcs-boundary-pseudo-dist-thr", type=float, default=60.0)
@@ -485,16 +464,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--gcs-boundary-pseudo-score-thr", type=float, default=0.0)
     parser.add_argument("--gcs-boundary-pseudo-envelope-margin-px", type=float, default=-1.0)
     parser.add_argument("--gcs-boundary-pseudo-envelope-ratio-thr", type=float, default=0.75)
-    parser.add_argument("--gcs-final-extra-guard", type=float, default=0.0)
-    parser.add_argument("--gcs-final-extra-guard-scope", type=str, default="1,3,4,5,6,7,8")
-    parser.add_argument("--gcs-final-extra-guard-score-thr", type=float, default=0.15)
-    parser.add_argument("--gcs-final-extra-guard-valid-thr", type=float, default=0.55)
-    parser.add_argument("--gcs-final-extra-guard-min-valid", type=int, default=2)
-    parser.add_argument("--gcs-final-extra-guard-min-overlap", type=int, default=3)
-    parser.add_argument("--gcs-final-extra-guard-clear-far-px", type=float, default=50.0)
-    parser.add_argument("--gcs-final-extra-guard-duplicate-px", type=float, default=30.0)
-    parser.add_argument("--gcs-final-extra-guard-protect-px", type=float, default=30.0)
-    parser.add_argument("--gcs-final-extra-guard-protect-acc", type=float, default=0.85)
     parser.add_argument("--gcs-exist-pos-weight", type=float, default=1.0)
     parser.add_argument("--gcs-exist-focal-gamma", type=float, default=0.0, help="Optional focal gamma for existence BCE. 0 disables focal weighting.")
     parser.add_argument(
@@ -826,23 +795,12 @@ def main() -> None:
         "gcs_spurious_gt_protect_mode": args.gcs_spurious_gt_protect_mode,
         "gcs_gt5_short_visible_thr": args.gcs_gt5_short_visible_thr,
         "gcs_gt5_short_point_valid_weight": args.gcs_gt5_short_point_valid_weight,
-        "gcs_gt4_short_visible_thr": args.gcs_gt4_short_visible_thr,
-        "gcs_gt4_short_point_valid_weight": args.gcs_gt4_short_point_valid_weight,
         "gcs_short_geom": args.gcs_short_geom,
         "gcs_short_geom_visible_thr": args.gcs_short_geom_visible_thr,
         "gcs_short_geom_gt4_weight": args.gcs_short_geom_gt4_weight,
         "gcs_short_geom_gt5_weight": args.gcs_short_geom_gt5_weight,
         "gcs_short_geom_max_weight": args.gcs_short_geom_max_weight,
         "gcs_short_geom_curve": args.gcs_short_geom_curve,
-        "gcs_short_geom_tiered": args.gcs_short_geom_tiered,
-        "gcs_short_geom_gt4_ultra_visible_thr": args.gcs_short_geom_gt4_ultra_visible_thr,
-        "gcs_short_geom_gt4_ultra_weight": args.gcs_short_geom_gt4_ultra_weight,
-        "gcs_short_geom_gt4_mid_visible_thr": args.gcs_short_geom_gt4_mid_visible_thr,
-        "gcs_short_geom_gt4_mid_weight": args.gcs_short_geom_gt4_mid_weight,
-        "gcs_short_geom_gt5_ultra_visible_thr": args.gcs_short_geom_gt5_ultra_visible_thr,
-        "gcs_short_geom_gt5_ultra_weight": args.gcs_short_geom_gt5_ultra_weight,
-        "gcs_short_geom_gt5_mid_visible_thr": args.gcs_short_geom_gt5_mid_visible_thr,
-        "gcs_short_geom_gt5_mid_weight": args.gcs_short_geom_gt5_mid_weight,
         "gcs_boundary_pseudo_neg": args.gcs_boundary_pseudo_neg,
         "gcs_boundary_pseudo_visible_thr": args.gcs_boundary_pseudo_visible_thr,
         "gcs_boundary_pseudo_dist_thr": args.gcs_boundary_pseudo_dist_thr,
@@ -852,16 +810,6 @@ def main() -> None:
         "gcs_boundary_pseudo_score_thr": args.gcs_boundary_pseudo_score_thr,
         "gcs_boundary_pseudo_envelope_margin_px": args.gcs_boundary_pseudo_envelope_margin_px,
         "gcs_boundary_pseudo_envelope_ratio_thr": args.gcs_boundary_pseudo_envelope_ratio_thr,
-        "gcs_final_extra_guard": args.gcs_final_extra_guard,
-        "gcs_final_extra_guard_scope": args.gcs_final_extra_guard_scope,
-        "gcs_final_extra_guard_score_thr": args.gcs_final_extra_guard_score_thr,
-        "gcs_final_extra_guard_valid_thr": args.gcs_final_extra_guard_valid_thr,
-        "gcs_final_extra_guard_min_valid": args.gcs_final_extra_guard_min_valid,
-        "gcs_final_extra_guard_min_overlap": args.gcs_final_extra_guard_min_overlap,
-        "gcs_final_extra_guard_clear_far_px": args.gcs_final_extra_guard_clear_far_px,
-        "gcs_final_extra_guard_duplicate_px": args.gcs_final_extra_guard_duplicate_px,
-        "gcs_final_extra_guard_protect_px": args.gcs_final_extra_guard_protect_px,
-        "gcs_final_extra_guard_protect_acc": args.gcs_final_extra_guard_protect_acc,
         "gcs_exist_pos_weight": args.gcs_exist_pos_weight,
         "gcs_exist_focal_gamma": args.gcs_exist_focal_gamma,
         "gcs_exist_focal_alpha": args.gcs_exist_focal_alpha,

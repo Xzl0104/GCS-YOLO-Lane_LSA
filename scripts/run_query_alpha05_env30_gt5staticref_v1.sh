@@ -2,12 +2,12 @@
 set -euo pipefail
 
 # Run from the repository root on the remote CUDA server.
-# Combination ablation: matched GT4/GT5 weak-positive geometry rescue, GT5 point-valid rescue, and env30 boundary mask.
-# Override variables from the shell when needed, e.g. BATCH=16 DEVICE=1 bash scripts/run_query_alpha05_gt4gt5weak_geom_w15w2_env30_nocount_v1.sh
+# This is the true boundary-pseudo mask-v2 / envelope-protected protocol.
+# Override variables from the shell when needed, e.g. BATCH=16 DEVICE=1 bash scripts/run_query_alpha05_gt5short_geom_w2_bneg002_env30_nocount_v1.sh
 
-RUN_NAME="${RUN_NAME:-query_alpha05_gt4gt5weak_geom_w15w2_env30_nocount_v1}"
+RUN_NAME="${RUN_NAME:-query_alpha05_env30_gt5staticref_v1}"
 PROJECT="${PROJECT:-runs/gcs_lane}"
-MODEL="${MODEL:-ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml}"
+MODEL="${MODEL:-ultralytics/cfg/models/gcs/gcs-yolo-lane-s-env30-gt5staticref-v1.yaml}"
 DATA="${DATA:-data/tusimple_gcs_fixed_y_960x544.yaml}"
 PRETRAINED="${PRETRAINED:-yolo11s-seg.pt}"
 ARCHIVE_ROOT="${ARCHIVE_ROOT:-archive/TUSimple}"
@@ -27,15 +27,8 @@ HALF="${HALF:-1}"
 RUN_TRAIN="${RUN_TRAIN:-1}"
 OVERWRITE_SWEEPS="${OVERWRITE_SWEEPS:-0}"
 OVERWRITE_TESTS="${OVERWRITE_TESTS:-0}"
-OVERWRITE_DIAGNOSTICS="${OVERWRITE_DIAGNOSTICS:-0}"
 RUN_TESTS="${RUN_TESTS:-0}"
-RUN_DIAGNOSTICS="${RUN_DIAGNOSTICS:-1}"
-RUN_TEST_DIAGNOSTICS="${RUN_TEST_DIAGNOSTICS:-${RUN_TESTS}}"
 VALID_BEFORE_MAXDET="${VALID_BEFORE_MAXDET:-1}"
-DIAG_WARMUP="${DIAG_WARMUP:-20}"
-DIAG_MATCH_THR_PX="${DIAG_MATCH_THR_PX:-20}"
-DIAG_MATCH_MIN_OVERLAP="${DIAG_MATCH_MIN_OVERLAP:-3}"
-DIAG_SHORT_VISIBLE_MAX="${DIAG_SHORT_VISIBLE_MAX:-10}"
 
 OFFICIAL_CONFS="${OFFICIAL_CONFS:-0.001 0.003 0.005 0.008 0.01 0.02}"
 OFFICIAL_POINT_VALID_THRS="${OFFICIAL_POINT_VALID_THRS:-0.45 0.50 0.55 0.60}"
@@ -109,10 +102,6 @@ OFFICIAL_BEST_SWEEP_DIR="${OFFICIAL_BEST_SWEEP_DIR:-${PROJECT}/${RUN_NAME}_offic
 BEST_SWEEP_DIR="${BEST_SWEEP_DIR:-${PROJECT}/${RUN_NAME}_best_val_sweep_${DECODE_TAG}}"
 OFFICIAL_BEST_TEST_DIR="${OFFICIAL_BEST_TEST_DIR:-${PROJECT}/${RUN_NAME}_official_best_test_from_val_sweep_${DECODE_TAG}}"
 BEST_TEST_DIR="${BEST_TEST_DIR:-${PROJECT}/${RUN_NAME}_best_test_from_val_sweep_${DECODE_TAG}}"
-OFFICIAL_BEST_VAL_DIAG_DIR="${OFFICIAL_BEST_VAL_DIAG_DIR:-${PROJECT}/${RUN_NAME}_official_best_val_raw_q12_${DECODE_TAG}}"
-BEST_VAL_DIAG_DIR="${BEST_VAL_DIAG_DIR:-${PROJECT}/${RUN_NAME}_best_val_raw_q12_${DECODE_TAG}}"
-OFFICIAL_BEST_TEST_DIAG_DIR="${OFFICIAL_BEST_TEST_DIAG_DIR:-${PROJECT}/${RUN_NAME}_official_best_test_raw_q12_${DECODE_TAG}}"
-BEST_TEST_DIAG_DIR="${BEST_TEST_DIAG_DIR:-${PROJECT}/${RUN_NAME}_best_test_raw_q12_${DECODE_TAG}}"
 PROTOCOL_SUMMARY="${PROTOCOL_SUMMARY:-${PROJECT}/${RUN_NAME}_official_best_and_best_test_protocol_summary.json}"
 
 run_train() {
@@ -141,13 +130,11 @@ run_train() {
     --gcs-count-boundary 0.0 \
     --gcs-query-count-ce 0.0 \
     --gcs-short-geom 1.0 \
-    --gcs-short-geom-visible-thr 20 \
-    --gcs-short-geom-gt4-weight 1.5 \
+    --gcs-short-geom-visible-thr 10 \
     --gcs-short-geom-gt5-weight 2.0 \
     --gcs-short-geom-max-weight 3.0 \
     --gcs-short-geom-curve 1.0 \
-    --gcs-gt5-short-visible-thr 10 \
-    --gcs-gt5-short-point-valid-weight 1.25 \
+    --gcs-gt5-short-visible-thr 0 \
     --gcs-boundary-pseudo-neg 0.02 \
     --gcs-boundary-pseudo-visible-thr 10 \
     --gcs-boundary-pseudo-dist-thr 80 \
@@ -289,120 +276,11 @@ subprocess.run(cmd, check=True)
 PY
 }
 
-run_raw_q12_diag_from_sweep() {
-  local label="$1"
-  local weights="$2"
-  local sweep_dir="$3"
-  local split="$4"
-  local save_dir="$5"
-  local max_images="$6"
-  local summary="${sweep_dir}/tusimple_official_sweep_summary.json"
-
-  if [[ ! -f "${summary}" ]]; then
-    echo "Missing ${label} sweep summary for raw-Q12 diagnostic: ${summary}" >&2
-    exit 2
-  fi
-  if [[ ! -f "${weights}" ]]; then
-    echo "Missing ${label} weights for raw-Q12 diagnostic: ${weights}" >&2
-    exit 2
-  fi
-  if [[ -e "${save_dir}" ]] && ! is_true "${OVERWRITE_DIAGNOSTICS}"; then
-    echo "Diagnostic directory already exists: ${save_dir}" >&2
-    echo "Set OVERWRITE_DIAGNOSTICS=1 or choose a new RUN_NAME/DIAG dir." >&2
-    exit 2
-  fi
-
-  python - \
-    "${summary}" "${weights}" "${save_dir}" "${ARCHIVE_ROOT}" "${DEVICE}" \
-    "${max_images}" "${DIAG_WARMUP}" "${HALF}" "${split}" "${GT_JSON}" \
-    "${DIAG_MATCH_THR_PX}" "${DIAG_MATCH_MIN_OVERLAP}" "${DIAG_SHORT_VISIBLE_MAX}" <<'PY'
-import json
-import shlex
-import subprocess
-import sys
-
-(
-    summary_path,
-    weights,
-    save_dir,
-    archive_root,
-    device,
-    max_images,
-    warmup,
-    half,
-    split,
-    gt_json,
-    match_thr_px,
-    match_min_overlap,
-    short_visible_max,
-) = sys.argv[1:]
-
-with open(summary_path, "r", encoding="utf-8") as f:
-    best = json.load(f)["best"]
-
-if best.get("decode_mode", "query") == "ordered_slot":
-    raise SystemExit("This protocol script is for query raw-Q12 diagnostics, not ordered_slot decode.")
-
-cmd = [
-    sys.executable,
-    "tools/diagnose_tusimple_raw_q12_filters.py",
-    "--archive-root",
-    archive_root,
-    "--split",
-    split,
-    "--weights",
-    weights,
-    "--imgsz",
-    "544",
-    "960",
-    "--device",
-    device,
-    "--conf",
-    str(best["conf"]),
-    "--point-valid-thr",
-    str(best["point_valid_thr"]),
-    "--nms-dist-px",
-    str(best["nms_dist_px"]),
-    "--max-det",
-    str(int(best["max_det"])),
-    "--min-points",
-    str(int(best["min_points"])),
-    "--match-thr-px",
-    str(float(match_thr_px)),
-    "--match-min-overlap",
-    str(int(match_min_overlap)),
-    "--short-visible-max",
-    str(int(short_visible_max)),
-    "--warmup",
-    str(int(max(0, int(warmup)))),
-    "--save-dir",
-    save_dir,
-]
-if split == "val":
-    cmd.extend(["--gt-json", gt_json])
-elif split == "test":
-    cmd.append("--allow-test-oracle")
-else:
-    raise SystemExit(f"Unsupported split for this protocol diagnostic: {split}")
-if str(half).strip().lower() in {"1", "true", "yes", "on"}:
-    cmd.append("--half")
-if int(max_images) > 0:
-    cmd.extend(["--max-images", str(int(max_images))])
-if bool(best.get("valid_before_maxdet", False)):
-    cmd.append("--valid-before-maxdet")
-
-print("[diag] " + " ".join(shlex.quote(part) for part in cmd), flush=True)
-subprocess.run(cmd, check=True)
-PY
-}
-
 write_protocol_summary() {
   python - \
     "${RUN_NAME}" \
     "${OFFICIAL_BEST_WEIGHTS}" "${OFFICIAL_BEST_SWEEP_DIR}" "${OFFICIAL_BEST_TEST_DIR}" \
     "${BEST_WEIGHTS}" "${BEST_SWEEP_DIR}" "${BEST_TEST_DIR}" \
-    "${OFFICIAL_BEST_VAL_DIAG_DIR}" "${BEST_VAL_DIAG_DIR}" \
-    "${OFFICIAL_BEST_TEST_DIAG_DIR}" "${BEST_TEST_DIAG_DIR}" \
     "${PROTOCOL_SUMMARY}" <<'PY'
 import json
 import sys
@@ -416,10 +294,6 @@ from pathlib import Path
     best_weights,
     best_sweep_dir,
     best_test_dir,
-    official_best_val_diag_dir,
-    best_val_diag_dir,
-    official_best_test_diag_dir,
-    best_test_diag_dir,
     protocol_summary,
 ) = sys.argv[1:]
 
@@ -442,38 +316,13 @@ def package(label: str, weights: str, sweep_dir: str, test_dir: str) -> dict:
     }
 
 
-def diagnostic_package(save_dir: str) -> dict | None:
-    summary = Path(save_dir) / "raw_q12_filter_summary.json"
-    if not summary.exists():
-        return None
-    return {
-        "save_dir": save_dir,
-        "summary": str(summary),
-        "raw_gt_lane_diagnostics": str(Path(save_dir) / "raw_gt_lane_diagnostics.csv"),
-        "per_image_filter_trace": str(Path(save_dir) / "per_image_filter_trace.csv"),
-        "raw_ape_group_summary": str(Path(save_dir) / "raw_ape_group_summary.csv"),
-        "point_valid_group_summary": str(Path(save_dir) / "point_valid_group_summary.csv"),
-    }
-
-
 output = {
     "run_name": run_name,
     "primary_checkpoint": "official_best.pt",
     "selection_split": "official-val",
     "test_usage": "reporting_only_from_each_val_selected_decode",
     "do_not_select_from_test": True,
-    "test_diagnostic_usage": "reporting_only_with_allow_test_oracle_not_for_selection",
     "best_pt_test_role": "reporting_only_not_selection",
-    "weak_positive_geom_params": {
-        "gcs_short_geom": 1.0,
-        "gcs_short_geom_visible_thr": 20,
-        "gcs_short_geom_gt4_weight": 1.5,
-        "gcs_short_geom_gt5_weight": 2.0,
-        "gcs_short_geom_max_weight": 3.0,
-        "gcs_short_geom_curve": 1.0,
-        "gcs_gt5_short_visible_thr": 10,
-        "gcs_gt5_short_point_valid_weight": 1.25,
-    },
     "mask_v2_params": {
         "gcs_boundary_pseudo_neg": 0.02,
         "gcs_boundary_pseudo_dist_thr": 80,
@@ -484,12 +333,6 @@ output = {
     },
     "official_best": package("official_best.pt", official_best_weights, official_best_sweep_dir, official_best_test_dir),
     "best": package("best.pt", best_weights, best_sweep_dir, best_test_dir),
-    "diagnostics": {
-        "official_best_val": diagnostic_package(official_best_val_diag_dir),
-        "best_val": diagnostic_package(best_val_diag_dir),
-        "official_best_test": diagnostic_package(official_best_test_diag_dir),
-        "best_test": diagnostic_package(best_test_diag_dir),
-    },
 }
 Path(protocol_summary).parent.mkdir(parents=True, exist_ok=True)
 Path(protocol_summary).write_text(json.dumps(output, indent=2), encoding="utf-8")
@@ -505,13 +348,10 @@ PY
 }
 
 echo "Run name: ${RUN_NAME}"
-echo "Weak-positive geometry params: short_geom=1.0 visible_thr=20 gt4_weight=1.5 gt5_weight=2.0 max_weight=3.0 curve=1.0 gt5_point_valid_weight=1.25"
 echo "Mask-v2 boundary pseudo params: neg=0.02 dist_thr=80 min_valid=4 score_thr=0.2 envelope_margin_px=30 envelope_ratio_thr=0.75"
 echo "Selection GT: ${GT_JSON}"
 echo "Training-time official_best and post-train sweeps use tools/sweep_tusimple_official_cached.py."
 echo "RUN_TESTS=${RUN_TESTS}: official test is reporting-only and must stay off until official-val and diagnostics pass."
-echo "RUN_DIAGNOSTICS=${RUN_DIAGNOSTICS}: val raw-Q12 diagnostics are selection-support diagnostics only."
-echo "RUN_TEST_DIAGNOSTICS=${RUN_TEST_DIAGNOSTICS}: test raw-Q12 diagnostics use --allow-test-oracle and are reporting-only."
 
 if is_true "${RUN_TRAIN}"; then
   run_train
@@ -521,21 +361,9 @@ fi
 
 run_val_sweep "official_best.pt" "${OFFICIAL_BEST_WEIGHTS}" "${OFFICIAL_BEST_SWEEP_DIR}"
 run_val_sweep "best.pt" "${BEST_WEIGHTS}" "${BEST_SWEEP_DIR}"
-if is_true "${RUN_DIAGNOSTICS}"; then
-  run_raw_q12_diag_from_sweep "official_best.pt val" "${OFFICIAL_BEST_WEIGHTS}" "${OFFICIAL_BEST_SWEEP_DIR}" "val" "${OFFICIAL_BEST_VAL_DIAG_DIR}" "${VAL_MAX_IMAGES}"
-  run_raw_q12_diag_from_sweep "best.pt val" "${BEST_WEIGHTS}" "${BEST_SWEEP_DIR}" "val" "${BEST_VAL_DIAG_DIR}" "${VAL_MAX_IMAGES}"
-else
-  echo "RUN_DIAGNOSTICS=0: skipping val raw-Q12 diagnostics." >&2
-fi
 if is_true "${RUN_TESTS}"; then
   run_test_from_sweep "official_best.pt" "${OFFICIAL_BEST_WEIGHTS}" "${OFFICIAL_BEST_SWEEP_DIR}" "${OFFICIAL_BEST_TEST_DIR}"
   run_test_from_sweep "best.pt" "${BEST_WEIGHTS}" "${BEST_SWEEP_DIR}" "${BEST_TEST_DIR}"
-  if is_true "${RUN_TEST_DIAGNOSTICS}"; then
-    run_raw_q12_diag_from_sweep "official_best.pt test" "${OFFICIAL_BEST_WEIGHTS}" "${OFFICIAL_BEST_SWEEP_DIR}" "test" "${OFFICIAL_BEST_TEST_DIAG_DIR}" "${TEST_MAX_IMAGES}"
-    run_raw_q12_diag_from_sweep "best.pt test" "${BEST_WEIGHTS}" "${BEST_SWEEP_DIR}" "test" "${BEST_TEST_DIAG_DIR}" "${TEST_MAX_IMAGES}"
-  else
-    echo "RUN_TEST_DIAGNOSTICS=0: skipping test raw-Q12 diagnostics." >&2
-  fi
   write_protocol_summary
 else
   echo "RUN_TESTS=0: skipping official test and test protocol summary." >&2

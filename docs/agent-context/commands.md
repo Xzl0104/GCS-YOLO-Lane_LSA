@@ -26,24 +26,144 @@ The q12-k56-named model/data files are compatibility paths for old experiment re
 
 The 5-25-3 branch now includes explicit branch-local `--gcs-official-best` training-time checkpoint selection. It does not include later mainline Count/Quality/Survival, near-miss, or K56 candidate machinery. The only Count Head available on this branch is the 2026-07-06 user-requested, default-off query Count Head ablation enabled by `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-count.yaml`. It also includes branch-local TuSimple official eval/sweep helpers: `tools/eval_tusimple_official.py`, `tools/sweep_tusimple_official_cached.py`, and `tools/sweep_tusimple_official.py`. New threshold scans should use the cached helper.
 
-Active source/config is rolled back to commit `424ab1c86` (`Add
-valid-before-maxdet decode option`). Sections below that mention
-post-`424ab1c86` mechanisms such as short-side hardset diagnostics,
-`gcs_short_side_geom`, `gcs_far_spurious_neg`, `gcs_farspur_*`,
-`gcs_shortside_*`, `gcs_rank_*`, count-contract diagnostics, Q18/Q20/dataref
-configs, Count Head, count-guided decode, side-aux, or GT4-hard diagnostics
-are legacy experiment records only. They are not commands for the current code
-state unless a future task explicitly restores those commits.
+Active source/config is rolled back to commit `86c8fb31c` (`Add GT4 GT5 weak
+geometry rescue run`). The active env30-family scripts at this boundary are:
+
+```text
+scripts/run_query_alpha05_gt5short_geom_w2_bneg002_env30_nocount_v1.sh
+scripts/run_query_alpha05_gt4gt5weak_geom_w15w2_env30_nocount_v1.sh
+```
+
+Sections below that mention post-`86c8fb31c` tiered rescue, Q12 ultrashort
+dataref, final-query extra guard/gate, router/selector experiments, Q18/Q20
+dataref configs, side-aux, or GT4-hard diagnostics are rejected legacy
+experiment records only. Their scripts/YAMLs/reference banks have been removed
+from the active worktree by the rollback and are not commands for the current
+code state unless a future task explicitly restores those commits.
+
+## Q12 Ultrashort q1/q3-Protected Dataref Diagnostic
+
+This post-`86c8fb31c` diagnostic has been completed and rejected. Its script,
+YAML, and reference bank were removed from the active rollback state; keep the
+launch command only as a historical record, not as a runnable current command:
+
+```bash
+bash scripts/run_query_alpha05_env30_q12_ultrashort_q1q3protected_dataref_geom1_extraguard_v1.sh
+```
+
+Model, bank, and static audit:
+
+```text
+model = ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-ultrashort-dataref-q1q3protected-v1.yaml
+bank = data/gcs_reference_banks/q12_ultrashort_env30_train_q1q3protected_v1.json
+audit = data/gcs_reference_banks/q12_ultrashort_env30_train_q1q3protected_v1_reference_audit.json
+```
+
+Default safety settings:
+
+```text
+RUN_TESTS=0
+ENFORCE_REFERENCE_GATE=1
+ENFORCE_PRETRAINED_GATE=1
+ENFORCE_FINAL_QUERY_EXTRA_GATE=1
+FINAL_EXTRA_DIAG_FOCUS_QUERIES=4,5,6,7,8,10
+FINAL_EXTRA_GATE_FOCUS_GT5_TO6_QUERIES=4,5,6,7,8,10
+FINAL_EXTRA_GATE_TOTAL_EXTRA_QUERIES=4,5
+FINAL_EXTRA_GATE_TOTAL_EXTRA_MAX=2
+FINAL_EXTRA_GATE_TRAIN_WATCH_QUERIES=4,5
+```
+
+The local static gate passed for the then-committed bank/audit, but the remote
+diagnostic failed the official-val gate below. If a future task explicitly
+restores this legacy line for reproduction or audit, keep the remote preflight
+and model-shape checks:
+
+```bash
+PREFLIGHT_ONLY=1 \
+bash scripts/run_query_alpha05_env30_q12_ultrashort_q1q3protected_dataref_geom1_extraguard_v1.sh
+
+python tools/check_model.py \
+  --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-ultrashort-dataref-q1q3protected-v1.yaml \
+  --imgsz 544 960 \
+  --batch 1 \
+  --device cpu
+```
+
+The script enforces the rejected diagnostic protocol:
+
+```text
+static reference audit
+-> train with official_best
+-> official_best official-val sweep
+-> best.pt official-val sweep
+-> official_best and best.pt final-query extra diagnostics on official-val
+-> official_best train0601/train0531 final-query q4/q5 diagnostics
+-> env30 baseline final-query diagnostics
+-> tools/check_gcs_final_query_extra_gate.py with q4/q5 watch queries
+-> reporting-only TEST only when the gate passes and RUN_TESTS=1
+```
+
+This candidate is not a promotion and should not be relaunched as the next
+training line. It was allowed only as an official-val/train diagnostic because
+historical proxy evidence showed q4/q5 could become new GT4/GT5 extra-lane
+carriers, then it failed the official-val gate. Do not run TEST for it. TEST
+remains reporting-only for future candidates that have already passed
+official-val/train gates and must not be used for any checkpoint, threshold,
+decode, loss, sampler, or structure choice.
+
+Completed rejection:
+
+```text
+run = query_alpha05_env30_q12_ultrashort_q1q3protected_dataref_geom1_extraguard_v1
+remote run dir =
+  /root/GCS-YOLO-Lane_LSA_5-25-3-k56/runs/gcs_lane/query_alpha05_env30_q12_ultrashort_q1q3protected_dataref_geom1_extraguard_v1
+process = early-stopped with TERM after 18 complete results.csv rows,
+  while epoch19 was running
+primary checkpoint = weights/official_best.pt
+official_best source_epoch = 15
+selected decode = conf 0.001, point_valid_thr 0.6, nms_dist_px 0,
+  max_det 5, min_points 3, valid_before_maxdet true
+official_best val ACC/FP/FN = 0.949375 / 0.113682 / 0.047980
+official_best val count_acc_3/4/5 =
+  0.726457 / 0.681818 / 0.959459
+official_best val count_confusion includes 4->5 21, 5->4 3
+epoch015 sweep rows with ACC >= env30 0.973330 = 0 / 864
+epoch015 sweep rows with FN <= env30 0.009642 = 0 / 864
+epoch015 sweep rows passing count-shape gate = 0 / 864
+best epoch015 max_det=6 row ACC/FP/FN =
+  0.947559 / 0.133976 / 0.047291
+best epoch015 max_det=6 row includes 4->5 12, 4->6 9, 5->6 69
+selected max_det=5 final-query diagnostic =
+  runs/gcs_lane/query_alpha05_env30_q12_ultrashort_q1q3protected_dataref_geom1_extraguard_v1_official_best_val_final_query_extra_valid_before_maxdet
+selected max_det=5 final-query over/under = 82 / 3 images
+selected max_det=5 extra_topk/far/duplicate = 94 / 84 / 3 lanes
+selected max_det=5 extra carrier hist =
+  q11 33, q6 18, q0 13, q5 7, q1 6, q9 6, q7 5, q8 5, q2 1
+diagnostic max_det=6 final-query diagnostic =
+  runs/gcs_lane/query_alpha05_env30_q12_ultrashort_q1q3protected_dataref_geom1_extraguard_v1_epoch015_val_final_query_extra_maxdet6_diag
+diagnostic max_det=6 final-query over/under = 151 / 3 images
+diagnostic max_det=6 extra_topk/far/duplicate = 173 / 156 / 6 lanes
+diagnostic max_det=6 GT5 5->6 carrier hist =
+  q1 22, q6 21, q5 13, q11 9, q8 3, q9 1
+TEST artifacts = none
+```
+
+Decision: reject this q1/q3-protected diagnostic line. Do not rerun or continue
+it to 220 epochs, do not run TEST, and do not tune decode, loss, sampler, or
+reference assignment from this failed official-val evidence. The carrier
+diagnostics show a distributed clear-far over-count failure, not a q4/q5-only
+swap failure or a simple duplicate/NMS failure.
 
 ## Q12 Ultrashort Dataref v2 + Final Extra Guard Run
 
-The default-off v2 candidate is launched through:
+This post-`86c8fb31c` v2 candidate is rejected and its launch script was
+removed from the active rollback state. The historical launch path was:
 
 ```bash
 bash scripts/run_query_alpha05_env30_q12_ultrashort_dataref_geom1_extraguard_v2.sh
 ```
 
-The script's static reference gate uses the committed audit copy:
+The script's static reference gate used the then-committed audit copy:
 
 ```text
 data/gcs_reference_banks/q12_ultrashort_env30_train_v2_reference_audit.json
@@ -89,6 +209,174 @@ gcs_final_extra_guard_scope = 1,3,4,5,6,7,8
 
 Do not use final-query extra diagnostics on TEST for selection. TEST remains
 reporting-only after the official-val/train gate passes.
+
+Quantity semantics for final-query extra diagnostics:
+
+```text
+official over-image count = images where decoded pred_lanes > gt_lanes
+official_FP = TuSimple official metric false-positive rate
+extra_topk_candidate / extra_topk_lanes = approximate post-decode GT diagnostic
+nearest_ref/query histograms = likely source attribution, not official FP
+```
+
+The final-query extra diagnostic uses GT after decode to attribute likely extra
+lane sources. It is useful for failure localization and gate checks on
+official-val/train, but the query histogram is not an exact FP counter. If this
+diagnostic is run on TEST for reporting after a candidate has already been
+selected on official-val, treat the result as reporting-only and never use it
+to choose thresholds, checkpoints, loss gains, query assignments, guards, or
+decode settings.
+
+Completed result:
+
+```text
+run = query_alpha05_env30_q12_ultrashort_dataref_geom1_extraguard_v2
+training stopped at epoch 154
+primary checkpoint = weights/official_best.pt
+selected decode = conf 0.001, point_valid_thr 0.55, nms_dist_px 30,
+  max_det 6, min_points 2, valid_before_maxdet true
+official_best val ACC/FP/FN = 0.972040 / 0.023691 / 0.011938
+official_best val count_acc_3/4/5 = 0.968610 / 0.939394 / 0.810811
+official_best val count_confusion includes 4->5 2, 4->6 1, 5->6 12
+best.pt val ACC/FP/FN = 0.966947 / 0.053444 / 0.018136
+best.pt val count_confusion includes 4->5 9, 4->6 3, 5->6 26
+final_query_extra_gate.pass = false
+TEST artifacts = none
+```
+
+The final-query extra gate failed on official-val overcount and train0601 q4
+far-extra checks:
+
+```text
+official-val over_images = 22 vs env30 7, limit 10
+official-val GT5 5->6 extra = 12, limit 0
+official-val GT4 4->6 extra = 2, limit 0
+official-val GT4 4->5 extra = 2 vs env30 0
+official-val focus-query GT5 5->6 extra for q1/q3/q5/q6/q8 = 8, limit 0
+official-val q5+q6 total extra = 5, limit 2
+train0601 q4 far extra = 4 vs env30 0
+```
+
+Decision: do not rerun TEST from this candidate. If this artifact is reused for
+analysis, use `RUN_TRAIN=0` and keep any follow-up to official-val/train
+diagnostics until a new candidate passes the gate.
+
+Completed read-only focus-query trace audit:
+
+```text
+v2 official-val focus q3/q4/q6/q7 extra = 15
+  q3 6, q4 3, q6 5, q7 1
+  transitions: 3->4 2, 4->6 2, 5->6 11
+  class: clear_far 8, near_gt_nonduplicate 7, duplicate_like 0
+
+env30 official-val focus q3/q4/q6/q7 extra = 0
+
+v2 train0601 focus q3/q4/q6/q7 extra = 57
+  q3 19, q4 9, q6 15, q7 14
+  transitions: 3->4 1, 4->5 10, 5->6 46
+  class: clear_far 28, near_gt_nonduplicate 29, duplicate_like 0
+
+env30 train0601 focus q3/q4/q6/q7 extra = 0
+
+v2 train0531 focus q3/q4/q6/q7 extra = 2
+  q6 1, q7 1, both 4->6 clear_far
+
+env30 train0531 focus q3/q4/q6/q7 extra = 0
+```
+
+Official-val sweep rescue is rejected:
+
+```text
+v2 sweep rows = 864
+rows with ACC >= env30 0.973330 = 0
+rows passing count-shape gate
+  (4->5=0, 4->6=0, 5->4<=1, 5->6=0, FN<=0.009642) = 0
+best 5->6=0 row ACC/FP/FN = 0.971993 / 0.017355 / 0.011938
+best 5->6=0 row still has 4->5=2 and 5->4=2
+```
+
+Use these artifacts only for official-val/train diagnosis. Do not use them to
+select TEST behavior, and do not launch another v2-derived training run until a
+specific static counterfactual has evidence that it can reduce q3/q4/q6/q7
+extras without suppressing true short GT5 lanes.
+
+## Env30 Count-Restore Official-Val-Only Ablation Template
+
+The env30 reference already has GT5 short geometry active:
+
+```text
+gcs_short_geom = 1.0
+gcs_short_geom_gt5_weight = 2.0
+```
+
+Therefore "opening geo like env30" is not a missing switch for the env30
+reference, and the ultrashort dataref geom runs already restored the intended
+geometry pressure. The remaining small ablation worth testing is count
+restoration on top of env30, selected only on official-val.
+
+Do not run this ablation through
+`scripts/run_query_alpha05_gt5short_geom_w2_bneg002_env30_nocount_v1.sh` by
+assuming shell variables can override the count losses. That script hardcodes:
+
+```text
+gcs_count = 0.0
+gcs_count_under5 = 0.0
+gcs_count_boundary = 0.0
+gcs_query_count_ce = 0.0
+```
+
+Use a dedicated reviewed script or direct `tools/train_gcs.py` command that
+keeps the env30 protocol and changes only these count gains:
+
+```text
+base = env30 protocol
+keep current GT5 geometry and env30 boundary mask
+gcs_count = 0.3
+gcs_count_under5 = 0.3
+gcs_count_boundary = 0.2
+gcs_query_count_ce = 0.0
+RUN_TESTS = 0
+```
+
+Do not combine this first count-restore ablation with GT4 point-valid rescue,
+broader tiered GT4/GT5 geometry, query binding, new dataref references, or TEST
+selection.
+
+Promotion gate:
+
+```text
+official-val ACC >= env30 0.973330
+official-val FN <= env30 0.009642
+official-val GT4 4->5 = 0
+official-val GT5 5->4 <= 1
+official-val GT5 5->6 = 0 under max_det=6 rows
+raw-Q12 short GT4/GT5 geometry and point-valid survival do not regress
+```
+
+Completed rejection:
+
+```text
+run = query_alpha05_gt5short_geom_w2_bneg002_env30_countrestore_v1
+remote run dir =
+  /root/GCS-YOLO-Lane_LSA_5-25-3-k56/runs/gcs_lane/query_alpha05_gt5short_geom_w2_bneg002_env30_countrestore_v1
+process = early-stopped with TERM after 22 complete results.csv rows,
+  while epoch23 was running
+official_best source_epoch = 20
+official_best decode = conf 0.001, point_valid_thr 0.6, nms_dist_px 30,
+  max_det 5, min_points 5, valid_before_maxdet true
+official_best val ACC/FP/FN = 0.944877 / 0.096740 / 0.063131
+official_best val count_acc_3/4/5 =
+  0.865471 / 0.833333 / 0.918919
+official_best val count_confusion includes 4->5 10, 5->4 6
+best max_det=6 epoch020 row ACC/FP/FN =
+  0.942369 / 0.108907 / 0.064279
+best max_det=6 epoch020 row includes 4->5 12, 5->6 44
+TEST artifacts = none
+```
+
+Decision: reject this count-restore line. It stays far below env30 on
+official-val ACC/FP/FN, does not meet the GT4/GT5 count-shape gate, and should
+not be continued to 220 epochs or evaluated on TEST.
 
 ## Query Count Head CE0.5 Run
 
@@ -146,9 +434,10 @@ or loss-gain tuning.
 
 ## Query Alpha05 GT4/GT5 Tiered Geometry Env30 Rejected Run
 
-The tiered GT4/GT5 + GT4 point-valid follow-up after the env30
-boundary-mask diagnostic has been completed and rejected. Keep these commands
-only for reproduction or audit:
+The post-`86c8fb31c` tiered GT4/GT5 + GT4 point-valid follow-up after the
+env30 boundary-mask diagnostic has been completed and rejected. Its scripts
+were removed from the active rollback state; keep these commands only as
+historical records unless a future task explicitly restores them:
 
 ```bash
 cd /root/GCS-YOLO-Lane_LSA_5-25-3-k56
@@ -255,12 +544,12 @@ RUN_TRAIN=0 OVERWRITE_SWEEPS=1 OVERWRITE_DIAGNOSTICS=1 \
 bash scripts/run_query_alpha05_gt4gt5_tiered_geom_gt4pv12_env30_nocount_v1.sh
 ```
 
-The previous tiered GT5-only point-valid wrapper
+The previous post-`86c8fb31c` tiered GT5-only point-valid wrapper
 `scripts/run_query_alpha05_gt4gt5_tiered_geom_env30_nocount_v1.sh`
-remains available for reproducing the tiered-geometry + GT5PV setup without
-GT4 point-valid rescue.
+was removed from the active rollback state and remains only a rejected legacy
+record.
 
-The previous non-tiered script
+The previous non-tiered script retained at the active rollback boundary
 `scripts/run_query_alpha05_gt4gt5weak_geom_w15w2_env30_nocount_v1.sh`
 remains available for reproducing the legacy single-threshold w15/w2 run.
 
@@ -1538,7 +1827,7 @@ Use this test result only as final reporting evidence for the previous `count03_
 
 ## Legacy Train/Val Count-Confusion Diagnostic
 
-The 2026-06-20 train/val diagnostic for `count03_under5_03` groups decoded lane-count confusion by date, GT lane count, and the shortest visible GT lane bucket. It is a legacy diagnostic; `tools/diagnose_tusimple_count_confusion.py` is not present in the active `424ab1c86` rollback code. It used the frozen official-val selected decode and did not touch final test:
+The 2026-06-20 train/val diagnostic for `count03_under5_03` groups decoded lane-count confusion by date, GT lane count, and the shortest visible GT lane bucket. It is a legacy diagnostic; `tools/diagnose_tusimple_count_confusion.py` is not present in the active `86c8fb31c` rollback code. It used the frozen official-val selected decode and did not touch final test:
 
 ```text
 output: runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_visible_iou_count03_under5_03_count_confusion_train_val_by_visibility/summary.json
@@ -1677,7 +1966,7 @@ short-lane failure trace. The main outputs are `summary.json`,
 ## Legacy GT4 Short-Lane Weighted Training
 
 The GT4 short-lane sampler boost was an explicit post-`b6535f641`
-experimental option. It is not present in the active `424ab1c86` rollback code. Historical
+experimental option. It is not present in the active `86c8fb31c` rollback code. Historical
 defaults were:
 
 ```text
@@ -2178,7 +2467,7 @@ NMS, checkpoint, decode, target floor, or loss weights from this test.
 
 Legacy Q18/count-head guided sweeps used the same
 official-val surface and kept normal/count-guided rows in one sweep table.
-These flags are not available in the active `424ab1c86` rollback code:
+These flags are not available in the active `86c8fb31c` rollback code:
 
 ```bash
 python tools/sweep_tusimple_official.py \
