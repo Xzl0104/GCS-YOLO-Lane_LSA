@@ -797,6 +797,8 @@ def main() -> None:
         "gcs_gt5_short_point_valid_weight": args.gcs_gt5_short_point_valid_weight,
         "gcs_short_geom": args.gcs_short_geom,
         "gcs_short_geom_visible_thr": args.gcs_short_geom_visible_thr,
+        "gcs_short_geom_focus_visible_thr": args.gcs_short_geom_focus_visible_thr,
+        "gcs_short_geom_focus_weight": args.gcs_short_geom_focus_weight,
         "gcs_short_geom_gt4_weight": args.gcs_short_geom_gt4_weight,
         "gcs_short_geom_gt5_weight": args.gcs_short_geom_gt5_weight,
         "gcs_short_geom_max_weight": args.gcs_short_geom_max_weight,

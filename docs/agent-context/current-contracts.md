@@ -483,21 +483,17 @@ logs the unweighted GT5 undercount boundary term.
 
 `boundary_pseudo_neg_loss` is disabled by default through
 `gcs_boundary_pseudo_neg=0.0`. When enabled, it requires `pred_valid_logits`
-and applies only to unmatched queries on images whose GT lane count equals
+and applies only to unmatched queries on images whose GT lane count is at least
 `gcs_boundary_pseudo_gt_count`. Candidate queries must have predicted-visible
 anchor count in `[gcs_boundary_pseudo_min_valid, gcs_boundary_pseudo_visible_thr]`,
-existence score at least `gcs_boundary_pseudo_score_thr`, nearest GT lane equal
-to the leftmost or rightmost GT lane, and nearest-GT mean x distance at least
-`gcs_boundary_pseudo_dist_thr`. `gcs_boundary_pseudo_envelope_margin_px=-1.0`
-preserves the old mask. When set to a non-negative margin, the envelope gate is
-computed on query/GT common-visible anchors. For each such anchor, the left and
-right GT envelope is the minimum and maximum valid GT x at that fixed-y anchor.
-A left-boundary candidate must have at least
-`gcs_boundary_pseudo_envelope_ratio_thr` of common-visible anchors left of
-`left_env_x - margin`; a right-boundary candidate must have at least that ratio
-right of `right_env_x + margin`. This changes only the training loss candidate
-mask; it does not change model outputs, matcher assignment, labels, decode,
-NMS, or official metrics.
+existence score at least `gcs_boundary_pseudo_score_thr`, and minimum mean x
+distance from every GT lane at least `gcs_boundary_pseudo_dist_thr`.
+`gcs_boundary_pseudo_envelope_margin_px=-1.0` preserves the old mask. When set
+to a non-negative margin, the envelope gate is computed on query/GT
+common-visible anchors and requires the query to stay outside the GT envelope
+by at least the configured margin for a sufficient fraction of anchors. This
+changes only the training loss candidate mask; it does not change model outputs,
+matcher assignment, labels, decode, NMS, or official metrics.
 
 ### Legacy Post-424 Loss And Diagnostic Records
 
@@ -622,36 +618,34 @@ Hungarian ultra-short rawmatch base boost is not blocked by
 Hungarian raw-close matches are reported separately through
 `shortside_hungarian_rawmatch_candidate_count`.
 
-`gcs_gt4_short_visible_thr=0`,
-`gcs_gt4_short_point_valid_weight=1.0`,
-`gcs_gt5_short_visible_thr=0`, and
-`gcs_gt5_short_point_valid_weight=1.0` keep GT4/GT5 short point-valid rescue
-effectively disabled by default. When enabled, the point-valid BCE keeps the
-same global target structure, applies only during training, only on images
-with `GT lane count == 4` or `GT lane count == 5`, only on Hungarian-matched GT
-lanes whose visible anchor count is at or below that GT-count-specific
-threshold, and only multiplies the BCE weight for visible `target_valid == 1`
-anchors. The GT4/GT5 short point-valid weights are rescue-only controls and
-must be `>= 1.0`; values below `1.0` are rejected instead of silently weakening
-visible positives. It does not change point regression, smooth, curve, mask, edge,
-dataset, dataloader, matcher, decode, NMS, official metrics, or validation loss
-weighting. `gt5_short_pos_count`, `gt5_short_pos_anchor_count`,
-`gt5_short_point_valid_loss`, `gt4_short_pos_count`,
-`gt4_short_pos_anchor_count`, and `gt4_short_point_valid_loss` are diagnostics
-for the rescued anchors. The GT4 diagnostics are appended after the historical
-loss columns to preserve old log-column positions.
+`gcs_gt5_short_visible_thr=0` and
+`gcs_gt5_short_point_valid_weight=1.0` keep the legacy GT5-only point-valid
+rescue effectively disabled by default. The active short-rescue path is
+`gcs_short_geom`. When enabled, `gcs_short_geom` applies to Hungarian-matched
+images with `GT lane count == 4` or `GT lane count == 5`, first to GT lanes
+whose visible anchor count is at or below `gcs_short_geom_visible_thr`, then
+with a stronger multiplier for lanes at or below
+`gcs_short_geom_focus_visible_thr`. GT4 and GT5 can be weighted separately
+through `gcs_short_geom_gt4_weight` and `gcs_short_geom_gt5_weight`. The same
+short-rescue weights are used by `point_loss`, `curve_loss`, and the positive
+anchor side of `point_valid_loss`; they do not change point regression, smooth,
+mask, edge, dataset, dataloader, matcher, decode, NMS, or official metrics.
+`gt5_short_pos_count`, `gt5_short_pos_anchor_count`, and
+`gt5_short_point_valid_loss` are diagnostics for the rescued anchors.
 
 `gcs_short_geom=0.0` keeps the default query point/curve geometry losses
 unchanged. When explicitly enabled, `gcs_short_geom` applies only inside
 training loss calculation for Hungarian-matched images with `GT lane count == 4`
 or `GT lane count == 5`, only to GT lanes whose visible anchor count is at or
-below `gcs_short_geom_visible_thr`, and only by lane-level weighting inside
-`point_loss` and `curve_loss`. The GT4 path is default-off through
-`gcs_short_geom_gt4_weight=1.0`; GT5 keeps the existing
-`gcs_short_geom_gt5_weight` behavior. It does not change model outputs, matcher
-assignment, smooth loss, point-valid BCE targets, mask/edge losses, dataset,
-dataloader, decode, NMS, official metrics, Count Head, or loss item count.
-The geometry boost has no side-lane/order assumption.
+below `gcs_short_geom_visible_thr`, and with an extra stronger multiplier via
+`gcs_short_geom_focus_weight` for lanes at or below
+`gcs_short_geom_focus_visible_thr`. GT4 and GT5 remain separately weighted
+through `gcs_short_geom_gt4_weight` and `gcs_short_geom_gt5_weight`. It does not
+change model outputs, matcher assignment, smooth loss, mask/edge losses,
+dataset, dataloader, decode, NMS, official metrics, Count Head, or loss item
+count. The same short-rescue weights are shared by `point_loss`, `curve_loss`,
+and the positive-anchor side of `point_valid_loss`. The geometry boost has no
+side-lane/order assumption.
 
 `gcs_short_geom_tiered=False` preserves the legacy single-threshold
 `gcs_short_geom_visible_thr` path above. When explicitly enabled, the helper

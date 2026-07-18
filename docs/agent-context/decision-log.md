@@ -4597,6 +4597,36 @@ Promotion gates used for that follow-up:
 - train GT4->5 must drop below `38`;
 - official test remains closed until official-val and train/val diagnostics
   pass, and any later test is reporting-only.
+## 2026-07-19: Switch short rescue and clear-far guard to the exact training contract
+
+Decision:
+
+Make the short-lane positive rescue explicit as a two-threshold contract and
+move the extra negative guard to clear-far unmatched queries.
+
+Implementation scope:
+
+- `gcs_short_geom` now uses an outer visible-anchor threshold plus a focus
+  threshold, with an extra `gcs_short_geom_focus_weight` multiplier for the
+  focus bucket.
+- GT4 and GT5 keep separate short-rescue weights, and the same rescue weights
+  are shared by `point_loss`, `curve_loss`, and the positive-anchor side of
+  `point_valid_loss`.
+- `boundary_pseudo_neg_loss` now selects unmatched clear-far queries by
+  distance to all GT lanes instead of left/right boundary pseudo lanes, while
+  keeping the optional envelope protection.
+- Updated the training entry, default config, contract notes, and the short
+  geom self-check script to match the new behavior.
+
+Validation:
+
+- `D:\miniconda3\envs\lsa_yolo\python.exe -m py_compile
+  ultralytics\utils\gcs_loss.py tools\train_gcs.py
+  tools\check_gcs_short_geom_loss.py`
+- `D:\miniconda3\envs\lsa_yolo\python.exe tools\check_gcs_short_geom_loss.py`
+- `D:\miniconda3\envs\lsa_yolo\python.exe tools\check_model.py --cfg
+  ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml --imgsz 544 960 --batch 1
+  --device cpu`
 
 ## 2026-07-10: Use cached official-val sweep for threshold selection
 

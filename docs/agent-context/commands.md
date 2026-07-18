@@ -609,6 +609,14 @@ If `batch=32` OOMs on the target machine, reduce batch only for OOM/instability 
 
 `--no-amp` is included because the current remote run hit an Ultralytics AMP self-check failure while loading `yolo26n.pt`. If that server cache/checkpoint issue is fixed, AMP may be re-enabled only with a run note.
 
+For the interval-2 version of the same full protocol, use:
+
+```bash
+bash scripts/run_gt5_short_geom_full_protocol_interval2_v1.sh
+```
+
+It keeps the same training recipe, but scans every 2 epochs, then runs the post-train official-val sweeps and final test reports for both `official_best.pt` and `best.pt`.
+
 ## Completed E2 Short0601 Hard-Sampling Result
 
 The E2 hard-sampling run from the E1 count-boundary checkpoint is rejected for
