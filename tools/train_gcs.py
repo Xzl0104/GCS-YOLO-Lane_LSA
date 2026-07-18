@@ -450,7 +450,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Extra point-valid BCE multiplier for visible anchors of matched short GT5 lanes.",
     )
     parser.add_argument("--gcs-short-geom", type=float, default=0.0)
-    parser.add_argument("--gcs-short-geom-visible-thr", type=int, default=10)
+    parser.add_argument("--gcs-short-geom-visible-thr", type=int, default=20)
+    parser.add_argument("--gcs-short-geom-focus-visible-thr", type=int, default=10)
+    parser.add_argument("--gcs-short-geom-focus-weight", type=float, default=1.5)
     parser.add_argument("--gcs-short-geom-gt4-weight", type=float, default=1.0)
     parser.add_argument("--gcs-short-geom-gt5-weight", type=float, default=2.0)
     parser.add_argument("--gcs-short-geom-max-weight", type=float, default=3.0)
