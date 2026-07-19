@@ -355,6 +355,7 @@ class GCSLoss(nn.Module):
         self.boundary_pseudo_valid_thr = float(self._arg(args, "gcs_boundary_pseudo_valid_thr", 0.5))
         self.boundary_pseudo_min_valid = int(self._arg(args, "gcs_boundary_pseudo_min_valid", 3))
         self.boundary_pseudo_gt_count = int(self._arg(args, "gcs_boundary_pseudo_gt_count", 5))
+        self.boundary_pseudo_max_gt_count = int(self._arg(args, "gcs_boundary_pseudo_max_gt_count", 0))
         self.boundary_pseudo_score_thr = float(self._arg(args, "gcs_boundary_pseudo_score_thr", 0.0))
         self.boundary_pseudo_envelope_margin_px = float(
             self._arg(args, "gcs_boundary_pseudo_envelope_margin_px", -1.0)
@@ -398,6 +399,16 @@ class GCSLoss(nn.Module):
             raise ValueError("gcs_boundary_pseudo_min_valid must be >= 0.")
         if self.boundary_pseudo_gt_count < 0:
             raise ValueError("gcs_boundary_pseudo_gt_count must be >= 0.")
+        if self.boundary_pseudo_max_gt_count < 0:
+            raise ValueError("gcs_boundary_pseudo_max_gt_count must be >= 0.")
+        if (
+            self.boundary_pseudo_max_gt_count > 0
+            and self.boundary_pseudo_gt_count > self.boundary_pseudo_max_gt_count
+        ):
+            raise ValueError(
+                "gcs_boundary_pseudo_gt_count must be <= gcs_boundary_pseudo_max_gt_count when the max bound is set, "
+                f"got {self.boundary_pseudo_gt_count} > {self.boundary_pseudo_max_gt_count}."
+            )
         if self.boundary_pseudo_score_thr < 0.0:
             raise ValueError("gcs_boundary_pseudo_score_thr must be >= 0.")
         if self.boundary_pseudo_envelope_margin_px < -1.0:
@@ -1227,6 +1238,8 @@ class GCSLoss(nn.Module):
         for b in range(bsz):
             gt_count_b = int(round(float(gt_lanes[b].detach().cpu().item())))
             if gt_count_b < int(self.boundary_pseudo_gt_count):
+                continue
+            if int(self.boundary_pseudo_max_gt_count) > 0 and gt_count_b > int(self.boundary_pseudo_max_gt_count):
                 continue
 
             gt_points_b = gt_points[b].detach().to(device=device, dtype=dtype)

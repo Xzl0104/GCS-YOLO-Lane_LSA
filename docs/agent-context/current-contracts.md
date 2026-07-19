@@ -484,7 +484,10 @@ logs the unweighted GT5 undercount boundary term.
 `boundary_pseudo_neg_loss` is disabled by default through
 `gcs_boundary_pseudo_neg=0.0`. When enabled, it requires `pred_valid_logits`
 and applies only to unmatched queries on images whose GT lane count is at least
-`gcs_boundary_pseudo_gt_count`. Candidate queries must have predicted-visible
+`gcs_boundary_pseudo_gt_count`. `gcs_boundary_pseudo_max_gt_count=0` preserves
+the old no-upper-bound behavior; setting it to a positive value excludes images
+with more GT lanes than that value from this extra target-zero BCE. Candidate
+queries must have predicted-visible
 anchor count in `[gcs_boundary_pseudo_min_valid, gcs_boundary_pseudo_visible_thr]`,
 existence score at least `gcs_boundary_pseudo_score_thr`, and minimum mean x
 distance from every GT lane at least `gcs_boundary_pseudo_dist_thr`.

@@ -34,6 +34,17 @@ scripts/run_query_alpha05_gt5short_geom_w2_bneg002_env30_nocount_v1.sh
 scripts/run_query_alpha05_gt4gt5weak_geom_w15w2_env30_nocount_v1.sh
 ```
 
+The 2026-07-20 explicit GT3/GT4-only clear-far follow-up uses:
+
+```bash
+bash scripts/run_gt34_bneg_gt3to4_short_geom_full_protocol_interval5_v1.sh
+```
+
+This script trains with `--gcs-boundary-pseudo-gt-count 3` and
+`--gcs-boundary-pseudo-max-gt-count 4`, runs training-time official-val scans
+every 5 epochs, then runs post-train official-val sweeps and reporting-only
+TEST evaluation for both `weights/official_best.pt` and `weights/best.pt`.
+
 Sections below that mention post-`86c8fb31c` tiered rescue, Q12 ultrashort
 dataref, final-query extra guard/gate, router/selector experiments, Q18/Q20
 dataref configs, side-aux, or GT4-hard diagnostics are rejected legacy
