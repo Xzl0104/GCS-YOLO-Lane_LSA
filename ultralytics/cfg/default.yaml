@@ -194,6 +194,7 @@ gcs_boundary_pseudo_max_gt_count: 0 # (int) maximum GT lane count targeted by cl
 gcs_boundary_pseudo_score_thr: 0.0 # (float) optional existence score floor for clear-far negatives; 0 disables
 gcs_boundary_pseudo_envelope_margin_px: -1.0 # (float) require common-visible query anchors outside GT envelope by this margin; <0 disables
 gcs_boundary_pseudo_envelope_ratio_thr: 0.75 # (float) minimum common-visible anchor ratio outside GT envelope when envelope margin is enabled
+gcs_boundary_pseudo_valid_neg_weight: 0.0 # (float) extra per-point visibility target-zero BCE inside selected clear-far boundary-pseudo negatives; 0 disables
 gcs_exist_pos_weight: 1.0 # (float) positive query weight for GCS lane existence BCE
 gcs_exist_focal_gamma: 0.0 # (float) optional focal gamma for GCS existence BCE; 0 disables focal weighting
 gcs_exist_focal_alpha: -1.0 # (float) optional focal alpha for GCS existence BCE; set 0..1 to enable alpha weighting

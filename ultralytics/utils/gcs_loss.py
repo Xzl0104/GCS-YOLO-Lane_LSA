@@ -363,6 +363,9 @@ class GCSLoss(nn.Module):
         self.boundary_pseudo_envelope_ratio_thr = float(
             self._arg(args, "gcs_boundary_pseudo_envelope_ratio_thr", 0.75)
         )
+        self.boundary_pseudo_valid_neg_weight = float(
+            self._arg(args, "gcs_boundary_pseudo_valid_neg_weight", 0.0)
+        )
 
         if self.short_geom_gain < 0.0:
             raise ValueError(f"gcs_short_geom must be >= 0, got {self.short_geom_gain}.")
@@ -415,6 +418,8 @@ class GCSLoss(nn.Module):
             raise ValueError("gcs_boundary_pseudo_envelope_margin_px must be >= -1.0.")
         if not (0.0 <= self.boundary_pseudo_envelope_ratio_thr <= 1.0):
             raise ValueError("gcs_boundary_pseudo_envelope_ratio_thr must be in [0, 1].")
+        if self.boundary_pseudo_valid_neg_weight < 0.0:
+            raise ValueError("gcs_boundary_pseudo_valid_neg_weight must be >= 0.")
 
         self.exist_quality_alpha = float(
             exist_quality_alpha if exist_quality_alpha is not None else self._arg(args, "gcs_exist_quality_alpha", 1.0)
@@ -1262,6 +1267,7 @@ class GCSLoss(nn.Module):
 
             selected = []
             selected_scores = []
+            selected_valid_losses = []
             for q in unmatched_idx.tolist():
                 q_valid = valid_prob[b, q] > float(self.boundary_pseudo_valid_thr)
                 visible_len = int(q_valid.sum().item())
@@ -1304,6 +1310,14 @@ class GCSLoss(nn.Module):
 
                 selected.append(q)
                 selected_scores.append(exist_prob[b, q].to(device=device, dtype=dtype))
+                if float(self.boundary_pseudo_valid_neg_weight) > 0.0:
+                    valid_logits = pred_valid_logits[b, q, q_valid]
+                    valid_loss = F.binary_cross_entropy_with_logits(
+                        valid_logits,
+                        torch.zeros_like(valid_logits),
+                        reduction="mean",
+                    )
+                    selected_valid_losses.append(valid_loss)
 
             if not selected:
                 continue
@@ -1311,6 +1325,9 @@ class GCSLoss(nn.Module):
             selected_idx = torch.tensor(selected, device=device, dtype=torch.long)
             logits = pred_logits_2d[b, selected_idx]
             loss = F.binary_cross_entropy_with_logits(logits, torch.zeros_like(logits), reduction="mean")
+            if selected_valid_losses:
+                valid_loss = torch.stack(selected_valid_losses).mean()
+                loss = loss + float(self.boundary_pseudo_valid_neg_weight) * valid_loss
             losses.append(loss)
             pseudo_counts.append(torch.tensor(float(len(selected)), device=device, dtype=dtype))
             pseudo_score_means.append(torch.stack(selected_scores).mean())

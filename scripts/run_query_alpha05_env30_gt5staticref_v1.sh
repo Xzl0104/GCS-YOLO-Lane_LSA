@@ -29,6 +29,16 @@ OVERWRITE_SWEEPS="${OVERWRITE_SWEEPS:-0}"
 OVERWRITE_TESTS="${OVERWRITE_TESTS:-0}"
 RUN_TESTS="${RUN_TESTS:-0}"
 VALID_BEFORE_MAXDET="${VALID_BEFORE_MAXDET:-1}"
+BOUNDARY_PSEUDO_VISIBLE_THR="${BOUNDARY_PSEUDO_VISIBLE_THR:-10}"
+BOUNDARY_PSEUDO_DIST_THR="${BOUNDARY_PSEUDO_DIST_THR:-80}"
+BOUNDARY_PSEUDO_VALID_THR="${BOUNDARY_PSEUDO_VALID_THR:-0.5}"
+BOUNDARY_PSEUDO_MIN_VALID="${BOUNDARY_PSEUDO_MIN_VALID:-4}"
+BOUNDARY_PSEUDO_GT_COUNT="${BOUNDARY_PSEUDO_GT_COUNT:-5}"
+BOUNDARY_PSEUDO_MAX_GT_COUNT="${BOUNDARY_PSEUDO_MAX_GT_COUNT:-0}"
+BOUNDARY_PSEUDO_SCORE_THR="${BOUNDARY_PSEUDO_SCORE_THR:-0.2}"
+BOUNDARY_PSEUDO_ENVELOPE_MARGIN_PX="${BOUNDARY_PSEUDO_ENVELOPE_MARGIN_PX:-30}"
+BOUNDARY_PSEUDO_ENVELOPE_RATIO_THR="${BOUNDARY_PSEUDO_ENVELOPE_RATIO_THR:-0.75}"
+BOUNDARY_PSEUDO_VALID_NEG_WEIGHT="${BOUNDARY_PSEUDO_VALID_NEG_WEIGHT:-0.0}"
 
 OFFICIAL_CONFS="${OFFICIAL_CONFS:-0.001 0.003 0.005 0.008 0.01 0.02}"
 OFFICIAL_POINT_VALID_THRS="${OFFICIAL_POINT_VALID_THRS:-0.45 0.50 0.55 0.60}"
@@ -136,14 +146,16 @@ run_train() {
     --gcs-short-geom-curve 1.0 \
     --gcs-gt5-short-visible-thr 0 \
     --gcs-boundary-pseudo-neg 0.02 \
-    --gcs-boundary-pseudo-visible-thr 10 \
-    --gcs-boundary-pseudo-dist-thr 80 \
-    --gcs-boundary-pseudo-valid-thr 0.5 \
-    --gcs-boundary-pseudo-min-valid 4 \
-    --gcs-boundary-pseudo-gt-count 5 \
-    --gcs-boundary-pseudo-score-thr 0.2 \
-    --gcs-boundary-pseudo-envelope-margin-px 30 \
-    --gcs-boundary-pseudo-envelope-ratio-thr 0.75 \
+    --gcs-boundary-pseudo-visible-thr "${BOUNDARY_PSEUDO_VISIBLE_THR}" \
+    --gcs-boundary-pseudo-dist-thr "${BOUNDARY_PSEUDO_DIST_THR}" \
+    --gcs-boundary-pseudo-valid-thr "${BOUNDARY_PSEUDO_VALID_THR}" \
+    --gcs-boundary-pseudo-min-valid "${BOUNDARY_PSEUDO_MIN_VALID}" \
+    --gcs-boundary-pseudo-gt-count "${BOUNDARY_PSEUDO_GT_COUNT}" \
+    --gcs-boundary-pseudo-max-gt-count "${BOUNDARY_PSEUDO_MAX_GT_COUNT}" \
+    --gcs-boundary-pseudo-score-thr "${BOUNDARY_PSEUDO_SCORE_THR}" \
+    --gcs-boundary-pseudo-envelope-margin-px "${BOUNDARY_PSEUDO_ENVELOPE_MARGIN_PX}" \
+    --gcs-boundary-pseudo-envelope-ratio-thr "${BOUNDARY_PSEUDO_ENVELOPE_RATIO_THR}" \
+    --gcs-boundary-pseudo-valid-neg-weight "${BOUNDARY_PSEUDO_VALID_NEG_WEIGHT}" \
     --gcs-official-best \
     --gcs-official-interval "${OFFICIAL_INTERVAL}" \
     --gcs-official-archive-root "${ARCHIVE_ROOT}" \
@@ -281,7 +293,11 @@ write_protocol_summary() {
     "${RUN_NAME}" \
     "${OFFICIAL_BEST_WEIGHTS}" "${OFFICIAL_BEST_SWEEP_DIR}" "${OFFICIAL_BEST_TEST_DIR}" \
     "${BEST_WEIGHTS}" "${BEST_SWEEP_DIR}" "${BEST_TEST_DIR}" \
-    "${PROTOCOL_SUMMARY}" <<'PY'
+    "${PROTOCOL_SUMMARY}" \
+    "${BOUNDARY_PSEUDO_VISIBLE_THR}" "${BOUNDARY_PSEUDO_DIST_THR}" "${BOUNDARY_PSEUDO_VALID_THR}" \
+    "${BOUNDARY_PSEUDO_MIN_VALID}" "${BOUNDARY_PSEUDO_GT_COUNT}" "${BOUNDARY_PSEUDO_MAX_GT_COUNT}" \
+    "${BOUNDARY_PSEUDO_SCORE_THR}" "${BOUNDARY_PSEUDO_ENVELOPE_MARGIN_PX}" \
+    "${BOUNDARY_PSEUDO_ENVELOPE_RATIO_THR}" "${BOUNDARY_PSEUDO_VALID_NEG_WEIGHT}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -295,6 +311,16 @@ from pathlib import Path
     best_sweep_dir,
     best_test_dir,
     protocol_summary,
+    boundary_pseudo_visible_thr,
+    boundary_pseudo_dist_thr,
+    boundary_pseudo_valid_thr,
+    boundary_pseudo_min_valid,
+    boundary_pseudo_gt_count,
+    boundary_pseudo_max_gt_count,
+    boundary_pseudo_score_thr,
+    boundary_pseudo_envelope_margin_px,
+    boundary_pseudo_envelope_ratio_thr,
+    boundary_pseudo_valid_neg_weight,
 ) = sys.argv[1:]
 
 
@@ -325,11 +351,16 @@ output = {
     "best_pt_test_role": "reporting_only_not_selection",
     "mask_v2_params": {
         "gcs_boundary_pseudo_neg": 0.02,
-        "gcs_boundary_pseudo_dist_thr": 80,
-        "gcs_boundary_pseudo_min_valid": 4,
-        "gcs_boundary_pseudo_score_thr": 0.2,
-        "gcs_boundary_pseudo_envelope_margin_px": 30,
-        "gcs_boundary_pseudo_envelope_ratio_thr": 0.75,
+        "gcs_boundary_pseudo_visible_thr": int(boundary_pseudo_visible_thr),
+        "gcs_boundary_pseudo_dist_thr": float(boundary_pseudo_dist_thr),
+        "gcs_boundary_pseudo_valid_thr": float(boundary_pseudo_valid_thr),
+        "gcs_boundary_pseudo_min_valid": int(boundary_pseudo_min_valid),
+        "gcs_boundary_pseudo_gt_count": int(boundary_pseudo_gt_count),
+        "gcs_boundary_pseudo_max_gt_count": int(boundary_pseudo_max_gt_count),
+        "gcs_boundary_pseudo_score_thr": float(boundary_pseudo_score_thr),
+        "gcs_boundary_pseudo_envelope_margin_px": float(boundary_pseudo_envelope_margin_px),
+        "gcs_boundary_pseudo_envelope_ratio_thr": float(boundary_pseudo_envelope_ratio_thr),
+        "gcs_boundary_pseudo_valid_neg_weight": float(boundary_pseudo_valid_neg_weight),
     },
     "official_best": package("official_best.pt", official_best_weights, official_best_sweep_dir, official_best_test_dir),
     "best": package("best.pt", best_weights, best_sweep_dir, best_test_dir),
@@ -348,7 +379,7 @@ PY
 }
 
 echo "Run name: ${RUN_NAME}"
-echo "Mask-v2 boundary pseudo params: neg=0.02 dist_thr=80 min_valid=4 score_thr=0.2 envelope_margin_px=30 envelope_ratio_thr=0.75"
+echo "Mask-v2 boundary pseudo params: neg=0.02 visible_thr=${BOUNDARY_PSEUDO_VISIBLE_THR} dist_thr=${BOUNDARY_PSEUDO_DIST_THR} valid_thr=${BOUNDARY_PSEUDO_VALID_THR} min_valid=${BOUNDARY_PSEUDO_MIN_VALID} gt_count=${BOUNDARY_PSEUDO_GT_COUNT} max_gt_count=${BOUNDARY_PSEUDO_MAX_GT_COUNT} score_thr=${BOUNDARY_PSEUDO_SCORE_THR} envelope_margin_px=${BOUNDARY_PSEUDO_ENVELOPE_MARGIN_PX} envelope_ratio_thr=${BOUNDARY_PSEUDO_ENVELOPE_RATIO_THR} valid_neg_weight=${BOUNDARY_PSEUDO_VALID_NEG_WEIGHT}"
 echo "Selection GT: ${GT_JSON}"
 echo "Training-time official_best and post-train sweeps use tools/sweep_tusimple_official_cached.py."
 echo "RUN_TESTS=${RUN_TESTS}: official test is reporting-only and must stay off until official-val and diagnostics pass."

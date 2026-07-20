@@ -467,6 +467,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--gcs-boundary-pseudo-score-thr", type=float, default=0.0)
     parser.add_argument("--gcs-boundary-pseudo-envelope-margin-px", type=float, default=-1.0)
     parser.add_argument("--gcs-boundary-pseudo-envelope-ratio-thr", type=float, default=0.75)
+    parser.add_argument("--gcs-boundary-pseudo-valid-neg-weight", type=float, default=0.0)
     parser.add_argument("--gcs-exist-pos-weight", type=float, default=1.0)
     parser.add_argument("--gcs-exist-focal-gamma", type=float, default=0.0, help="Optional focal gamma for existence BCE. 0 disables focal weighting.")
     parser.add_argument(
@@ -816,6 +817,7 @@ def main() -> None:
         "gcs_boundary_pseudo_score_thr": args.gcs_boundary_pseudo_score_thr,
         "gcs_boundary_pseudo_envelope_margin_px": args.gcs_boundary_pseudo_envelope_margin_px,
         "gcs_boundary_pseudo_envelope_ratio_thr": args.gcs_boundary_pseudo_envelope_ratio_thr,
+        "gcs_boundary_pseudo_valid_neg_weight": args.gcs_boundary_pseudo_valid_neg_weight,
         "gcs_exist_pos_weight": args.gcs_exist_pos_weight,
         "gcs_exist_focal_gamma": args.gcs_exist_focal_gamma,
         "gcs_exist_focal_alpha": args.gcs_exist_focal_alpha,

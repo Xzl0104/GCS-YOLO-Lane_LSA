@@ -823,6 +823,77 @@ def test_boundary_pseudo_neg_loss_clear_far_and_permutation_invariance() -> None
         raise AssertionError(f"clear-far score mean changed under query permutation: got={float(got[2]):.8f}, permuted={float(permuted[2]):.8f}.")
 
 
+def test_boundary_pseudo_valid_neg_weight_targets_selected_valid_logits() -> None:
+    base = GCSLoss(
+        {
+            "gcs_imgsz": [544, 960],
+            "gcs_boundary_pseudo_neg": 1.0,
+            "gcs_boundary_pseudo_gt_count": 3,
+            "gcs_boundary_pseudo_visible_thr": 10,
+            "gcs_boundary_pseudo_min_valid": 2,
+            "gcs_boundary_pseudo_dist_thr": 60.0,
+            "gcs_boundary_pseudo_score_thr": 0.0,
+            "gcs_boundary_pseudo_envelope_margin_px": -1.0,
+            "gcs_boundary_pseudo_valid_neg_weight": 0.0,
+        }
+    )
+    weighted = GCSLoss(
+        {
+            "gcs_imgsz": [544, 960],
+            "gcs_boundary_pseudo_neg": 1.0,
+            "gcs_boundary_pseudo_gt_count": 3,
+            "gcs_boundary_pseudo_visible_thr": 10,
+            "gcs_boundary_pseudo_min_valid": 2,
+            "gcs_boundary_pseudo_dist_thr": 60.0,
+            "gcs_boundary_pseudo_score_thr": 0.0,
+            "gcs_boundary_pseudo_envelope_margin_px": -1.0,
+            "gcs_boundary_pseudo_valid_neg_weight": 0.25,
+        }
+    )
+    k = 4
+    gt_points_b, gt_valid_b = _constant_lane_fixture([0.10, 0.30, 0.60, 0.85], k)
+    gt_points = [gt_points_b]
+    gt_valid = [gt_valid_b]
+    pred_points = torch.zeros(1, 3, k, 2)
+    pred_logits = torch.full((1, 3), 5.0, requires_grad=True)
+    pred_valid_logits = torch.full((1, 3, k), 5.0, requires_grad=True)
+    pred_points[0, 0, :, 0] = 0.10
+    pred_points[0, 1, :, 0] = 0.62
+    pred_points[0, 2, :, 0] = 0.95
+    indices = [(torch.tensor([0]), torch.tensor([0]))]
+
+    base_loss = base.boundary_pseudo_neg_loss(
+        pred_points.detach(),
+        pred_logits.detach(),
+        pred_valid_logits.detach(),
+        gt_points,
+        gt_valid,
+        indices,
+        torch.tensor([4]),
+    )[0]
+    weighted_loss = weighted.boundary_pseudo_neg_loss(
+        pred_points,
+        pred_logits,
+        pred_valid_logits,
+        gt_points,
+        gt_valid,
+        indices,
+        torch.tensor([4]),
+    )[0]
+    if float(weighted_loss.detach().item()) <= float(base_loss.detach().item()):
+        raise AssertionError(
+            f"boundary pseudo valid-neg weight did not increase selected loss: base={float(base_loss):.8f}, "
+            f"weighted={float(weighted_loss):.8f}."
+        )
+    weighted_loss.backward()
+    selected_grad = pred_valid_logits.grad[0, 2].abs().sum()
+    unselected_grad = pred_valid_logits.grad[0, 1].abs().sum()
+    if float(selected_grad.item()) <= 0.0:
+        raise AssertionError("boundary pseudo valid-neg weight did not backprop through selected valid logits.")
+    if float(unselected_grad.item()) != 0.0:
+        raise AssertionError("boundary pseudo valid-neg weight leaked valid-logit gradients to an unselected query.")
+
+
 def main() -> None:
     test_short_geom_lane_weights_gt5_outer_and_focus()
     test_short_geom_lane_weights_gt4_outer_and_focus()
@@ -831,8 +902,9 @@ def main() -> None:
     test_short_geom_curve_loss_two_threshold_weighting()
     test_short_geom_point_valid_loss_generalizes_to_gt4()
     test_boundary_pseudo_neg_loss_clear_far_and_permutation_invariance()
+    test_boundary_pseudo_valid_neg_weight_targets_selected_valid_logits()
     test_short_geom_forward_keeps_loss_items_stable()
-    print(json.dumps({"status": "ok", "tests": 8}, indent=2))
+    print(json.dumps({"status": "ok", "tests": 9}, indent=2))
 
 
 if __name__ == "__main__":

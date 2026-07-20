@@ -497,6 +497,26 @@ common-visible anchors and requires the query to stay outside the GT envelope
 by at least the configured margin for a sufficient fraction of anchors. This
 changes only the training loss candidate mask; it does not change model outputs,
 matcher assignment, labels, decode, NMS, or official metrics.
+`gcs_boundary_pseudo_valid_neg_weight=0.0` preserves the old behavior. When set
+above zero, the same selected clear-far unmatched queries also receive a
+target-zero BCE on anchors whose detached predicted visibility exceeds
+`gcs_boundary_pseudo_valid_thr`; this is intended to make clear-far extra
+carriers fail point-valid/min-points survival without changing decode or the
+selection mask.
+
+The default-off `env30_gt45staticref_v2` candidate adds only a constrained Q12
+static reference bank and a wrapper script:
+
+```text
+data/gcs_reference_banks/q12_env30_gt45_static_v2.json
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-env30-gt45staticref-v2.yaml
+scripts/run_query_alpha05_env30_gt45staticref_v2.sh
+```
+
+The bank changes only q5/q6/q7, keeps q2/q8 and q0/q1/q3/q10/q11 at the default
+Q12 reference, uses visible-span prototypes with four-anchor taper, and avoids
+the v1 hard-edge `0.001`/`0.999` extrapolation. It is a training candidate only;
+test remains closed until official-val plus train0601/train0531 gates pass.
 
 ### Legacy Post-424 Loss And Diagnostic Records
 

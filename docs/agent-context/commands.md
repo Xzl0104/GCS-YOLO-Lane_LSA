@@ -34,6 +34,36 @@ scripts/run_query_alpha05_gt5short_geom_w2_bneg002_env30_nocount_v1.sh
 scripts/run_query_alpha05_gt4gt5weak_geom_w15w2_env30_nocount_v1.sh
 ```
 
+The 2026-07-20 env30 GT4/GT5 constrained static-reference v2 full-protocol
+wrapper uses:
+
+```bash
+bash scripts/run_query_alpha05_env30_gt45staticref_v2.sh
+```
+
+It keeps the env30 query protocol and `--imgsz 544 960`, uses
+`ultralytics/cfg/models/gcs/gcs-yolo-lane-s-env30-gt45staticref-v2.yaml`, and
+defaults to a coarse training-time sweep every 5 epochs, a finer post-train
+official-val sweep, and automatic reporting-only TEST for both
+`official_best.pt` and `best.pt`:
+
+```text
+RUN_TRAIN = 1
+RUN_TESTS = 1
+OFFICIAL_INTERVAL = 5
+training-time OFFICIAL_* = coarse grid
+post-train SWEEP_* = fine grid
+gcs_boundary_pseudo_neg = 0.02
+gcs_boundary_pseudo_visible_thr = 12
+gcs_boundary_pseudo_gt_count = 4
+gcs_boundary_pseudo_max_gt_count = 5
+gcs_boundary_pseudo_score_thr = 0.05
+gcs_boundary_pseudo_valid_neg_weight = 0.25
+```
+
+Select only from the official-val sweeps. TEST is reporting-only and must not
+drive threshold or checkpoint choice.
+
 The 2026-07-20 explicit GT3/GT4-only clear-far follow-up uses:
 
 ```bash

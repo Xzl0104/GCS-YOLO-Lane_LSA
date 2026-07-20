@@ -1,5 +1,40 @@
 # Decision Log
 
+## 2026-07-20: Add constrained env30 GT4/GT5 staticref v2 candidate
+
+Decision:
+
+Implement the user-requested next env30-family candidate as default-off code
+and config only. Do not run TEST or claim improvement until the candidate passes
+official-val plus train0601/train0531 gates.
+
+Implementation:
+
+```text
+data/gcs_reference_banks/q12_env30_gt45_static_v2.json
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-env30-gt45staticref-v2.yaml
+scripts/run_query_alpha05_env30_gt45staticref_v2.sh
+gcs_boundary_pseudo_valid_neg_weight default = 0.0
+```
+
+Why:
+
+`gt5staticref_v1` improved some raw geometry but created extra carriers because
+the short-lane prototypes were extrapolated into invisible anchors as hard
+boundary lines. The v2 bank changes only q5/q6/q7, leaves q2/q8 and
+q0/q1/q3/q10/q11 at the default Q12 reference, keeps prototype influence local
+to visible spans with four-anchor taper, and clamps away from hard
+`0.001`/`0.999` edges. The paired `gcs_boundary_pseudo_valid_neg_weight`
+extension lets selected clear-far unmatched queries lose point-valid survival,
+instead of only lowering their existence score.
+
+Gate:
+
+Use official-val for checkpoint/decode selection. Before any reporting-only
+TEST, require no official-val FP/FN/count-shape regression versus env30, short
+GT4/GT5 raw match and point-valid improvement, no q0/q1/q3/q10/q11 carrier
+growth, and leave-date-out train0601/train0531 count-shape stability.
+
 ## 2026-07-17: Execute env30 short GT4/GT5 gate and reject before training
 
 Decision:
