@@ -64,6 +64,35 @@ gcs_boundary_pseudo_valid_neg_weight = 0.25
 Select only from the official-val sweeps. TEST is reporting-only and must not
 drive threshold or checkpoint choice.
 
+The 2026-07-21 GT4-only valid-negative follow-up to the rejected v2 run uses:
+
+```bash
+bash scripts/run_query_alpha05_env30_gt45staticref_v2_gt4only_validneg_w01.sh
+```
+
+It keeps the same v2 static reference bank but scopes boundary-pseudo pressure
+to GT4 images and lowers the point-valid negative term:
+
+```text
+RUN_TESTS = 0 by default
+gcs_boundary_pseudo_gt_count = 4
+gcs_boundary_pseudo_max_gt_count = 4
+gcs_boundary_pseudo_valid_neg_weight = 0.1
+```
+
+For the no-valid-negative companion, reuse the same wrapper with explicit
+overrides:
+
+```bash
+BOUNDARY_PSEUDO_VALID_NEG_WEIGHT=0.0 \
+RUN_NAME=query_alpha05_env30_gt45staticref_v2_gt4only_validneg_w00 \
+bash scripts/run_query_alpha05_env30_gt45staticref_v2_gt4only_validneg_w01.sh
+```
+
+Do not enable `RUN_TESTS=1` for this follow-up until the candidate passes
+official-val ACC/FP/FN, GT4/GT5 count shape, raw-Q12 GT4/GT5 match, and
+train0601/train0531 robustness gates.
+
 The 2026-07-20 explicit GT3/GT4-only clear-far follow-up uses:
 
 ```bash

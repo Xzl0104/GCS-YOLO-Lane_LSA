@@ -1,5 +1,104 @@
 # Known Bottlenecks
 
+## 2026-07-21 Env30 GT4/GT5 Staticref v2 Closure
+
+The `query_alpha05_env30_gt45staticref_v2` full protocol is complete and
+rejected. It is not promotable and should not be threshold-tuned from TEST.
+
+Primary comparison:
+
+```text
+env30 official-val ACC/FP/FN =
+  0.973330 / 0.015748 / 0.009642
+v2 official-val ACC/FP/FN =
+  0.971040 / 0.018825 / 0.012626
+
+env30 reporting-only TEST ACC/FP/FN =
+  0.966780 / 0.028732 / 0.023544
+v2 reporting-only TEST ACC/FP/FN =
+  0.966541 / 0.029601 / 0.022795
+```
+
+The post-train fine sweeps for both `official_best.pt` and `best.pt` had zero
+rows reaching env30 official-val ACC, zero rows with FP/FN both at least as
+good as env30, and zero rows passing the GT4/GT5 count-shape gate. Training-time
+official_best selected epoch 213, so this is not an early-checkpoint issue.
+
+What the run proved:
+
+- The v2 static bank solved the old `gt5staticref_v1` six-lane extra explosion
+  (`val 5->6: 10 -> 0`, `test 5->6: 71 -> 0`).
+- It partly improved reporting-only TEST GT4 retention
+  (`4->3: 98 -> 81`, `count_acc_4: 0.598291 -> 0.649573`).
+- It did not improve the real target because GT3 over-count and GT5 under-count
+  rose (`test 3->4: 50 -> 64`, `test 5->4: 43 -> 69`,
+  `count_acc_5: 0.891037 -> 0.857645`).
+
+Post-hoc official-val raw-Q12 diagnostics show that v2 did not improve net raw
+geometry:
+
+```text
+overall has_match_20px: 0.975441 -> 0.972371
+overall mean APE px:    5.627210 -> 6.053190
+GT4 all has_match_20px: 0.954545 -> 0.950758
+GT5 all has_match_20px: 0.962162 -> 0.956757
+GT5 short has_match_20px: 0.754717 -> 0.773585
+GT5 short point_valid_recall@0.6: 0.957233 -> 0.943396
+```
+
+Post-hoc train-side raw-Q12 diagnostics confirm the same split instability:
+
+```text
+train0601 overall has_match_20px: 0.960828 -> 0.950196
+train0601 overall mean APE px:    6.609740 -> 7.269312
+train0601 final under-count images: 5 -> 8
+
+train0601 GT4 short has_match_20px: 0.473684 -> 0.578947
+train0601 GT5 short has_match_20px: 0.775956 -> 0.737705
+train0601 GT5 short point_valid_recall@0.6: 0.937601 -> 0.908242
+
+train0531 overall has_match_20px: 0.983900 -> 0.980322
+train0531 overall mean APE px:    5.177374 -> 5.694983
+train0531 final over-count images: 7 -> 12
+```
+
+Train-side count shape also moves in opposite directions:
+
+```text
+train0601:
+  env30: 3->4=1, 4->5=7, 5->4=3
+  v2:    3->4=3, 4->5=4, 5->4=6
+
+train0531:
+  env30: 3->4=4, 4->5=2
+  v2:    3->4=6, 4->5=6
+```
+
+The edited q5/q6/q7 references become major GT5-short carriers on train0601
+(`3/183 -> 56/183`), but 20px misses also rise (`41/183 -> 48/183`). The v2
+bank therefore did not simply add missing short-lane coverage; it changed the
+query carrier assignment and made GT5-short survival less stable.
+
+Current bottleneck:
+
+The candidate solved the old boundary-extrapolated extra-carrier failure, but
+it did not solve the active env30 bottleneck: improving short GT4/GT5 coverage
+without suppressing true GT5 lanes or creating GT3/GT4 extras. The observed
+tradeoff is specifically "GT4 count retention up, GT5 true-lane survival down,
+GT3 false-fourth up."
+
+Smallest safe next action:
+
+Do not run another blind train. First run official-val plus
+train0601/train0531 raw-Q12 diagnostics comparing env30 and v2. Only if those
+diagnostics show that GT5 damage comes from broad valid-negative pressure should
+the next ablation be narrowed to GT4-only boundary-pseudo valid negatives
+(`gcs_boundary_pseudo_gt_count=4`,
+`gcs_boundary_pseudo_max_gt_count=4`) or a lower
+`gcs_boundary_pseudo_valid_neg_weight` (`0.1` or `0.0`). Any follow-up must pass
+official-val ACC/FP/FN, GT4/GT5 count shape, raw match/point-valid survival, and
+train0601/train0531 robustness together before any reporting-only TEST.
+
 ## 2026-07-17 Env30 Short GT4/GT5 Gate Execution
 
 The user-requested env30 short GT4/GT5 robustness-gate experiment is complete

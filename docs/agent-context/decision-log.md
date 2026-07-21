@@ -35,6 +35,219 @@ TEST, require no official-val FP/FN/count-shape regression versus env30, short
 GT4/GT5 raw match and point-valid improvement, no q0/q1/q3/q10/q11 carrier
 growth, and leave-date-out train0601/train0531 count-shape stability.
 
+## 2026-07-21: Reject env30 GT4/GT5 staticref v2 after full protocol
+
+Decision:
+
+Reject `query_alpha05_env30_gt45staticref_v2` as a promotion candidate. Keep
+`query_alpha05_gt5short_geom_w2_bneg002_env30_nocount_v1` as the active env30
+reference. Do not tune thresholds, valid-negative weights, reference-bank
+queries, checkpoint choice, or TEST behavior from this result.
+
+Primary official-val evidence:
+
+```text
+env30 official_best val ACC/FP/FN =
+  0.973330 / 0.015748 / 0.009642
+v2 official_best val ACC/FP/FN =
+  0.971040 / 0.018825 / 0.012626
+v2 best.pt val ACC/FP/FN =
+  0.968341 / 0.026676 / 0.017677
+```
+
+The post-train fine sweep did not expose a threshold rescue:
+
+```text
+v2 official_best sweep rows = 2520
+rows with ACC >= env30 = 0
+rows with FP/FN both <= env30 = 0
+rows passing GT4/GT5 count-shape gate = 0
+
+v2 best.pt sweep rows = 2520
+rows with ACC >= env30 = 0
+rows with FP/FN both <= env30 = 0
+rows passing GT4/GT5 count-shape gate = 0
+```
+
+Reporting-only TEST evidence is also below env30 and must not be used for
+selection:
+
+```text
+env30 TEST ACC/FP/FN =
+  0.966780 / 0.028732 / 0.023544
+v2 official_best TEST ACC/FP/FN =
+  0.966541 / 0.029601 / 0.022795
+v2 best.pt TEST ACC/FP/FN =
+  0.966150 / 0.033926 / 0.024832
+```
+
+What improved:
+
+Compared with rejected `gt5staticref_v1`, v2 fixed the severe six-lane extra
+carrier failure:
+
+```text
+val 5->6: 10 -> 0
+test 5->6: 71 -> 0
+test 4->5: 116 -> 83
+test FP: 0.042535 -> 0.029601
+```
+
+Against env30, v2 improved reporting-only TEST GT4 retention:
+
+```text
+GT4 4->3: 98 -> 81
+GT4 4->4: 280 -> 304
+count_acc_4: 0.598291 -> 0.649573
+```
+
+What regressed:
+
+The GT4 gain is offset by GT3 over-count and GT5 under-count:
+
+```text
+official-val GT4/GT5 shape:
+  env30 4->5=0, 5->4=1
+  v2    4->5=2, 5->4=2
+
+TEST GT3 over-count:
+  3->4: 50 -> 64
+
+TEST GT5 retention:
+  5->4: 43 -> 69
+  count_acc_5: 0.891037 -> 0.857645
+```
+
+Post-hoc official-val raw-Q12 diagnostics confirm v2 did not improve overall
+candidate geometry:
+
+```text
+raw has_match_20px: 0.975441 -> 0.972371
+raw mean APE px:    5.627210 -> 6.053190
+raw p90 APE px:     10.042735 -> 10.759785
+
+GT4 all has_match_20px: 0.954545 -> 0.950758
+GT5 all has_match_20px: 0.962162 -> 0.956757
+GT5 short has_match_20px: 0.754717 -> 0.773585
+GT5 short point_valid_recall@0.6: 0.957233 -> 0.943396
+```
+
+Post-hoc train-side raw-Q12 diagnostics close the remaining ambiguity:
+
+```text
+train0601 overall:
+  has_match_20px: 0.960828 -> 0.950196
+  mean APE px:    6.609740 -> 7.269312
+  final under-count images: 5 -> 8
+
+train0601 GT4 short:
+  has_match_20px: 0.473684 -> 0.578947
+  mean APE px:    23.666 -> 21.842
+  point_valid_recall@0.6: 0.854386 -> 0.880702
+
+train0601 GT5 short:
+  has_match_20px: 0.775956 -> 0.737705
+  mean APE px:    13.745 -> 15.007
+  point_valid_recall@0.6: 0.937601 -> 0.908242
+
+train0531 overall:
+  has_match_20px: 0.983900 -> 0.980322
+  mean APE px:    5.177374 -> 5.694983
+  final over-count images: 7 -> 12
+```
+
+Train-side count shape confirms the same tradeoff:
+
+```text
+train0601:
+  env30: 3->4=1, 4->5=7, 5->4=3
+  v2:    3->4=3, 4->5=4, 5->4=6
+
+train0531:
+  env30: 3->4=4, 4->5=2
+  v2:    3->4=6, 4->5=6
+```
+
+Query attribution shows the static v2 changes moved many GT5 short lanes onto
+the edited q5/q6/q7 carriers but not cleanly:
+
+```text
+train0601 GT5 short q5/q6/q7 best-query share:
+  env30 3/183 -> v2 56/183
+train0601 GT5 short 20px misses:
+  env30 41/183 -> v2 48/183
+train0601 GT5 short lost20 events:
+  10 lanes, often q10/q11 -> q7 handoff
+```
+
+Why:
+
+The constrained v2 reference bank successfully removed the old v1
+visible-outside extrapolation failure, but the paired q5/q6/q7 static changes
+plus GT4/GT5 clear-far valid-negative pressure did not create a net official-val
+geometry gain. The small GT5-short raw-match improvement is not clean because
+mean/p90 APE and point-valid survival worsen, and the official count shape
+shows the true-lane/extra-query separation remains unstable.
+
+Smallest safe next action:
+
+Run official-val plus train0601/train0531 raw-Q12 diagnostics for env30 and v2
+before any new training. If the train-side diagnostics confirm that the damage
+comes from GT5 valid-negative pressure rather than the static bank itself, the
+only justified ablation is a narrow official-val-only run that keeps the v2
+static bank but scopes valid-negative pressure to GT4 only
+(`gcs_boundary_pseudo_gt_count=4`,
+`gcs_boundary_pseudo_max_gt_count=4`) or lowers
+`gcs_boundary_pseudo_valid_neg_weight` to `0.1/0.0`. Reject that ablation
+unless official-val ACC/FP/FN, GT4/GT5 count shape, raw GT4/GT5 match, and
+train0601/train0531 robustness all improve together.
+
+## 2026-07-21: Add GT4-only valid-negative follow-up wrapper
+
+Decision:
+
+Add a separate wrapper for the narrow v2 follow-up instead of changing the
+rejected v2 script defaults.
+
+Implementation:
+
+```text
+script =
+  scripts/run_query_alpha05_env30_gt45staticref_v2_gt4only_validneg_w01.sh
+base wrapper =
+  scripts/run_query_alpha05_env30_gt45staticref_v2.sh
+model =
+  ultralytics/cfg/models/gcs/gcs-yolo-lane-s-env30-gt45staticref-v2.yaml
+default run =
+  query_alpha05_env30_gt45staticref_v2_gt4only_validneg_w01
+```
+
+Default settings:
+
+```text
+gcs_boundary_pseudo_gt_count = 4
+gcs_boundary_pseudo_max_gt_count = 4
+gcs_boundary_pseudo_valid_neg_weight = 0.1
+RUN_TESTS = 0
+OFFICIAL_INTERVAL = 5
+```
+
+The no-valid-negative companion is the same wrapper with:
+
+```bash
+BOUNDARY_PSEUDO_VALID_NEG_WEIGHT=0.0
+RUN_NAME=query_alpha05_env30_gt45staticref_v2_gt4only_validneg_w00
+```
+
+Why:
+
+The train0601/train0531 diagnostics show v2 improved GT4-short coverage while
+hurting GT5-short coverage and GT3/GT4 over-count robustness. Scoping
+boundary-pseudo valid-negative pressure to GT4 is the smallest follow-up that
+tests whether the GT5 damage is caused by broad valid-negative pressure. This
+is not a promotion and should keep TEST closed until official-val plus
+train0601/train0531 gates pass.
+
 ## 2026-07-17: Execute env30 short GT4/GT5 gate and reject before training
 
 Decision:
