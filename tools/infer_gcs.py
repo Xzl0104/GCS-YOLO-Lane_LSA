@@ -179,6 +179,32 @@ def _set_model_gcs_imgsz(model: torch.nn.Module, imgsz: tuple[int, int]) -> None
         model.args.gcs_imgsz = [int(imgsz[0]), int(imgsz[1])]
 
 
+def _prepare_loaded_gcs_model(
+    model: torch.nn.Module,
+    *,
+    weights: str | Path,
+    device: torch.device,
+    half: bool,
+    gcs_imgsz: tuple[int, int] | None,
+) -> torch.nn.Module:
+    """Move a loaded GCS model to the requested runtime settings."""
+    model = model.to(device).eval()
+    if getattr(model, "task", None) != "gcs_lane":
+        raise ValueError(f"Expected a GCS lane model, got task={getattr(model, 'task', None)!r}.")
+    if gcs_imgsz is not None:
+        _set_model_gcs_imgsz(model, normalize_imgsz(gcs_imgsz))
+
+    for module in model.modules():
+        if isinstance(module, GCSLaneHead):
+            module.return_aux = False
+
+    if half:
+        if device.type != "cuda":
+            raise ValueError("--half requires a CUDA device.")
+        model.half()
+    return model
+
+
 def load_gcs_model(
     weights: str | Path,
     device: torch.device,
@@ -194,22 +220,36 @@ def load_gcs_model(
         model = GCSLaneModel(str(weights), nc=1, verbose=False).to(device).eval()
     else:
         model, _ = load_checkpoint(weights, device=device, fuse=False)
-        model = model.to(device).eval()
+    return _prepare_loaded_gcs_model(model, weights=weights, device=device, half=half, gcs_imgsz=gcs_imgsz)
 
-    if getattr(model, "task", None) != "gcs_lane":
-        raise ValueError(f"Expected a GCS lane model, got task={getattr(model, 'task', None)!r}.")
-    if gcs_imgsz is not None:
-        _set_model_gcs_imgsz(model, normalize_imgsz(gcs_imgsz))
 
-    for module in model.modules():
-        if isinstance(module, GCSLaneHead):
-            module.return_aux = False
+def load_gcs_model_from_cfg_and_weights(
+    model_cfg: str | Path,
+    weights: str | Path,
+    device: torch.device,
+    half: bool = False,
+    gcs_imgsz: tuple[int, int] | None = None,
+) -> torch.nn.Module:
+    """Build a GCS YAML model, then load a checkpoint state into it.
 
-    if half:
-        if device.type != "cuda":
-            raise ValueError("--half requires a CUDA device.")
-        model.half()
-    return model
+    This is for reference-bank counterfactual diagnostics: checkpoint tensors are
+    copied into a model constructed from a different YAML, while non-persistent
+    fixed-y reference buffers stay defined by that YAML.
+    """
+    model_cfg = Path(model_cfg)
+    weights = Path(weights)
+    if not model_cfg.exists():
+        raise FileNotFoundError(f"GCS model cfg not found: {model_cfg}")
+    if not weights.exists():
+        raise FileNotFoundError(f"GCS weights not found: {weights}")
+
+    model = GCSLaneModel(str(model_cfg), nc=1, verbose=False)
+    source_model, _ = load_checkpoint(weights, device=torch.device("cpu"), fuse=False)
+    model.load(source_model, verbose=False)
+    model.args = getattr(source_model, "args", {})
+    model.pt_path = str(weights)
+    model.task = "gcs_lane"
+    return _prepare_loaded_gcs_model(model, weights=weights, device=device, half=half, gcs_imgsz=gcs_imgsz)
 
 
 def preprocess_image(

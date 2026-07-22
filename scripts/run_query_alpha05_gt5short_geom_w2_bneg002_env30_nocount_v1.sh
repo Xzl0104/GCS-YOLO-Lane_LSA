@@ -29,6 +29,13 @@ OVERWRITE_SWEEPS="${OVERWRITE_SWEEPS:-0}"
 OVERWRITE_TESTS="${OVERWRITE_TESTS:-0}"
 RUN_TESTS="${RUN_TESTS:-0}"
 VALID_BEFORE_MAXDET="${VALID_BEFORE_MAXDET:-1}"
+GT4_NEAR20_GEOM_REFINE="${GT4_NEAR20_GEOM_REFINE:-0.0}"
+GT4_NEAR20_VISIBLE_THR="${GT4_NEAR20_VISIBLE_THR:-10}"
+GT4_NEAR20_LOWER_PX="${GT4_NEAR20_LOWER_PX:-20.0}"
+GT4_NEAR20_UPPER_PX="${GT4_NEAR20_UPPER_PX:-25.0}"
+GT4_NEAR20_MIN_OVERLAP="${GT4_NEAR20_MIN_OVERLAP:-3}"
+GT4_NEAR20_ALLOWED_QUERIES="${GT4_NEAR20_ALLOWED_QUERIES:-0,10}"
+GT4_NEAR20_GEOM_CURVE="${GT4_NEAR20_GEOM_CURVE:-0.0}"
 
 OFFICIAL_CONFS="${OFFICIAL_CONFS:-0.001 0.003 0.005 0.008 0.01 0.02}"
 OFFICIAL_POINT_VALID_THRS="${OFFICIAL_POINT_VALID_THRS:-0.45 0.50 0.55 0.60}"
@@ -134,6 +141,13 @@ run_train() {
     --gcs-short-geom-gt5-weight 2.0 \
     --gcs-short-geom-max-weight 3.0 \
     --gcs-short-geom-curve 1.0 \
+    --gcs-gt4-near20-geom-refine "${GT4_NEAR20_GEOM_REFINE}" \
+    --gcs-gt4-near20-visible-thr "${GT4_NEAR20_VISIBLE_THR}" \
+    --gcs-gt4-near20-lower-px "${GT4_NEAR20_LOWER_PX}" \
+    --gcs-gt4-near20-upper-px "${GT4_NEAR20_UPPER_PX}" \
+    --gcs-gt4-near20-min-overlap "${GT4_NEAR20_MIN_OVERLAP}" \
+    --gcs-gt4-near20-allowed-queries "${GT4_NEAR20_ALLOWED_QUERIES}" \
+    --gcs-gt4-near20-geom-curve "${GT4_NEAR20_GEOM_CURVE}" \
     --gcs-gt5-short-visible-thr 0 \
     --gcs-boundary-pseudo-neg 0.02 \
     --gcs-boundary-pseudo-visible-thr 10 \

@@ -54,6 +54,50 @@ scripts/run_query_alpha05_gt5short_geom_w2_bneg002_env30_nocount_v1.sh
 scripts/run_query_alpha05_gt4gt5weak_geom_w15w2_env30_nocount_v1.sh
 ```
 
+The 2026-07-22 q7-only static-reference counterfactual is default-off and
+diagnostic-only:
+
+```text
+data/gcs_reference_banks/q12_env30_gt45_static_q7only_v3a.json
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-env30-gt45staticref-q7only-v3a.yaml
+scripts/run_query_alpha05_env30_gt45staticref_q7only_v3a_raw_diag.sh
+tools/diagnose_tusimple_raw_q12_filters.py --model-cfg
+```
+
+It changes only the constructed model reference bank for raw-Q12 diagnostics by
+loading an existing checkpoint into a model built from the q7-only YAML. It is
+not a full training script, does not change default env30 behavior, and must
+not run TEST or become a training candidate unless official-val plus
+train0601/train0531 raw gates pass first.
+
+The 2026-07-22 GT4 near-20px geometry refine follow-up is default-off and
+train-loss-only:
+
+```text
+gcs_gt4_near20_geom_refine = 0.0
+gcs_gt4_near20_visible_thr = 10
+gcs_gt4_near20_lower_px = 20.0
+gcs_gt4_near20_upper_px = 25.0
+gcs_gt4_near20_min_overlap = 3
+gcs_gt4_near20_allowed_queries = "0,10"
+gcs_gt4_near20_geom_curve = 0.0
+```
+
+When explicitly enabled, it adds an extra geometry-only loss for GT4 images
+only, GT lanes with visible anchor count at or below the threshold, and
+Hungarian-matched same-GT queries whose id is in the allowed-query list and
+whose current fixed-y mean x-APE is inside the configured pixel window. It does
+not change reference banks, matcher assignment, existence targets,
+point-valid targets, count losses, decode, NMS, official metrics, validation
+GT, or TEST protocol. The paired wrapper is:
+
+```bash
+bash scripts/run_query_alpha05_env30_gt4_near20_geom_refine_v1.sh
+```
+
+TEST must stay closed until official-val plus train0601/train0531 raw-Q12 and
+count-shape gates pass.
+
 Earlier pre-env30 history around the old `424ab1c86` rollback remains useful
 only to interpret old logs. The following older mechanisms/tools are not part
 of the active `86c8fb31c` code state unless the exact active files expose them:

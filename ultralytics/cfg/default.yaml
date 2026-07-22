@@ -184,6 +184,13 @@ gcs_short_geom_gt4_weight: 1.0 # (float) default-off GT4 short geometry boost
 gcs_short_geom_gt5_weight: 2.0 # (float) target lane weight when gcs_short_geom=1.0
 gcs_short_geom_max_weight: 3.0 # (float) maximum clamped lane weight for short geometry boost
 gcs_short_geom_curve: 1.0 # (float) fraction of short geometry lane boost applied to curve_loss
+gcs_gt4_near20_geom_refine: 0.0 # (float) extra geometry loss gain for matched GT4 short lanes just outside 20px; 0 disables
+gcs_gt4_near20_visible_thr: 10 # (int) maximum GT visible anchors for GT4 near-20px geometry refine
+gcs_gt4_near20_lower_px: 20.0 # (float) lower x-APE bound in pixels for GT4 near-20px geometry refine
+gcs_gt4_near20_upper_px: 25.0 # (float) upper x-APE bound in pixels for GT4 near-20px geometry refine
+gcs_gt4_near20_min_overlap: 3 # (int) minimum visible anchors required for GT4 near-20px geometry refine
+gcs_gt4_near20_allowed_queries: "0,10" # (str) comma-separated query ids allowed for GT4 near-20px geometry refine
+gcs_gt4_near20_geom_curve: 0.0 # (float) optional curvature term multiplier inside GT4 near-20px geometry refine
 gcs_boundary_pseudo_neg: 0.0 # (float) extra BCE negative loss gain for clear-far unmatched query lanes; 0 disables
 gcs_boundary_pseudo_visible_thr: 10 # (int) maximum predicted visible anchors for clear-far negatives
 gcs_boundary_pseudo_dist_thr: 60.0 # (float) minimum mean x distance in pixels from every GT lane

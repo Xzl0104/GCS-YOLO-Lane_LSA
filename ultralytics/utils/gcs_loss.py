@@ -47,6 +47,9 @@ class GCSLoss(nn.Module):
         "boundary_pseudo_neg_loss",
         "boundary_pseudo_count",
         "boundary_pseudo_score_mean",
+        "gt4_near20_refine_loss",
+        "gt4_near20_refine_count",
+        "gt4_near20_refine_ape",
         "query_count_ce_loss",
         "query_count_acc",
         "query_count_pred_mean",
@@ -366,6 +369,15 @@ class GCSLoss(nn.Module):
         self.boundary_pseudo_valid_neg_weight = float(
             self._arg(args, "gcs_boundary_pseudo_valid_neg_weight", 0.0)
         )
+        self.gt4_near20_geom_refine_gain = float(self._arg(args, "gcs_gt4_near20_geom_refine", 0.0))
+        self.gt4_near20_visible_thr = int(self._arg(args, "gcs_gt4_near20_visible_thr", 10))
+        self.gt4_near20_lower_px = float(self._arg(args, "gcs_gt4_near20_lower_px", 20.0))
+        self.gt4_near20_upper_px = float(self._arg(args, "gcs_gt4_near20_upper_px", 25.0))
+        self.gt4_near20_min_overlap = int(self._arg(args, "gcs_gt4_near20_min_overlap", 3))
+        self.gt4_near20_allowed_queries = self._parse_query_ids(
+            self._arg(args, "gcs_gt4_near20_allowed_queries", "0,10")
+        )
+        self.gt4_near20_geom_curve = float(self._arg(args, "gcs_gt4_near20_geom_curve", 0.0))
 
         if self.short_geom_gain < 0.0:
             raise ValueError(f"gcs_short_geom must be >= 0, got {self.short_geom_gain}.")
@@ -420,6 +432,23 @@ class GCSLoss(nn.Module):
             raise ValueError("gcs_boundary_pseudo_envelope_ratio_thr must be in [0, 1].")
         if self.boundary_pseudo_valid_neg_weight < 0.0:
             raise ValueError("gcs_boundary_pseudo_valid_neg_weight must be >= 0.")
+        if self.gt4_near20_geom_refine_gain < 0.0:
+            raise ValueError("gcs_gt4_near20_geom_refine must be >= 0.")
+        if self.gt4_near20_visible_thr < 0:
+            raise ValueError("gcs_gt4_near20_visible_thr must be >= 0.")
+        if self.gt4_near20_lower_px < 0.0:
+            raise ValueError("gcs_gt4_near20_lower_px must be >= 0.")
+        if self.gt4_near20_upper_px <= self.gt4_near20_lower_px:
+            raise ValueError(
+                "gcs_gt4_near20_upper_px must be greater than gcs_gt4_near20_lower_px, "
+                f"got {self.gt4_near20_upper_px} <= {self.gt4_near20_lower_px}."
+            )
+        if self.gt4_near20_min_overlap < 1:
+            raise ValueError("gcs_gt4_near20_min_overlap must be >= 1.")
+        if self.gt4_near20_geom_curve < 0.0:
+            raise ValueError("gcs_gt4_near20_geom_curve must be >= 0.")
+        if self.gt4_near20_geom_refine_gain > 0.0 and not self.gt4_near20_allowed_queries:
+            raise ValueError("gcs_gt4_near20_allowed_queries must be non-empty when refine gain is enabled.")
 
         self.exist_quality_alpha = float(
             exist_quality_alpha if exist_quality_alpha is not None else self._arg(args, "gcs_exist_quality_alpha", 1.0)
@@ -506,6 +535,38 @@ class GCSLoss(nn.Module):
         if isinstance(value, str):
             return value.strip().lower() in {"1", "true", "yes", "y", "on"}
         return bool(value)
+
+    @staticmethod
+    def _parse_query_ids(value) -> tuple[int, ...]:
+        """Parse a query-id list such as '0,10' or 'q0 q10' into a stable tuple."""
+        if value is None:
+            return ()
+        if isinstance(value, str):
+            text = value.replace(";", ",").replace(" ", ",")
+            raw_items = [item.strip() for item in text.split(",") if item.strip()]
+        elif isinstance(value, (list, tuple, set)):
+            raw_items = list(value)
+        else:
+            raw_items = [value]
+
+        ids = []
+        seen = set()
+        for item in raw_items:
+            if isinstance(item, str):
+                normalized = item.strip().lower()
+                if normalized.startswith("q"):
+                    normalized = normalized[1:]
+                if normalized == "":
+                    continue
+                qid = int(normalized)
+            else:
+                qid = int(item)
+            if qid < 0:
+                raise ValueError(f"Query ids must be non-negative, got {qid}.")
+            if qid not in seen:
+                ids.append(qid)
+                seen.add(qid)
+        return tuple(ids)
 
     @staticmethod
     def _point_scale(image_size) -> tuple[float, float]:
@@ -999,6 +1060,97 @@ class GCSLoss(nn.Module):
             losses.append((lane_curve_loss * lane_weights).sum() / lane_weights.sum().clamp_min(1.0))
 
         return torch.stack(losses).mean() if losses else self._zero_like(pred_points)
+
+    def gt4_near20_geom_refine_loss(
+        self,
+        pred_points: torch.Tensor,
+        gt_points: list[torch.Tensor],
+        gt_valid: list[torch.Tensor],
+        indices: list[tuple[torch.Tensor, torch.Tensor]],
+        gt_lanes: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Extra x-geometry pull for matched GT4 short lanes that sit just outside the 20px gate."""
+        zero = self._zero_like(pred_points)
+        if (
+            float(self.gt4_near20_geom_refine_gain) <= 0.0
+            or gt_lanes is None
+            or int(self.gt4_near20_visible_thr) <= 0
+            or not self.gt4_near20_allowed_queries
+        ):
+            return zero, pred_points.new_zeros(()), pred_points.new_zeros(())
+
+        device, dtype = pred_points.device, pred_points.dtype
+        point_scale = self._scale_for(pred_points).reshape(2)
+        pixel_scale = self._pixel_scale_for(pred_points).reshape(2)
+        width_px = pixel_scale[0].clamp_min(1.0)
+        allowed_queries = set(int(q) for q in self.gt4_near20_allowed_queries)
+
+        losses = []
+        ape_values = []
+        for b, (src_idx, tgt_idx) in enumerate(indices):
+            gt_count_b = int(round(float(torch.as_tensor(gt_lanes[b]).detach().cpu().item())))
+            if gt_count_b != 4 or src_idx.numel() == 0:
+                continue
+
+            src_idx = src_idx.to(device=device, dtype=torch.long)
+            tgt_idx = tgt_idx.to(device=device, dtype=torch.long)
+            matched_src_by_tgt = {
+                int(tgt.item()): int(src.item())
+                for src, tgt in zip(src_idx, tgt_idx)
+                if int(src.item()) in allowed_queries
+            }
+            if not matched_src_by_tgt:
+                continue
+
+            target_all = gt_points[b].to(device=device, dtype=dtype)
+            valid_all = gt_valid[b].to(device=device, dtype=dtype)
+            for target_lane_idx, query_idx in matched_src_by_tgt.items():
+                if query_idx < 0 or query_idx >= pred_points.shape[1]:
+                    continue
+                if target_lane_idx < 0 or target_lane_idx >= target_all.shape[0]:
+                    continue
+
+                valid = valid_all[target_lane_idx] > 0.5
+                visible_count = int(valid.sum().detach().cpu().item())
+                if visible_count < int(self.gt4_near20_min_overlap):
+                    continue
+                if visible_count > int(self.gt4_near20_visible_thr):
+                    continue
+
+                pred = pred_points[b, query_idx]
+                target = target_all[target_lane_idx]
+                x_error_px = (pred[:, 0] - target[:, 0]).abs() * width_px
+                ape = x_error_px[valid].mean()
+                ape_value = float(ape.detach().cpu().item())
+                if ape_value < float(self.gt4_near20_lower_px) or ape_value > float(self.gt4_near20_upper_px):
+                    continue
+
+                point_loss = ((pred[:, 0] - target[:, 0]).abs() * point_scale[0])[valid].mean()
+                loss = point_loss
+                if float(self.gt4_near20_geom_curve) > 0.0 and pred_points.shape[2] >= 3:
+                    triplet_valid = valid[2:] & valid[1:-1] & valid[:-2]
+                    if bool(triplet_valid.any()):
+                        pred_px = pred * pixel_scale.view(1, 2)
+                        target_px = target * pixel_scale.view(1, 2)
+                        pred_lap = pred_px[2:] - 2.0 * pred_px[1:-1] + pred_px[:-2]
+                        gt_lap = target_px[2:] - 2.0 * target_px[1:-1] + target_px[:-2]
+                        gt_curve_mag = torch.norm(gt_lap.detach(), dim=-1)
+                        curve_weight = (1.0 + self.curve_alpha * gt_curve_mag).clamp(max=self.curve_weight_max)
+                        curve_raw = F.smooth_l1_loss(pred_lap, gt_lap, reduction="none").sum(dim=-1)
+                        triplet = triplet_valid.to(dtype=dtype)
+                        curve_loss = (curve_raw * triplet * curve_weight).sum() / triplet.sum().clamp_min(1.0)
+                        loss = loss + float(self.gt4_near20_geom_curve) * curve_loss
+
+                losses.append(loss)
+                ape_values.append(ape.detach())
+
+        if not losses:
+            return zero, pred_points.new_zeros(()), pred_points.new_zeros(())
+
+        loss = torch.stack(losses).mean()
+        count = pred_points.new_tensor(float(len(losses)))
+        mean_ape = torch.stack(ape_values).mean().to(device=device, dtype=dtype)
+        return loss, count, mean_ape
 
     def target_lane_count(self, pred_logits: torch.Tensor, batch: dict, gt_valid: list[torch.Tensor]) -> torch.Tensor:
         """Return one GT lane count per image on the prediction device."""
@@ -1631,6 +1783,15 @@ class GCSLoss(nn.Module):
             indices,
             gt_lanes,
         )
+        gt4_near20_refine_loss, gt4_near20_refine_count, gt4_near20_refine_ape = (
+            self.gt4_near20_geom_refine_loss(
+                pred_points,
+                gt_points,
+                gt_valid,
+                indices,
+                gt_lanes,
+            )
+        )
         query_count_ce_loss, query_count_acc, query_count_pred_mean = self.query_count_ce_loss(
             preds,
             batch,
@@ -1679,6 +1840,8 @@ class GCSLoss(nn.Module):
             total = total + self.count_boundary_gain * count_boundary_loss
         if self.boundary_pseudo_neg_gain != 0.0:
             total = total + self.boundary_pseudo_neg_gain * boundary_pseudo_neg_loss
+        if self.gt4_near20_geom_refine_gain != 0.0:
+            total = total + self.gt4_near20_geom_refine_gain * gt4_near20_refine_loss
         if self.query_count_ce_gain != 0.0:
             total = total + self.query_count_ce_gain * query_count_ce_loss
         if self.spurious_neg_gain != 0.0:
@@ -1716,6 +1879,9 @@ class GCSLoss(nn.Module):
                 boundary_pseudo_neg_loss.detach(),
                 boundary_pseudo_count.detach(),
                 boundary_pseudo_score_mean.detach(),
+                gt4_near20_refine_loss.detach(),
+                gt4_near20_refine_count.detach(),
+                gt4_near20_refine_ape.detach(),
                 query_count_ce_loss.detach(),
                 query_count_acc.detach(),
                 query_count_pred_mean.detach(),

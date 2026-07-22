@@ -93,6 +93,48 @@ Do not enable `RUN_TESTS=1` for this follow-up until the candidate passes
 official-val ACC/FP/FN, GT4/GT5 count shape, raw-Q12 GT4/GT5 match, and
 train0601/train0531 robustness gates.
 
+The 2026-07-22 q7-only static reference counterfactual is diagnostic-only and
+does not train or run TEST:
+
+```bash
+bash scripts/run_query_alpha05_env30_gt45staticref_q7only_v3a_raw_diag.sh
+```
+
+It constructs
+`ultralytics/cfg/models/gcs/gcs-yolo-lane-s-env30-gt45staticref-q7only-v3a.yaml`,
+loads env30 `weights/official_best.pt` into that YAML through
+`tools/diagnose_tusimple_raw_q12_filters.py --model-cfg`, and writes raw-Q12
+diagnostics for official-val, train0601, and train0531 only. Use it to decide
+whether a q7-only reference bank passes the raw candidate gate before any full
+training is considered.
+
+The 2026-07-22 GT4 near-20px geometry refine follow-up trains from env30 with
+a default-off extra geometry-only loss enabled by the wrapper:
+
+```bash
+bash scripts/run_query_alpha05_env30_gt4_near20_geom_refine_v1.sh
+```
+
+Default first-pass settings:
+
+```text
+RUN_TESTS = 0
+GT4_NEAR20_GEOM_REFINE = 2.0
+GT4_NEAR20_VISIBLE_THR = 10
+GT4_NEAR20_LOWER_PX = 20.0
+GT4_NEAR20_UPPER_PX = 25.0
+GT4_NEAR20_MIN_OVERLAP = 3
+GT4_NEAR20_ALLOWED_QUERIES = 0,10
+GT4_NEAR20_GEOM_CURVE = 0.05
+OFFICIAL_INTERVAL = 5
+VALID_BEFORE_MAXDET = 1
+```
+
+This keeps the env30 model/data/decode/reference/count/valid-negative protocol
+and only adds a training-time geometry pull for matched GT4 short near-miss
+lanes. Do not run TEST unless the candidate first passes official-val
+ACC/FP/FN, GT4/GT5 count-shape, and train0601/train0531 raw-Q12 gates.
+
 The 2026-07-20 explicit GT3/GT4-only clear-far follow-up uses:
 
 ```bash

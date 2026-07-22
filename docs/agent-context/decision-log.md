@@ -1,5 +1,241 @@
 # Decision Log
 
+## 2026-07-22: Add env30 GT4 near-20px geometry refine follow-up
+
+Decision:
+
+Implement a default-off env30 follow-up that targets the current train0601
+GT4-short bottleneck without changing reference banks, decode, count losses, or
+valid-negative pressure.
+
+Implementation:
+
+```text
+ultralytics/utils/gcs_loss.py
+tools/train_gcs.py
+ultralytics/cfg/default.yaml
+scripts/run_query_alpha05_gt5short_geom_w2_bneg002_env30_nocount_v1.sh
+scripts/run_query_alpha05_env30_gt4_near20_geom_refine_v1.sh
+```
+
+New default-off loss/config:
+
+```text
+gcs_gt4_near20_geom_refine = 0.0
+gcs_gt4_near20_visible_thr = 10
+gcs_gt4_near20_lower_px = 20.0
+gcs_gt4_near20_upper_px = 25.0
+gcs_gt4_near20_min_overlap = 3
+gcs_gt4_near20_allowed_queries = "0,10"
+gcs_gt4_near20_geom_curve = 0.0
+```
+
+Why:
+
+The env30 train0601 GT4-short miss decomposition showed `10/10` misses already
+have a final decoded lane, but all decoded x-APE values remain above 20px.
+There was no clean threshold, max-det, count, point-valid, or static-reference
+rescue. The useful subset is the `20..25px` near-miss region, especially
+matched q0/q10 candidates that are not the dominant q5/q6/q7 GT5-lost20
+carriers.
+
+The new loss only applies on GT4 images, short GT lanes, Hungarian-matched
+same-GT queries from the allowed-query list, and current fixed-y mean x-APE
+inside the configured pixel window. It adds geometry only; it does not boost
+existence or point-valid targets.
+
+Next action:
+
+Run the wrapper on the remote server and keep TEST closed:
+
+```bash
+bash scripts/run_query_alpha05_env30_gt4_near20_geom_refine_v1.sh
+```
+
+Before any reporting-only TEST, require official-val ACC/FP/FN at least as good
+as env30, GT4/GT5 count-shape safety, train0601 GT4-short miss reduction, and
+no GT5-short raw/point-valid regression on train0601/train0531.
+
+## 2026-07-22: Complete env30 GT4/GT5 staticref v3 bank diagnostic
+
+Decision:
+
+Do not launch v3 full training from the current staticref v2 bank, and do not
+launch the `w00` no-valid-negative companion as the immediate next full train.
+Keep env30 as the active reference. The next allowed action is a no-training
+q7-only static/pretrain counterfactual.
+
+Artifacts:
+
+```text
+.tmp/env30_gt45staticref_v3_bank_diagnostic/summary.md
+.tmp/env30_gt45staticref_v3_bank_diagnostic/short_gt45_summary.csv
+.tmp/env30_gt45staticref_v3_bank_diagnostic/lane_transition_events.csv
+.tmp/env30_gt45staticref_v3_bank_diagnostic/query_carrier_summary.csv
+.tmp/env30_gt45staticref_v3_bank_diagnostic/focus_query_quality.csv
+.tmp/env30_gt45staticref_v3_bank_diagnostic/candidate_v3_recommendation.json
+```
+
+Evidence:
+
+```text
+train0601 GT4 short hit20:
+  env30 9/19, v2 11/19, w01 14/19
+train0601 GT5 short hit20:
+  env30 142/183, v2 135/183, w01 139/183
+
+train0601 GT4 short q5/q6/q7 best-query share:
+  env30 2/19, v2 11/19, w01 10/19
+train0601 GT5 short q5/q6/q7 best-query share:
+  env30 3/183, v2 56/183, w01 58/183
+
+v2 GT4 short gained20:
+  3 lanes, all train0601 center; v2 q7 is best for 2/3.
+v2 GT5 short lost20:
+  10 lanes, all train0601; v2 q5/q6/q7 is best for 6/10.
+
+w01 GT4 short gained20:
+  7 lanes, val+train0601; w01 q7 is best for 3/7.
+w01 GT5 short lost20:
+  8 lanes, val+train0601; w01 q5/q6/q7 is best for 6/8.
+```
+
+Why:
+
+The diagnostic separates the previous aggregate tradeoff into carrier-level
+events. q7 is the only edited query with meaningful GT4-short gain, while q5
+and q6 add little direct GT4-short 20px coverage. But q7 is also the dominant
+GT5-short lost20 carrier: protected q10/q11/q1/q8 lanes often hand off to
+q7/q6, and the GT4-gain and GT5-loss pools overlap on center visible 9-10
+lanes. This means the staticref v2 bank is not just suffering from too much
+valid-negative pressure; the q5/q6/q7 carrier assignment itself is unstable.
+
+Next action:
+
+Build and screen a q7-only static/pretrain counterfactual before any training:
+
+```text
+q5/q6: default Q12 reference
+q7: only changed query
+q7 visible span: derived from GT4-short gained20 events
+outside q7 span: exact default reference
+taper: 2 anchors
+boundary clamp: no contact with 0.04/0.96 extremes
+selection: official-val + train0601/train0531 raw-Q12 only
+TEST: closed
+```
+
+Reject the staticref route if this q7-only counterfactual cannot improve
+GT4-short raw hit20 while keeping GT5-short hit20 and point-valid at or above
+env30 and preventing protected-query handoff into q5/q6/q7.
+
+## 2026-07-22: Add q7-only staticref v3a diagnostic implementation
+
+Decision:
+
+Implement the q7-only static reference counterfactual as default-off diagnostic
+tooling only. Do not change env30 defaults, do not launch training, and keep
+TEST closed.
+
+Implementation:
+
+```text
+data/gcs_reference_banks/q12_env30_gt45_static_q7only_v3a.json
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-env30-gt45staticref-q7only-v3a.yaml
+scripts/run_query_alpha05_env30_gt45staticref_q7only_v3a_raw_diag.sh
+tools/diagnose_tusimple_raw_q12_filters.py --model-cfg
+tools/infer_gcs.py::load_gcs_model_from_cfg_and_weights
+```
+
+Why:
+
+The existing raw-Q12 diagnostic could only load the pickled checkpoint model or
+a YAML model without checkpoint tensors. That is insufficient for static-bank
+counterfactuals because the q7-only reference must come from a new YAML while
+the learned weights must come from env30 `official_best.pt`. The new
+`--model-cfg` path builds the YAML model first, loads checkpoint tensors into
+it, and leaves the non-persistent fixed-y reference buffer defined by the YAML.
+
+q7-only bank policy:
+
+```text
+q5/q6 = default Q12 reference
+q7 = only changed query
+prototype source = train0601 q7-assisted GT4-short gained20 events only
+official-val usage = none for prototype generation; official-val is screening only
+span = fixed-y desc indices 36..44
+taper = 2 anchors each side
+x clip = [0.06, 0.94], with no v2 0.96 boundary contact
+```
+
+Next action:
+
+Run the no-training raw-Q12 diagnostic on the server and compare against env30:
+
+```bash
+bash scripts/run_query_alpha05_env30_gt45staticref_q7only_v3a_raw_diag.sh
+```
+
+Do not consider full training unless official-val, train0601, and train0531
+raw gates pass together.
+
+## 2026-07-22: Reject q7-only staticref v3a at raw-Q12 gate
+
+Decision:
+
+Reject `query_alpha05_env30_gt45staticref_q7only_v3a` before full training.
+Do not run TEST and do not use this as the next training candidate.
+
+Protocol:
+
+```text
+run type = no-training raw-Q12 counterfactual
+weights = env30 official_best.pt
+model_cfg = gcs-yolo-lane-s-env30-gt45staticref-q7only-v3a.yaml
+splits = official-val, train0601, train0531
+TEST = not used
+```
+
+Artifacts:
+
+```text
+runs/gcs_lane/query_alpha05_env30_gt45staticref_q7only_v3a_official_best_val_raw_q12_counterfactual
+runs/gcs_lane/query_alpha05_env30_gt45staticref_q7only_v3a_official_best_train0601_raw_q12_counterfactual
+runs/gcs_lane/query_alpha05_env30_gt45staticref_q7only_v3a_official_best_train0531_raw_q12_counterfactual
+.tmp/env30_gt45staticref_q7only_v3a_analysis/summary.json
+```
+
+Evidence:
+
+```text
+overall raw has_match_20px:
+  val       env30 0.975441, q7only 0.975441
+  train0601 env30 0.960828, q7only 0.960828
+  train0531 env30 0.983900, q7only 0.983900
+
+train0601 GT4 short hit20:
+  env30 9/19, q7only 9/19
+train0601 GT5 short hit20:
+  env30 142/183, q7only 142/183
+
+GT4_short_gain20_q7only = 0
+GT5_short_lost20_q7only = 1
+```
+
+Why:
+
+The q7-only bank controlled the old q5/q6/q7 carrier explosion but did not
+create useful GT4-short raw coverage. It is almost env30-neutral: q7 usage does
+not grow into the dangerous GT5-short pool, but it also does not reproduce the
+GT4-short gains seen after actual v2/w01 training. Therefore the bottleneck is
+not solved by changing the static q7 reference prior alone.
+
+Next action:
+
+Do not run full training for q7-only v3a. A future attempt must first show a
+raw-Q12 gain above env30 on GT4 short without GT5 short regression. If no
+pretraining counterfactual can pass that gate, close the staticref route.
+
 ## 2026-07-20: Add constrained env30 GT4/GT5 staticref v2 candidate
 
 Decision:
@@ -247,6 +483,144 @@ boundary-pseudo valid-negative pressure to GT4 is the smallest follow-up that
 tests whether the GT5 damage is caused by broad valid-negative pressure. This
 is not a promotion and should keep TEST closed until official-val plus
 train0601/train0531 gates pass.
+
+## 2026-07-22: Reject GT4-only valid-negative w01 follow-up
+
+Decision:
+
+Reject `query_alpha05_env30_gt45staticref_v2_gt4only_validneg_w01` as a
+promotion candidate. Do not run TEST and do not immediately launch the `w00`
+no-valid-negative companion. Keep `env30` as the active reference.
+
+Primary official-val evidence:
+
+```text
+env30 official_best val ACC/FP/FN =
+  0.973330 / 0.015748 / 0.009642
+v2 official_best val ACC/FP/FN =
+  0.971040 / 0.018825 / 0.012626
+w01 official_best val ACC/FP/FN =
+  0.970965 / 0.024656 / 0.012626
+w01 best.pt val ACC/FP/FN =
+  0.968859 / 0.033425 / 0.013545
+```
+
+Post-train sweep gate:
+
+```text
+w01 official_best sweep rows = 2520
+rows with ACC >= env30 = 0
+rows with FP/FN both <= env30 = 0
+rows passing GT4/GT5 count-shape gate = 0
+
+w01 best.pt sweep rows = 2520
+rows with ACC >= env30 = 0
+rows with FP/FN both <= env30 = 0
+rows passing GT4/GT5 count-shape gate = 0
+```
+
+User-requested reporting-only TEST was run after this rejection. It confirms
+the candidate is below env30 and must not be used for tuning:
+
+```text
+env30 reporting-only TEST ACC/FP/FN =
+  0.966780 / 0.028732 / 0.023544
+w01 official_best TEST ACC/FP/FN =
+  0.966061 / 0.037233 / 0.024712
+w01 best.pt TEST ACC/FP/FN =
+  0.965752 / 0.041175 / 0.024053
+
+w01 official_best TEST count_acc_3/4/5 =
+  0.963218 / 0.617521 / 0.706503
+w01 official_best TEST count_confusion includes:
+  4->5 = 75, 4->6 = 15, 5->4 = 50, 5->6 = 99
+```
+
+The official ACC-best row uses `max_det=6` and is not count-shape-safe:
+
+```text
+decode = conf 0.001, point_valid_thr 0.6, nms 0, max_det 6, min_points 4
+w01 val count_confusion =
+  3->3 217, 3->4 6,
+  4->3 1, 4->4 64, 4->6 1,
+  5->4 2, 5->5 57, 5->6 15
+```
+
+The best `max_det=5` row removes the GT5 false-sixth explosion but still fails
+env30 ACC/FP/FN and count shape:
+
+```text
+w01 max_det=5 best val ACC/FP/FN =
+  0.970928 / 0.017493 / 0.012626
+count_confusion =
+  3->3 217, 3->4 6,
+  4->3 1, 4->4 64, 4->5 1,
+  5->4 2, 5->5 72
+```
+
+Raw-Q12 diagnostics:
+
+```text
+official-val overall has_match_20px:
+  env30 0.975441, v2 0.972371, w01 0.976209
+official-val overall mean APE:
+  env30 5.627210, v2 6.053190, w01 6.021849
+
+train0601 overall has_match_20px:
+  env30 0.960828, v2 0.950196, w01 0.956911
+train0601 overall mean APE:
+  env30 6.609740, v2 7.269312, w01 7.122588
+
+train0531 overall has_match_20px:
+  env30 0.983900, v2 0.980322, w01 0.982111
+train0531 overall mean APE:
+  env30 5.177374, v2 5.694983, w01 5.520983
+```
+
+Short-lane diagnostics:
+
+```text
+train0601 GT4 short has_match_20px:
+  env30 0.473684, v2 0.578947, w01 0.736842
+train0601 GT5 short has_match_20px:
+  env30 0.775956, v2 0.737705, w01 0.759563
+train0601 GT5 short point_valid_recall@0.6:
+  env30 0.937601, v2 0.908242, w01 0.935816
+```
+
+Train-side count shape:
+
+```text
+train0601:
+  env30: 3->4=1, 4->5=7, 5->4=3
+  v2:    3->4=3, 4->5=4, 5->4=6
+  w01:   3->4=1, 4->5=11, 5->4=4
+
+train0531:
+  env30: 3->4=4, 4->5=2
+  v2:    3->4=6, 4->5=6
+  w01:   3->4=6, 3->5=1, 4->5=3
+```
+
+Why:
+
+`w01` proves that reducing/scoping valid-negative pressure partially restores
+GT5-short valid survival and strongly improves GT4-short raw coverage, but it
+does not solve the official target. The same q5/q6/q7 static bank remains a
+large GT5-short carrier (`train0601 q5/q6/q7 share 58/183`) while GT5-short
+20px misses stay worse than env30 (`41/183 -> 44/183`). At the count level,
+the improvement flips back into GT4 over-count (`train0601 4->5: 7 -> 11`) and
+official-val FP remains too high.
+
+Smallest safe next action:
+
+Do not spend TEST and do not launch `w00` as the immediate next training run.
+The current evidence says the blocker is not simply "valid-neg too strong";
+the v2 static reference bank itself creates unstable q5/q6/q7 GT5/GT4 carrier
+assignment. The next useful step should be static-bank analysis or a new bank
+that changes the q5/q6/q7 GT5-short carrier behavior before another full
+training run. A candidate should be screened by raw-Q12 official-val plus
+train0601/train0531 before TEST.
 
 ## 2026-07-17: Execute env30 short GT4/GT5 gate and reject before training
 

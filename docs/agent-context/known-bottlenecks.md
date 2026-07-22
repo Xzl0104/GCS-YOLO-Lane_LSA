@@ -1,5 +1,189 @@
 # Known Bottlenecks
 
+## 2026-07-22 Env30 q7-only Staticref v3a Raw Diagnostic Rejection
+
+The no-training q7-only static-reference counterfactual is complete and
+rejected before full training. TEST was not used.
+
+Command:
+
+```bash
+bash scripts/run_query_alpha05_env30_gt45staticref_q7only_v3a_raw_diag.sh
+```
+
+Artifacts:
+
+```text
+runs/gcs_lane/query_alpha05_env30_gt45staticref_q7only_v3a_official_best_val_raw_q12_counterfactual
+runs/gcs_lane/query_alpha05_env30_gt45staticref_q7only_v3a_official_best_train0601_raw_q12_counterfactual
+runs/gcs_lane/query_alpha05_env30_gt45staticref_q7only_v3a_official_best_train0531_raw_q12_counterfactual
+.tmp/env30_gt45staticref_q7only_v3a_analysis/summary.json
+.tmp/env30_gt45staticref_q7only_v3a_analysis/short_gt45_compare.csv
+.tmp/env30_gt45staticref_q7only_v3a_analysis/q7only_transition_events.csv
+```
+
+Overall raw-Q12 is essentially env30-neutral:
+
+```text
+official-val has_match_20px:
+  env30 0.975441, q7only 0.975441
+train0601 has_match_20px:
+  env30 0.960828, q7only 0.960828
+train0531 has_match_20px:
+  env30 0.983900, q7only 0.983900
+```
+
+The short GT4/GT5 gate fails:
+
+```text
+val GT4 short hit20:
+  env30 1/8, q7only 1/8
+val GT5 short hit20:
+  env30 40/53, q7only 40/53
+
+train0601 GT4 short hit20:
+  env30 9/19, q7only 9/19
+train0601 GT5 short hit20:
+  env30 142/183, q7only 142/183
+
+train0531 GT4 short hit20:
+  env30 2/3, q7only 2/3
+```
+
+Carrier behavior is controlled but not useful:
+
+```text
+train0601 GT4 short q5/q6/q7 best-query share:
+  env30 2/19, q7only 3/19
+train0601 GT5 short q5/q6/q7 best-query share:
+  env30 3/183, q7only 2/183
+```
+
+Event-level result:
+
+```text
+GT4_short_gain20_q7only = 0
+GT5_short_lost20_q7only = 1
+GT5 short hit20 flips = 2 total:
+  one env30 hit becomes q7only miss,
+  one env30 miss becomes q7only hit.
+```
+
+Decision:
+
+Reject q7-only v3a before training. It solves the carrier-explosion risk by
+keeping q7 usage close to env30, but it does not recover the train0601
+GT4-short gain that made v2/w01 interesting. Since the required first gate was
+GT4-short raw hit20 improvement without GT5 damage, this line should not
+proceed to full training or TEST.
+
+Smallest safe next action:
+
+Do not train q7-only v3a. A future staticref attempt would need a stronger
+pretraining counterfactual that changes the actual learned q7 response, not
+only the non-persistent reference prior. If no such raw-Q12 counterfactual can
+raise GT4-short hit20 above env30 while keeping GT5 short at env30, close the
+static-reference route and move back to candidate-generation evidence rather
+than another full training run.
+
+## 2026-07-22 Env30 GT4/GT5 Staticref v3 Bank Diagnostic
+
+The v3 reference-bank diagnostic is complete as a no-training, no-TEST
+analysis. It compared env30, rejected staticref v2, and rejected w01 using
+raw-Q12 `official_best` diagnostics on canonical official-val, train0601, and
+train0531.
+
+Artifacts:
+
+```text
+.tmp/env30_gt45staticref_v3_bank_diagnostic/summary.md
+.tmp/env30_gt45staticref_v3_bank_diagnostic/short_gt45_summary.csv
+.tmp/env30_gt45staticref_v3_bank_diagnostic/lane_transition_events.csv
+.tmp/env30_gt45staticref_v3_bank_diagnostic/query_carrier_summary.csv
+.tmp/env30_gt45staticref_v3_bank_diagnostic/focus_query_quality.csv
+.tmp/env30_gt45staticref_v3_bank_diagnostic/candidate_v3_recommendation.json
+```
+
+Short-lane aggregate:
+
+```text
+val GT4 short hit20:
+  env30 1/8, v2 0/8, w01 3/8
+val GT5 short hit20:
+  env30 40/53, v2 41/53, w01 42/53
+
+train0601 GT4 short hit20:
+  env30 9/19, v2 11/19, w01 14/19
+train0601 GT5 short hit20:
+  env30 142/183, v2 135/183, w01 139/183
+
+train0531 GT4 short hit20:
+  env30 2/3, v2 1/3, w01 2/3
+```
+
+Query-carrier evidence:
+
+```text
+train0601 GT4 short q5/q6/q7 best-query share:
+  env30 2/19, v2 11/19, w01 10/19
+train0601 GT5 short q5/q6/q7 best-query share:
+  env30 3/183, v2 56/183, w01 58/183
+
+val GT5 short q5/q6/q7 best-query share:
+  env30 1/53, v2 15/53, w01 17/53
+```
+
+Critical transition events:
+
+```text
+v2 GT4 short gained20:
+  3 lanes, all train0601 center; v2 q7 is best for 2/3.
+v2 GT5 short lost20:
+  10 lanes, all train0601; v2 q5/q6/q7 is best for 6/10,
+  with protected q10/q11/q1/q8 often handing off to q7/q6.
+
+w01 GT4 short gained20:
+  7 lanes, val+train0601; w01 q7 is best for 3/7.
+w01 GT5 short lost20:
+  8 lanes, val+train0601; w01 q5/q6/q7 is best for 6/8,
+  with protected-to-focus handoff in 5/8.
+```
+
+Interpretation:
+
+The only useful edited-query signal is mostly q7; q5 and q6 add little direct
+GT4-short 20px coverage. However, q7 is not a clean GT4-only carrier. The GT4
+gain and GT5 lost20 pools overlap on center lanes with visible counts around
+9-10, so a broad q7/q5/q6 static bank cannot be separated by a simple
+visible-count or side-group rule. This explains why w01 can improve
+train0601 GT4-short raw hit20 while official-val FP/count shape and TEST
+reporting remain worse than env30.
+
+Decision:
+
+Do not launch a v3 full training run from the current v2 bank. Do not launch
+the w00 no-valid-negative companion as the next full train. The next allowed
+step is a no-training q7-only static/pretrain counterfactual: keep q5/q6 at the
+default Q12 reference, change only q7, restrict q7 to the GT4-short gained20
+visible span, use exact default reference outside that span, use a smaller
+two-anchor taper, and avoid 0.04/0.96 boundary clamp contact.
+
+Gate before any full training:
+
+```text
+official-val and train0601/train0531 raw-Q12:
+  GT4 short hit20 must improve over env30.
+  GT5 short hit20 must be >= env30, not only better than v2/w01.
+  GT5 short point_valid@0.6 must not regress.
+  q0/q1/q3/q10/q11 must not hand off into q5/q6/q7 lost20.
+  q5/q6/q7 GT5-short best-carrier share must not jump from env30 levels
+  unless GT5 short hit20 and point-valid both improve.
+
+official-val count shape after any later train:
+  ACC >= 0.973330, FP <= 0.015748, FN <= 0.009642,
+  4->5 = 0, 5->4 <= 1, and max_det=6 5->6 = 0.
+```
+
 ## 2026-07-21 Env30 GT4/GT5 Staticref v2 Closure
 
 The `query_alpha05_env30_gt45staticref_v2` full protocol is complete and
@@ -98,6 +282,102 @@ the next ablation be narrowed to GT4-only boundary-pseudo valid negatives
 `gcs_boundary_pseudo_valid_neg_weight` (`0.1` or `0.0`). Any follow-up must pass
 official-val ACC/FP/FN, GT4/GT5 count shape, raw match/point-valid survival, and
 train0601/train0531 robustness together before any reporting-only TEST.
+
+## 2026-07-22 GT4-Only Valid-Neg w01 Closure
+
+The `query_alpha05_env30_gt45staticref_v2_gt4only_validneg_w01` follow-up is
+complete and rejected. TEST was not run and should remain closed.
+
+Primary official-val comparison:
+
+```text
+env30 ACC/FP/FN =
+  0.973330 / 0.015748 / 0.009642
+v2 ACC/FP/FN =
+  0.971040 / 0.018825 / 0.012626
+w01 ACC/FP/FN =
+  0.970965 / 0.024656 / 0.012626
+```
+
+The post-train sweeps for both `official_best.pt` and `best.pt` had zero rows
+with ACC at or above env30, zero rows with FP/FN both at least as good as env30,
+and zero rows passing the GT4/GT5 count-shape gate.
+
+User-requested reporting-only TEST confirms rejection:
+
+```text
+env30 TEST ACC/FP/FN =
+  0.966780 / 0.028732 / 0.023544
+w01 official_best TEST ACC/FP/FN =
+  0.966061 / 0.037233 / 0.024712
+w01 best.pt TEST ACC/FP/FN =
+  0.965752 / 0.041175 / 0.024053
+```
+
+The `w01 official_best` TEST count shape is worse than env30:
+
+```text
+count_acc_3/4/5 =
+  0.963218 / 0.617521 / 0.706503
+count_confusion includes:
+  4->5 = 75, 4->6 = 15, 5->4 = 50, 5->6 = 99
+```
+
+The best official-val ACC row used `max_det=6`, which created clear GT5
+over-count:
+
+```text
+w01 best row count_confusion includes:
+  4->6 = 1
+  5->6 = 15
+  count_acc_5 = 0.770270
+```
+
+The best `max_det=5` row is cleaner but still below the gate:
+
+```text
+w01 max_det=5 ACC/FP/FN =
+  0.970928 / 0.017493 / 0.012626
+count_confusion includes:
+  4->5 = 1
+  5->4 = 2
+```
+
+Raw-Q12 evidence shows a partial recovery, not a solution:
+
+```text
+official-val has_match_20px:
+  env30 0.975441, v2 0.972371, w01 0.976209
+train0601 has_match_20px:
+  env30 0.960828, v2 0.950196, w01 0.956911
+train0531 has_match_20px:
+  env30 0.983900, v2 0.980322, w01 0.982111
+
+train0601 GT4 short has_match_20px:
+  env30 0.473684, v2 0.578947, w01 0.736842
+train0601 GT5 short has_match_20px:
+  env30 0.775956, v2 0.737705, w01 0.759563
+```
+
+Interpretation:
+
+Reducing/scoping valid-negative pressure helps GT4-short and partially restores
+GT5-short valid survival, but it does not fix the unstable q5/q6/q7 static-bank
+carrier behavior. On train0601, GT4 `4->5` gets worse than both env30 and v2:
+
+```text
+env30 4->5 = 7
+v2    4->5 = 4
+w01   4->5 = 11
+```
+
+Next action:
+
+Do not launch `w00` as the immediate next full training run. A zero valid-neg
+run is likely to further release extra carriers because `w01` already increases
+GT4 over-count while still failing env30 official-val. The next useful work is
+a static-bank redesign or pre-training static/raw diagnostic that changes
+q5/q6/q7 GT5-short carrier assignment before another full training run.
 
 ## 2026-07-17 Env30 Short GT4/GT5 Gate Execution
 
