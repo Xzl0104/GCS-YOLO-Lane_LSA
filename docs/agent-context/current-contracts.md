@@ -2,14 +2,6 @@
 
 This file records the active contracts for branch `codex/5-25-3-k56`.
 
-Active source/config is the rollback state at commit `86c8fb31c` (`Add GT4
-GT5 weak geometry rescue run`). All later commits, files, commands, and
-experiment results after `86c8fb31c` are rejected legacy records unless a
-future task explicitly reopens them. The rolled-back worktree intentionally
-removes the post-86 tiered rescue scripts, Q12 ultrashort dataref YAMLs,
-reference banks, final-query extra guard/gate tools, and related diagnostics
-from active code.
-
 ## Branch Scope
 
 This branch imports the historical `5-25-3.zip` algorithm and changes only the TuSimple fixed-y contract:
@@ -27,80 +19,15 @@ query-count YAML and emits `pred_count_logits: B x 4` for the fixed 2/3/4/5
 lane-count classes. The default query YAML still emits no `pred_count_logits`,
 and ordered-slot keeps its existing count/slot logic unchanged.
 
-Post-`86c8fb31c` Q12 ultrashort dataref variants are rejected legacy records,
-not active branch contracts. This includes `Q12-dataref-ultrashort-v1`,
-`Q12-dataref-ultrashort-v2`, and
-`Q12-dataref-ultrashort-q1q3protected-v1`, their YAMLs, reference banks,
-static audits, launch scripts, and final-query extra guard/gate diagnostics.
-They were removed from active code by the rollback. Their recorded outcomes
-remain useful only as negative evidence: v2 failed the official-val/train
-final-query gate (`0.972040/0.023691/0.011938`, GT4 false fifth and GT5
-false sixth regressions), and q1/q3-protected failed much earlier
-(`0.949375/0.113682/0.047980`, severe over-count). Do not relaunch, continue,
-or use TEST for these lines unless a future task explicitly reopens them with a
-new official-val/train gate.
-
 The branch also includes the 2026-06-27 user-requested, default-off `gcs_hard_sampling` train-only sampler for short-visible GT3/GT4/GT5 and 0601 samples. It changes only the training dataloader sampling frequency through `WeightedRandomSampler`; it does not change labels, validation/test dataloaders, point/smooth/curve losses, decode, or official metrics.
 
 The branch also includes the 2026-06-27 user-requested, default-off `gcs_spurious_neg` loss for E3-lite. It uses the training Hungarian matcher indices only to select unmatched short duplicate-like queries near matched queries, then adds an extra target-zero BCE on their `pred_logits`. The GT-count weighting extension keeps the old default behavior with `gcs_spurious_gt3_weight=1.0`, `gcs_spurious_gt4_weight=1.0`, `gcs_spurious_gt5_weight=1.0`, and `gcs_spurious_disable_gt5=False`, while allowing GT3-or-sparser, GT4, and GT5-or-denser samples to carry different spurious-negative weights. The 2026-06-28 `gcs_spurious_gt_protect` extension is also default-off and only removes GT-close candidate queries from this extra negative BCE. It does not change data sampling, dataset labels, matcher logic, point/smooth/curve losses, decode, NMS, or official metrics.
 
-The env30 rollback boundary also includes the default-off
-`gcs_gt5_short_visible_thr` / `gcs_gt5_short_point_valid_weight`,
-`gcs_short_geom`, `gcs_boundary_pseudo_neg`, cached official sweep protocol,
-and the two env30-family launch scripts first present at `86c8fb31c`:
-
-```text
-scripts/run_query_alpha05_gt5short_geom_w2_bneg002_env30_nocount_v1.sh
-scripts/run_query_alpha05_gt4gt5weak_geom_w15w2_env30_nocount_v1.sh
-```
-
-The 2026-07-22 q7-only static-reference counterfactual is default-off and
-diagnostic-only:
-
-```text
-data/gcs_reference_banks/q12_env30_gt45_static_q7only_v3a.json
-ultralytics/cfg/models/gcs/gcs-yolo-lane-s-env30-gt45staticref-q7only-v3a.yaml
-scripts/run_query_alpha05_env30_gt45staticref_q7only_v3a_raw_diag.sh
-tools/diagnose_tusimple_raw_q12_filters.py --model-cfg
-```
-
-It changes only the constructed model reference bank for raw-Q12 diagnostics by
-loading an existing checkpoint into a model built from the q7-only YAML. It is
-not a full training script, does not change default env30 behavior, and must
-not run TEST or become a training candidate unless official-val plus
-train0601/train0531 raw gates pass first.
-
-The 2026-07-22 GT4 near-20px geometry refine follow-up is default-off and
-train-loss-only:
-
-```text
-gcs_gt4_near20_geom_refine = 0.0
-gcs_gt4_near20_visible_thr = 10
-gcs_gt4_near20_lower_px = 20.0
-gcs_gt4_near20_upper_px = 25.0
-gcs_gt4_near20_min_overlap = 3
-gcs_gt4_near20_allowed_queries = "0,10"
-gcs_gt4_near20_geom_curve = 0.0
-```
-
-When explicitly enabled, it adds an extra geometry-only loss for GT4 images
-only, GT lanes with visible anchor count at or below the threshold, and
-Hungarian-matched same-GT queries whose id is in the allowed-query list and
-whose current fixed-y mean x-APE is inside the configured pixel window. It does
-not change reference banks, matcher assignment, existence targets,
-point-valid targets, count losses, decode, NMS, official metrics, validation
-GT, or TEST protocol. The paired wrapper is:
-
-```bash
-bash scripts/run_query_alpha05_env30_gt4_near20_geom_refine_v1.sh
-```
-
-TEST must stay closed until official-val plus train0601/train0531 raw-Q12 and
-count-shape gates pass.
-
-Earlier pre-env30 history around the old `424ab1c86` rollback remains useful
-only to interpret old logs. The following older mechanisms/tools are not part
-of the active `86c8fb31c` code state unless the exact active files expose them:
+Active source/config is rolled back to commit
+`424ab1c869f0a02556d8b6b6a44c27e5585e47c0` (`Add valid-before-maxdet decode
+option`). The following commits are old state for this rollback and their
+mechanisms, tools, commands, logs, and experiment results are legacy records
+only unless a future task explicitly re-enables them:
 
 - `436fcb616` (`Add GCS short-side hardset diagnostics`)
 - `f4c200bbe` (`Add default-off short-side geometry loss`)
@@ -372,17 +299,15 @@ All branch configs keep `Q=12`, `K=56`, fixed-y anchors `710/720 -> 160/720`, an
 
 Historical q12-k56 experiment docs are old records. Preserve them, but do not let them override the active 5-25-3 K56 mainline contract.
 
-Active source/config is rolled back to commit `86c8fb31c` (`Add GT4 GT5 weak
-geometry rescue run`). Its algorithm contract remains the 5-25-3 K56 mainline
-through the env30 script boundary: the default-off query Count Head,
-`valid_before_maxdet`, GT5 short point-valid rescue, `gcs_short_geom`,
-`gcs_boundary_pseudo_neg`, cached official sweep protocol, and env30-family
-scripts are active. Post-`86c8fb31c` tiered rescue, Q12 ultrashort dataref,
-final-query extra guard/gate, router/selector, Q18/Q20/dataref,
-lane-balanced, valid-repair, side-aux, far-spurious, ranking/raw-rescue, or
-count-contract diagnostic tooling is rejected legacy material only. Later
-commits and notes are preserved only as failed experiment conclusions in the
-docs. They are not active CLI/config/loss/tool behavior.
+Active source/config is rolled back to commit `424ab1c86` (`Add
+valid-before-maxdet decode option`). Its algorithm contract remains the
+5-25-3 K56 mainline through that commit: no later mainline Count Head,
+Q18/Q20/dataref, lane-balanced, valid-repair, side-aux, short-side hardset,
+`gcs_short_side_geom`, `gcs_far_spurious_neg`, ignore-first ranking/raw-rescue,
+or count-contract diagnostic tooling is active. The only Count Head exception is
+the 2026-07-06 user-requested, default-off query Count Head ablation documented
+above. Later commits and notes are preserved only as legacy experiment
+conclusions in the docs. They are not active CLI/config/loss/tool behavior.
 
 ## Label Contract
 
@@ -445,7 +370,7 @@ This optional output is default-off and uses class mapping
 
 ## Loss Contract
 
-Default logged loss items on the active `86c8fb31c` rollback state include:
+Default logged loss items on the active `424ab1c86` rollback state include:
 
 ```text
 exist_loss
@@ -489,12 +414,10 @@ query_count_pred_mean
 When logits are absent, the three query-count log items are zero for old-model
 compatibility.
 
-Post-`86c8fb31c` log items such as `gt4_short_*`,
-`final_extra_guard_*`, tiered short-geometry diagnostics, ultrashort dataref
-diagnostics, router/selector diagnostics, `far_spur_loss`,
+Post-`424ab1c86` log items such as `short_side_geom_loss`, `far_spur_loss`,
 `farspur_if_loss`, `rank_topk_loss`, `shortside_*`, `rank_*`,
-`base_exist_ignore_*`, and `clear_far_boundary_count` are rejected legacy
-records only and are not emitted by the active rollback code.
+`base_exist_ignore_*`, and `clear_far_boundary_count` are legacy records only
+and are not emitted by the active rollback code.
 
 For ordered-slot mode, standalone `OrderedSlotGCSLoss` defaults must match
 `ultralytics/cfg/default.yaml`: `gcs_count_ce=1.0`,
@@ -527,40 +450,21 @@ logs the unweighted GT5 undercount boundary term.
 
 `boundary_pseudo_neg_loss` is disabled by default through
 `gcs_boundary_pseudo_neg=0.0`. When enabled, it requires `pred_valid_logits`
-and applies only to unmatched queries on images whose GT lane count is at least
-`gcs_boundary_pseudo_gt_count`. `gcs_boundary_pseudo_max_gt_count=0` preserves
-the old no-upper-bound behavior; setting it to a positive value excludes images
-with more GT lanes than that value from this extra target-zero BCE. Candidate
-queries must have predicted-visible
+and applies only to unmatched queries on images whose GT lane count equals
+`gcs_boundary_pseudo_gt_count`. Candidate queries must have predicted-visible
 anchor count in `[gcs_boundary_pseudo_min_valid, gcs_boundary_pseudo_visible_thr]`,
-existence score at least `gcs_boundary_pseudo_score_thr`, and minimum mean x
-distance from every GT lane at least `gcs_boundary_pseudo_dist_thr`.
-`gcs_boundary_pseudo_envelope_margin_px=-1.0` preserves the old mask. When set
-to a non-negative margin, the envelope gate is computed on query/GT
-common-visible anchors and requires the query to stay outside the GT envelope
-by at least the configured margin for a sufficient fraction of anchors. This
-changes only the training loss candidate mask; it does not change model outputs,
-matcher assignment, labels, decode, NMS, or official metrics.
-`gcs_boundary_pseudo_valid_neg_weight=0.0` preserves the old behavior. When set
-above zero, the same selected clear-far unmatched queries also receive a
-target-zero BCE on anchors whose detached predicted visibility exceeds
-`gcs_boundary_pseudo_valid_thr`; this is intended to make clear-far extra
-carriers fail point-valid/min-points survival without changing decode or the
-selection mask.
-
-The default-off `env30_gt45staticref_v2` candidate adds only a constrained Q12
-static reference bank and a wrapper script:
-
-```text
-data/gcs_reference_banks/q12_env30_gt45_static_v2.json
-ultralytics/cfg/models/gcs/gcs-yolo-lane-s-env30-gt45staticref-v2.yaml
-scripts/run_query_alpha05_env30_gt45staticref_v2.sh
-```
-
-The bank changes only q5/q6/q7, keeps q2/q8 and q0/q1/q3/q10/q11 at the default
-Q12 reference, uses visible-span prototypes with four-anchor taper, and avoids
-the v1 hard-edge `0.001`/`0.999` extrapolation. It is a training candidate only;
-test remains closed until official-val plus train0601/train0531 gates pass.
+existence score at least `gcs_boundary_pseudo_score_thr`, nearest GT lane equal
+to the leftmost or rightmost GT lane, and nearest-GT mean x distance at least
+`gcs_boundary_pseudo_dist_thr`. `gcs_boundary_pseudo_envelope_margin_px=-1.0`
+preserves the old mask. When set to a non-negative margin, the envelope gate is
+computed on query/GT common-visible anchors. For each such anchor, the left and
+right GT envelope is the minimum and maximum valid GT x at that fixed-y anchor.
+A left-boundary candidate must have at least
+`gcs_boundary_pseudo_envelope_ratio_thr` of common-visible anchors left of
+`left_env_x - margin`; a right-boundary candidate must have at least that ratio
+right of `right_env_x + margin`. This changes only the training loss candidate
+mask; it does not change model outputs, matcher assignment, labels, decode,
+NMS, or official metrics.
 
 ### Legacy Post-424 Loss And Diagnostic Records
 
@@ -686,42 +590,27 @@ Hungarian raw-close matches are reported separately through
 `shortside_hungarian_rawmatch_candidate_count`.
 
 `gcs_gt5_short_visible_thr=0` and
-`gcs_gt5_short_point_valid_weight=1.0` keep the legacy GT5-only point-valid
-rescue effectively disabled by default. The active short-rescue path is
-`gcs_short_geom`. When enabled, `gcs_short_geom` applies to Hungarian-matched
-images with `GT lane count == 4` or `GT lane count == 5`, first to GT lanes
-whose visible anchor count is at or below `gcs_short_geom_visible_thr`, then
-with a stronger multiplier for lanes at or below
-`gcs_short_geom_focus_visible_thr`. GT4 and GT5 can be weighted separately
-through `gcs_short_geom_gt4_weight` and `gcs_short_geom_gt5_weight`. The same
-short-rescue weights are used by `point_loss`, `curve_loss`, and the positive
-anchor side of `point_valid_loss`; they do not change point regression, smooth,
-mask, edge, dataset, dataloader, matcher, decode, NMS, or official metrics.
-`gt5_short_pos_count`, `gt5_short_pos_anchor_count`, and
+`gcs_gt5_short_point_valid_weight=1.0` keep GT5 short point-valid rescue
+effectively disabled by default. When enabled, the point-valid BCE keeps the
+same global target structure, applies only on images with `GT lane count == 5`,
+only on Hungarian-matched GT lanes whose visible anchor count is at or below
+the threshold, and only multiplies the BCE weight for visible
+`target_valid == 1` anchors. It does not change point regression, smooth,
+curve, mask, edge, dataset, dataloader, matcher, decode, NMS, or official
+metrics. `gt5_short_pos_count`, `gt5_short_pos_anchor_count`, and
 `gt5_short_point_valid_loss` are diagnostics for the rescued anchors.
 
 `gcs_short_geom=0.0` keeps the default query point/curve geometry losses
 unchanged. When explicitly enabled, `gcs_short_geom` applies only inside
 training loss calculation for Hungarian-matched images with `GT lane count == 4`
 or `GT lane count == 5`, only to GT lanes whose visible anchor count is at or
-below `gcs_short_geom_visible_thr`, and with an extra stronger multiplier via
-`gcs_short_geom_focus_weight` for lanes at or below
-`gcs_short_geom_focus_visible_thr`. GT4 and GT5 remain separately weighted
-through `gcs_short_geom_gt4_weight` and `gcs_short_geom_gt5_weight`. It does not
-change model outputs, matcher assignment, smooth loss, mask/edge losses,
-dataset, dataloader, decode, NMS, official metrics, Count Head, or loss item
-count. The same short-rescue weights are shared by `point_loss`, `curve_loss`,
-and the positive-anchor side of `point_valid_loss`. The geometry boost has no
-side-lane/order assumption.
-
-`gcs_short_geom_tiered=False` preserves the legacy single-threshold
-`gcs_short_geom_visible_thr` path above. When explicitly enabled, the helper
-selects lane weights by GT lane count and visible-count tier:
-GT4 ultra/mid and GT5 ultra/mid thresholds and weights. Tier weights default to
-`1.0`, so enabling tiered mode without explicit tier weights still produces no
-extra boost. The tiered path still only changes lane-level weighting in
-`point_loss` and `curve_loss`; it does not change point-valid rescue, matcher,
-decode, official metrics, outputs, or loss item count.
+below `gcs_short_geom_visible_thr`, and only by lane-level weighting inside
+`point_loss` and `curve_loss`. The GT4 path is default-off through
+`gcs_short_geom_gt4_weight=1.0`; GT5 keeps the existing
+`gcs_short_geom_gt5_weight` behavior. It does not change model outputs, matcher
+assignment, smooth loss, point-valid BCE targets, mask/edge losses, dataset,
+dataloader, decode, NMS, official metrics, Count Head, or loss item count.
+The geometry boost has no side-lane/order assumption.
 
 `spurious_neg_loss` is disabled by default through `gcs_spurious_neg=0.0`.
 When enabled, it requires `pred_valid_logits` and applies only to unmatched

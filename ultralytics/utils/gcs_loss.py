@@ -47,9 +47,6 @@ class GCSLoss(nn.Module):
         "boundary_pseudo_neg_loss",
         "boundary_pseudo_count",
         "boundary_pseudo_score_mean",
-        "gt4_near20_refine_loss",
-        "gt4_near20_refine_count",
-        "gt4_near20_refine_ape",
         "query_count_ce_loss",
         "query_count_acc",
         "query_count_pred_mean",
@@ -345,9 +342,7 @@ class GCSLoss(nn.Module):
             else self._arg(args, "gcs_point_valid_pos_weight_max", 10.0)
         )
         self.short_geom_gain = float(self._arg(args, "gcs_short_geom", 0.0))
-        self.short_geom_visible_thr = int(self._arg(args, "gcs_short_geom_visible_thr", 20))
-        self.short_geom_focus_visible_thr = int(self._arg(args, "gcs_short_geom_focus_visible_thr", 10))
-        self.short_geom_focus_weight = float(self._arg(args, "gcs_short_geom_focus_weight", 1.5))
+        self.short_geom_visible_thr = int(self._arg(args, "gcs_short_geom_visible_thr", 10))
         self.short_geom_gt4_weight = float(self._arg(args, "gcs_short_geom_gt4_weight", 1.0))
         self.short_geom_gt5_weight = float(self._arg(args, "gcs_short_geom_gt5_weight", 2.0))
         self.short_geom_max_weight = float(self._arg(args, "gcs_short_geom_max_weight", 3.0))
@@ -358,7 +353,6 @@ class GCSLoss(nn.Module):
         self.boundary_pseudo_valid_thr = float(self._arg(args, "gcs_boundary_pseudo_valid_thr", 0.5))
         self.boundary_pseudo_min_valid = int(self._arg(args, "gcs_boundary_pseudo_min_valid", 3))
         self.boundary_pseudo_gt_count = int(self._arg(args, "gcs_boundary_pseudo_gt_count", 5))
-        self.boundary_pseudo_max_gt_count = int(self._arg(args, "gcs_boundary_pseudo_max_gt_count", 0))
         self.boundary_pseudo_score_thr = float(self._arg(args, "gcs_boundary_pseudo_score_thr", 0.0))
         self.boundary_pseudo_envelope_margin_px = float(
             self._arg(args, "gcs_boundary_pseudo_envelope_margin_px", -1.0)
@@ -366,34 +360,11 @@ class GCSLoss(nn.Module):
         self.boundary_pseudo_envelope_ratio_thr = float(
             self._arg(args, "gcs_boundary_pseudo_envelope_ratio_thr", 0.75)
         )
-        self.boundary_pseudo_valid_neg_weight = float(
-            self._arg(args, "gcs_boundary_pseudo_valid_neg_weight", 0.0)
-        )
-        self.gt4_near20_geom_refine_gain = float(self._arg(args, "gcs_gt4_near20_geom_refine", 0.0))
-        self.gt4_near20_visible_thr = int(self._arg(args, "gcs_gt4_near20_visible_thr", 10))
-        self.gt4_near20_lower_px = float(self._arg(args, "gcs_gt4_near20_lower_px", 20.0))
-        self.gt4_near20_upper_px = float(self._arg(args, "gcs_gt4_near20_upper_px", 25.0))
-        self.gt4_near20_min_overlap = int(self._arg(args, "gcs_gt4_near20_min_overlap", 3))
-        self.gt4_near20_allowed_queries = self._parse_query_ids(
-            self._arg(args, "gcs_gt4_near20_allowed_queries", "0,10")
-        )
-        self.gt4_near20_geom_curve = float(self._arg(args, "gcs_gt4_near20_geom_curve", 0.0))
 
         if self.short_geom_gain < 0.0:
             raise ValueError(f"gcs_short_geom must be >= 0, got {self.short_geom_gain}.")
         if self.short_geom_visible_thr < 0:
             raise ValueError(f"gcs_short_geom_visible_thr must be >= 0, got {self.short_geom_visible_thr}.")
-        if self.short_geom_focus_visible_thr < 0:
-            raise ValueError(
-                f"gcs_short_geom_focus_visible_thr must be >= 0, got {self.short_geom_focus_visible_thr}."
-            )
-        if self.short_geom_focus_visible_thr > self.short_geom_visible_thr:
-            raise ValueError(
-                "gcs_short_geom_focus_visible_thr must be <= gcs_short_geom_visible_thr, "
-                f"got {self.short_geom_focus_visible_thr} > {self.short_geom_visible_thr}."
-            )
-        if self.short_geom_focus_weight < 1.0:
-            raise ValueError(f"gcs_short_geom_focus_weight must be >= 1, got {self.short_geom_focus_weight}.")
         if self.short_geom_gt4_weight < 1.0:
             raise ValueError(f"gcs_short_geom_gt4_weight must be >= 1, got {self.short_geom_gt4_weight}.")
         if self.short_geom_gt5_weight < 1.0:
@@ -414,41 +385,12 @@ class GCSLoss(nn.Module):
             raise ValueError("gcs_boundary_pseudo_min_valid must be >= 0.")
         if self.boundary_pseudo_gt_count < 0:
             raise ValueError("gcs_boundary_pseudo_gt_count must be >= 0.")
-        if self.boundary_pseudo_max_gt_count < 0:
-            raise ValueError("gcs_boundary_pseudo_max_gt_count must be >= 0.")
-        if (
-            self.boundary_pseudo_max_gt_count > 0
-            and self.boundary_pseudo_gt_count > self.boundary_pseudo_max_gt_count
-        ):
-            raise ValueError(
-                "gcs_boundary_pseudo_gt_count must be <= gcs_boundary_pseudo_max_gt_count when the max bound is set, "
-                f"got {self.boundary_pseudo_gt_count} > {self.boundary_pseudo_max_gt_count}."
-            )
         if self.boundary_pseudo_score_thr < 0.0:
             raise ValueError("gcs_boundary_pseudo_score_thr must be >= 0.")
         if self.boundary_pseudo_envelope_margin_px < -1.0:
             raise ValueError("gcs_boundary_pseudo_envelope_margin_px must be >= -1.0.")
         if not (0.0 <= self.boundary_pseudo_envelope_ratio_thr <= 1.0):
             raise ValueError("gcs_boundary_pseudo_envelope_ratio_thr must be in [0, 1].")
-        if self.boundary_pseudo_valid_neg_weight < 0.0:
-            raise ValueError("gcs_boundary_pseudo_valid_neg_weight must be >= 0.")
-        if self.gt4_near20_geom_refine_gain < 0.0:
-            raise ValueError("gcs_gt4_near20_geom_refine must be >= 0.")
-        if self.gt4_near20_visible_thr < 0:
-            raise ValueError("gcs_gt4_near20_visible_thr must be >= 0.")
-        if self.gt4_near20_lower_px < 0.0:
-            raise ValueError("gcs_gt4_near20_lower_px must be >= 0.")
-        if self.gt4_near20_upper_px <= self.gt4_near20_lower_px:
-            raise ValueError(
-                "gcs_gt4_near20_upper_px must be greater than gcs_gt4_near20_lower_px, "
-                f"got {self.gt4_near20_upper_px} <= {self.gt4_near20_lower_px}."
-            )
-        if self.gt4_near20_min_overlap < 1:
-            raise ValueError("gcs_gt4_near20_min_overlap must be >= 1.")
-        if self.gt4_near20_geom_curve < 0.0:
-            raise ValueError("gcs_gt4_near20_geom_curve must be >= 0.")
-        if self.gt4_near20_geom_refine_gain > 0.0 and not self.gt4_near20_allowed_queries:
-            raise ValueError("gcs_gt4_near20_allowed_queries must be non-empty when refine gain is enabled.")
 
         self.exist_quality_alpha = float(
             exist_quality_alpha if exist_quality_alpha is not None else self._arg(args, "gcs_exist_quality_alpha", 1.0)
@@ -535,38 +477,6 @@ class GCSLoss(nn.Module):
         if isinstance(value, str):
             return value.strip().lower() in {"1", "true", "yes", "y", "on"}
         return bool(value)
-
-    @staticmethod
-    def _parse_query_ids(value) -> tuple[int, ...]:
-        """Parse a query-id list such as '0,10' or 'q0 q10' into a stable tuple."""
-        if value is None:
-            return ()
-        if isinstance(value, str):
-            text = value.replace(";", ",").replace(" ", ",")
-            raw_items = [item.strip() for item in text.split(",") if item.strip()]
-        elif isinstance(value, (list, tuple, set)):
-            raw_items = list(value)
-        else:
-            raw_items = [value]
-
-        ids = []
-        seen = set()
-        for item in raw_items:
-            if isinstance(item, str):
-                normalized = item.strip().lower()
-                if normalized.startswith("q"):
-                    normalized = normalized[1:]
-                if normalized == "":
-                    continue
-                qid = int(normalized)
-            else:
-                qid = int(item)
-            if qid < 0:
-                raise ValueError(f"Query ids must be non-negative, got {qid}.")
-            if qid not in seen:
-                ids.append(qid)
-                seen.add(qid)
-        return tuple(ids)
 
     @staticmethod
     def _point_scale(image_size) -> tuple[float, float]:
@@ -743,19 +653,10 @@ class GCSLoss(nn.Module):
             return weights
 
         visible_counts = gt_valid_b.float().sum(dim=1)
-        outer_mask = visible_counts <= float(self.short_geom_visible_thr)
-        if not bool(outer_mask.any()):
-            return weights
+        short_mask = visible_counts <= float(self.short_geom_visible_thr)
 
         boost = 1.0 + float(self.short_geom_gain) * (float(target_weight) - 1.0)
-        weights[outer_mask] = boost
-
-        focus_thr = float(self.short_geom_focus_visible_thr)
-        focus_gain = float(self.short_geom_focus_weight)
-        if focus_thr > 0.0 and focus_gain > 1.0:
-            focus_mask = visible_counts <= focus_thr
-            if bool(focus_mask.any()):
-                weights[focus_mask] = (weights[focus_mask] * focus_gain).clamp(max=float(self.short_geom_max_weight))
+        weights[short_mask] = boost
 
         return weights.clamp(min=1.0, max=float(self.short_geom_max_weight))
 
@@ -856,7 +757,7 @@ class GCSLoss(nn.Module):
         gt_lanes: torch.Tensor | None = None,
         return_details: bool = False,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """BCE supervision for matched visible anchors, with optional short-lane rescue."""
+        """BCE supervision for visible fixed-y anchors on matched lanes and zero target for unmatched queries."""
         if pred_valid_logits is None:
             loss = self._zero_like(pred_points)
             zero = pred_points.new_zeros(())
@@ -873,13 +774,7 @@ class GCSLoss(nn.Module):
                 raise ValueError(
                     f"gt_lanes must have one value per image, got {gt_lanes.numel()} vs B={pred_valid_logits.shape[0]}."
                 )
-        generic_short_rescue_enabled = (
-            gt_lanes is not None
-            and float(self.short_geom_gain) > 0.0
-            and int(self.short_geom_visible_thr) > 0
-            and max(float(self.short_geom_gt4_weight), float(self.short_geom_gt5_weight)) > 1.0
-        )
-        rescue_enabled = gt_lanes is not None and self.gt5_short_visible_thr > 0 and not generic_short_rescue_enabled
+        rescue_enabled = gt_lanes is not None and self.gt5_short_visible_thr > 0
         for b, (src_idx, tgt_idx) in enumerate(indices):
             if src_idx.numel() == 0:
                 continue
@@ -887,19 +782,6 @@ class GCSLoss(nn.Module):
             tgt_idx = tgt_idx.to(device=target.device, dtype=torch.long)
             target_valid = gt_valid[b].to(device=target.device, dtype=target.dtype)[tgt_idx]
             target[b, src_idx] = target_valid
-            if generic_short_rescue_enabled:
-                lane_weights = self._short_geom_lane_weights(target_valid, gt_lanes[b])
-                boost_weight = lane_weights[:, None].expand_as(target_valid)
-                boost_mask = (target_valid > 0.5) & (boost_weight > 1.0 + 1e-6)
-                if bool(boost_mask.any()):
-                    local_weight = torch.ones_like(target_valid)
-                    local_weight[boost_mask] = boost_weight[boost_mask]
-                    extra_weight[b, src_idx] = local_weight
-                    gt5_short_boost_mask[b, src_idx] = boost_mask
-                    gt5_short_pos_count += int((lane_weights > 1.0 + 1e-6).sum().item())
-                    gt5_short_pos_anchor_count += int(boost_mask.sum().item())
-                continue
-
             if not rescue_enabled or int(round(float(gt_lanes[b].detach().item()))) != 5:
                 continue
 
@@ -1061,97 +943,6 @@ class GCSLoss(nn.Module):
 
         return torch.stack(losses).mean() if losses else self._zero_like(pred_points)
 
-    def gt4_near20_geom_refine_loss(
-        self,
-        pred_points: torch.Tensor,
-        gt_points: list[torch.Tensor],
-        gt_valid: list[torch.Tensor],
-        indices: list[tuple[torch.Tensor, torch.Tensor]],
-        gt_lanes: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Extra x-geometry pull for matched GT4 short lanes that sit just outside the 20px gate."""
-        zero = self._zero_like(pred_points)
-        if (
-            float(self.gt4_near20_geom_refine_gain) <= 0.0
-            or gt_lanes is None
-            or int(self.gt4_near20_visible_thr) <= 0
-            or not self.gt4_near20_allowed_queries
-        ):
-            return zero, pred_points.new_zeros(()), pred_points.new_zeros(())
-
-        device, dtype = pred_points.device, pred_points.dtype
-        point_scale = self._scale_for(pred_points).reshape(2)
-        pixel_scale = self._pixel_scale_for(pred_points).reshape(2)
-        width_px = pixel_scale[0].clamp_min(1.0)
-        allowed_queries = set(int(q) for q in self.gt4_near20_allowed_queries)
-
-        losses = []
-        ape_values = []
-        for b, (src_idx, tgt_idx) in enumerate(indices):
-            gt_count_b = int(round(float(torch.as_tensor(gt_lanes[b]).detach().cpu().item())))
-            if gt_count_b != 4 or src_idx.numel() == 0:
-                continue
-
-            src_idx = src_idx.to(device=device, dtype=torch.long)
-            tgt_idx = tgt_idx.to(device=device, dtype=torch.long)
-            matched_src_by_tgt = {
-                int(tgt.item()): int(src.item())
-                for src, tgt in zip(src_idx, tgt_idx)
-                if int(src.item()) in allowed_queries
-            }
-            if not matched_src_by_tgt:
-                continue
-
-            target_all = gt_points[b].to(device=device, dtype=dtype)
-            valid_all = gt_valid[b].to(device=device, dtype=dtype)
-            for target_lane_idx, query_idx in matched_src_by_tgt.items():
-                if query_idx < 0 or query_idx >= pred_points.shape[1]:
-                    continue
-                if target_lane_idx < 0 or target_lane_idx >= target_all.shape[0]:
-                    continue
-
-                valid = valid_all[target_lane_idx] > 0.5
-                visible_count = int(valid.sum().detach().cpu().item())
-                if visible_count < int(self.gt4_near20_min_overlap):
-                    continue
-                if visible_count > int(self.gt4_near20_visible_thr):
-                    continue
-
-                pred = pred_points[b, query_idx]
-                target = target_all[target_lane_idx]
-                x_error_px = (pred[:, 0] - target[:, 0]).abs() * width_px
-                ape = x_error_px[valid].mean()
-                ape_value = float(ape.detach().cpu().item())
-                if ape_value < float(self.gt4_near20_lower_px) or ape_value > float(self.gt4_near20_upper_px):
-                    continue
-
-                point_loss = ((pred[:, 0] - target[:, 0]).abs() * point_scale[0])[valid].mean()
-                loss = point_loss
-                if float(self.gt4_near20_geom_curve) > 0.0 and pred_points.shape[2] >= 3:
-                    triplet_valid = valid[2:] & valid[1:-1] & valid[:-2]
-                    if bool(triplet_valid.any()):
-                        pred_px = pred * pixel_scale.view(1, 2)
-                        target_px = target * pixel_scale.view(1, 2)
-                        pred_lap = pred_px[2:] - 2.0 * pred_px[1:-1] + pred_px[:-2]
-                        gt_lap = target_px[2:] - 2.0 * target_px[1:-1] + target_px[:-2]
-                        gt_curve_mag = torch.norm(gt_lap.detach(), dim=-1)
-                        curve_weight = (1.0 + self.curve_alpha * gt_curve_mag).clamp(max=self.curve_weight_max)
-                        curve_raw = F.smooth_l1_loss(pred_lap, gt_lap, reduction="none").sum(dim=-1)
-                        triplet = triplet_valid.to(dtype=dtype)
-                        curve_loss = (curve_raw * triplet * curve_weight).sum() / triplet.sum().clamp_min(1.0)
-                        loss = loss + float(self.gt4_near20_geom_curve) * curve_loss
-
-                losses.append(loss)
-                ape_values.append(ape.detach())
-
-        if not losses:
-            return zero, pred_points.new_zeros(()), pred_points.new_zeros(())
-
-        loss = torch.stack(losses).mean()
-        count = pred_points.new_tensor(float(len(losses)))
-        mean_ape = torch.stack(ape_values).mean().to(device=device, dtype=dtype)
-        return loss, count, mean_ape
-
     def target_lane_count(self, pred_logits: torch.Tensor, batch: dict, gt_valid: list[torch.Tensor]) -> torch.Tensor:
         """Return one GT lane count per image on the prediction device."""
         num_lanes = batch.get("num_lanes")
@@ -1295,7 +1086,7 @@ class GCSLoss(nn.Module):
         gt_valid_b: torch.Tensor,
         width: float,
         *,
-        side: str | None,
+        side: str,
         margin: float,
     ) -> torch.Tensor:
         """Return outside-envelope ratio over query/GT common visible anchors."""
@@ -1316,12 +1107,8 @@ class GCSLoss(nn.Module):
             outside = pred_x[env_valid] < (left_env_x[env_valid] - float(margin))
         elif side == "right":
             outside = pred_x[env_valid] > (right_env_x[env_valid] + float(margin))
-        elif side is None:
-            outside = (pred_x[env_valid] < (left_env_x[env_valid] - float(margin))) | (
-                pred_x[env_valid] > (right_env_x[env_valid] + float(margin))
-            )
         else:
-            raise ValueError(f"side must be 'left', 'right', or None, got {side!r}.")
+            raise ValueError(f"side must be 'left' or 'right', got {side!r}.")
         return outside.float().mean()
 
     def _query_to_gt_lane_dist_px(
@@ -1359,7 +1146,7 @@ class GCSLoss(nn.Module):
         indices: list[tuple[torch.Tensor, torch.Tensor]],
         gt_lanes: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Extra negative BCE for clear-far unmatched pseudo lanes."""
+        """Extra negative BCE for short far-side pseudo lanes on unmatched queries."""
         if float(self.boundary_pseudo_neg_gain) <= 0.0:
             zero = self._zero_like(pred_points)
             return zero, zero, zero
@@ -1394,9 +1181,7 @@ class GCSLoss(nn.Module):
 
         for b in range(bsz):
             gt_count_b = int(round(float(gt_lanes[b].detach().cpu().item())))
-            if gt_count_b < int(self.boundary_pseudo_gt_count):
-                continue
-            if int(self.boundary_pseudo_max_gt_count) > 0 and gt_count_b > int(self.boundary_pseudo_max_gt_count):
+            if gt_count_b != int(self.boundary_pseudo_gt_count):
                 continue
 
             gt_points_b = gt_points[b].detach().to(device=device, dtype=dtype)
@@ -1417,9 +1202,12 @@ class GCSLoss(nn.Module):
             if unmatched_idx.numel() == 0:
                 continue
 
+            gt_mean_x = self._gt_lane_mean_x_px(gt_points_b, gt_valid_b, width)
+            left_gt = int(torch.argmin(gt_mean_x).item())
+            right_gt = int(torch.argmax(gt_mean_x).item())
+
             selected = []
             selected_scores = []
-            selected_valid_losses = []
             for q in unmatched_idx.tolist():
                 q_valid = valid_prob[b, q] > float(self.boundary_pseudo_valid_thr)
                 visible_len = int(q_valid.sum().item())
@@ -1441,35 +1229,31 @@ class GCSLoss(nn.Module):
                 if dists.numel() == 0 or not bool(torch.isfinite(dists).any()):
                     continue
 
-                min_dist = float(dists.min().detach().cpu().item())
-                if min_dist < float(self.boundary_pseudo_dist_thr):
+                nearest_gt = int(torch.argmin(dists).item())
+                nearest_dist = float(dists[nearest_gt].detach().cpu().item())
+                if nearest_gt not in (left_gt, right_gt):
+                    continue
+                if nearest_dist < float(self.boundary_pseudo_dist_thr):
                     continue
                 if float(self.boundary_pseudo_envelope_margin_px) >= 0.0:
                     margin = float(self.boundary_pseudo_envelope_margin_px)
+                    side = "left" if nearest_gt == left_gt else "right"
                     outside_ratio = self._query_outside_gt_envelope_ratio(
                         points[b, q],
                         q_valid,
                         gt_points_b,
                         gt_valid_b,
                         width,
-                        side=None,
+                        side=side,
                         margin=margin,
                     )
-                    if bool(torch.isfinite(outside_ratio)) and float(outside_ratio.detach().cpu().item()) < float(
-                        self.boundary_pseudo_envelope_ratio_thr
-                    ):
+                    if not bool(torch.isfinite(outside_ratio)):
+                        continue
+                    if float(outside_ratio.detach().cpu().item()) < float(self.boundary_pseudo_envelope_ratio_thr):
                         continue
 
                 selected.append(q)
                 selected_scores.append(exist_prob[b, q].to(device=device, dtype=dtype))
-                if float(self.boundary_pseudo_valid_neg_weight) > 0.0:
-                    valid_logits = pred_valid_logits[b, q, q_valid]
-                    valid_loss = F.binary_cross_entropy_with_logits(
-                        valid_logits,
-                        torch.zeros_like(valid_logits),
-                        reduction="mean",
-                    )
-                    selected_valid_losses.append(valid_loss)
 
             if not selected:
                 continue
@@ -1477,9 +1261,6 @@ class GCSLoss(nn.Module):
             selected_idx = torch.tensor(selected, device=device, dtype=torch.long)
             logits = pred_logits_2d[b, selected_idx]
             loss = F.binary_cross_entropy_with_logits(logits, torch.zeros_like(logits), reduction="mean")
-            if selected_valid_losses:
-                valid_loss = torch.stack(selected_valid_losses).mean()
-                loss = loss + float(self.boundary_pseudo_valid_neg_weight) * valid_loss
             losses.append(loss)
             pseudo_counts.append(torch.tensor(float(len(selected)), device=device, dtype=dtype))
             pseudo_score_means.append(torch.stack(selected_scores).mean())
@@ -1783,15 +1564,6 @@ class GCSLoss(nn.Module):
             indices,
             gt_lanes,
         )
-        gt4_near20_refine_loss, gt4_near20_refine_count, gt4_near20_refine_ape = (
-            self.gt4_near20_geom_refine_loss(
-                pred_points,
-                gt_points,
-                gt_valid,
-                indices,
-                gt_lanes,
-            )
-        )
         query_count_ce_loss, query_count_acc, query_count_pred_mean = self.query_count_ce_loss(
             preds,
             batch,
@@ -1840,8 +1612,6 @@ class GCSLoss(nn.Module):
             total = total + self.count_boundary_gain * count_boundary_loss
         if self.boundary_pseudo_neg_gain != 0.0:
             total = total + self.boundary_pseudo_neg_gain * boundary_pseudo_neg_loss
-        if self.gt4_near20_geom_refine_gain != 0.0:
-            total = total + self.gt4_near20_geom_refine_gain * gt4_near20_refine_loss
         if self.query_count_ce_gain != 0.0:
             total = total + self.query_count_ce_gain * query_count_ce_loss
         if self.spurious_neg_gain != 0.0:
@@ -1879,9 +1649,6 @@ class GCSLoss(nn.Module):
                 boundary_pseudo_neg_loss.detach(),
                 boundary_pseudo_count.detach(),
                 boundary_pseudo_score_mean.detach(),
-                gt4_near20_refine_loss.detach(),
-                gt4_near20_refine_count.detach(),
-                gt4_near20_refine_ape.detach(),
                 query_count_ce_loss.detach(),
                 query_count_acc.detach(),
                 query_count_pred_mean.detach(),

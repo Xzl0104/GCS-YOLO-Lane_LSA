@@ -126,9 +126,7 @@ run_train() {
     --mosaic 0.0 \
     --gcs-exist-quality-alpha 0.5 \
     --gcs-short-geom 1.0 \
-    --gcs-short-geom-visible-thr 20 \
-    --gcs-short-geom-focus-visible-thr 10 \
-    --gcs-short-geom-focus-weight 1.5 \
+    --gcs-short-geom-visible-thr 10 \
     --gcs-short-geom-gt5-weight 2.0 \
     --gcs-short-geom-max-weight 3.0 \
     --gcs-short-geom-curve 1.0 \

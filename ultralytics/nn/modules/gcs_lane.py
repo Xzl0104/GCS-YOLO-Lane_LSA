@@ -1,9 +1,6 @@
 # Ultralytics AGPL-3.0 License - https://ultralytics.com/license
 """GCS-YOLO-Lane neural network modules."""
 
-import json
-from pathlib import Path
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -218,7 +215,6 @@ class GCSLaneHead(nn.Module):
         max_lanes=5,
         count_classes=None,
         query_count_head: bool = False,
-        static_reference_bank: str | None = None,
     ):
         """Initialize the GCS lane query decoder and training-only auxiliary heads."""
         super().__init__()
@@ -286,7 +282,6 @@ class GCSLaneHead(nn.Module):
         self.return_aux = False
         self.min_spatial_tokens = 1024
         self._last_spatial_debug = None
-        self.static_reference_bank = str(static_reference_bank or "")
 
         self.query_embed = nn.Embedding(num_queries, c1)
         self.level_embed = nn.Parameter(torch.empty(4, c1))
@@ -409,87 +404,10 @@ class GCSLaneHead(nn.Module):
         top_x = 0.5 + (bottom_x - 0.5) * 0.25
         t = torch.linspace(0.0, 1.0, self.num_points)
         x = bottom_x[:, None] * (1.0 - t[None]) + top_x[:, None] * t[None]
-        if self.static_reference_bank:
-            x = self._load_static_reference_bank_x(x)
         if getattr(self, "point_mode", "free") == "fixed_y":
             return torch.logit(x.clamp(1e-4, 1.0 - 1e-4))
         points = torch.stack((x, y[None].expand(self.num_queries, -1)), dim=-1)
         return torch.logit(points.clamp(1e-4, 1.0 - 1e-4))
-
-    def _resolve_static_reference_bank_path(self) -> Path:
-        """Resolve a repository-local static reference bank path."""
-        path = Path(self.static_reference_bank).expanduser()
-        candidates = [path] if path.is_absolute() else [Path.cwd() / path, Path(__file__).resolve().parents[3] / path]
-        for candidate in candidates:
-            if candidate.is_file():
-                return candidate
-        raise FileNotFoundError(
-            "GCSLaneHead static_reference_bank not found: "
-            + ", ".join(str(candidate) for candidate in candidates)
-        )
-
-    def _load_static_reference_bank_x(self, default_x: torch.Tensor) -> torch.Tensor:
-        """Load and validate a controlled Q12/K56 fixed-y static reference bank."""
-        if self.point_mode != "fixed_y":
-            raise ValueError("GCSLaneHead static_reference_bank requires point_mode='fixed_y'.")
-        if int(self.num_queries) != 12 or int(self.num_points) != 56:
-            raise ValueError("GCSLaneHead static_reference_bank is only supported for Q12/K56.")
-
-        path = self._resolve_static_reference_bank_path()
-        with path.open("r", encoding="utf-8") as f:
-            bank = json.load(f)
-
-        if bank.get("schema") != "gcs_q12_fixed_y_static_reference_bank_v1":
-            raise ValueError(f"Unsupported GCS static reference bank schema: {bank.get('schema')!r}.")
-        if bank.get("point_mode") != "fixed_y":
-            raise ValueError(f"Unsupported GCS static reference bank point_mode: {bank.get('point_mode')!r}.")
-        if int(bank.get("num_queries", -1)) != int(self.num_queries):
-            raise ValueError(
-                f"GCS static reference bank num_queries mismatch: bank={bank.get('num_queries')} head={self.num_queries}."
-            )
-        if int(bank.get("num_points", -1)) != int(self.num_points):
-            raise ValueError(
-                f"GCS static reference bank num_points mismatch: bank={bank.get('num_points')} head={self.num_points}."
-            )
-
-        expected_fixed_y = list(range(710, 150, -10))
-        fixed_y = [int(v) for v in bank.get("fixed_y_px_desc", [])]
-        if fixed_y != expected_fixed_y:
-            raise ValueError(
-                f"GCS static reference bank fixed_y_px_desc mismatch: expected {expected_fixed_y}, got {fixed_y}."
-            )
-
-        allowed_changed = {2, 5, 6, 7, 8}
-        protected_queries = {0, 1, 10, 11}
-        try:
-            changed_queries = {int(q) for q in bank.get("changed_queries", [])}
-        except (TypeError, ValueError) as exc:
-            raise ValueError("GCS static reference bank changed_queries must be integer query ids.") from exc
-        if not changed_queries.issubset(allowed_changed):
-            raise ValueError(
-                f"GCS static reference bank changed_queries must be a subset of {sorted(allowed_changed)}, "
-                f"got {sorted(changed_queries)}."
-            )
-        if changed_queries & protected_queries:
-            raise ValueError(
-                f"GCS static reference bank must not replace protected queries {sorted(protected_queries)}, "
-                f"got {sorted(changed_queries & protected_queries)}."
-            )
-
-        raw_x = torch.as_tensor(bank.get("x_norm"), dtype=torch.float64)
-        expected_shape = (int(self.num_queries), int(self.num_points))
-        if tuple(raw_x.shape) != expected_shape:
-            raise ValueError(f"GCS static reference bank x_norm must have shape {expected_shape}, got {tuple(raw_x.shape)}.")
-        if not bool(torch.isfinite(raw_x).all()):
-            raise ValueError("GCS static reference bank x_norm contains non-finite values.")
-        if float(raw_x.min()) < 0.001 or float(raw_x.max()) > 0.999:
-            raise ValueError("GCS static reference bank x_norm must be in [0.001, 0.999].")
-
-        unchanged_queries = sorted(set(range(int(self.num_queries))) - changed_queries)
-        for query_id in unchanged_queries:
-            if not torch.allclose(raw_x[query_id], default_x[query_id].double(), atol=1e-6, rtol=1e-6):
-                raise ValueError(f"GCS static reference bank unexpectedly changed default query q{query_id}.")
-        return raw_x.to(dtype=default_x.dtype)
 
     def _init_point_delta_head(self):
         """Initialize point deltas near zero while keeping point gradients live."""

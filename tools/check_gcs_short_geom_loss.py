@@ -21,18 +21,6 @@ def _quadratic_x_with_laplacian_px(num_points: int, laplacian_px: float) -> torc
     return (float(laplacian_px) / 960.0) * idx * (idx - 1.0) * 0.5
 
 
-def _constant_lane_fixture(x_values: list[float], k: int, visible_counts: list[int] | None = None) -> tuple[torch.Tensor, torch.Tensor]:
-    gt_points = torch.zeros(len(x_values), k, 2)
-    gt_valid = torch.zeros(len(x_values), k)
-    for i, x in enumerate(x_values):
-        gt_points[i, :, 0] = float(x)
-        if visible_counts is None:
-            gt_valid[i, :] = 1.0
-        else:
-            gt_valid[i, : int(visible_counts[i])] = 1.0
-    return gt_points, gt_valid
-
-
 def test_short_geom_lane_weights_gt5_short() -> None:
     loss = GCSLoss({"gcs_imgsz": [544, 960], "gcs_short_geom": 1.0})
     gt_valid = torch.zeros(5, 56)
@@ -635,276 +623,30 @@ def test_short_geom_forward_keeps_loss_items_stable() -> None:
         raise AssertionError("short-geom forward produced non-finite loss values.")
 
 
-def test_short_geom_lane_weights_gt5_outer_and_focus() -> None:
-    loss = GCSLoss({"gcs_imgsz": [544, 960], "gcs_short_geom": 1.0})
-    gt_valid = torch.zeros(5, 56)
-    gt_valid[0, :21] = 1
-    gt_valid[1, :20] = 1
-    gt_valid[2, :10] = 1
-    gt_valid[3, :9] = 1
-    gt_valid[4, :8] = 1
-
-    weights = loss._short_geom_lane_weights(gt_valid, torch.tensor(5))
-    expected = torch.tensor([1.0, 2.0, 3.0, 3.0, 3.0])
-    if not torch.allclose(weights.cpu(), expected):
-        raise AssertionError(f"GT5 outer/focus weights changed: got={weights.tolist()}, expected={expected.tolist()}.")
-
-
-def test_short_geom_lane_weights_gt4_outer_and_focus() -> None:
-    loss = GCSLoss(
-        {
-            "gcs_imgsz": [544, 960],
-            "gcs_short_geom": 1.0,
-            "gcs_short_geom_gt4_weight": 1.5,
-        }
-    )
-    gt_valid = torch.zeros(4, 56)
-    gt_valid[0, :21] = 1
-    gt_valid[1, :20] = 1
-    gt_valid[2, :11] = 1
-    gt_valid[3, :10] = 1
-
-    weights = loss._short_geom_lane_weights(gt_valid, torch.tensor(4))
-    expected = torch.tensor([1.0, 1.5, 1.5, 2.25])
-    if not torch.allclose(weights.cpu(), expected, atol=1e-6):
-        raise AssertionError(f"GT4 outer/focus weights changed: got={weights.tolist()}, expected={expected.tolist()}.")
-
-
-def test_short_geom_lane_weights_focus_cap() -> None:
-    loss = GCSLoss(
-        {
-            "gcs_imgsz": [544, 960],
-            "gcs_short_geom": 1.0,
-            "gcs_short_geom_gt4_weight": 1.5,
-            "gcs_short_geom_focus_weight": 3.0,
-            "gcs_short_geom_max_weight": 2.5,
-        }
-    )
-    gt_valid = torch.zeros(4, 56)
-    gt_valid[3, :10] = 1
-
-    weights = loss._short_geom_lane_weights(gt_valid, torch.tensor(4))
-    if not torch.allclose(weights[3], torch.tensor(2.5)):
-        raise AssertionError(f"short-geom focus cap changed: got={weights.tolist()}.")
-
-
-def test_short_geom_point_loss_two_threshold_weighting() -> None:
-    loss = GCSLoss({"gcs_imgsz": [544, 960], "gcs_short_geom": 1.0})
-    k = 21
-    pred_points = torch.zeros(1, 2, k, 2)
-    gt_points = [torch.zeros(5, k, 2)]
-    gt_valid_b = torch.zeros(5, k)
-    gt_valid_b[0, :21] = 1.0
-    gt_valid_b[4, :8] = 1.0
-    gt_valid = [gt_valid_b]
-    pred_points[0, 0, :, 0] = 0.1
-    pred_points[0, 1, :8, 0] = 0.5
-    indices = [(torch.tensor([0, 1]), torch.tensor([0, 4]))]
-
-    got = loss.point_loss(pred_points, gt_points, gt_valid, indices, gt_lanes=torch.tensor([5]))
-    expected = pred_points.new_tensor((0.1 + 0.5 * 3.0) / 4.0)
-    anchor_level = pred_points.new_tensor((21.0 * 0.1 + 8.0 * 0.5 * 3.0) / (21.0 + 8.0))
-    if torch.allclose(got, anchor_level, atol=1e-6):
-        raise AssertionError(f"point_loss used anchor-level weighting: got={float(got):.8f}.")
-    if not torch.allclose(got, expected, atol=1e-6):
-        raise AssertionError(f"point_loss two-threshold weighting changed: got={float(got):.8f}, expected={float(expected):.8f}.")
-
-
-def test_short_geom_curve_loss_two_threshold_weighting() -> None:
-    off_loss = GCSLoss({"gcs_imgsz": [544, 960], "gcs_short_geom": 0.0})
-    on_loss = GCSLoss({"gcs_imgsz": [544, 960], "gcs_short_geom": 1.0})
-    k = 21
-    pred_points = torch.zeros(1, 2, k, 2)
-    gt_points = [torch.zeros(5, k, 2)]
-    gt_valid_b = torch.zeros(5, k)
-    gt_valid_b[0, :21] = 1.0
-    gt_valid_b[4, :8] = 1.0
-    gt_valid = [gt_valid_b]
-    pred_points[0, 0, :, 0] = _quadratic_x_with_laplacian_px(k, 2496.0)
-    pred_points[0, 1, :, 0] = _quadratic_x_with_laplacian_px(k, 7104.0)
-    indices = [(torch.tensor([0, 1]), torch.tensor([0, 4]))]
-
-    got = on_loss.curve_loss(pred_points, gt_points, gt_valid, indices, gt_lanes=torch.tensor([5]))
-    lane0 = off_loss.curve_loss(
-        pred_points[:, :1],
-        [gt_points[0][:1]],
-        [gt_valid_b[:1]],
-        [(torch.tensor([0]), torch.tensor([0]))],
-        gt_lanes=torch.tensor([5]),
-    )
-    lane1 = off_loss.curve_loss(
-        pred_points[:, 1:2],
-        [gt_points[0][4:5]],
-        [gt_valid_b[4:5]],
-        [(torch.tensor([0]), torch.tensor([0]))],
-        gt_lanes=torch.tensor([5]),
-    )
-    expected = (lane0 + lane1 * 3.0) / 4.0
-    if not torch.allclose(got, expected, atol=1e-5):
-        raise AssertionError(f"curve_loss two-threshold weighting changed: got={float(got):.8f}, expected={float(expected):.8f}.")
-
-
-def test_short_geom_point_valid_loss_generalizes_to_gt4() -> None:
-    loss = GCSLoss(
-        {
-            "gcs_imgsz": [544, 960],
-            "gcs_short_geom": 1.0,
-            "gcs_short_geom_gt4_weight": 1.5,
-        }
-    )
-    pred_valid_logits = torch.zeros(1, 2, 12)
-    pred_points = torch.zeros(1, 2, 12, 2)
-    gt_points = [torch.zeros(4, 12, 2)]
-    gt_valid_b = torch.zeros(4, 12)
-    gt_valid_b[0, :8] = 1.0
-    gt_valid = [gt_valid_b]
-    indices = [(torch.tensor([0]), torch.tensor([0]))]
-
-    got, short_pos_count, short_pos_anchor_count, short_point_valid_loss = loss.point_valid_loss(
-        pred_valid_logits,
-        pred_points,
-        gt_valid,
-        indices,
-        gt_lanes=torch.tensor([4]),
-        return_details=True,
-    )
-    if int(short_pos_count.item()) != 1:
-        raise AssertionError(f"GT4 short rescue count changed: got={float(short_pos_count):.8f}.")
-    if int(short_pos_anchor_count.item()) != 8:
-        raise AssertionError(f"GT4 short rescue anchor count changed: got={float(short_pos_anchor_count):.8f}.")
-    if not torch.isfinite(got) or not torch.isfinite(short_point_valid_loss):
-        raise AssertionError("GT4 short point-valid rescue produced non-finite loss.")
-
-
-def test_boundary_pseudo_neg_loss_clear_far_and_permutation_invariance() -> None:
-    loss = GCSLoss(
-        {
-            "gcs_imgsz": [544, 960],
-            "gcs_boundary_pseudo_neg": 1.0,
-            "gcs_boundary_pseudo_gt_count": 3,
-            "gcs_boundary_pseudo_visible_thr": 10,
-            "gcs_boundary_pseudo_min_valid": 2,
-            "gcs_boundary_pseudo_dist_thr": 60.0,
-            "gcs_boundary_pseudo_score_thr": 0.0,
-            "gcs_boundary_pseudo_envelope_margin_px": -1.0,
-        }
-    )
-    k = 4
-    gt_points_b, gt_valid_b = _constant_lane_fixture([0.10, 0.30, 0.60, 0.85], k)
-    gt_points = [gt_points_b]
-    gt_valid = [gt_valid_b]
-    pred_points = torch.zeros(1, 3, k, 2)
-    pred_logits = torch.full((1, 3), 5.0)
-    pred_valid_logits = torch.full((1, 3, k), 5.0)
-    pred_points[0, 0, :, 0] = 0.10
-    pred_points[0, 1, :, 0] = 0.62
-    pred_points[0, 2, :, 0] = 0.95
-    indices = [(torch.tensor([0]), torch.tensor([0]))]
-
-    got = loss.boundary_pseudo_neg_loss(pred_points, pred_logits, pred_valid_logits, gt_points, gt_valid, indices, torch.tensor([4]))
-    if int(got[1].item()) != 1:
-        raise AssertionError(f"clear-far negative count changed: got={float(got[1]):.8f}.")
-
-    perm = torch.tensor([2, 0, 1])
-    permuted = loss.boundary_pseudo_neg_loss(
-        pred_points[:, perm],
-        pred_logits[:, perm],
-        pred_valid_logits[:, perm],
-        gt_points,
-        gt_valid,
-        [(torch.tensor([1]), torch.tensor([0]))],
-        torch.tensor([4]),
-    )
-    if not torch.allclose(got[0], permuted[0], atol=1e-6):
-        raise AssertionError(f"clear-far loss changed under query permutation: got={float(got[0]):.8f}, permuted={float(permuted[0]):.8f}.")
-    if not torch.allclose(got[1], permuted[1], atol=1e-6):
-        raise AssertionError(f"clear-far count changed under query permutation: got={float(got[1]):.8f}, permuted={float(permuted[1]):.8f}.")
-    if not torch.allclose(got[2], permuted[2], atol=1e-6):
-        raise AssertionError(f"clear-far score mean changed under query permutation: got={float(got[2]):.8f}, permuted={float(permuted[2]):.8f}.")
-
-
-def test_boundary_pseudo_valid_neg_weight_targets_selected_valid_logits() -> None:
-    base = GCSLoss(
-        {
-            "gcs_imgsz": [544, 960],
-            "gcs_boundary_pseudo_neg": 1.0,
-            "gcs_boundary_pseudo_gt_count": 3,
-            "gcs_boundary_pseudo_visible_thr": 10,
-            "gcs_boundary_pseudo_min_valid": 2,
-            "gcs_boundary_pseudo_dist_thr": 60.0,
-            "gcs_boundary_pseudo_score_thr": 0.0,
-            "gcs_boundary_pseudo_envelope_margin_px": -1.0,
-            "gcs_boundary_pseudo_valid_neg_weight": 0.0,
-        }
-    )
-    weighted = GCSLoss(
-        {
-            "gcs_imgsz": [544, 960],
-            "gcs_boundary_pseudo_neg": 1.0,
-            "gcs_boundary_pseudo_gt_count": 3,
-            "gcs_boundary_pseudo_visible_thr": 10,
-            "gcs_boundary_pseudo_min_valid": 2,
-            "gcs_boundary_pseudo_dist_thr": 60.0,
-            "gcs_boundary_pseudo_score_thr": 0.0,
-            "gcs_boundary_pseudo_envelope_margin_px": -1.0,
-            "gcs_boundary_pseudo_valid_neg_weight": 0.25,
-        }
-    )
-    k = 4
-    gt_points_b, gt_valid_b = _constant_lane_fixture([0.10, 0.30, 0.60, 0.85], k)
-    gt_points = [gt_points_b]
-    gt_valid = [gt_valid_b]
-    pred_points = torch.zeros(1, 3, k, 2)
-    pred_logits = torch.full((1, 3), 5.0, requires_grad=True)
-    pred_valid_logits = torch.full((1, 3, k), 5.0, requires_grad=True)
-    pred_points[0, 0, :, 0] = 0.10
-    pred_points[0, 1, :, 0] = 0.62
-    pred_points[0, 2, :, 0] = 0.95
-    indices = [(torch.tensor([0]), torch.tensor([0]))]
-
-    base_loss = base.boundary_pseudo_neg_loss(
-        pred_points.detach(),
-        pred_logits.detach(),
-        pred_valid_logits.detach(),
-        gt_points,
-        gt_valid,
-        indices,
-        torch.tensor([4]),
-    )[0]
-    weighted_loss = weighted.boundary_pseudo_neg_loss(
-        pred_points,
-        pred_logits,
-        pred_valid_logits,
-        gt_points,
-        gt_valid,
-        indices,
-        torch.tensor([4]),
-    )[0]
-    if float(weighted_loss.detach().item()) <= float(base_loss.detach().item()):
-        raise AssertionError(
-            f"boundary pseudo valid-neg weight did not increase selected loss: base={float(base_loss):.8f}, "
-            f"weighted={float(weighted_loss):.8f}."
-        )
-    weighted_loss.backward()
-    selected_grad = pred_valid_logits.grad[0, 2].abs().sum()
-    unselected_grad = pred_valid_logits.grad[0, 1].abs().sum()
-    if float(selected_grad.item()) <= 0.0:
-        raise AssertionError("boundary pseudo valid-neg weight did not backprop through selected valid logits.")
-    if float(unselected_grad.item()) != 0.0:
-        raise AssertionError("boundary pseudo valid-neg weight leaked valid-logit gradients to an unselected query.")
-
-
 def main() -> None:
-    test_short_geom_lane_weights_gt5_outer_and_focus()
-    test_short_geom_lane_weights_gt4_outer_and_focus()
-    test_short_geom_lane_weights_focus_cap()
-    test_short_geom_point_loss_two_threshold_weighting()
-    test_short_geom_curve_loss_two_threshold_weighting()
-    test_short_geom_point_valid_loss_generalizes_to_gt4()
-    test_boundary_pseudo_neg_loss_clear_far_and_permutation_invariance()
-    test_boundary_pseudo_valid_neg_weight_targets_selected_valid_logits()
+    test_short_geom_lane_weights_gt5_short()
+    test_short_geom_lane_weights_non_gt5_no_boost()
+    test_short_geom_rejects_gt4_weight_below_one()
+    test_short_geom_lane_weights_gt4_short_enabled()
+    test_short_geom_lane_weights_gt3_no_boost()
+    test_short_geom_lane_weights_visible_gt20_no_boost()
+    test_short_geom_lane_weights_max_cap()
+    test_short_geom_default_point_loss_matches_visible_point_average()
+    test_short_geom_default_point_loss_matches_old_path_with_no_valid_image()
+    test_short_geom_enabled_point_loss_keeps_gt4_no_boost_old_aggregation()
+    test_short_geom_enabled_point_loss_keeps_boosted_inactive_old_aggregation()
+    test_short_geom_point_loss_uses_lane_level_weighting()
+    test_short_geom_point_loss_uses_gt4_lane_level_weighting()
+    test_short_geom_enabled_point_loss_keeps_no_valid_zero_in_batch_mean()
+    test_short_geom_default_curve_loss_keeps_no_triplet_zero_in_batch_mean()
+    test_short_geom_enabled_curve_loss_keeps_gt4_no_boost_old_aggregation()
+    test_short_geom_enabled_curve_loss_keeps_boosted_inactive_old_aggregation()
+    test_short_geom_curve_loss_uses_lane_level_weighting()
+    test_short_geom_curve_loss_uses_gt4_lane_level_weighting()
+    test_short_geom_enabled_losses_keep_gt5_no_short_old_aggregation()
+    test_short_geom_enabled_curve_loss_keeps_no_triplet_zero_in_batch_mean()
     test_short_geom_forward_keeps_loss_items_stable()
-    print(json.dumps({"status": "ok", "tests": 9}, indent=2))
+    print(json.dumps({"status": "ok", "tests": 22}, indent=2))
 
 
 if __name__ == "__main__":

@@ -28,12 +28,7 @@ from gcs_tools.tusimple_official_eval import (  # noqa: E402
     tusimple_image_path,
     valid_tusimple_lanes,
 )
-from tools.infer_gcs import (  # noqa: E402
-    load_gcs_model,
-    load_gcs_model_from_cfg_and_weights,
-    preprocess_image,
-    warn_max_det_mismatch,
-)
+from tools.infer_gcs import load_gcs_model, preprocess_image, warn_max_det_mismatch  # noqa: E402
 from ultralytics.models.gcs.decode_summary import load_decode_yaml, validate_decode_yaml_for_model  # noqa: E402
 from ultralytics.models.gcs.mode_utils import resolve_decode_mode  # noqa: E402
 from ultralytics.utils.gcs_postprocess import (  # noqa: E402
@@ -75,14 +70,6 @@ def parse_args() -> argparse.Namespace:
         help="Explicit escape hatch for test-only audits. Do not use test oracle output for selection or tuning.",
     )
     parser.add_argument("--weights", default=str(DEFAULT_WEIGHTS), help="Query GCS checkpoint .pt or YAML.")
-    parser.add_argument(
-        "--model-cfg",
-        default=None,
-        help=(
-            "Optional GCS YAML to construct before loading --weights. Use only for diagnostic "
-            "reference-bank counterfactuals; default checkpoint loading is unchanged."
-        ),
-    )
     parser.add_argument("--decode-yaml", default=None, help="Optional query official_best_decode.yaml.")
     parser.add_argument("--imgsz", nargs="+", type=int, default=None, help="GCS inference shape as H W.")
     parser.add_argument("--conf", type=float, default=0.003, help="Lane existence confidence threshold.")
@@ -593,16 +580,7 @@ def main() -> None:
     imgsz = normalize_imgsz(args.imgsz, dataset=args.dataset)
 
     device_obj = select_device(args.device)
-    if args.model_cfg:
-        model = load_gcs_model_from_cfg_and_weights(
-            args.model_cfg,
-            args.weights,
-            device=device_obj,
-            half=args.half,
-            gcs_imgsz=imgsz,
-        )
-    else:
-        model = load_gcs_model(args.weights, device=device_obj, half=args.half, gcs_imgsz=imgsz)
+    model = load_gcs_model(args.weights, device=device_obj, half=args.half, gcs_imgsz=imgsz)
     if args.decode_yaml:
         _, decode_yaml_cfg = load_decode_yaml(args.decode_yaml)
         decode_mode = resolve_decode_mode(decode_yaml_cfg.get("decode_mode"), model)
@@ -925,7 +903,6 @@ def main() -> None:
     summary = {
         "config": {
             "weights": str(Path(args.weights).resolve()),
-            "model_cfg": None if not args.model_cfg else str(Path(args.model_cfg).resolve()),
             "decode_yaml": None if not args.decode_yaml else str(Path(args.decode_yaml).resolve()),
             "archive_root": str(archive_root.resolve()),
             "split": args.split,

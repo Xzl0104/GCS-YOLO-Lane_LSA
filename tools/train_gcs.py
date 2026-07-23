@@ -450,66 +450,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Extra point-valid BCE multiplier for visible anchors of matched short GT5 lanes.",
     )
     parser.add_argument("--gcs-short-geom", type=float, default=0.0)
-    parser.add_argument("--gcs-short-geom-visible-thr", type=int, default=20)
-    parser.add_argument("--gcs-short-geom-focus-visible-thr", type=int, default=10)
-    parser.add_argument("--gcs-short-geom-focus-weight", type=float, default=1.5)
+    parser.add_argument("--gcs-short-geom-visible-thr", type=int, default=10)
     parser.add_argument("--gcs-short-geom-gt4-weight", type=float, default=1.0)
     parser.add_argument("--gcs-short-geom-gt5-weight", type=float, default=2.0)
     parser.add_argument("--gcs-short-geom-max-weight", type=float, default=3.0)
     parser.add_argument("--gcs-short-geom-curve", type=float, default=1.0)
-    parser.add_argument(
-        "--gcs-gt4-near20-geom-refine",
-        type=float,
-        default=0.0,
-        help="Extra geometry loss gain for matched GT4 short lanes whose allowed query is just outside 20px. 0 disables.",
-    )
-    parser.add_argument(
-        "--gcs-gt4-near20-visible-thr",
-        type=int,
-        default=10,
-        help="Maximum GT visible-anchor count for GT4 near-20px geometry refine.",
-    )
-    parser.add_argument(
-        "--gcs-gt4-near20-lower-px",
-        type=float,
-        default=20.0,
-        help="Lower x-APE bound in pixels for GT4 near-20px geometry refine.",
-    )
-    parser.add_argument(
-        "--gcs-gt4-near20-upper-px",
-        type=float,
-        default=25.0,
-        help="Upper x-APE bound in pixels for GT4 near-20px geometry refine.",
-    )
-    parser.add_argument(
-        "--gcs-gt4-near20-min-overlap",
-        type=int,
-        default=3,
-        help="Minimum visible anchors required for GT4 near-20px geometry refine.",
-    )
-    parser.add_argument(
-        "--gcs-gt4-near20-allowed-queries",
-        type=str,
-        default="0,10",
-        help="Comma-separated query ids allowed to receive GT4 near-20px geometry refine.",
-    )
-    parser.add_argument(
-        "--gcs-gt4-near20-geom-curve",
-        type=float,
-        default=0.0,
-        help="Optional curvature term multiplier inside GT4 near-20px geometry refine.",
-    )
     parser.add_argument("--gcs-boundary-pseudo-neg", type=float, default=0.0)
     parser.add_argument("--gcs-boundary-pseudo-visible-thr", type=int, default=10)
     parser.add_argument("--gcs-boundary-pseudo-dist-thr", type=float, default=60.0)
     parser.add_argument("--gcs-boundary-pseudo-valid-thr", type=float, default=0.5)
     parser.add_argument("--gcs-boundary-pseudo-min-valid", type=int, default=3)
     parser.add_argument("--gcs-boundary-pseudo-gt-count", type=int, default=5)
-    parser.add_argument("--gcs-boundary-pseudo-max-gt-count", type=int, default=0)
     parser.add_argument("--gcs-boundary-pseudo-score-thr", type=float, default=0.0)
     parser.add_argument("--gcs-boundary-pseudo-envelope-margin-px", type=float, default=-1.0)
     parser.add_argument("--gcs-boundary-pseudo-envelope-ratio-thr", type=float, default=0.75)
-    parser.add_argument("--gcs-boundary-pseudo-valid-neg-weight", type=float, default=0.0)
     parser.add_argument("--gcs-exist-pos-weight", type=float, default=1.0)
     parser.add_argument("--gcs-exist-focal-gamma", type=float, default=0.0, help="Optional focal gamma for existence BCE. 0 disables focal weighting.")
     parser.add_argument(
@@ -843,30 +797,19 @@ def main() -> None:
         "gcs_gt5_short_point_valid_weight": args.gcs_gt5_short_point_valid_weight,
         "gcs_short_geom": args.gcs_short_geom,
         "gcs_short_geom_visible_thr": args.gcs_short_geom_visible_thr,
-        "gcs_short_geom_focus_visible_thr": args.gcs_short_geom_focus_visible_thr,
-        "gcs_short_geom_focus_weight": args.gcs_short_geom_focus_weight,
         "gcs_short_geom_gt4_weight": args.gcs_short_geom_gt4_weight,
         "gcs_short_geom_gt5_weight": args.gcs_short_geom_gt5_weight,
         "gcs_short_geom_max_weight": args.gcs_short_geom_max_weight,
         "gcs_short_geom_curve": args.gcs_short_geom_curve,
-        "gcs_gt4_near20_geom_refine": args.gcs_gt4_near20_geom_refine,
-        "gcs_gt4_near20_visible_thr": args.gcs_gt4_near20_visible_thr,
-        "gcs_gt4_near20_lower_px": args.gcs_gt4_near20_lower_px,
-        "gcs_gt4_near20_upper_px": args.gcs_gt4_near20_upper_px,
-        "gcs_gt4_near20_min_overlap": args.gcs_gt4_near20_min_overlap,
-        "gcs_gt4_near20_allowed_queries": args.gcs_gt4_near20_allowed_queries,
-        "gcs_gt4_near20_geom_curve": args.gcs_gt4_near20_geom_curve,
         "gcs_boundary_pseudo_neg": args.gcs_boundary_pseudo_neg,
         "gcs_boundary_pseudo_visible_thr": args.gcs_boundary_pseudo_visible_thr,
         "gcs_boundary_pseudo_dist_thr": args.gcs_boundary_pseudo_dist_thr,
         "gcs_boundary_pseudo_valid_thr": args.gcs_boundary_pseudo_valid_thr,
         "gcs_boundary_pseudo_min_valid": args.gcs_boundary_pseudo_min_valid,
         "gcs_boundary_pseudo_gt_count": args.gcs_boundary_pseudo_gt_count,
-        "gcs_boundary_pseudo_max_gt_count": args.gcs_boundary_pseudo_max_gt_count,
         "gcs_boundary_pseudo_score_thr": args.gcs_boundary_pseudo_score_thr,
         "gcs_boundary_pseudo_envelope_margin_px": args.gcs_boundary_pseudo_envelope_margin_px,
         "gcs_boundary_pseudo_envelope_ratio_thr": args.gcs_boundary_pseudo_envelope_ratio_thr,
-        "gcs_boundary_pseudo_valid_neg_weight": args.gcs_boundary_pseudo_valid_neg_weight,
         "gcs_exist_pos_weight": args.gcs_exist_pos_weight,
         "gcs_exist_focal_gamma": args.gcs_exist_focal_gamma,
         "gcs_exist_focal_alpha": args.gcs_exist_focal_alpha,
