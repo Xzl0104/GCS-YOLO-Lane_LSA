@@ -191,6 +191,11 @@ gcs_boundary_pseudo_gt_count: 5 # (int) GT lane count targeted by boundary pseud
 gcs_boundary_pseudo_score_thr: 0.0 # (float) optional existence score floor for boundary pseudo negatives; 0 disables
 gcs_boundary_pseudo_envelope_margin_px: -1.0 # (float) require common-visible query anchors outside GT envelope by this margin; <0 disables
 gcs_boundary_pseudo_envelope_ratio_thr: 0.75 # (float) minimum common-visible anchor ratio outside GT envelope when envelope margin is enabled
+gcs_boundary_pseudo_gt5_safe: False # (bool) protect true GT5 short/near candidates before applying boundary-pseudo negatives
+gcs_boundary_pseudo_protect_short_visible_thr: 10 # (int) GT5 visible-anchor threshold for safe protection
+gcs_boundary_pseudo_protect_dist_px: 40.0 # (float) max mean x distance in pixels for GT5 short/near protection
+gcs_boundary_pseudo_protect_min_overlap: 3 # (int) minimum common anchors required for GT5-safe protection
+gcs_boundary_pseudo_protect_queries: "" # (str) optional protected query ids; empty protects all queries
 gcs_role_contain: 0.0 # (float) Q24 extra-query role-containment BCE gain; 0 disables
 gcs_role_contain_valid_weight: 0.25 # (float) point-valid zero-target multiplier inside role-containment loss
 gcs_role_contain_matcher: False # (bool) forbid role-invalid Q24 extra-query Hungarian matches

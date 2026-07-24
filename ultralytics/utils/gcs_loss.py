@@ -47,6 +47,8 @@ class GCSLoss(nn.Module):
         "boundary_pseudo_neg_loss",
         "boundary_pseudo_count",
         "boundary_pseudo_score_mean",
+        "boundary_pseudo_candidate_count",
+        "boundary_pseudo_protected_count",
         "query_count_ce_loss",
         "query_count_acc",
         "query_count_pred_mean",
@@ -124,6 +126,11 @@ class GCSLoss(nn.Module):
         role_gt4_queries=None,
         role_gt4_visible_thr: int | None = None,
         role_gt5_visible_thr: int | None = None,
+        boundary_pseudo_gt5_safe: bool | None = None,
+        boundary_pseudo_protect_short_visible_thr: int | None = None,
+        boundary_pseudo_protect_dist_px: float | None = None,
+        boundary_pseudo_protect_min_overlap: int | None = None,
+        boundary_pseudo_protect_queries=None,
         image_size=None,
     ):
         """Initialize GCS-YOLO-Lane loss weights and Hungarian matcher."""
@@ -418,6 +425,31 @@ class GCSLoss(nn.Module):
         self.boundary_pseudo_envelope_ratio_thr = float(
             self._arg(args, "gcs_boundary_pseudo_envelope_ratio_thr", 0.75)
         )
+        self.boundary_pseudo_gt5_safe = self._bool_arg(
+            boundary_pseudo_gt5_safe
+            if boundary_pseudo_gt5_safe is not None
+            else self._arg(args, "gcs_boundary_pseudo_gt5_safe", False)
+        )
+        self.boundary_pseudo_protect_short_visible_thr = int(
+            boundary_pseudo_protect_short_visible_thr
+            if boundary_pseudo_protect_short_visible_thr is not None
+            else self._arg(args, "gcs_boundary_pseudo_protect_short_visible_thr", 10)
+        )
+        self.boundary_pseudo_protect_dist_px = float(
+            boundary_pseudo_protect_dist_px
+            if boundary_pseudo_protect_dist_px is not None
+            else self._arg(args, "gcs_boundary_pseudo_protect_dist_px", 40.0)
+        )
+        self.boundary_pseudo_protect_min_overlap = int(
+            boundary_pseudo_protect_min_overlap
+            if boundary_pseudo_protect_min_overlap is not None
+            else self._arg(args, "gcs_boundary_pseudo_protect_min_overlap", 3)
+        )
+        self.boundary_pseudo_protect_queries = self._parse_query_spec(
+            boundary_pseudo_protect_queries
+            if boundary_pseudo_protect_queries is not None
+            else self._arg(args, "gcs_boundary_pseudo_protect_queries", "")
+        )
 
         if self.short_geom_gain < 0.0:
             raise ValueError(f"gcs_short_geom must be >= 0, got {self.short_geom_gain}.")
@@ -449,6 +481,19 @@ class GCSLoss(nn.Module):
             raise ValueError("gcs_boundary_pseudo_envelope_margin_px must be >= -1.0.")
         if not (0.0 <= self.boundary_pseudo_envelope_ratio_thr <= 1.0):
             raise ValueError("gcs_boundary_pseudo_envelope_ratio_thr must be in [0, 1].")
+        if self.boundary_pseudo_gt5_safe and int(self.boundary_pseudo_gt_count) != 5:
+            raise ValueError("gcs_boundary_pseudo_gt5_safe requires gcs_boundary_pseudo_gt_count=5.")
+        if self.boundary_pseudo_gt5_safe and float(self.boundary_pseudo_envelope_margin_px) < 0.0:
+            raise ValueError(
+                "gcs_boundary_pseudo_gt5_safe requires gcs_boundary_pseudo_envelope_margin_px >= 0 "
+                "so selected negatives are clear boundary-pseudo lanes."
+            )
+        if self.boundary_pseudo_protect_short_visible_thr < 0:
+            raise ValueError("gcs_boundary_pseudo_protect_short_visible_thr must be >= 0.")
+        if self.boundary_pseudo_protect_dist_px < 0.0:
+            raise ValueError("gcs_boundary_pseudo_protect_dist_px must be >= 0.")
+        if self.boundary_pseudo_protect_min_overlap < 1:
+            raise ValueError("gcs_boundary_pseudo_protect_min_overlap must be >= 1.")
 
         self.exist_quality_alpha = float(
             exist_quality_alpha if exist_quality_alpha is not None else self._arg(args, "gcs_exist_quality_alpha", 1.0)
@@ -1394,6 +1439,43 @@ class GCSLoss(nn.Module):
 
         return torch.stack(dists) if dists else torch.empty((0,), device=device, dtype=dtype)
 
+    def _boundary_pseudo_protected_by_short_gt5(
+        self,
+        pred_points_q: torch.Tensor,
+        pred_visible_q: torch.Tensor,
+        gt_points_b: torch.Tensor,
+        gt_valid_b: torch.Tensor,
+        width: float,
+        *,
+        query_idx: int,
+    ) -> bool:
+        """Return whether a GT5 boundary-pseudo candidate is close to a true short GT5 lane."""
+        if not self.boundary_pseudo_gt5_safe:
+            return False
+        if self.boundary_pseudo_protect_queries and int(query_idx) not in set(self.boundary_pseudo_protect_queries):
+            return False
+        short_thr = int(self.boundary_pseudo_protect_short_visible_thr)
+        if short_thr <= 0:
+            return False
+
+        q_visible = pred_visible_q > 0.5
+        pred_x = pred_points_q[:, 0] * float(width)
+        gt_x = gt_points_b[..., 0] * float(width)
+        min_overlap = int(self.boundary_pseudo_protect_min_overlap)
+        protect_dist = float(self.boundary_pseudo_protect_dist_px)
+
+        for gt_i in range(gt_points_b.shape[0]):
+            gt_visible = gt_valid_b[gt_i] > 0.5
+            if int(gt_visible.sum().item()) > short_thr:
+                continue
+            common = q_visible & gt_visible
+            if int(common.sum().item()) < min_overlap:
+                continue
+            mean_dx = (pred_x[common] - gt_x[gt_i, common]).abs().mean()
+            if float(mean_dx.detach().cpu().item()) <= protect_dist:
+                return True
+        return False
+
     def boundary_pseudo_neg_loss(
         self,
         pred_points: torch.Tensor,
@@ -1403,11 +1485,11 @@ class GCSLoss(nn.Module):
         gt_valid: list[torch.Tensor],
         indices: list[tuple[torch.Tensor, torch.Tensor]],
         gt_lanes: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Extra negative BCE for short far-side pseudo lanes on unmatched queries."""
         if float(self.boundary_pseudo_neg_gain) <= 0.0:
             zero = self._zero_like(pred_points)
-            return zero, zero, zero
+            return zero, zero, zero, zero, zero
         if pred_valid_logits is None:
             raise ValueError(
                 "gcs_boundary_pseudo_neg requires preds['pred_valid_logits'] with shape B x Q x K; "
@@ -1436,6 +1518,8 @@ class GCSLoss(nn.Module):
         losses = []
         pseudo_counts = []
         pseudo_score_means = []
+        candidate_count = 0
+        protected_count = 0
 
         for b in range(bsz):
             gt_count_b = int(round(float(gt_lanes[b].detach().cpu().item())))
@@ -1476,6 +1560,18 @@ class GCSLoss(nn.Module):
                 if float(self.boundary_pseudo_score_thr) > 0.0:
                     if float(exist_prob[b, q].detach().cpu().item()) < float(self.boundary_pseudo_score_thr):
                         continue
+                candidate_count += 1
+
+                if self._boundary_pseudo_protected_by_short_gt5(
+                    points[b, q],
+                    q_valid,
+                    gt_points_b,
+                    gt_valid_b,
+                    width,
+                    query_idx=int(q),
+                ):
+                    protected_count += 1
+                    continue
 
                 dists = self._query_to_gt_lane_dist_px(
                     points[b, q],
@@ -1525,9 +1621,21 @@ class GCSLoss(nn.Module):
 
         if not losses:
             zero = self._zero_like(pred_points)
-            return zero, zero, zero
+            return (
+                zero,
+                zero,
+                zero,
+                pred_points.new_tensor(float(candidate_count)),
+                pred_points.new_tensor(float(protected_count)),
+            )
 
-        return torch.stack(losses).mean(), torch.stack(pseudo_counts).sum(), torch.stack(pseudo_score_means).mean()
+        return (
+            torch.stack(losses).mean(),
+            torch.stack(pseudo_counts).sum(),
+            torch.stack(pseudo_score_means).mean(),
+            pred_points.new_tensor(float(candidate_count)),
+            pred_points.new_tensor(float(protected_count)),
+        )
 
     def _spurious_candidate_gt_protected(
         self,
@@ -1820,7 +1928,13 @@ class GCSLoss(nn.Module):
         ) = self.count_losses(
             pred_logits, batch, gt_valid, target=gt_lanes
         )
-        boundary_pseudo_neg_loss, boundary_pseudo_count, boundary_pseudo_score_mean = self.boundary_pseudo_neg_loss(
+        (
+            boundary_pseudo_neg_loss,
+            boundary_pseudo_count,
+            boundary_pseudo_score_mean,
+            boundary_pseudo_candidate_count,
+            boundary_pseudo_protected_count,
+        ) = self.boundary_pseudo_neg_loss(
             pred_points,
             pred_logits,
             pred_valid_logits,
@@ -1932,6 +2046,8 @@ class GCSLoss(nn.Module):
                 boundary_pseudo_neg_loss.detach(),
                 boundary_pseudo_count.detach(),
                 boundary_pseudo_score_mean.detach(),
+                boundary_pseudo_candidate_count.detach(),
+                boundary_pseudo_protected_count.detach(),
                 query_count_ce_loss.detach(),
                 query_count_acc.detach(),
                 query_count_pred_mean.detach(),

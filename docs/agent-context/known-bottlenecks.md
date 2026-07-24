@@ -531,6 +531,265 @@ now been implemented for this failure mode: it suppresses wrong-count
 negative pressure. The next action is to run only the 20-40 epoch
 official-val/train-side probe before any formal full training or TEST.
 
+### Q24 Role-Containment Probe40 v2 Rejection
+
+The role-containment diagnostic
+`query_alpha05_env30_q24_role_containment_probe40_v2` is complete and rejected
+for full training. TEST was not used.
+
+```text
+official_best source_epoch = 40
+official-val ACC/FP/FN = 0.963152 / 0.051607 / 0.021350
+count_acc_3/4/5 = 0.869955 / 0.803030 / 0.972973
+count_confusion includes 3->4=24, 3->5=5, 4->5=11, 5->4=2
+```
+
+The 864-row official-val sweep has no rescue row:
+
+```text
+max ACC = 0.963152
+min FP = 0.044949
+min FN = 0.021350
+max count_acc_4 = 0.818182
+rows with ACC >= env30 = 0
+rows with FP/FN both <= env30 = 0
+rows with count_acc_4>=0.90 and count_acc_5>=0.972973 = 0
+```
+
+This probe proves the containment mechanism is active, because the old
+GT3/GT4 short-visible extra-query carrier rate drops sharply:
+
+```text
+role v2 val/train0601/train0531 GT3GT4 visible<=20 q12..q23 raw-best rate =
+  0.057878 / 0.118721 / 0.082596
+cont100 comparable band was about 0.58 / 0.66 / 0.65
+```
+
+But the cost is unacceptable raw geometry loss, especially GT5 short-visible:
+
+```text
+role v2 val/train0601/train0531 raw overall match20 =
+  0.937836 / 0.864578 / 0.967800
+cont100 val/train0601/train0531 raw overall match20 =
+  0.948580 / 0.893677 / 0.964222
+env30 val/train0601/train0531 raw overall match20 =
+  0.975441 / 0.960828 / 0.983900
+
+role v2 val/train0601 GT5 visible<=10 match20 =
+  0.358491 / 0.262295
+cont100 val/train0601 GT5 visible<=10 match20 =
+  0.490566 / 0.415301
+env30 val/train0601 GT5 visible<=10 match20 =
+  0.754717 / 0.775956
+```
+
+Oracle-rank closes the decode-only rescue path:
+
+```text
+current selected decode ACC/FP/FN = 0.963152 / 0.051607 / 0.021350
+GT-count oracle-rank ACC/FP/FN = 0.963287 / 0.021534 / 0.021350
+permissive pool24 oracle-rank ACC/FP/FN = 0.960530 / 0.023324 / 0.022039
+```
+
+Final decoded extra-lane diagnostics also show the residual overcount is not
+mostly duplicate lanes removable by NMS:
+
+```text
+GT3->4 images = 24, duplicate=4, spurious=9, boundary_pseudo=5, ambiguous=6
+GT4->5 images = 11, duplicate=1, spurious=2, boundary_pseudo=6, ambiguous=2
+```
+
+Interpretation:
+
+The current role-containment design moved the failure from broad extra-query
+carrier drift to a harder raw-coverage failure. The hard partition is wrong for
+the trained Q24 bank: useful true-GT5 short carriers such as `q21/q23` are in
+the GT4 bank and are forbidden on GT5 images, while `q13/q16` from the GT5 bank
+still appear in GT4 false-fifth outputs. The bottleneck is therefore the role
+partition and exist/valid calibration under containment, not training length,
+static capacity, threshold selection, NMS, count estimation, or ranking.
+
+Smallest safe next action:
+
+Do not continue this run and do not launch full training. If Q24 continues, run
+only a new 20-40 epoch official-val/train-side probe with a corrected partition
+or softer matcher: make the GT5 bank follow the actual GT5 short carriers
+(`q13/q15/q21/q23` are the current evidence-backed core), narrow the GT4 bank,
+keep strong GT3/GT4 containment, and keep GT5 images free of extra negative
+pressure. The gate must require GT5 visible<=10 raw match20 recovery above the
+role-v2/cont100 band, no rebound in `3->5`/`4->5`, lower FP, and
+`count_acc_4 >= 0.90` before any full training.
+
+### Q24 Role-Partition Probe40 v3 Rejection
+
+The role-partition follow-up
+`query_alpha05_env30_q24_role_partition_v3_probe40_v1` is complete and
+rejected for full training. TEST was not used.
+
+```text
+official_best source_epoch = 40
+role GT5 bank = q12,q13,q15,q16,q20,q21,q23
+role GT4 bank = q14,q17,q18,q19,q22
+official-val ACC/FP/FN = 0.962991 / 0.079844 / 0.023416
+count_acc_3/4/5 = 0.878924 / 0.818182 / 0.094595
+```
+
+The 864-row official-val sweep has no promotable or decode-rescue row:
+
+```text
+max ACC = 0.962991
+min FP = 0.048118
+min FN = 0.023416
+max count_acc_4 = 0.818182
+max count_acc_5 = 1.0
+rows with ACC >= env30 = 0
+rows with FP/FN both <= env30 = 0
+rows with count_acc_4>=0.90 and count_acc_5>=0.972973 = 0
+```
+
+The selected official-val count shape is worse than role v2 and exposes a new
+GT5 sixth-lane failure:
+
+```text
+pred_lanes_hist = 3:197, 4:77, 5:20, 6:69
+count_confusion:
+  3->3=196, 3->4=23, 3->5=4
+  4->3=1, 4->4=54, 4->5=9, 4->6=2
+  5->5=7, 5->6=67
+```
+
+Training-time official-val progression is not a promotion signal:
+
+```text
+epoch030 ACC/FP/FN = 0.958986 / 0.072727 / 0.025482, count_acc_5=1.0
+epoch035 ACC/FP/FN = 0.960652 / 0.059183 / 0.027548, count_acc_5=1.0
+epoch040 ACC/FP/FN = 0.962991 / 0.079844 / 0.023416, count_acc_5=0.094595
+```
+
+Raw diagnostics show the GT5 short geometry bottleneck worsened rather than
+recovered:
+
+```text
+v3 val/train0601/train0531 raw overall match20 =
+  0.937068 / 0.864018 / 0.974061
+env30 val/train0601/train0531 raw overall match20 =
+  0.975441 / 0.960828 / 0.983900
+
+v3 val/train0601 GT5 visible<=10 match20 =
+  0.188679 / 0.229508
+role v2 val/train0601 GT5 visible<=10 match20 =
+  0.358491 / 0.262295
+cont100 val/train0601 GT5 visible<=10 match20 =
+  0.490566 / 0.415301
+```
+
+The role partition did suppress the old broad GT3/GT4 extra-query raw-best
+carrier drift, but this is not enough for official ACC:
+
+```text
+v3 val/train0601/train0531 GT3GT4 visible<=20 q12..q23 raw-best rate =
+  0.093248 / 0.127854 / 0.079646
+```
+
+Final decoded GT5 overcount is not an NMS duplicate problem:
+
+```text
+GT5->6 images = 67
+duplicate = 0
+spurious = 4
+boundary_pseudo = 36
+ambiguous = 27
+extra_best_gt_ape_mean = 85.590668
+exist_score_mean = 0.191999
+visible_length_mean = 9.044776
+
+GT5->6 extra query histogram:
+  q13=30, q21=12, q23=10, q11=7, q20=5, q1=2, q15=1
+```
+
+The same query IDs overlap with true GT5 short-lane raw carriers, so a manual
+hard partition alone cannot solve the problem:
+
+```text
+true GT5 visible<=10 raw-best query histogram on val:
+  q21=20, q13=10, q23=7, q15=6, q20=4
+
+hit20 among those true GT5 visible<=10 raw-best lanes:
+  q23=4, q13=2, q15=2, q20=1, q14=1
+```
+
+The event-mined per-query gate confirms there is no clean hard-partition query
+that has enough true GT5 short value and low false-extra risk:
+
+```text
+artifact = .tmp/q24_role_partition_v3_review/event_mined_gate/per_query_event_gate.csv
+TEST used = false
+
+total val GT5->6 events = 67
+total val GT3/GT4 false-extra events = 38
+total val true GT5 visible<=10 raw-best events = 53
+total train0601 true GT5 visible<=10 raw-best events = 183
+no query with val GT5<=10 hit20 >= 4 and risk_events <= 2
+
+high-risk queries:
+  q13 gt5_bank: true hit20=2, near20-40=8, GT5->6=30, GT3/GT4 false-extra=1
+  q23 gt5_bank: true hit20=4, near20-40=3, GT5->6=10, GT3/GT4 false-extra=3
+  q21 gt5_bank: true hit20=0, near20-40=18, GT5->6=12, GT3/GT4 false-extra=1
+  q22 gt4_bank: true hit20=0, near20-40=0, GT5->6=0, GT3/GT4 false-extra=11
+  q0 protected: true hit20=0, near20-40=0, GT5->6=0, GT3/GT4 false-extra=11
+```
+
+Score calibration cannot separate true GT5 short lanes from fake GT5 sixth
+lanes either:
+
+```text
+GT5->6 final extra exist_score mean/p50 = 0.191999 / 0.146697
+true GT5 visible<=10 raw-best exist_score mean/p50 ~= 0.199561 / 0.157525
+boundary_pseudo GT5->6 extras below score 0.2 = 35/36
+train boundary_pseudo_count last10 mean ~= 0.081
+```
+
+Oracle/count diagnostics close the decode-only rescue path:
+
+```text
+current selected decode ACC/FP/FN = 0.963007 / 0.079844 / 0.023416
+GT-count oracle-rank ACC/FP/FN = 0.963118 / 0.023508 / 0.023416
+best count-safe sweep row ACC/FP/FN = 0.962843 / 0.051745 / 0.023416
+```
+
+Interpretation:
+
+V3 proves the previous idea "put the observed GT5 carriers into the GT5 bank"
+is insufficient. The same carriers, especially `q13/q21/q23`, are also the
+dominant GT5 sixth-lane boundary/ambiguous carriers, while their scores overlap
+with true short GT5 lanes. The boundary-pseudo negative path was enabled but is
+too sparse and score-gated above many final low-score decoded extras. The root
+cause is therefore a coupled event-level separation failure: true GT5
+short-geometry rescue and GT5 boundary-pseudo suppression are not separable by
+static hard query partition, simple confidence thresholds, NMS, max-det, count
+oracle, or rank oracle.
+
+Smallest safe next action:
+
+Stop Q24 hard role-partition as-is. Do not full-train and do not TEST. Before
+another 20-40 epoch probe, run or implement an official-val/train-side
+event-mined gate that reports, per query, true GT5 short hit20/near/miss counts
+against GT5->6 boundary-pseudo/ambiguous counts and GT3/GT4 false-extra counts.
+Only then try a GT5-safe boundary-pseudo suppression that protects true GT5
+short candidates, paired with a true-short geometry rescue. The gate must prove
+GT5 visible<=10 raw match20 recovers above role v2/cont100 without reintroducing
+GT3/GT4 overcount before any full training.
+
+Implementation status:
+
+The default-off GT5-safe boundary-pseudo probe and event-mined gate tooling are
+now implemented. Use `scripts/run_q24_gt5safe_boundary_probe_v1.sh` for the
+40-epoch probe and `scripts/run_q24_event_mined_gate_v1.sh` after training.
+Do not enable hard role-partition matcher constraints for this default probe.
+The next bottleneck test is whether low-score GT5->6 boundary-pseudo pressure
+can reduce overcount while preserving true GT5 short raw geometry; it is not a
+full-training or TEST candidate until that official-val/train-side gate passes.
+
 ## 2026-07-23 Env30 GT4 Near-20px Geometry Refine v1 Rejection
 
 The `query_alpha05_env30_gt4_near20_geom_refine_v1` full training run is

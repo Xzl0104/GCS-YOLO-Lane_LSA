@@ -465,6 +465,34 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--gcs-boundary-pseudo-envelope-margin-px", type=float, default=-1.0)
     parser.add_argument("--gcs-boundary-pseudo-envelope-ratio-thr", type=float, default=0.75)
     parser.add_argument(
+        "--gcs-boundary-pseudo-gt5-safe",
+        action="store_true",
+        help="Protect true GT5 short/near candidates while suppressing clear GT5 boundary-pseudo extras.",
+    )
+    parser.add_argument(
+        "--gcs-boundary-pseudo-protect-short-visible-thr",
+        type=int,
+        default=10,
+        help="GT5 lanes with visible anchors <= this threshold can protect nearby pseudo-negative candidates.",
+    )
+    parser.add_argument(
+        "--gcs-boundary-pseudo-protect-dist-px",
+        type=float,
+        default=40.0,
+        help="Maximum mean x distance in pixels for true GT5 short/near candidate protection.",
+    )
+    parser.add_argument(
+        "--gcs-boundary-pseudo-protect-min-overlap",
+        type=int,
+        default=3,
+        help="Minimum common visible anchors required for GT5-safe boundary-pseudo protection.",
+    )
+    parser.add_argument(
+        "--gcs-boundary-pseudo-protect-queries",
+        default="",
+        help="Optional query ids protected by GT5-safe boundary-pseudo logic, e.g. '13,21,23'. Empty means all queries.",
+    )
+    parser.add_argument(
         "--gcs-role-contain",
         type=float,
         default=0.0,
@@ -849,6 +877,11 @@ def main() -> None:
         "gcs_boundary_pseudo_score_thr": args.gcs_boundary_pseudo_score_thr,
         "gcs_boundary_pseudo_envelope_margin_px": args.gcs_boundary_pseudo_envelope_margin_px,
         "gcs_boundary_pseudo_envelope_ratio_thr": args.gcs_boundary_pseudo_envelope_ratio_thr,
+        "gcs_boundary_pseudo_gt5_safe": args.gcs_boundary_pseudo_gt5_safe,
+        "gcs_boundary_pseudo_protect_short_visible_thr": args.gcs_boundary_pseudo_protect_short_visible_thr,
+        "gcs_boundary_pseudo_protect_dist_px": args.gcs_boundary_pseudo_protect_dist_px,
+        "gcs_boundary_pseudo_protect_min_overlap": args.gcs_boundary_pseudo_protect_min_overlap,
+        "gcs_boundary_pseudo_protect_queries": args.gcs_boundary_pseudo_protect_queries,
         "gcs_role_contain": args.gcs_role_contain,
         "gcs_role_contain_valid_weight": args.gcs_role_contain_valid_weight,
         "gcs_role_contain_matcher": args.gcs_role_contain_matcher,

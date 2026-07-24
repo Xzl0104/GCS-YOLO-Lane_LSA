@@ -271,6 +271,113 @@ GT3/GT4 short-visible q12..q23 carrier rate must fall from the ~0.59/0.66 band
 GT5 visible<=10 raw coverage must not regress from cont100
 ```
 
+Completed role-containment result:
+
+```text
+run = query_alpha05_env30_q24_role_containment_probe40_v2
+status = rejected for full training
+training rows = 40
+official_best source_epoch = 40
+TEST used = false
+
+official-val ACC/FP/FN = 0.963152 / 0.051607 / 0.021350
+count_acc_3/4/5 = 0.869955 / 0.803030 / 0.972973
+count_confusion includes 3->4=24, 3->5=5, 4->5=11, 5->4=2
+
+external sweep rows = 864
+rows with ACC >= env30 = 0
+rows with FP/FN both <= env30 = 0
+max count_acc_4 = 0.818182
+```
+
+Do not continue this artifact to full training and do not run TEST. The probe
+reduced the old GT3/GT4 extra-query raw carrier rate, but it regressed GT5
+short raw geometry and still leaves high FP/FN. The next Q24 command, if this
+line continues, must be a new 20-40 epoch role-partition or soft-containment
+probe. It should relabel the GT5 bank toward the observed GT5 short carriers
+such as `q13/q15/q21/q23`, narrow the GT4 bank, keep TEST closed, and gate on
+GT5 visible<=10 raw recovery, `3->5`/`4->5`, FP, and `count_acc_4` before any
+longer run.
+
+Completed role-partition follow-up:
+
+```text
+run = query_alpha05_env30_q24_role_partition_v3_probe40_v1
+status = rejected for full training
+training rows = 40
+official_best source_epoch = 40
+TEST used = false
+
+role partition:
+  GT5 bank = q12,q13,q15,q16,q20,q21,q23
+  GT4 bank = q14,q17,q18,q19,q22
+
+official-val ACC/FP/FN = 0.962991 / 0.079844 / 0.023416
+count_acc_3/4/5 = 0.878924 / 0.818182 / 0.094595
+count_confusion includes 3->4=23, 3->5=4, 4->5=9, 4->6=2, 5->6=67
+
+external sweep rows = 864
+rows with ACC >= env30 = 0
+rows with FP/FN both <= env30 = 0
+rows with count_acc_4>=0.90 and count_acc_5>=0.972973 = 0
+```
+
+Do not continue this artifact to full training and do not run TEST. Capping
+decode to `max_det=5` can remove most GT5 `5->6` count errors
+diagnostically, but the best count-safe official-val row still reaches only
+`ACC=0.962843`, and GT-count oracle-rank reaches only about `0.963118`. The
+next command should not be another hard role-partition train. First implement
+or run an official-val/train-side event-mined diagnostic that separates true
+GT5 short carriers from GT5 boundary-pseudo/ambiguous sixth-lane carriers,
+then design a GT5-safe boundary-pseudo suppression plus true-short geometry
+rescue probe.
+
+## Q24 GT5-Safe Boundary-Pseudo Probe
+
+The default-off Q24 GT5-safe boundary-pseudo probe is the next implementation
+vehicle after the rejected hard role-partition run. It keeps the existing true
+GT5 short geometry rescue from the env30 script, lowers the boundary-pseudo
+score floor to reach the observed low-score GT5->6 events, protects candidates
+near true GT5 short lanes, and does not enable hard role-partition matcher
+constraints by default.
+
+```bash
+bash scripts/run_q24_gt5safe_boundary_probe_v1.sh
+```
+
+Equivalent explicit launch:
+
+```bash
+RUN_NAME=query_alpha05_env30_q24_gt5safe_boundary_probe40_v1 \
+MODEL=ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q24-k56-protected-static.yaml \
+EPOCHS=40 \
+RUN_TESTS=0 \
+EXTRA_TRAIN_ARGS="--gcs-boundary-pseudo-gt5-safe --gcs-boundary-pseudo-score-thr 0.0 --gcs-boundary-pseudo-protect-short-visible-thr 10 --gcs-boundary-pseudo-protect-dist-px 40 --gcs-boundary-pseudo-protect-min-overlap 3 --gcs-boundary-pseudo-protect-queries 12,13,15,16,20,21,23" \
+bash scripts/run_query_alpha05_gt5short_geom_w2_bneg002_env30_nocount_v1.sh
+```
+
+After training and official-val sweeps, run the event-mined diagnostic gate:
+
+```bash
+RUN_NAME=query_alpha05_env30_q24_gt5safe_boundary_probe40_v1 \
+OVERWRITE_DIAGS=0 \
+bash scripts/run_q24_event_mined_gate_v1.sh
+```
+
+Promotion gate before any longer run:
+
+```text
+TEST used = false
+official-val ACC must improve over role-v2/v3 and move toward env30
+official-val FP must drop materially from role-v3
+GT5->6 must drop sharply, especially boundary_pseudo and ambiguous
+count_acc_4 >= 0.90 before any full-training attempt
+GT5 visible<=10 raw match20 must recover above role-v2 and preferably cont100
+val GT3/GT4 false-extra must not rebound toward cont100
+boundary_pseudo_candidate_count should be nonzero and protected_count should
+  show the safe guard is active when near true GT5 short candidates occur
+```
+
 ## Query Count Head CE0.5 Run
 
 The default-off query Count Head ablation is launched through:

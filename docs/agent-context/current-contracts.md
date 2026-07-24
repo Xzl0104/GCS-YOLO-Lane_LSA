@@ -150,6 +150,80 @@ pressure to protect true fifth-lane retention. This is a 20-40 epoch probe
 mechanism only until official-val/train-side gates prove reduced FP/overcount
 without GT5 regression.
 
+The completed role-containment probe
+`query_alpha05_env30_q24_role_containment_probe40_v2` is rejected for full
+training. TEST was not used. It confirms the code path is active and suppresses
+the old broad GT3/GT4 extra-query raw carrier drift, but it does not pass the
+official-val gate and regresses true GT5 short raw geometry:
+
+```text
+official-val ACC/FP/FN = 0.963152 / 0.051607 / 0.021350
+count_acc_3/4/5 = 0.869955 / 0.803030 / 0.972973
+val/train0601 GT5 visible<=10 raw match20 = 0.358491 / 0.262295
+official-val sweep rows with ACC>=env30 = 0
+oracle-rank ACC upper check ~= 0.9633, so decode/count/rank rescue is not enough
+```
+
+Decision: do not full-train or TEST this artifact. Any next Q24 probe must
+first change the role partition or soften matcher constraints, using only
+official-val/train-side gates.
+
+The completed role-partition follow-up
+`query_alpha05_env30_q24_role_partition_v3_probe40_v1` is also rejected for
+full training. TEST was not used. It widened the GT5 bank to the observed
+short-lane carriers, but this reintroduced severe GT5 overcount while true GT5
+short raw coverage stayed weak:
+
+```text
+official-val ACC/FP/FN = 0.962991 / 0.079844 / 0.023416
+count_acc_3/4/5 = 0.878924 / 0.818182 / 0.094595
+count_confusion includes 3->4=23, 3->5=4, 4->5=9, 4->6=2, 5->6=67
+val/train0601 GT5 visible<=10 raw match20 = 0.188679 / 0.229508
+official-val sweep rows with ACC>=env30 = 0
+GT-count oracle-rank ACC upper check ~= 0.9631
+```
+
+Decision: do not full-train or TEST this artifact. The failure is not a simple
+partition-labeling issue: the same query IDs that are nearest to true GT5
+short lanes also generate GT5 sixth-lane boundary/ambiguous outputs, and their
+scores overlap with true short-lane scores. Any next Q24 work must first
+separate true GT5 short geometry rescue from GT5 boundary-pseudo suppression
+with event-level diagnostics and GT-safe protection.
+
+The branch now includes a default-off GT5-safe boundary-pseudo suppression
+probe for the Q24 failure above. It is enabled only by explicit args:
+
+```text
+--gcs-boundary-pseudo-gt5-safe
+--gcs-boundary-pseudo-score-thr 0.0
+--gcs-boundary-pseudo-envelope-margin-px >= 0
+--gcs-boundary-pseudo-protect-short-visible-thr <N>
+--gcs-boundary-pseudo-protect-dist-px <PX>
+--gcs-boundary-pseudo-protect-min-overlap <N>
+--gcs-boundary-pseudo-protect-queries <optional query ids>
+```
+
+When enabled, the boundary-pseudo negative loss still applies only during
+training, only to unmatched short candidate lanes on GT5 images, and only after
+the clear boundary/envelope checks pass. Before a candidate can become a
+target-zero boundary-pseudo negative, the GT5-safe guard protects candidates
+that overlap a true short GT5 lane and are within the configured mean x-distance
+window. It does not change labels, matcher assignment, decode, NMS, official
+metrics, model outputs, or the default Q12/Q24 behavior. Diagnostics add
+`boundary_pseudo_candidate_count` and `boundary_pseudo_protected_count` to the
+loss log.
+
+The branch also includes diagnostic-only event-mined gate tooling:
+
+```text
+tools/diagnose_q24_event_mined_gate.py
+scripts/run_q24_event_mined_gate_v1.sh
+```
+
+These consume official-val/train-side raw/extra diagnostic CSVs and write
+per-query true GT5 short hit/near/miss counts versus GT5->6 and GT3/GT4
+false-extra risks. They must not use TEST for candidate selection.
+
 Training-time `official_best` checkpoint preservation is active as an explicit 2026-06-27 selection-protocol change. It preserves the 5-25-3 algorithm body and only changes how formal TuSimple checkpoints are selected.
 
 The 2026-06-29 `ordered_slot_training_protocol_fix_v1` change is a protocol
