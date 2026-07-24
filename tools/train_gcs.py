@@ -531,6 +531,78 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=20,
         help="GT5 bank may match only GT5 lanes with visible anchors <= this threshold when matcher containment is enabled.",
     )
+    parser.add_argument(
+        "--gcs-q24-event-contain",
+        type=float,
+        default=0.0,
+        help="Q24 event-mined extra-query containment BCE gain. 0 disables.",
+    )
+    parser.add_argument(
+        "--gcs-q24-event-valid-weight",
+        type=float,
+        default=0.25,
+        help="Point-valid zero-target multiplier inside Q24 event containment loss.",
+    )
+    parser.add_argument(
+        "--gcs-q24-event-matcher",
+        action="store_true",
+        help="Use event-mined Q24 query roles to constrain Hungarian assignment.",
+    )
+    parser.add_argument(
+        "--gcs-q24-event-clean-gt5-queries",
+        default="",
+        help="Clean GT5 true-short carrier query ids, e.g. '12,15,20'.",
+    )
+    parser.add_argument(
+        "--gcs-q24-event-risk-queries",
+        default="",
+        help="High-risk event query ids to contain, e.g. '13,21,22,23'.",
+    )
+    parser.add_argument(
+        "--gcs-q24-event-gt4-queries",
+        default="",
+        help="GT4 hard/short event query ids, e.g. '14,17,18,19'.",
+    )
+    parser.add_argument(
+        "--gcs-q24-event-gt4-visible-thr",
+        type=int,
+        default=20,
+        help="Event GT4 queries may match only GT4 lanes with visible anchors <= this threshold.",
+    )
+    parser.add_argument(
+        "--gcs-q24-event-gt5-visible-thr",
+        type=int,
+        default=10,
+        help="Clean event GT5 queries may match only GT5 lanes with visible anchors <= this threshold.",
+    )
+    parser.add_argument(
+        "--gcs-q24-event-suppress-gt5-risk",
+        action="store_true",
+        help="Apply event containment to high-risk queries on GT5 images.",
+    )
+    parser.add_argument(
+        "--gcs-q24-event-gt5-risk-protect",
+        action="store_true",
+        help="Skip GT5 risk-query negative pressure when the query is near a true short GT5 lane.",
+    )
+    parser.add_argument(
+        "--gcs-q24-event-gt5-risk-protect-short-visible-thr",
+        type=int,
+        default=10,
+        help="GT5 visible-anchor threshold for optional risk-query protection.",
+    )
+    parser.add_argument(
+        "--gcs-q24-event-gt5-risk-protect-dist-px",
+        type=float,
+        default=30.0,
+        help="Maximum mean x distance in pixels for optional GT5 risk-query protection.",
+    )
+    parser.add_argument(
+        "--gcs-q24-event-gt5-risk-protect-min-overlap",
+        type=int,
+        default=3,
+        help="Minimum common anchors required for optional GT5 risk-query protection.",
+    )
     parser.add_argument("--gcs-exist-pos-weight", type=float, default=1.0)
     parser.add_argument("--gcs-exist-focal-gamma", type=float, default=0.0, help="Optional focal gamma for existence BCE. 0 disables focal weighting.")
     parser.add_argument(
@@ -889,6 +961,19 @@ def main() -> None:
         "gcs_role_gt4_queries": args.gcs_role_gt4_queries,
         "gcs_role_gt4_visible_thr": args.gcs_role_gt4_visible_thr,
         "gcs_role_gt5_visible_thr": args.gcs_role_gt5_visible_thr,
+        "gcs_q24_event_contain": args.gcs_q24_event_contain,
+        "gcs_q24_event_valid_weight": args.gcs_q24_event_valid_weight,
+        "gcs_q24_event_matcher": args.gcs_q24_event_matcher,
+        "gcs_q24_event_clean_gt5_queries": args.gcs_q24_event_clean_gt5_queries,
+        "gcs_q24_event_risk_queries": args.gcs_q24_event_risk_queries,
+        "gcs_q24_event_gt4_queries": args.gcs_q24_event_gt4_queries,
+        "gcs_q24_event_gt4_visible_thr": args.gcs_q24_event_gt4_visible_thr,
+        "gcs_q24_event_gt5_visible_thr": args.gcs_q24_event_gt5_visible_thr,
+        "gcs_q24_event_suppress_gt5_risk": args.gcs_q24_event_suppress_gt5_risk,
+        "gcs_q24_event_gt5_risk_protect": args.gcs_q24_event_gt5_risk_protect,
+        "gcs_q24_event_gt5_risk_protect_short_visible_thr": args.gcs_q24_event_gt5_risk_protect_short_visible_thr,
+        "gcs_q24_event_gt5_risk_protect_dist_px": args.gcs_q24_event_gt5_risk_protect_dist_px,
+        "gcs_q24_event_gt5_risk_protect_min_overlap": args.gcs_q24_event_gt5_risk_protect_min_overlap,
         "gcs_exist_pos_weight": args.gcs_exist_pos_weight,
         "gcs_exist_focal_gamma": args.gcs_exist_focal_gamma,
         "gcs_exist_focal_alpha": args.gcs_exist_focal_alpha,

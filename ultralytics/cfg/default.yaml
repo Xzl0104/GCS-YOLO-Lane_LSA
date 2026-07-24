@@ -203,6 +203,19 @@ gcs_role_gt5_queries: 12-17 # (str) GT5 short/weak-visible extra query bank
 gcs_role_gt4_queries: 18-23 # (str) GT4 hard/short extra query bank
 gcs_role_gt4_visible_thr: 20 # (int) GT4 bank may match GT4 lanes at or below this visible-anchor count
 gcs_role_gt5_visible_thr: 20 # (int) GT5 bank may match GT5 lanes at or below this visible-anchor count
+gcs_q24_event_contain: 0.0 # (float) event-mined Q24 extra-query containment BCE gain; 0 disables
+gcs_q24_event_valid_weight: 0.25 # (float) point-valid zero-target multiplier inside event containment
+gcs_q24_event_matcher: False # (bool) constrain Hungarian assignment with event-mined Q24 query roles
+gcs_q24_event_clean_gt5_queries: "" # (str) clean GT5 true-short carrier query ids
+gcs_q24_event_risk_queries: "" # (str) high-risk event query ids to contain
+gcs_q24_event_gt4_queries: "" # (str) GT4 hard/short event query ids
+gcs_q24_event_gt4_visible_thr: 20 # (int) event GT4 queries may match GT4 lanes at or below this visible-anchor count
+gcs_q24_event_gt5_visible_thr: 10 # (int) clean event GT5 queries may match GT5 lanes at or below this visible-anchor count
+gcs_q24_event_suppress_gt5_risk: False # (bool) suppress high-risk event queries on GT5 images
+gcs_q24_event_gt5_risk_protect: False # (bool) optionally protect high-risk GT5 queries near true short GT5 lanes
+gcs_q24_event_gt5_risk_protect_short_visible_thr: 10 # (int) GT5 short-lane threshold for optional risk protection
+gcs_q24_event_gt5_risk_protect_dist_px: 30.0 # (float) max mean x distance for optional risk protection
+gcs_q24_event_gt5_risk_protect_min_overlap: 3 # (int) min common anchors for optional risk protection
 gcs_exist_pos_weight: 1.0 # (float) positive query weight for GCS lane existence BCE
 gcs_exist_focal_gamma: 0.0 # (float) optional focal gamma for GCS existence BCE; 0 disables focal weighting
 gcs_exist_focal_alpha: -1.0 # (float) optional focal alpha for GCS existence BCE; set 0..1 to enable alpha weighting

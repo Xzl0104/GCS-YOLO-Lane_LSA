@@ -60,6 +60,14 @@ class GCSLoss(nn.Module):
         "role_contain_gt4_gt5bank_count",
         "role_contain_gt4_extra_count",
         "role_contain_allowed_count",
+        "q24_event_contain_loss",
+        "q24_event_exist_loss",
+        "q24_event_valid_loss",
+        "q24_event_gt3_count",
+        "q24_event_gt4_count",
+        "q24_event_gt5_risk_count",
+        "q24_event_gt5_risk_protected_count",
+        "q24_event_clean_allowed_count",
     )
 
     def __init__(
@@ -126,6 +134,19 @@ class GCSLoss(nn.Module):
         role_gt4_queries=None,
         role_gt4_visible_thr: int | None = None,
         role_gt5_visible_thr: int | None = None,
+        q24_event_contain: float | None = None,
+        q24_event_valid_weight: float | None = None,
+        q24_event_matcher: bool | None = None,
+        q24_event_clean_gt5_queries=None,
+        q24_event_risk_queries=None,
+        q24_event_gt4_queries=None,
+        q24_event_gt4_visible_thr: int | None = None,
+        q24_event_gt5_visible_thr: int | None = None,
+        q24_event_suppress_gt5_risk: bool | None = None,
+        q24_event_gt5_risk_protect: bool | None = None,
+        q24_event_gt5_risk_protect_short_visible_thr: int | None = None,
+        q24_event_gt5_risk_protect_dist_px: float | None = None,
+        q24_event_gt5_risk_protect_min_overlap: int | None = None,
         boundary_pseudo_gt5_safe: bool | None = None,
         boundary_pseudo_protect_short_visible_thr: int | None = None,
         boundary_pseudo_protect_dist_px: float | None = None,
@@ -303,6 +324,71 @@ class GCSLoss(nn.Module):
             if role_gt5_visible_thr is not None
             else self._arg(args, "gcs_role_gt5_visible_thr", 20)
         )
+        self.q24_event_contain_gain = float(
+            q24_event_contain
+            if q24_event_contain is not None
+            else self._arg(args, "gcs_q24_event_contain", 0.0)
+        )
+        self.q24_event_valid_weight = float(
+            q24_event_valid_weight
+            if q24_event_valid_weight is not None
+            else self._arg(args, "gcs_q24_event_valid_weight", 0.25)
+        )
+        self.q24_event_matcher = self._bool_arg(
+            q24_event_matcher
+            if q24_event_matcher is not None
+            else self._arg(args, "gcs_q24_event_matcher", False)
+        )
+        self.q24_event_clean_gt5_queries = self._parse_query_spec(
+            q24_event_clean_gt5_queries
+            if q24_event_clean_gt5_queries is not None
+            else self._arg(args, "gcs_q24_event_clean_gt5_queries", "")
+        )
+        self.q24_event_risk_queries = self._parse_query_spec(
+            q24_event_risk_queries
+            if q24_event_risk_queries is not None
+            else self._arg(args, "gcs_q24_event_risk_queries", "")
+        )
+        self.q24_event_gt4_queries = self._parse_query_spec(
+            q24_event_gt4_queries
+            if q24_event_gt4_queries is not None
+            else self._arg(args, "gcs_q24_event_gt4_queries", "")
+        )
+        self.q24_event_gt4_visible_thr = int(
+            q24_event_gt4_visible_thr
+            if q24_event_gt4_visible_thr is not None
+            else self._arg(args, "gcs_q24_event_gt4_visible_thr", 20)
+        )
+        self.q24_event_gt5_visible_thr = int(
+            q24_event_gt5_visible_thr
+            if q24_event_gt5_visible_thr is not None
+            else self._arg(args, "gcs_q24_event_gt5_visible_thr", 10)
+        )
+        self.q24_event_suppress_gt5_risk = self._bool_arg(
+            q24_event_suppress_gt5_risk
+            if q24_event_suppress_gt5_risk is not None
+            else self._arg(args, "gcs_q24_event_suppress_gt5_risk", False)
+        )
+        self.q24_event_gt5_risk_protect = self._bool_arg(
+            q24_event_gt5_risk_protect
+            if q24_event_gt5_risk_protect is not None
+            else self._arg(args, "gcs_q24_event_gt5_risk_protect", False)
+        )
+        self.q24_event_gt5_risk_protect_short_visible_thr = int(
+            q24_event_gt5_risk_protect_short_visible_thr
+            if q24_event_gt5_risk_protect_short_visible_thr is not None
+            else self._arg(args, "gcs_q24_event_gt5_risk_protect_short_visible_thr", 10)
+        )
+        self.q24_event_gt5_risk_protect_dist_px = float(
+            q24_event_gt5_risk_protect_dist_px
+            if q24_event_gt5_risk_protect_dist_px is not None
+            else self._arg(args, "gcs_q24_event_gt5_risk_protect_dist_px", 30.0)
+        )
+        self.q24_event_gt5_risk_protect_min_overlap = int(
+            q24_event_gt5_risk_protect_min_overlap
+            if q24_event_gt5_risk_protect_min_overlap is not None
+            else self._arg(args, "gcs_q24_event_gt5_risk_protect_min_overlap", 3)
+        )
         self.count_under5_min_lanes = int(
             count_under5_min_lanes
             if count_under5_min_lanes is not None
@@ -388,6 +474,47 @@ class GCSLoss(nn.Module):
         role_overlap = set(self.role_gt5_queries) & set(self.role_gt4_queries)
         if role_overlap:
             raise ValueError(f"gcs_role_gt5_queries and gcs_role_gt4_queries must not overlap: {sorted(role_overlap)}.")
+        if self.q24_event_contain_gain < 0.0:
+            raise ValueError(f"gcs_q24_event_contain must be >= 0, got {self.q24_event_contain_gain}.")
+        if self.q24_event_valid_weight < 0.0:
+            raise ValueError(
+                "gcs_q24_event_valid_weight must be >= 0, "
+                f"got {self.q24_event_valid_weight}."
+            )
+        if self.q24_event_gt4_visible_thr < 0:
+            raise ValueError(f"gcs_q24_event_gt4_visible_thr must be >= 0, got {self.q24_event_gt4_visible_thr}.")
+        if self.q24_event_gt5_visible_thr < 0:
+            raise ValueError(f"gcs_q24_event_gt5_visible_thr must be >= 0, got {self.q24_event_gt5_visible_thr}.")
+        if self.q24_event_gt5_risk_protect_short_visible_thr < 0:
+            raise ValueError(
+                "gcs_q24_event_gt5_risk_protect_short_visible_thr must be >= 0, "
+                f"got {self.q24_event_gt5_risk_protect_short_visible_thr}."
+            )
+        if self.q24_event_gt5_risk_protect_dist_px < 0.0:
+            raise ValueError(
+                "gcs_q24_event_gt5_risk_protect_dist_px must be >= 0, "
+                f"got {self.q24_event_gt5_risk_protect_dist_px}."
+            )
+        if self.q24_event_gt5_risk_protect_min_overlap < 1:
+            raise ValueError(
+                "gcs_q24_event_gt5_risk_protect_min_overlap must be >= 1, "
+                f"got {self.q24_event_gt5_risk_protect_min_overlap}."
+            )
+        event_sets = (
+            ("clean_gt5", set(self.q24_event_clean_gt5_queries)),
+            ("risk", set(self.q24_event_risk_queries)),
+            ("gt4", set(self.q24_event_gt4_queries)),
+        )
+        for i, (name_i, set_i) in enumerate(event_sets):
+            for name_j, set_j in event_sets[i + 1 :]:
+                overlap = set_i & set_j
+                if overlap:
+                    raise ValueError(
+                        f"gcs_q24_event_{name_i}_queries and gcs_q24_event_{name_j}_queries "
+                        f"must not overlap: {sorted(overlap)}."
+                    )
+        if self._q24_event_enabled() and not any(values for _, values in event_sets):
+            raise ValueError("Q24 event containment requires at least one clean, risk, or GT4 query set.")
         self.curve_alpha = float(curve_alpha if curve_alpha is not None else self._arg(args, "gcs_curve_alpha", 5.0))
         self.curve_weight_max = float(
             curve_weight_max if curve_weight_max is not None else self._arg(args, "gcs_curve_weight_max", 5.0)
@@ -1265,6 +1392,259 @@ class GCSLoss(nn.Module):
             pred_logits.new_tensor(float(allowed_count)),
         )
 
+    def _q24_event_enabled(self) -> bool:
+        """Return whether Q24 event-aware containment behavior is active."""
+        return bool(float(self.q24_event_contain_gain) > 0.0 or self.q24_event_matcher)
+
+    def _q24_event_query_tensors(
+        self, device: torch.device, num_queries: int
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Return clean-GT5, high-risk, GT4, and combined Q24 event query tensors."""
+        clean_gt5 = torch.as_tensor(self.q24_event_clean_gt5_queries, device=device, dtype=torch.long)
+        risk = torch.as_tensor(self.q24_event_risk_queries, device=device, dtype=torch.long)
+        gt4 = torch.as_tensor(self.q24_event_gt4_queries, device=device, dtype=torch.long)
+        groups = [x for x in (clean_gt5, risk, gt4) if x.numel()]
+        if not groups:
+            raise ValueError("Q24 event containment requires at least one configured query.")
+        max_query = max(int(x.max().item()) for x in groups)
+        if max_query >= num_queries:
+            raise ValueError(
+                "Q24 event containment query range exceeds model query count: "
+                f"max configured q{max_query}, model has Q={num_queries}."
+            )
+        all_event = torch.cat(groups).unique(sorted=True)
+        return clean_gt5, risk, gt4, all_event
+
+    def _q24_event_allowed_masks(
+        self,
+        pred_points: torch.Tensor,
+        gt_valid: list[torch.Tensor],
+        gt_lanes: torch.Tensor,
+    ) -> list[torch.Tensor] | None:
+        """Build per-image Q x N masks for event-aware Q24 Hungarian matching."""
+        if not self._q24_event_enabled():
+            return None
+
+        device = pred_points.device
+        num_queries = int(pred_points.shape[1])
+        clean_gt5, risk, gt4_queries, all_event = self._q24_event_query_tensors(device, num_queries)
+        gt_lanes = torch.as_tensor(gt_lanes, device=device, dtype=pred_points.dtype).reshape(-1)
+        if gt_lanes.numel() != pred_points.shape[0]:
+            raise ValueError(f"gt_lanes must have one value per image, got {gt_lanes.numel()} vs B={pred_points.shape[0]}.")
+
+        masks: list[torch.Tensor] = []
+        for b, valid_b_raw in enumerate(gt_valid):
+            valid_b = valid_b_raw.to(device=device, dtype=pred_points.dtype)
+            if valid_b.ndim != 2:
+                raise ValueError(f"GT lane_valid must have shape N x K, got {tuple(valid_b.shape)}.")
+            mask = torch.ones((num_queries, valid_b.shape[0]), device=device, dtype=torch.bool)
+            if valid_b.shape[0] == 0:
+                masks.append(mask)
+                continue
+
+            gt_count = int(round(float(gt_lanes[b].detach().item())))
+            visible_counts = valid_b.float().sum(dim=1)
+            gt4_short = visible_counts <= float(self.q24_event_gt4_visible_thr)
+            gt5_short = visible_counts <= float(self.q24_event_gt5_visible_thr)
+
+            if gt_count <= 3:
+                mask[all_event, :] = False
+            elif gt_count == 4:
+                if clean_gt5.numel():
+                    mask[clean_gt5, :] = False
+                if risk.numel():
+                    mask[risk, :] = False
+                if gt4_queries.numel():
+                    mask[gt4_queries, :] = gt4_short[None, :]
+            else:
+                if clean_gt5.numel():
+                    mask[clean_gt5, :] = gt5_short[None, :] if self.q24_event_gt5_visible_thr > 0 else True
+                if risk.numel():
+                    mask[risk, :] = False
+                if gt4_queries.numel():
+                    mask[gt4_queries, :] = False
+            masks.append(mask)
+        return masks
+
+    @staticmethod
+    def _merge_allowed_masks(*mask_lists: list[torch.Tensor] | None) -> list[torch.Tensor] | None:
+        """Combine optional matcher allow masks with logical AND."""
+        active = [m for m in mask_lists if m is not None]
+        if not active:
+            return None
+        merged = [m.clone() for m in active[0]]
+        for masks in active[1:]:
+            if len(masks) != len(merged):
+                raise ValueError("Allowed-mask lists must have the same batch size.")
+            for i, mask in enumerate(masks):
+                if mask.shape != merged[i].shape:
+                    raise ValueError(f"Allowed-mask shape mismatch: {tuple(mask.shape)} vs {tuple(merged[i].shape)}.")
+                merged[i] = merged[i] & mask.to(device=merged[i].device, dtype=torch.bool)
+        return merged
+
+    def _q24_event_risk_protected_by_short_gt5(
+        self,
+        pred_points_q: torch.Tensor,
+        pred_visible_q: torch.Tensor,
+        gt_points_b: torch.Tensor,
+        gt_valid_b: torch.Tensor,
+        width: float,
+    ) -> bool:
+        """Return whether a high-risk query is close enough to a true short GT5 lane to skip extra negative pressure."""
+        if not self.q24_event_gt5_risk_protect:
+            return False
+        short_thr = int(self.q24_event_gt5_risk_protect_short_visible_thr)
+        if short_thr <= 0:
+            return False
+
+        q_visible = pred_visible_q > 0.5
+        pred_x = pred_points_q[:, 0] * float(width)
+        gt_x = gt_points_b[..., 0] * float(width)
+        min_overlap = int(self.q24_event_gt5_risk_protect_min_overlap)
+        protect_dist = float(self.q24_event_gt5_risk_protect_dist_px)
+
+        for gt_i in range(gt_points_b.shape[0]):
+            gt_visible = gt_valid_b[gt_i] > 0.5
+            if int(gt_visible.sum().item()) > short_thr:
+                continue
+            common = q_visible & gt_visible
+            if int(common.sum().item()) < min_overlap:
+                continue
+            mean_dx = (pred_x[common] - gt_x[gt_i, common]).abs().mean()
+            if float(mean_dx.detach().cpu().item()) <= protect_dist:
+                return True
+        return False
+
+    def q24_event_containment_loss(
+        self,
+        pred_points: torch.Tensor,
+        pred_logits: torch.Tensor,
+        pred_valid_logits: torch.Tensor | None,
+        indices: list[tuple[torch.Tensor, torch.Tensor]],
+        gt_points: list[torch.Tensor],
+        gt_valid: list[torch.Tensor],
+        gt_lanes: torch.Tensor,
+        event_allowed_masks: list[torch.Tensor] | None,
+    ) -> tuple[torch.Tensor, ...]:
+        """Suppress event-mined Q24 high-risk queries while keeping clean GT5 carriers isolated."""
+        zero = self._zero_like(pred_points)
+        if float(self.q24_event_contain_gain) <= 0.0:
+            return zero, zero, zero, zero, zero, zero, zero, zero
+        if pred_valid_logits is None and float(self.q24_event_valid_weight) > 0.0:
+            raise ValueError(
+                "gcs_q24_event_contain with gcs_q24_event_valid_weight > 0 requires pred_valid_logits."
+            )
+        if event_allowed_masks is None:
+            raise ValueError("event_allowed_masks must be provided when gcs_q24_event_contain is enabled.")
+
+        device = pred_logits.device
+        dtype = pred_points.dtype
+        if pred_logits.ndim == 3 and pred_logits.shape[-1] == 1:
+            pred_logits_2d = pred_logits.squeeze(-1)
+        else:
+            pred_logits_2d = pred_logits
+        if pred_logits_2d.ndim != 2:
+            raise ValueError(f"pred_logits must be B x Q, got {tuple(pred_logits.shape)}.")
+
+        num_queries = int(pred_logits_2d.shape[1])
+        clean_gt5, risk, gt4_queries, all_event = self._q24_event_query_tensors(device, num_queries)
+        gt_lanes = torch.as_tensor(gt_lanes, device=device, dtype=pred_logits_2d.dtype).reshape(-1)
+        if gt_lanes.numel() != pred_logits_2d.shape[0]:
+            raise ValueError(f"gt_lanes must have one value per image, got {gt_lanes.numel()} vs B={pred_logits_2d.shape[0]}.")
+
+        width = float(self._pixel_scale_for(pred_points).reshape(-1)[0].detach().cpu().item())
+        valid_prob = pred_valid_logits.detach().sigmoid() if pred_valid_logits is not None else None
+        points = pred_points.detach()
+
+        exist_losses = []
+        valid_losses = []
+        gt3_count = 0
+        gt4_count = 0
+        gt5_risk_count = 0
+        gt5_risk_protected_count = 0
+        clean_allowed_count = 0
+
+        for b in range(pred_logits_2d.shape[0]):
+            gt_count = int(round(float(gt_lanes[b].detach().item())))
+            selected = torch.zeros((num_queries,), device=device, dtype=torch.bool)
+            allowed_positive = torch.zeros((num_queries,), device=device, dtype=torch.bool)
+            src_idx, tgt_idx = indices[b]
+            if src_idx.numel():
+                src_idx = src_idx.to(device=device, dtype=torch.long)
+                tgt_idx = tgt_idx.to(device=device, dtype=torch.long)
+                allowed_mask_b = event_allowed_masks[b].to(device=device, dtype=torch.bool)
+                for q, t in zip(src_idx.tolist(), tgt_idx.tolist()):
+                    if 0 <= q < num_queries and 0 <= t < allowed_mask_b.shape[1] and bool(allowed_mask_b[q, t]):
+                        allowed_positive[q] = True
+
+            if gt_count <= 3:
+                selected[all_event] = True
+                gt3_count += int(all_event.numel())
+            elif gt_count == 4:
+                if clean_gt5.numel():
+                    selected[clean_gt5] = True
+                if risk.numel():
+                    selected[risk] = True
+                if gt4_queries.numel():
+                    allowed_gt4 = allowed_positive[gt4_queries]
+                    suppressed_gt4 = gt4_queries[~allowed_gt4]
+                    if suppressed_gt4.numel():
+                        selected[suppressed_gt4] = True
+                gt4_count += int(selected.sum().item())
+            else:
+                if clean_gt5.numel():
+                    clean_allowed_count += int(allowed_positive[clean_gt5].sum().item())
+                if risk.numel() and self.q24_event_suppress_gt5_risk:
+                    selected[risk] = True
+                    if valid_prob is not None and self.q24_event_gt5_risk_protect:
+                        gt_points_b = gt_points[b].detach().to(device=device, dtype=dtype)
+                        gt_valid_b = gt_valid[b].detach().to(device=device, dtype=dtype)
+                        for q in risk.tolist():
+                            if self._q24_event_risk_protected_by_short_gt5(
+                                points[b, q],
+                                valid_prob[b, q],
+                                gt_points_b,
+                                gt_valid_b,
+                                width,
+                            ):
+                                selected[q] = False
+                                gt5_risk_protected_count += 1
+                    gt5_risk_count += int(selected[risk].sum().item())
+
+            if not bool(selected.any()):
+                continue
+
+            selected_idx = torch.nonzero(selected, as_tuple=False).flatten()
+            exist_losses.append(
+                F.binary_cross_entropy_with_logits(
+                    pred_logits_2d[b, selected_idx],
+                    torch.zeros_like(pred_logits_2d[b, selected_idx]),
+                    reduction="mean",
+                )
+            )
+            if pred_valid_logits is not None and float(self.q24_event_valid_weight) > 0.0:
+                valid_losses.append(
+                    F.binary_cross_entropy_with_logits(
+                        pred_valid_logits[b, selected_idx],
+                        torch.zeros_like(pred_valid_logits[b, selected_idx]),
+                        reduction="mean",
+                    )
+                )
+
+        exist_loss = torch.stack(exist_losses).mean() if exist_losses else zero
+        valid_loss = torch.stack(valid_losses).mean() if valid_losses else zero
+        loss = exist_loss + float(self.q24_event_valid_weight) * valid_loss
+        return (
+            loss,
+            exist_loss,
+            valid_loss,
+            pred_logits_2d.new_tensor(float(gt3_count)),
+            pred_logits_2d.new_tensor(float(gt4_count)),
+            pred_logits_2d.new_tensor(float(gt5_risk_count)),
+            pred_logits_2d.new_tensor(float(gt5_risk_protected_count)),
+            pred_logits_2d.new_tensor(float(clean_allowed_count)),
+        )
+
     def count_losses(
         self, pred_logits: torch.Tensor, batch: dict, gt_valid: list[torch.Tensor], target: torch.Tensor | None = None
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -1901,12 +2281,17 @@ class GCSLoss(nn.Module):
 
         gt_lanes = self.target_lane_count(pred_logits, batch, gt_valid)
         role_allowed_masks = self._role_allowed_masks(pred_points, gt_valid, gt_lanes)
+        event_allowed_masks = self._q24_event_allowed_masks(pred_points, gt_valid, gt_lanes)
+        matcher_allowed_masks = self._merge_allowed_masks(
+            role_allowed_masks if self.role_contain_matcher else None,
+            event_allowed_masks if self.q24_event_matcher else None,
+        )
         indices = self.matcher(
             pred_points,
             pred_logits,
             gt_points,
             gt_valid,
-            allowed_masks=role_allowed_masks if self.role_contain_matcher else None,
+            allowed_masks=matcher_allowed_masks,
         )
         exist_loss = self.exist_loss(pred_logits, pred_points, pred_valid_logits, gt_points, gt_valid, indices)
         point_loss = self.point_loss(pred_points, gt_points, gt_valid, indices, gt_lanes=gt_lanes)
@@ -1981,6 +2366,25 @@ class GCSLoss(nn.Module):
             gt_lanes,
             role_allowed_masks,
         )
+        (
+            q24_event_contain_loss,
+            q24_event_exist_loss,
+            q24_event_valid_loss,
+            q24_event_gt3_count,
+            q24_event_gt4_count,
+            q24_event_gt5_risk_count,
+            q24_event_gt5_risk_protected_count,
+            q24_event_clean_allowed_count,
+        ) = self.q24_event_containment_loss(
+            pred_points,
+            pred_logits,
+            pred_valid_logits,
+            indices,
+            gt_points,
+            gt_valid,
+            gt_lanes,
+            event_allowed_masks,
+        )
 
         mask_loss = self._zero_like(pred_points)
         if "aux_mask_logits" in preds and "semantic_mask" in batch:
@@ -2013,6 +2417,8 @@ class GCSLoss(nn.Module):
             total = total + self.spurious_neg_gain * self.spurious_neg_weight * spurious_neg_loss
         if self.role_contain_gain != 0.0:
             total = total + self.role_contain_gain * role_contain_loss
+        if self.q24_event_contain_gain != 0.0:
+            total = total + self.q24_event_contain_gain * q24_event_contain_loss
         loss_items = torch.stack(
             (
                 exist_loss.detach(),
@@ -2059,6 +2465,14 @@ class GCSLoss(nn.Module):
                 role_contain_gt4_gt5bank_count.detach(),
                 role_contain_gt4_extra_count.detach(),
                 role_contain_allowed_count.detach(),
+                q24_event_contain_loss.detach(),
+                q24_event_exist_loss.detach(),
+                q24_event_valid_loss.detach(),
+                q24_event_gt3_count.detach(),
+                q24_event_gt4_count.detach(),
+                q24_event_gt5_risk_count.detach(),
+                q24_event_gt5_risk_protected_count.detach(),
+                q24_event_clean_allowed_count.detach(),
             )
         )
         return total, loss_items

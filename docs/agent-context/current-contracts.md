@@ -224,6 +224,45 @@ These consume official-val/train-side raw/extra diagnostic CSVs and write
 per-query true GT5 short hit/near/miss counts versus GT5->6 and GT3/GT4
 false-extra risks. They must not use TEST for candidate selection.
 
+The completed GT5-safe boundary-pseudo probe
+`query_alpha05_env30_q24_gt5safe_boundary_probe40_v1` is rejected for
+longer/full training. TEST was not used. The mechanism was active, but the gate
+failed:
+
+```text
+official-val ACC/FP/FN = 0.962156 / 0.089302 / 0.021120
+count_acc_3/4/5 = 0.852018 / 0.712121 / 0.175676
+external official_best.pt sweep rows with ACC>=env30 = 0
+external official_best.pt sweep rows passing longer-training gate = 0
+val/train0601 GT5 visible<=10 raw match20 = 0.301887 / 0.316940
+val GT5->6 = 60
+val GT3/GT4 false-extra = 51
+```
+
+Decision: do not full-train or TEST this artifact. The result shows that
+GT5-safe boundary-pseudo suppression alone does not solve Q24's event-level
+query-role separation and existence/valid calibration bottleneck.
+
+The branch now includes a default-off Q24 event-containment probe for the
+follow-up mechanism. It is enabled only by explicit args such as:
+
+```text
+--gcs-q24-event-contain > 0
+--gcs-q24-event-matcher
+--gcs-q24-event-clean-gt5-queries 12,15,20
+--gcs-q24-event-risk-queries 13,21,22,23
+--gcs-q24-event-gt4-queries 14,17,18,19
+--gcs-q24-event-suppress-gt5-risk
+```
+
+When enabled, event-aware matching allows clean GT5 queries only on short GT5
+lanes, forbids high-risk event queries from matching GT5 lanes, and confines
+GT4 event queries to short GT4 lanes. The auxiliary event-containment BCE adds
+extra exist/valid target-zero pressure on selected event-role violations. It
+does not change labels, decode, NMS, official metrics, model outputs, or the
+default Q12/Q24 behavior. It is a 20-40 epoch probe mechanism only until
+official-val/train-side gates pass.
+
 Training-time `official_best` checkpoint preservation is active as an explicit 2026-06-27 selection-protocol change. It preserves the 5-25-3 algorithm body and only changes how formal TuSimple checkpoints are selected.
 
 The 2026-06-29 `ordered_slot_training_protocol_fix_v1` change is a protocol

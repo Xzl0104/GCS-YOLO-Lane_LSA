@@ -239,6 +239,9 @@ CFG_FLOAT_KEYS = frozenset(
         "gcs_boundary_pseudo_protect_dist_px",
         "gcs_role_contain",
         "gcs_role_contain_valid_weight",
+        "gcs_q24_event_contain",
+        "gcs_q24_event_valid_weight",
+        "gcs_q24_event_gt5_risk_protect_dist_px",
         "gcs_exist_pos_weight",
         "gcs_exist_focal_gamma",
         "gcs_exist_focal_alpha",
@@ -342,6 +345,10 @@ CFG_INT_KEYS = frozenset(
         "gcs_boundary_pseudo_protect_min_overlap",
         "gcs_role_gt4_visible_thr",
         "gcs_role_gt5_visible_thr",
+        "gcs_q24_event_gt4_visible_thr",
+        "gcs_q24_event_gt5_visible_thr",
+        "gcs_q24_event_gt5_risk_protect_short_visible_thr",
+        "gcs_q24_event_gt5_risk_protect_min_overlap",
         "gcs_hard_visible_thr",
         "gcs_hard_gt3_visible_thr",
     }
@@ -393,6 +400,9 @@ CFG_BOOL_KEYS = frozenset(
         "gcs_spurious_gt_protect",
         "gcs_boundary_pseudo_gt5_safe",
         "gcs_role_contain_matcher",
+        "gcs_q24_event_matcher",
+        "gcs_q24_event_suppress_gt5_risk",
+        "gcs_q24_event_gt5_risk_protect",
     }
 )
 

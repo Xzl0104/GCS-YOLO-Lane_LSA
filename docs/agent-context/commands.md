@@ -378,6 +378,82 @@ boundary_pseudo_candidate_count should be nonzero and protected_count should
   show the safe guard is active when near true GT5 short candidates occur
 ```
 
+Completed result:
+
+```text
+run = query_alpha05_env30_q24_gt5safe_boundary_probe40_v1
+status = rejected for longer/full training
+training rows = 40
+official_best source_epoch = 40
+TEST used = false
+
+official-val ACC/FP/FN =
+  0.962156 / 0.089302 / 0.021120
+count_acc_3/4/5 =
+  0.852018 / 0.712121 / 0.175676
+count_confusion includes 3->4=22, 3->5=11, 4->5=10, 4->6=8, 5->6=61
+
+external official_best.pt sweep rows = 864
+rows with ACC >= env30 = 0
+rows with FP/FN both <= env30 = 0
+rows passing longer-training gate = 0
+```
+
+Do not continue this artifact to longer/full training and do not run TEST. The
+GT5-safe boundary-pseudo loss was active, but raw/event diagnostics show severe
+GT5->6 and GT3/GT4 false-extra risk remains.
+
+## Q24 Event-Containment Probe
+
+The default-off Q24 event-containment probe is the follow-up to the rejected
+GT5-safe boundary-pseudo run. It keeps TEST closed, isolates the clean GT5
+true-short carriers, and contains the high-risk carriers found by the
+event-mined gate:
+
+```text
+clean GT5 true-short queries = q12,q15,q20
+high-risk event queries = q13,q21,q22,q23
+GT4 hard/short event queries = q14,q17,q18,q19
+```
+
+Launch only a 20-40 epoch probe:
+
+```bash
+bash scripts/run_q24_event_containment_probe_v1.sh
+```
+
+Equivalent explicit launch:
+
+```bash
+RUN_NAME=query_alpha05_env30_q24_event_containment_probe40_v1 \
+MODEL=ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q24-k56-protected-static.yaml \
+EPOCHS=40 \
+RUN_TESTS=0 \
+bash scripts/run_q24_event_containment_probe_v1.sh
+```
+
+After training and official-val sweeps, run the same event-mined diagnostic
+gate:
+
+```bash
+RUN_NAME=query_alpha05_env30_q24_event_containment_probe40_v1 \
+OVERWRITE_DIAGS=0 \
+bash scripts/run_q24_event_mined_gate_v1.sh
+```
+
+Promotion gate before any longer run:
+
+```text
+TEST used = false
+official-val ACC must improve over gt5safe v1 and role v2/v3
+official-val FP must be clearly below gt5safe v1
+count_acc_4 >= 0.90
+count_acc_5 >= 0.972973
+GT5 visible<=10 raw match20 should recover toward cont100
+GT5->6 and GT3/GT4 false-extra must drop materially
+q24_event_* logs must show the event-containment path is active
+```
+
 ## Query Count Head CE0.5 Run
 
 The default-off query Count Head ablation is launched through:

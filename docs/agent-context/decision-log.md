@@ -2,6 +2,151 @@
 
 This file records decisions for branch `codex/5-25-3-k56`.
 
+## 2026-07-25: Reject Q24 GT5-safe boundary-pseudo probe40 v1
+
+Decision:
+
+Do not enter longer or full training from
+`query_alpha05_env30_q24_gt5safe_boundary_probe40_v1`. Keep TEST closed. The
+GT5-safe boundary-pseudo path was active, but the official-val/train-side gate
+failed. The result proves that protecting true GT5 short candidates while
+lowering the boundary-pseudo score floor is not enough to make Q24 promotable.
+
+Protocol:
+
+```text
+run = runs/gcs_lane/query_alpha05_env30_q24_gt5safe_boundary_probe40_v1
+model = ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q24-k56-protected-static.yaml
+training rows = 40
+official_best source_epoch = 40
+TEST used = false
+active flags include:
+  gcs_boundary_pseudo_neg=0.02
+  gcs_boundary_pseudo_score_thr=0.0
+  gcs_boundary_pseudo_gt5_safe=true
+  gcs_boundary_pseudo_protect_queries=12,13,15,16,20,21,23
+  gcs_role_contain=0.0
+```
+
+Primary official-val evidence:
+
+```text
+official_best ACC/FP/FN =
+  0.962156 / 0.089302 / 0.021120
+count_acc_3/4/5 =
+  0.852018 / 0.712121 / 0.175676
+count_confusion includes:
+  3->4=22, 3->5=11, 4->5=10, 4->6=8, 5->6=61
+
+env30 official-val ACC/FP/FN =
+  0.973330 / 0.015748 / 0.009642
+env30 count_acc_3/4/5 =
+  0.968610 / 0.969697 / 0.986486
+```
+
+The external official-val sweeps cannot rescue this checkpoint:
+
+```text
+official_best.pt sweep rows = 864
+max ACC = 0.962156
+min FP = 0.056612
+min FN = 0.021120
+max count_acc_4 = 0.757576
+rows with ACC >= env30 = 0
+rows with FP/FN both <= env30 = 0
+rows passing the longer-training gate = 0
+
+best.pt sweep max ACC = 0.962354
+best.pt max count_acc_4 = 0.727273
+```
+
+The GT5-safe mechanism was not a no-op:
+
+```text
+epoch040 train boundary_pseudo_candidate_count = 2.19608
+epoch040 train boundary_pseudo_protected_count = 0.63726
+epoch040 val boundary_pseudo_candidate_count = 3.66667
+epoch040 val boundary_pseudo_protected_count = 1.5
+```
+
+Raw and event-mined diagnostics:
+
+```text
+val/train0601/train0531 raw overall match20 =
+  0.932464 / 0.870173 / 0.955277
+
+val/train0601 GT5 visible<=10 raw match20 =
+  0.301887 / 0.316940
+
+val/train0601/train0531 GT3GT4 visible<=20 q12..q23 raw-best rate =
+  0.581994 / 0.657534 / 0.654867
+
+event gate:
+  total_val_gt5_to6 = 60
+  total_val_gt34_false_extra = 51
+  total_val_true_gt5_le10_rawbest = 53
+  total_train0601_true_gt5_le10_rawbest = 183
+```
+
+Per-query event gate:
+
+```text
+q13 risk=25, true GT5<=10 hit20/near=5/8, GT5->6=22
+q21 risk=21, true GT5<=10 hit20/near=1/14, GT5->6=19
+q23 risk=22, true GT5<=10 hit20/near=1/6, GT5->6=9, GT3/GT4 false-extra=13
+q22 risk=15 with no useful val true-GT5 role
+q15 is the only clean high-true low-risk query:
+  true GT5<=10 hit20/near=5/2, risk=2
+```
+
+Why:
+
+This closes the GT5-safe boundary-pseudo probe as insufficient. It reduced the
+problem only for a small clean carrier (`q15`) while the dominant GT5 carriers
+remain coupled with GT5 sixth-lane boundary/ambiguous events and GT3/GT4
+false-extra events. It is not a simple undertraining result: the epoch trend is
+not monotonic, `count_acc_5` collapses at epoch040 after being normal at
+epoch035, and the official-val sweep has no count-safe or FP-safe rescue row.
+
+Integrated conclusion:
+
+Reject this artifact for longer/full training and do not run TEST. The current
+Q24 line is bottlenecked by event-level query role separation and
+existence/valid calibration, not by static capacity or boundary-pseudo score
+floor alone. The next Q24 attempt, if any, must first change the mechanism:
+isolate the clean true-short carriers (`q12/q15/q20` tier), treat high-risk
+carriers (`q13/q21/q23/q22`) with explicit event-aware containment or
+ambiguous-extra suppression, and pass a new 20-40 epoch official-val/train-side
+gate before any longer run.
+
+Follow-up implementation:
+
+Add a default-off Q24 event-containment probe:
+
+```text
+new flags:
+  --gcs-q24-event-contain
+  --gcs-q24-event-valid-weight
+  --gcs-q24-event-matcher
+  --gcs-q24-event-clean-gt5-queries
+  --gcs-q24-event-risk-queries
+  --gcs-q24-event-gt4-queries
+  --gcs-q24-event-suppress-gt5-risk
+new logs:
+  q24_event_contain_loss
+  q24_event_gt3_count
+  q24_event_gt4_count
+  q24_event_gt5_risk_count
+  q24_event_clean_allowed_count
+new script:
+  scripts/run_q24_event_containment_probe_v1.sh
+```
+
+The default probe protects only `q12/q15/q20` in the GT5-safe boundary loss,
+does not protect high-risk `q13/q21/q22/q23`, and uses event-aware matcher
+constraints so high-risk queries cannot continue serving as true GT5 short
+positives. Run only a 40-epoch official-val/train-side probe with TEST closed.
+
 ## 2026-07-25: Add default-off Q24 GT5-safe boundary-pseudo probe
 
 Decision:

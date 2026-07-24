@@ -790,6 +790,75 @@ The next bottleneck test is whether low-score GT5->6 boundary-pseudo pressure
 can reduce overcount while preserving true GT5 short raw geometry; it is not a
 full-training or TEST candidate until that official-val/train-side gate passes.
 
+Completed result:
+
+`query_alpha05_env30_q24_gt5safe_boundary_probe40_v1` is complete and rejected
+for longer/full training. TEST was not used. The official-val result is:
+
+```text
+ACC/FP/FN = 0.962156 / 0.089302 / 0.021120
+count_acc_3/4/5 = 0.852018 / 0.712121 / 0.175676
+count_confusion includes 3->4=22, 3->5=11, 4->5=10, 4->6=8, 5->6=61
+```
+
+The external 864-row official-val sweep has no rescue row:
+
+```text
+rows with ACC >= env30 = 0
+rows with FP/FN both <= env30 = 0
+rows passing longer-training gate = 0
+max count_acc_4 = 0.757576
+```
+
+The mechanism was active but insufficient:
+
+```text
+epoch040 train boundary_pseudo_candidate/protected =
+  2.19608 / 0.63726
+epoch040 val boundary_pseudo_candidate/protected =
+  3.66667 / 1.5
+```
+
+Raw and event diagnostics show the actual bottleneck:
+
+```text
+val/train0601 GT5 visible<=10 raw match20 =
+  0.301887 / 0.316940
+val/train0601/train0531 GT3GT4 visible<=20 q12..q23 raw-best rate =
+  0.581994 / 0.657534 / 0.654867
+event gate total_val_gt5_to6 = 60
+event gate total_val_gt34_false_extra = 51
+```
+
+Per-query evidence isolates the problem:
+
+```text
+q13: risk=25, true GT5<=10 hit20/near=5/8, GT5->6=22
+q21: risk=21, true GT5<=10 hit20/near=1/14, GT5->6=19
+q23: risk=22, true GT5<=10 hit20/near=1/6, GT5->6=9, false-extra=13
+q15: the only clean high-true low-risk query, hit20/near=5/2, risk=2
+```
+
+Interpretation: this is not a simple training-length issue or a no-op
+implementation. The GT5-safe path protected some near-true candidates, but the
+dominant carriers remain mixed true-short and false-extra events, and GT3/GT4
+extra-query carrier drift remains close to the failed cont100 band. Stop Q24
+GT5-safe boundary-pseudo as-is. If Q24 continues, the next probe must change
+the mechanism toward clean-carrier isolation plus event-aware containment for
+`q13/q21/q23/q22`, and must pass another 20-40 epoch official-val/train-side
+gate before any longer run.
+
+Implementation status:
+
+The default-off Q24 event-containment probe is implemented through
+`--gcs-q24-event-*` flags and
+`scripts/run_q24_event_containment_probe_v1.sh`. The first probe should keep
+clean GT5 protection on `q12/q15/q20`, stop protecting high-risk
+`q13/q21/q22/q23` in the boundary-pseudo loss, enable event-aware Hungarian
+matching, and suppress high-risk event queries on GT3/GT4/GT5 with low gain.
+This is not a full-training or TEST candidate until the new official-val and
+event-mined gates pass.
+
 ## 2026-07-23 Env30 GT4 Near-20px Geometry Refine v1 Rejection
 
 The `query_alpha05_env30_gt4_near20_geom_refine_v1` full training run is
