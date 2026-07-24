@@ -50,6 +50,14 @@ class GCSLoss(nn.Module):
         "query_count_ce_loss",
         "query_count_acc",
         "query_count_pred_mean",
+        "role_contain_loss",
+        "role_contain_exist_loss",
+        "role_contain_valid_loss",
+        "role_contain_count",
+        "role_contain_gt3_count",
+        "role_contain_gt4_gt5bank_count",
+        "role_contain_gt4_extra_count",
+        "role_contain_allowed_count",
     )
 
     def __init__(
@@ -109,6 +117,13 @@ class GCSLoss(nn.Module):
         query_count_ce: float | None = None,
         query_count_min_lanes: int | None = None,
         query_count_max_lanes: int | None = None,
+        role_contain: float | None = None,
+        role_contain_valid_weight: float | None = None,
+        role_contain_matcher: bool | None = None,
+        role_gt5_queries=None,
+        role_gt4_queries=None,
+        role_gt4_visible_thr: int | None = None,
+        role_gt5_visible_thr: int | None = None,
         image_size=None,
     ):
         """Initialize GCS-YOLO-Lane loss weights and Hungarian matcher."""
@@ -252,6 +267,35 @@ class GCSLoss(nn.Module):
             if gt5_short_point_valid_weight is not None
             else self._arg(args, "gcs_gt5_short_point_valid_weight", 1.0)
         )
+        self.role_contain_gain = float(
+            role_contain if role_contain is not None else self._arg(args, "gcs_role_contain", 0.0)
+        )
+        self.role_contain_valid_weight = float(
+            role_contain_valid_weight
+            if role_contain_valid_weight is not None
+            else self._arg(args, "gcs_role_contain_valid_weight", 0.25)
+        )
+        self.role_contain_matcher = self._bool_arg(
+            role_contain_matcher
+            if role_contain_matcher is not None
+            else self._arg(args, "gcs_role_contain_matcher", False)
+        )
+        self.role_gt5_queries = self._parse_query_spec(
+            role_gt5_queries if role_gt5_queries is not None else self._arg(args, "gcs_role_gt5_queries", "12-17")
+        )
+        self.role_gt4_queries = self._parse_query_spec(
+            role_gt4_queries if role_gt4_queries is not None else self._arg(args, "gcs_role_gt4_queries", "18-23")
+        )
+        self.role_gt4_visible_thr = int(
+            role_gt4_visible_thr
+            if role_gt4_visible_thr is not None
+            else self._arg(args, "gcs_role_gt4_visible_thr", 20)
+        )
+        self.role_gt5_visible_thr = int(
+            role_gt5_visible_thr
+            if role_gt5_visible_thr is not None
+            else self._arg(args, "gcs_role_gt5_visible_thr", 20)
+        )
         self.count_under5_min_lanes = int(
             count_under5_min_lanes
             if count_under5_min_lanes is not None
@@ -323,6 +367,20 @@ class GCSLoss(nn.Module):
                 "gcs_gt5_short_point_valid_weight must be >= 0, "
                 f"got {self.gt5_short_point_valid_weight}."
             )
+        if self.role_contain_gain < 0.0:
+            raise ValueError(f"gcs_role_contain must be >= 0, got {self.role_contain_gain}.")
+        if self.role_contain_valid_weight < 0.0:
+            raise ValueError(
+                "gcs_role_contain_valid_weight must be >= 0, "
+                f"got {self.role_contain_valid_weight}."
+            )
+        if self.role_gt4_visible_thr < 0:
+            raise ValueError(f"gcs_role_gt4_visible_thr must be >= 0, got {self.role_gt4_visible_thr}.")
+        if self.role_gt5_visible_thr < 0:
+            raise ValueError(f"gcs_role_gt5_visible_thr must be >= 0, got {self.role_gt5_visible_thr}.")
+        role_overlap = set(self.role_gt5_queries) & set(self.role_gt4_queries)
+        if role_overlap:
+            raise ValueError(f"gcs_role_gt5_queries and gcs_role_gt4_queries must not overlap: {sorted(role_overlap)}.")
         self.curve_alpha = float(curve_alpha if curve_alpha is not None else self._arg(args, "gcs_curve_alpha", 5.0))
         self.curve_weight_max = float(
             curve_weight_max if curve_weight_max is not None else self._arg(args, "gcs_curve_weight_max", 5.0)
@@ -477,6 +535,34 @@ class GCSLoss(nn.Module):
         if isinstance(value, str):
             return value.strip().lower() in {"1", "true", "yes", "y", "on"}
         return bool(value)
+
+    @staticmethod
+    def _parse_query_spec(value) -> tuple[int, ...]:
+        """Parse a query list like '12-17,21' into sorted unique indices."""
+        if value is None:
+            return ()
+        if isinstance(value, (list, tuple, set)):
+            values = [int(v) for v in value]
+        else:
+            text = str(value).strip()
+            if text.lower() in {"", "none", "false", "off"}:
+                return ()
+            values = []
+            for raw_part in text.split(","):
+                part = raw_part.strip()
+                if not part:
+                    continue
+                if "-" in part:
+                    start_s, end_s = part.split("-", 1)
+                    start = int(start_s.strip())
+                    end = int(end_s.strip())
+                    step = 1 if end >= start else -1
+                    values.extend(range(start, end + step, step))
+                else:
+                    values.append(int(part))
+        if any(v < 0 for v in values):
+            raise ValueError(f"Query indices must be non-negative, got {values}.")
+        return tuple(sorted(set(values)))
 
     @staticmethod
     def _point_scale(image_size) -> tuple[float, float]:
@@ -961,6 +1047,178 @@ class GCSLoss(nn.Module):
                 counts.append(int((valid.float().sum(dim=1) >= 2).sum().item()))
             target = pred_logits.new_tensor(counts, dtype=pred_logits.dtype)
         return target
+
+    def _role_enabled(self) -> bool:
+        """Return whether Q24 role-containment behavior is active."""
+        return bool(float(self.role_contain_gain) > 0.0 or self.role_contain_matcher)
+
+    def _role_query_tensors(self, device: torch.device, num_queries: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Return GT5, GT4, and combined extra query tensors for role containment."""
+        gt5_queries = torch.as_tensor(self.role_gt5_queries, device=device, dtype=torch.long)
+        gt4_queries = torch.as_tensor(self.role_gt4_queries, device=device, dtype=torch.long)
+        if gt5_queries.numel() == 0 and gt4_queries.numel() == 0:
+            raise ValueError("Q24 role containment requires at least one configured extra query.")
+        max_query = -1
+        if gt5_queries.numel():
+            max_query = max(max_query, int(gt5_queries.max().item()))
+        if gt4_queries.numel():
+            max_query = max(max_query, int(gt4_queries.max().item()))
+        if max_query >= num_queries:
+            raise ValueError(
+                "Q24 role containment query range exceeds model query count: "
+                f"max configured q{max_query}, model has Q={num_queries}."
+            )
+        extra_queries = torch.cat([gt5_queries, gt4_queries]) if gt5_queries.numel() and gt4_queries.numel() else (
+            gt5_queries if gt5_queries.numel() else gt4_queries
+        )
+        return gt5_queries, gt4_queries, extra_queries.unique(sorted=True)
+
+    def _role_allowed_masks(
+        self,
+        pred_points: torch.Tensor,
+        gt_valid: list[torch.Tensor],
+        gt_lanes: torch.Tensor,
+    ) -> list[torch.Tensor] | None:
+        """Build per-image Q x N masks for role-aware Hungarian matching."""
+        if not self._role_enabled():
+            return None
+
+        device = pred_points.device
+        num_queries = int(pred_points.shape[1])
+        gt5_queries, gt4_queries, extra_queries = self._role_query_tensors(device, num_queries)
+        gt_lanes = torch.as_tensor(gt_lanes, device=device, dtype=pred_points.dtype).reshape(-1)
+        if gt_lanes.numel() != pred_points.shape[0]:
+            raise ValueError(f"gt_lanes must have one value per image, got {gt_lanes.numel()} vs B={pred_points.shape[0]}.")
+
+        masks: list[torch.Tensor] = []
+        for b, valid_b_raw in enumerate(gt_valid):
+            valid_b = valid_b_raw.to(device=device, dtype=pred_points.dtype)
+            if valid_b.ndim != 2:
+                raise ValueError(f"GT lane_valid must have shape N x K, got {tuple(valid_b.shape)}.")
+            mask = torch.ones((num_queries, valid_b.shape[0]), device=device, dtype=torch.bool)
+            if valid_b.shape[0] == 0:
+                masks.append(mask)
+                continue
+
+            gt_count = int(round(float(gt_lanes[b].detach().item())))
+            visible_counts = valid_b.float().sum(dim=1)
+            gt4_short = visible_counts <= float(self.role_gt4_visible_thr)
+            gt5_short = visible_counts <= float(self.role_gt5_visible_thr)
+
+            if gt_count <= 3:
+                mask[extra_queries, :] = False
+            elif gt_count == 4:
+                if gt5_queries.numel():
+                    mask[gt5_queries, :] = False
+                if gt4_queries.numel():
+                    mask[gt4_queries, :] = gt4_short[None, :]
+            else:
+                if gt5_queries.numel() and self.role_gt5_visible_thr > 0:
+                    mask[gt5_queries, :] = gt5_short[None, :]
+                if gt4_queries.numel():
+                    mask[gt4_queries, :] = False
+            masks.append(mask)
+        return masks
+
+    def role_containment_loss(
+        self,
+        pred_logits: torch.Tensor,
+        pred_valid_logits: torch.Tensor | None,
+        indices: list[tuple[torch.Tensor, torch.Tensor]],
+        gt_lanes: torch.Tensor,
+        role_allowed_masks: list[torch.Tensor] | None,
+    ) -> tuple[torch.Tensor, ...]:
+        """Suppress Q24 extra-bank queries when they violate their intended GT-count role."""
+        zero = pred_logits.new_zeros(())
+        if float(self.role_contain_gain) <= 0.0:
+            return zero, zero, zero, zero, zero, zero, zero, zero
+        if pred_valid_logits is None and float(self.role_contain_valid_weight) > 0.0:
+            raise ValueError(
+                "gcs_role_contain with gcs_role_contain_valid_weight > 0 requires pred_valid_logits."
+            )
+
+        device = pred_logits.device
+        num_queries = int(pred_logits.shape[1])
+        gt5_queries, gt4_queries, extra_queries = self._role_query_tensors(device, num_queries)
+        gt_lanes = torch.as_tensor(gt_lanes, device=device, dtype=pred_logits.dtype).reshape(-1)
+        if gt_lanes.numel() != pred_logits.shape[0]:
+            raise ValueError(f"gt_lanes must have one value per image, got {gt_lanes.numel()} vs B={pred_logits.shape[0]}.")
+        if role_allowed_masks is None:
+            raise ValueError("role_allowed_masks must be provided when gcs_role_contain is enabled.")
+
+        exist_losses = []
+        valid_losses = []
+        total_count = 0
+        gt3_count = 0
+        gt4_gt5bank_count = 0
+        gt4_extra_count = 0
+        allowed_count = 0
+
+        for b in range(pred_logits.shape[0]):
+            gt_count = int(round(float(gt_lanes[b].detach().item())))
+            selected = torch.zeros((num_queries,), device=device, dtype=torch.bool)
+
+            if gt_count <= 3:
+                selected[extra_queries] = True
+                gt3_count += int(extra_queries.numel())
+            elif gt_count == 4:
+                if gt5_queries.numel():
+                    selected[gt5_queries] = True
+                    gt4_gt5bank_count += int(gt5_queries.numel())
+                if gt4_queries.numel():
+                    allowed_positive = torch.zeros((num_queries,), device=device, dtype=torch.bool)
+                    src_idx, tgt_idx = indices[b]
+                    if src_idx.numel():
+                        src_idx = src_idx.to(device=device, dtype=torch.long)
+                        tgt_idx = tgt_idx.to(device=device, dtype=torch.long)
+                        allowed_mask_b = role_allowed_masks[b].to(device=device, dtype=torch.bool)
+                        for q, t in zip(src_idx.tolist(), tgt_idx.tolist()):
+                            if 0 <= q < num_queries and 0 <= t < allowed_mask_b.shape[1] and bool(allowed_mask_b[q, t]):
+                                allowed_positive[q] = True
+                    allowed_gt4 = allowed_positive[gt4_queries]
+                    if bool(allowed_gt4.any()):
+                        allowed_count += int(allowed_gt4.sum().item())
+                    suppressed_gt4 = gt4_queries[~allowed_gt4]
+                    if suppressed_gt4.numel():
+                        selected[suppressed_gt4] = True
+                        gt4_extra_count += int(suppressed_gt4.numel())
+            else:
+                continue
+
+            if not bool(selected.any()):
+                continue
+
+            selected_idx = torch.nonzero(selected, as_tuple=False).flatten()
+            total_count += int(selected_idx.numel())
+            exist_losses.append(
+                F.binary_cross_entropy_with_logits(
+                    pred_logits[b, selected_idx],
+                    torch.zeros_like(pred_logits[b, selected_idx]),
+                    reduction="mean",
+                )
+            )
+            if pred_valid_logits is not None and float(self.role_contain_valid_weight) > 0.0:
+                valid_losses.append(
+                    F.binary_cross_entropy_with_logits(
+                        pred_valid_logits[b, selected_idx],
+                        torch.zeros_like(pred_valid_logits[b, selected_idx]),
+                        reduction="mean",
+                    )
+                )
+
+        exist_loss = torch.stack(exist_losses).mean() if exist_losses else zero
+        valid_loss = torch.stack(valid_losses).mean() if valid_losses else zero
+        loss = exist_loss + float(self.role_contain_valid_weight) * valid_loss
+        return (
+            loss,
+            exist_loss,
+            valid_loss,
+            pred_logits.new_tensor(float(total_count)),
+            pred_logits.new_tensor(float(gt3_count)),
+            pred_logits.new_tensor(float(gt4_gt5bank_count)),
+            pred_logits.new_tensor(float(gt4_extra_count)),
+            pred_logits.new_tensor(float(allowed_count)),
+        )
 
     def count_losses(
         self, pred_logits: torch.Tensor, batch: dict, gt_valid: list[torch.Tensor], target: torch.Tensor | None = None
@@ -1533,9 +1791,16 @@ class GCSLoss(nn.Module):
             )
         gt_points, gt_valid = self._targets_from_batch(batch)
 
-        indices = self.matcher(pred_points, pred_logits, gt_points, gt_valid)
-        exist_loss = self.exist_loss(pred_logits, pred_points, pred_valid_logits, gt_points, gt_valid, indices)
         gt_lanes = self.target_lane_count(pred_logits, batch, gt_valid)
+        role_allowed_masks = self._role_allowed_masks(pred_points, gt_valid, gt_lanes)
+        indices = self.matcher(
+            pred_points,
+            pred_logits,
+            gt_points,
+            gt_valid,
+            allowed_masks=role_allowed_masks if self.role_contain_matcher else None,
+        )
+        exist_loss = self.exist_loss(pred_logits, pred_points, pred_valid_logits, gt_points, gt_valid, indices)
         point_loss = self.point_loss(pred_points, gt_points, gt_valid, indices, gt_lanes=gt_lanes)
         (
             point_valid_loss,
@@ -1586,6 +1851,22 @@ class GCSLoss(nn.Module):
         ) = self.spurious_negative_loss(
             pred_points, pred_logits, pred_valid_logits, indices, gt_lanes, gt_points, gt_valid
         )
+        (
+            role_contain_loss,
+            role_contain_exist_loss,
+            role_contain_valid_loss,
+            role_contain_count,
+            role_contain_gt3_count,
+            role_contain_gt4_gt5bank_count,
+            role_contain_gt4_extra_count,
+            role_contain_allowed_count,
+        ) = self.role_containment_loss(
+            pred_logits,
+            pred_valid_logits,
+            indices,
+            gt_lanes,
+            role_allowed_masks,
+        )
 
         mask_loss = self._zero_like(pred_points)
         if "aux_mask_logits" in preds and "semantic_mask" in batch:
@@ -1616,6 +1897,8 @@ class GCSLoss(nn.Module):
             total = total + self.query_count_ce_gain * query_count_ce_loss
         if self.spurious_neg_gain != 0.0:
             total = total + self.spurious_neg_gain * self.spurious_neg_weight * spurious_neg_loss
+        if self.role_contain_gain != 0.0:
+            total = total + self.role_contain_gain * role_contain_loss
         loss_items = torch.stack(
             (
                 exist_loss.detach(),
@@ -1652,6 +1935,14 @@ class GCSLoss(nn.Module):
                 query_count_ce_loss.detach(),
                 query_count_acc.detach(),
                 query_count_pred_mean.detach(),
+                role_contain_loss.detach(),
+                role_contain_exist_loss.detach(),
+                role_contain_valid_loss.detach(),
+                role_contain_count.detach(),
+                role_contain_gt3_count.detach(),
+                role_contain_gt4_gt5bank_count.detach(),
+                role_contain_gt4_extra_count.detach(),
+                role_contain_allowed_count.detach(),
             )
         )
         return total, loss_items

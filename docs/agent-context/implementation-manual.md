@@ -5,7 +5,9 @@ This branch is the current mainline source import of `5-25-3.zip` with a K56 TuS
 ## Implementation Rules
 
 - Keep the 5-25-3 algorithm body unchanged unless a future task explicitly asks for an algorithm change.
-- Only change code/config needed for Q=12/K=56, `fixed_y_start=710/720`, `fixed_y_end=160/720`, `--imgsz 544 960`, and the K56 data/model YAMLs.
+- Only change code/config needed for the active Q12/K56 baseline,
+  documented default-off experiment YAMLs, `fixed_y_start=710/720`,
+  `fixed_y_end=160/720`, `--imgsz 544 960`, and the K56 data/model YAMLs.
 - Do not import later mainline Count Head, Quality Head, Survival Head, near-miss, or K56 candidate machinery. The only Count Head exception is the 2026-07-06 user-requested, default-off query Count Head ablation documented in `current-contracts.md`.
 - The only active Count Boundary mechanism is the 2026-06-27 user-requested, default-off `count_boundary_loss` on `sum(sigmoid(pred_logits))`; keep it separate from Count Head and decode changes.
 - The active train-only hard-sampling mechanism is the 2026-06-27 user-requested, default-off `gcs_hard_sampling`; keep it limited to the training dataloader and do not change labels, validation/test dataloaders, point loss, smooth loss, curve loss, decode, or official metrics.
@@ -30,8 +32,8 @@ their diagnostic helpers are legacy records only and are not available in the
 current code unless a future task explicitly restores them. The branch-local
 `count_boundary_loss`, train-only `gcs_hard_sampling`, E3-lite
 `gcs_spurious_neg`, training-time `official_best`, ordered-slot protocol
-tooling, and `valid_before_maxdet` decode option are inside the active rollback
-boundary.
+tooling, `valid_before_maxdet` decode option, and documented default-off
+Q20/Q24 protected static-gate tooling are inside the active rollback boundary.
 
 ## Main Files
 
@@ -97,6 +99,29 @@ pred_count_logits: B x 4
 for query models built from
 `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-count.yaml`. The default
 query YAML still emits no `pred_count_logits`.
+
+The default-off protected static Q24 YAML changes only query count:
+
+```text
+pred_points: B x 24 x 56 x 2
+pred_logits: B x 24
+pred_valid_logits: B x 24 x 56
+aux_mask_logits: B x 2 x H x W
+aux_edge_logits: B x 1 x H x W
+```
+
+It is enabled only by
+`ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q24-k56-protected-static.yaml` and
+a strict-passed `data/gcs_reference_banks/q24_protected_static_env30_best.json`
+bank. It must not change the default Q12 YAML.
+
+The default-off Q24 role-containment probe adds only training-time constraints
+when explicitly enabled by `--gcs-role-contain` or
+`--gcs-role-contain-matcher`. It keeps the same Q24 outputs, leaves decode and
+official metrics unchanged, and is intended only for 20-40 epoch official-val
+diagnostics until its gates pass. The current intended role partition is
+`q12..q17` for GT5 short/weak-visible lanes and `q18..q23` for GT4 hard/short
+lanes.
 
 ## Validation Order
 

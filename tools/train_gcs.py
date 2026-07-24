@@ -464,6 +464,45 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--gcs-boundary-pseudo-score-thr", type=float, default=0.0)
     parser.add_argument("--gcs-boundary-pseudo-envelope-margin-px", type=float, default=-1.0)
     parser.add_argument("--gcs-boundary-pseudo-envelope-ratio-thr", type=float, default=0.75)
+    parser.add_argument(
+        "--gcs-role-contain",
+        type=float,
+        default=0.0,
+        help="Q24 extra-query role-containment BCE gain. 0 disables.",
+    )
+    parser.add_argument(
+        "--gcs-role-contain-valid-weight",
+        type=float,
+        default=0.25,
+        help="Point-valid zero-target multiplier inside role-containment loss.",
+    )
+    parser.add_argument(
+        "--gcs-role-contain-matcher",
+        action="store_true",
+        help="Forbid role-invalid Q24 extra-query matches during Hungarian assignment.",
+    )
+    parser.add_argument(
+        "--gcs-role-gt5-queries",
+        default="12-17",
+        help="Q24 GT5 short/weak-visible bank query ids, e.g. '12-17'.",
+    )
+    parser.add_argument(
+        "--gcs-role-gt4-queries",
+        default="18-23",
+        help="Q24 GT4 hard/short bank query ids, e.g. '18-23'.",
+    )
+    parser.add_argument(
+        "--gcs-role-gt4-visible-thr",
+        type=int,
+        default=20,
+        help="GT4 bank may match only GT4 lanes with visible anchors <= this threshold.",
+    )
+    parser.add_argument(
+        "--gcs-role-gt5-visible-thr",
+        type=int,
+        default=20,
+        help="GT5 bank may match only GT5 lanes with visible anchors <= this threshold when matcher containment is enabled.",
+    )
     parser.add_argument("--gcs-exist-pos-weight", type=float, default=1.0)
     parser.add_argument("--gcs-exist-focal-gamma", type=float, default=0.0, help="Optional focal gamma for existence BCE. 0 disables focal weighting.")
     parser.add_argument(
@@ -810,6 +849,13 @@ def main() -> None:
         "gcs_boundary_pseudo_score_thr": args.gcs_boundary_pseudo_score_thr,
         "gcs_boundary_pseudo_envelope_margin_px": args.gcs_boundary_pseudo_envelope_margin_px,
         "gcs_boundary_pseudo_envelope_ratio_thr": args.gcs_boundary_pseudo_envelope_ratio_thr,
+        "gcs_role_contain": args.gcs_role_contain,
+        "gcs_role_contain_valid_weight": args.gcs_role_contain_valid_weight,
+        "gcs_role_contain_matcher": args.gcs_role_contain_matcher,
+        "gcs_role_gt5_queries": args.gcs_role_gt5_queries,
+        "gcs_role_gt4_queries": args.gcs_role_gt4_queries,
+        "gcs_role_gt4_visible_thr": args.gcs_role_gt4_visible_thr,
+        "gcs_role_gt5_visible_thr": args.gcs_role_gt5_visible_thr,
         "gcs_exist_pos_weight": args.gcs_exist_pos_weight,
         "gcs_exist_focal_gamma": args.gcs_exist_focal_gamma,
         "gcs_exist_focal_alpha": args.gcs_exist_focal_alpha,

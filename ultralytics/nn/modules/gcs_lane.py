@@ -1,6 +1,9 @@
 # Ultralytics AGPL-3.0 License - https://ultralytics.com/license
 """GCS-YOLO-Lane neural network modules."""
 
+import json
+from pathlib import Path
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -215,6 +218,8 @@ class GCSLaneHead(nn.Module):
         max_lanes=5,
         count_classes=None,
         query_count_head: bool = False,
+        reference_mode: str = "linear",
+        reference_bank=None,
     ):
         """Initialize the GCS lane query decoder and training-only auxiliary heads."""
         super().__init__()
@@ -278,6 +283,21 @@ class GCSLaneHead(nn.Module):
             )
         if self.point_mode == "fixed_y":
             self._validate_fixed_y_anchors()
+        self.reference_mode = str(reference_mode or "linear").lower()
+        if self.reference_mode in {"default", "perspective"}:
+            self.reference_mode = "linear"
+        if self.reference_mode not in {"linear", "dualbank"}:
+            raise ValueError(f"GCSLaneHead reference_mode must be 'linear' or 'dualbank', got {reference_mode!r}.")
+        self.reference_bank = reference_bank
+        if self.reference_mode == "dualbank":
+            if self.gcs_mode != "query":
+                raise ValueError("GCSLaneHead reference_mode='dualbank' is only supported for query mode.")
+            if self.point_mode != "fixed_y":
+                raise ValueError("GCSLaneHead reference_mode='dualbank' requires point_mode='fixed_y'.")
+            if self.num_queries not in {20, 24}:
+                raise ValueError(f"GCSLaneHead reference_mode='dualbank' requires num_queries=20 or 24, got {self.num_queries}.")
+            if reference_bank is None or str(reference_bank).strip() == "":
+                raise ValueError("GCSLaneHead reference_mode='dualbank' requires a reference_bank JSON path.")
         self.point_dims = 1 if self.point_mode == "fixed_y" else 2
         self.return_aux = False
         self.min_spatial_tokens = 1024
@@ -399,6 +419,9 @@ class GCSLaneHead(nn.Module):
         query a distinct spatial role while still letting the MLP learn large
         offsets when the image geometry requires it.
         """
+        if getattr(self, "reference_mode", "linear") == "dualbank":
+            return self._build_dualbank_point_references()
+
         y = self._build_fixed_y_anchors()
         bottom_x = torch.linspace(0.05, 0.95, self.num_queries)
         top_x = 0.5 + (bottom_x - 0.5) * 0.25
@@ -408,6 +431,121 @@ class GCSLaneHead(nn.Module):
             return torch.logit(x.clamp(1e-4, 1.0 - 1e-4))
         points = torch.stack((x, y[None].expand(self.num_queries, -1)), dim=-1)
         return torch.logit(points.clamp(1e-4, 1.0 - 1e-4))
+
+    def _resolve_reference_bank_path(self) -> Path:
+        """Resolve a YAML-provided reference-bank path relative to common project roots."""
+        raw = self.reference_bank
+        if isinstance(raw, (list, tuple)):
+            raise ValueError("GCSLaneHead dualbank reference_bank must be a JSON path, not an inline list.")
+        path = Path(str(raw)).expanduser()
+        if path.is_absolute():
+            return path
+        repo_root = Path(__file__).resolve().parents[3]
+        candidates = [Path.cwd() / path, repo_root / path]
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+        return candidates[-1]
+
+    def _load_reference_bank_x_norm(self) -> torch.Tensor:
+        """Load Q x K normalized x references from a static reference-bank JSON file."""
+        path = self._resolve_reference_bank_path()
+        if not path.exists():
+            raise FileNotFoundError(f"GCSLaneHead dualbank reference bank not found: {path}")
+        with path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        if not isinstance(data, dict):
+            raise ValueError(f"GCSLaneHead dualbank reference bank {path} must be a JSON object.")
+        allowed_schemas = {
+            f"q{self.num_queries}_protected_static_reference_bank_v1",
+            f"q{self.num_queries}_dualbank_static_reference_bank_v1",
+        }
+        if data.get("schema") not in allowed_schemas:
+            raise ValueError(f"GCSLaneHead dualbank reference bank has unsupported schema: {data.get('schema')!r}")
+        if data.get("formal_gate_passed") is not True:
+            raise ValueError(f"GCSLaneHead dualbank reference bank did not pass the strict static gate: {path}")
+        if data.get("selection_protocol") != "official_val_train_raw_static_gate_no_test":
+            raise ValueError(f"GCSLaneHead dualbank reference bank has invalid selection protocol: {path}")
+        if data.get("test_used") is not False:
+            raise ValueError(f"GCSLaneHead dualbank reference bank must declare test_used=false: {path}")
+        source_splits = [str(v).lower() for v in data.get("source_splits", [])]
+        if source_splits != ["official_val", "train0601", "train0531"] or any("test" in v for v in source_splits):
+            raise ValueError(f"GCSLaneHead dualbank reference bank has invalid source_splits: {source_splits!r}")
+        if data.get("reference_mode") != "dualbank":
+            raise ValueError(f"GCSLaneHead dualbank reference bank reference_mode must be 'dualbank': {path}")
+        if data.get("point_mode") != "fixed_y":
+            raise ValueError(f"GCSLaneHead dualbank reference bank point_mode must be 'fixed_y': {path}")
+        fixed_y_px = [int(v) for v in data.get("fixed_y_px_desc", [])]
+        expected_fixed_y_px = [int(v) for v in range(710, 150, -10)]
+        if fixed_y_px != expected_fixed_y_px:
+            raise ValueError("GCSLaneHead dualbank reference bank fixed_y_px_desc must be 710..160 step -10.")
+        protected_queries = [int(v) for v in data.get("protected_queries", [])]
+        if protected_queries != list(range(12)):
+            raise ValueError("GCSLaneHead dualbank reference bank must protect queries q0..q11.")
+        extra_queries = [int(v) for v in data.get("extra_queries", [])]
+        expected_extra_queries = list(range(12, int(self.num_queries)))
+        if extra_queries != expected_extra_queries:
+            raise ValueError(f"GCSLaneHead dualbank reference bank extra_queries must be q12..q{self.num_queries - 1}.")
+        gt5_bank_queries = [int(v) for v in data.get("gt5_bank_queries", [])]
+        gt4_bank_queries = [int(v) for v in data.get("gt4_bank_queries", [])]
+        if sorted(gt5_bank_queries + gt4_bank_queries) != expected_extra_queries:
+            raise ValueError("GCSLaneHead dualbank reference bank GT5/GT4 bank queries must partition extra_queries.")
+        if set(gt5_bank_queries).intersection(gt4_bank_queries):
+            raise ValueError("GCSLaneHead dualbank reference bank GT5 and GT4 query partitions overlap.")
+        gate = data.get("gate")
+        if not isinstance(gate, dict) or gate.get("strict_pass") is not True:
+            raise ValueError(f"GCSLaneHead dualbank reference bank must embed a strict-passed gate: {path}")
+        for key in (
+            "val_gt3gt4_normal_risk_no_increase",
+            "train0601_gt3gt4_normal_risk_no_increase",
+            "train0531_gt3gt4_normal_risk_no_increase",
+        ):
+            if gate.get(key) is not True:
+                raise ValueError(f"GCSLaneHead dualbank reference bank failed gate check {key}: {path}")
+        risk_added = gate.get("risk_added_normal_match20")
+        if not isinstance(risk_added, dict):
+            raise ValueError(f"GCSLaneHead dualbank reference bank must embed normal-risk gate metrics: {path}")
+        for key in ("val_gt3gt4_normal_risk", "train0601_gt3gt4_normal_risk", "train0531_gt3gt4_normal_risk"):
+            if float(risk_added.get(key, 1.0)) > 1e-12:
+                raise ValueError(f"GCSLaneHead dualbank reference bank increases normal-risk match20 for {key}: {path}")
+        refs_raw = data.get("references")
+        if not isinstance(refs_raw, list):
+            raise ValueError(f"GCSLaneHead dualbank reference bank {path} must contain a references list.")
+        query_ids = [int(item.get("query_id", -1)) for item in refs_raw]
+        if sorted(query_ids) != list(range(int(self.num_queries))):
+            raise ValueError(f"GCSLaneHead dualbank reference bank query_id coverage must be 0..{self.num_queries - 1}.")
+        refs = sorted(refs_raw, key=lambda item: int(item["query_id"]))
+        x_norm = [item.get("x_norm") for item in refs]
+
+        x = torch.as_tensor(x_norm, dtype=torch.float32)
+        expected = (int(self.num_queries), int(self.num_points))
+        if tuple(x.shape) != expected:
+            raise ValueError(f"GCSLaneHead dualbank reference bank shape must be {expected}, got {tuple(x.shape)}.")
+        if not torch.isfinite(x).all():
+            raise ValueError(f"GCSLaneHead dualbank reference bank contains non-finite x values: {path}")
+        if float(x.min()) <= 0.0 or float(x.max()) >= 1.0:
+            raise ValueError(f"GCSLaneHead dualbank reference bank x_norm values must stay inside (0, 1): {path}")
+
+        meta_q = data.get("num_queries") if isinstance(data, dict) else None
+        meta_k = data.get("num_points") if isinstance(data, dict) else None
+        if meta_q is not None and int(meta_q) != int(self.num_queries):
+            raise ValueError(f"GCSLaneHead dualbank reference bank num_queries={meta_q}, expected {self.num_queries}.")
+        if meta_k is not None and int(meta_k) != int(self.num_points):
+            raise ValueError(f"GCSLaneHead dualbank reference bank num_points={meta_k}, expected {self.num_points}.")
+        t = torch.linspace(0.0, 1.0, int(self.num_points), dtype=torch.float32)
+        bottom_x = torch.linspace(0.05, 0.95, 12, dtype=torch.float32)
+        top_x = 0.5 + (bottom_x - 0.5) * 0.25
+        q12_refs = bottom_x[:, None] * (1.0 - t[None, :]) + top_x[:, None] * t[None, :]
+        max_ref_err = float((x[:12] - q12_refs).abs().max().item())
+        if max_ref_err > 1e-6:
+            raise ValueError(f"GCSLaneHead dualbank reference bank must preserve q0..q11 Q12 references, max error={max_ref_err:.6g}.")
+        return x
+
+    def _build_dualbank_point_references(self):
+        """Build fixed-y x references from a protected static JSON."""
+        x = self._load_reference_bank_x_norm()
+        return torch.logit(x.clamp(1e-4, 1.0 - 1e-4))
 
     def _init_point_delta_head(self):
         """Initialize point deltas near zero while keeping point gradients live."""

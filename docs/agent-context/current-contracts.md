@@ -42,6 +42,114 @@ Therefore `tools/build_gcs_short_side_hardset.py`,
 the active code/config state. Historical sections below that mention those
 names are retained only to interpret old runs.
 
+Recent env30 follow-up experiments are also rejected records unless a future
+task explicitly reopens them with new official-val/train gates:
+
+```text
+query_alpha05_env30_gt45staticref_v2:
+  rejected, official-val ACC/FP/FN = 0.971040 / 0.018825 / 0.012626
+query_alpha05_env30_gt45staticref_v2_gt4only_validneg_w01:
+  rejected, official-val ACC/FP/FN = 0.970965 / 0.024656 / 0.012626
+query_alpha05_env30_gt45staticref_q7only_v3a:
+  rejected before training, no TEST, GT4_short_gain20_q7only = 0
+query_alpha05_env30_gt4_near20_geom_refine_v1:
+  rejected, official-val ACC/FP/FN = 0.968943 / 0.035373 / 0.015152
+```
+
+Do not relaunch these as the next path, run TEST for them, tune thresholds from
+them, or treat their default-off mechanisms as active improvement claims.
+
+The branch now also contains default-off Q20/Q24 protected dual-bank
+static-gate tooling paths for the 2026-07-23 env30 GT4/GT5 bottleneck
+diagnosis:
+
+```text
+Q20 model: ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q20-k56-dualbank.yaml
+Q24 model: ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q24-k56-protected-static.yaml
+Q20/Q24 tools:
+  tools/build_q20_dualbank_static_gate.py
+  tools/build_q24_protected_static_gate.py
+mode: reference_mode=dualbank
+```
+
+These are not the default model and do not change the Q12 baseline. They are
+enabled only by dedicated Q20/Q24 YAMLs plus generated reference-bank JSONs.
+The first twelve references must preserve the default Q12 linear references;
+queries `q12..q19` are Q20 extras and `q12..q23` are Q24 extras. The static
+gate may use canonical official-val diagnostics and train0601/train0531 raw
+diagnostics only. It must not read TEST, tune TEST, or publish a training bank
+unless the strict gate passes. The strict gate includes GT5 coverage, GT4
+coverage, Q12 reference preservation, and no increase in normal GT3/GT4
+match20 risk across val/train0601/train0531. Failed banks under `.tmp/` are
+diagnostic artifacts only. `GCSLaneHead` must reject dual-bank JSON whose
+`formal_gate_passed` is not `true`, whose `test_used` is not `false`, whose
+source splits include TEST, whose GT5/GT4 extra-query partition is malformed,
+whose normal-risk gate is missing/failed, whose fixed-y/protected-query
+metadata is malformed, or whose `q0..q11` references do not preserve the
+default Q12 linear references.
+
+The current Q24 bank passed the strict static gate on both local and remote
+validation and was published only as a default-off training candidate:
+
+```text
+bank: data/gcs_reference_banks/q24_protected_static_env30_best.json
+server summary: .tmp/q24_protected_static_gate_server/summary.json
+selected allocation: 6:6
+TEST used: false
+val GT5 primary match20/p90: 0.500000 / 79.271370
+train0601 GT5 primary match20/p90: 0.393443 / 61.043999
+val GT5 impact match20/p90: 0.750000 / 64.845001
+val/train0601/train0531 GT4 primary match20:
+  0.625000 / 0.266667 / 0.714286
+normal GT3/GT4 added match20 risk:
+  val 0.0, train0601 0.0, train0531 0.0
+```
+
+Decision: Q24 may enter a 20-40 epoch remote probe selected only on
+official-val. It is not promoted to full training or TEST by the static gate
+alone.
+
+Completed follow-up: the 40-epoch Q24 probe
+`query_alpha05_env30_q24_protected_static_probe40_v1` is rejected for full
+training. Its official-val ACC/FP/FN is
+`0.961733 / 0.068457 / 0.023186` versus env30
+`0.973330 / 0.015748 / 0.009642`; the external 864-row official-val sweep has
+zero rows at or above env30 ACC and zero rows with FP/FN both at or below
+env30. TEST was not used and must remain closed for this artifact. The failure
+is post-train extra-query carrier drift and existence calibration, not static
+gate capacity alone.
+
+The 100-epoch Q24 continuation diagnostic
+`query_alpha05_env30_q24_protected_static_cont100_v1` is also rejected for
+full training. Its official-val ACC/FP/FN is
+`0.964376 / 0.055096 / 0.016758`, with `count_acc_4=0.742424` and count
+confusion including `3->4=19`, `3->5=12`, and `4->5=17`. The official-val
+sweep has zero rows at or above env30 ACC and zero rows with FP/FN both at or
+below env30. TEST was not used. This closes the simple undertraining
+hypothesis: longer Q24 training helps but does not remove the wrong-count
+extra-query carrier bottleneck.
+
+The branch now includes a default-off Q24 role-containment probe for this
+specific failure mode. It is enabled only by explicit training args such as
+`--gcs-role-contain > 0` and/or `--gcs-role-contain-matcher` on the dedicated
+Q24 protected-static YAML. It adds no decode changes, no official metric
+changes, and no TEST usage. The intended Q24 partition is:
+
+```text
+GT5 bank: q12..q17
+GT4 bank: q18..q23
+```
+
+When enabled, role-aware matching forbids `q12..q23` from matching GT3 lanes,
+forbids GT5-bank matches on GT4 images, allows GT4-bank matches only to
+short/weak-visible GT4 lanes, allows GT5-bank matches only to short/weak-visible
+GT5 lanes, and forbids GT4-bank matches on GT5 images. The auxiliary
+role-containment BCE adds extra exist/valid negative pressure only on GT3/GT4
+role violations; it intentionally skips additional GT5-image containment
+pressure to protect true fifth-lane retention. This is a 20-40 epoch probe
+mechanism only until official-val/train-side gates prove reduced FP/overcount
+without GT5 regression.
+
 Training-time `official_best` checkpoint preservation is active as an explicit 2026-06-27 selection-protocol change. It preserves the 5-25-3 algorithm body and only changes how formal TuSimple checkpoints are selected.
 
 The 2026-06-29 `ordered_slot_training_protocol_fix_v1` change is a protocol
@@ -295,7 +403,11 @@ ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml
 ultralytics/cfg/models/gcs/gcs-yolo-lane-s-fixed-y.yaml
 ```
 
-All branch configs keep `Q=12`, `K=56`, fixed-y anchors `710/720 -> 160/720`, and `--imgsz 544 960`.
+Default and compatibility baseline configs keep `Q=12`, `K=56`, fixed-y
+anchors `710/720 -> 160/720`, and `--imgsz 544 960`. The only documented
+non-Q12 query configs in this branch are default-off Q20/Q24 protected
+dual-bank static-gate candidates, and they still keep `K=56`, fixed-y anchors
+`710/720 -> 160/720`, and `--imgsz 544 960`.
 
 Historical q12-k56 experiment docs are old records. Preserve them, but do not let them override the active 5-25-3 K56 mainline contract.
 

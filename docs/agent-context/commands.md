@@ -35,6 +35,242 @@ configs, Count Head, count-guided decode, side-aux, or GT4-hard diagnostics
 are legacy experiment records only. They are not commands for the current code
 state unless a future task explicitly restores those commits.
 
+## Rejected Env30 Follow-Up Commands
+
+The following recent env30-family commands are historical rejected records, not
+recommended launch commands for the current code state.
+
+```bash
+bash scripts/run_query_alpha05_env30_gt45staticref_v2.sh
+bash scripts/run_query_alpha05_env30_gt45staticref_v2_gt4only_validneg_w01.sh
+bash scripts/run_query_alpha05_env30_gt45staticref_q7only_v3a_raw_diag.sh
+bash scripts/run_query_alpha05_env30_gt4_near20_geom_refine_v1.sh
+```
+
+Status:
+
+```text
+query_alpha05_env30_gt45staticref_v2 =
+  rejected, official-val ACC/FP/FN 0.971040 / 0.018825 / 0.012626
+
+query_alpha05_env30_gt45staticref_v2_gt4only_validneg_w01 =
+  rejected, official-val ACC/FP/FN 0.970965 / 0.024656 / 0.012626
+
+query_alpha05_env30_gt45staticref_q7only_v3a =
+  rejected before training, no TEST, GT4_short_gain20_q7only = 0
+
+query_alpha05_env30_gt4_near20_geom_refine_v1 =
+  rejected, official-val ACC/FP/FN 0.968943 / 0.035373 / 0.015152
+```
+
+Do not run TEST, do not select thresholds, and do not continue with `w00`,
+q7-only full training, v3 staticref full training, or near20 full training from
+these records. Any future reopen must start with official-val plus
+train0601/train0531 raw-Q12 gates and must not use TEST for selection.
+
+## Q20 Protected Dual-Bank Static Gate
+
+The default-off Q20 dual-bank path is a gate-only diagnostic before any
+training. It preserves default Q12 as the first twelve references and searches
+dedicated extra queries `q12..q19` for GT5 short/weak-visible and GT4 hard
+short/weak-visible lanes.
+
+```bash
+python tools/build_q20_dualbank_static_gate.py \
+  --beam-width 240 \
+  --top-report 25 \
+  --save-dir .tmp/q20_dualbank_static_gate_alloc
+```
+
+Default allocation search:
+
+```text
+5:3,4:4,6:2
+```
+
+This command must use only official-val and train0601/train0531 diagnostics.
+It records `test_used=false` and must not read TEST. By default it writes the
+best bank only under `.tmp/`; it publishes to
+`data/gcs_reference_banks/q20_dualbank_env30_best.json` only when
+`--publish-bank` is passed and the strict gate passes.
+
+Current result:
+
+```text
+summary = .tmp/q20_dualbank_static_gate_alloc/summary.json
+strict_pass = false
+loose_pass = true
+selected_allocation = 6:2
+val GT5 primary match20 = 0.500000
+train0601 GT5 primary match20 = 0.377049
+val GT5 impact match20 = 0.750000
+val/train0601/train0531 GT4 primary match20 = 0.375000 / 0.133333 / 0.285714
+normal GT3/GT4 added match20 risk = 0.0 / 0.0 / 0.0
+```
+
+Decision: do not publish the failed bank as a training candidate and do not
+train Q20 from this result. The loose pass confirms the GT5 lane has moved, but
+the strict gate still fails on train0601 GT4 coverage and val GT5 p90.
+
+## Q24 Protected Static Gate
+
+The default-off Q24 protected static path is the follow-up to the failed Q20
+gate. It preserves default Q12 as `q0..q11`, adds twelve extra queries
+`q12..q23`, and searches separate GT5 short/weak-visible and GT4 hard
+short/weak-visible banks. It uses only official-val plus train0601/train0531
+diagnostics and records `test_used=false`.
+
+```bash
+python tools/build_q24_protected_static_gate.py \
+  --beam-width 80 \
+  --top-report 25 \
+  --save-dir .tmp/q24_protected_static_gate_server \
+  --publish-bank
+```
+
+Default allocation search:
+
+```text
+6:6,7:5,8:4
+```
+
+The published bank path is:
+
+```text
+data/gcs_reference_banks/q24_protected_static_env30_best.json
+```
+
+Current server result:
+
+```text
+summary = .tmp/q24_protected_static_gate_server/summary.json
+strict_pass = true
+loose_pass = true
+selected_allocation = 6:6
+TEST used = false
+
+val GT5 primary match20/p90 = 0.500000 / 79.271370
+train0601 GT5 primary match20/p90 = 0.393443 / 61.043999
+val GT5 impact match20/p90 = 0.750000 / 64.845001
+
+val/train0601/train0531 GT4 primary match20 =
+  0.625000 / 0.266667 / 0.714286
+
+normal GT3/GT4 added match20 risk =
+  val 0.0, train0601 0.0, train0531 0.0
+```
+
+Q24 model-shape check after strict-passed bank publication:
+
+```bash
+python tools/check_model.py \
+  --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q24-k56-protected-static.yaml \
+  --imgsz 544 960 \
+  --batch 1 \
+  --device cpu \
+  --detailed
+```
+
+Expected Q24 output:
+
+```text
+pred_points: B x 24 x 56 x 2
+pred_logits: B x 24
+pred_valid_logits: B x 24 x 56
+aux_mask_logits: B x 2 x 544 x 960
+aux_edge_logits: B x 1 x 544 x 960
+```
+
+Decision: Q24 passes the static gate and can enter a 20-40 epoch remote probe
+selected only on official-val. Do not run TEST and do not call it a final
+candidate until the probe has training-time official-val evidence.
+
+Completed probe result:
+
+```text
+run = query_alpha05_env30_q24_protected_static_probe40_v1
+status = rejected for full training
+training rows = 40
+official_best source_epoch = 35
+TEST used = false
+
+Q24 official-val ACC/FP/FN =
+  0.961733 / 0.068457 / 0.023186
+env30 official-val ACC/FP/FN =
+  0.973330 / 0.015748 / 0.009642
+
+Q24 count_acc_3/4/5 =
+  0.825112 / 0.803030 / 0.986486
+env30 count_acc_3/4/5 =
+  0.968610 / 0.969697 / 0.986486
+
+Q24 count_confusion includes:
+  3->4=28, 3->5=11, 4->5=13, 5->4=1
+```
+
+The 864-row external official-val sweep has no row reaching env30 ACC or
+matching env30 FP/FN. Do not extend this run to full 160/220 epoch training and
+do not run TEST for it. If continuing Q24, first run official-val/train-side
+carrier-drift diagnostics and design a new containment probe for extra queries
+`q12..q23`.
+
+Completed continuation result:
+
+```text
+run = query_alpha05_env30_q24_protected_static_cont100_v1
+status = rejected for full training
+training rows = 100
+official_best source_epoch = 100
+TEST used = false
+
+Q24 cont100 official-val ACC/FP/FN =
+  0.964376 / 0.055096 / 0.016758
+Q24 cont100 count_acc_3/4/5 =
+  0.860987 / 0.742424 / 0.986486
+
+Q24 cont100 count_confusion includes:
+  3->4=19, 3->5=12, 4->5=17, 5->4=1
+```
+
+This run improves over the 40-epoch probe but still fails every full-training
+gate. Do not extend Q24 as-is to 160/220 epochs. The next Q24 command should be
+a new default-off role-containment probe, not another longer unconstrained Q24
+training run.
+
+## Q24 Role-Containment Probe
+
+The role-containment probe is the next default-off Q24 diagnostic after the
+`cont100` rejection. It keeps TEST closed and runs only training-time
+official-val plus post-train official-val sweeps:
+
+```bash
+bash scripts/run_q24_role_containment_probe_v1.sh
+```
+
+Equivalent explicit launch:
+
+```bash
+RUN_NAME=query_alpha05_env30_q24_role_containment_probe40_v1 \
+MODEL=ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q24-k56-protected-static.yaml \
+EPOCHS=40 \
+RUN_TESTS=0 \
+EXTRA_TRAIN_ARGS="--gcs-role-contain 0.5 --gcs-role-contain-valid-weight 0.25 --gcs-role-contain-matcher --gcs-role-gt5-queries 12-17 --gcs-role-gt4-queries 18-23 --gcs-role-gt4-visible-thr 20 --gcs-role-gt5-visible-thr 20" \
+bash scripts/run_query_alpha05_gt5short_geom_w2_bneg002_env30_nocount_v1.sh
+```
+
+Promotion gate:
+
+```text
+TEST used = false
+official-val ACC must improve clearly over Q24 probe40 and move toward env30
+official-val FP must drop materially from cont100
+GT3->4, GT3->5, and GT4->5 must drop materially from cont100
+count_acc_4 should recover to at least 0.90 before any longer run
+count_acc_5 >= 0.972973 and 5->4 <= 2
+GT3/GT4 short-visible q12..q23 carrier rate must fall from the ~0.59/0.66 band
+GT5 visible<=10 raw coverage must not regress from cont100
+```
+
 ## Query Count Head CE0.5 Run
 
 The default-off query Count Head ablation is launched through:

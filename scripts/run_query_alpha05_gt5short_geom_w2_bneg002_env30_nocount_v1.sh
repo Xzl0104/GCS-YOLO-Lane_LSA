@@ -36,6 +36,7 @@ OFFICIAL_NMS_DIST_PXS="${OFFICIAL_NMS_DIST_PXS:-0 18 30}"
 OFFICIAL_MAX_DETS="${OFFICIAL_MAX_DETS:-5 6 8}"
 OFFICIAL_MIN_POINTS="${OFFICIAL_MIN_POINTS:-2 3 4 5}"
 OFFICIAL_COUNT_MODES="${OFFICIAL_COUNT_MODES:-score_sum}"
+EXTRA_TRAIN_ARGS="${EXTRA_TRAIN_ARGS:-}"
 
 SWEEP_CONFS="${SWEEP_CONFS:-${OFFICIAL_CONFS}}"
 SWEEP_POINT_VALID_THRS="${SWEEP_POINT_VALID_THRS:-${OFFICIAL_POINT_VALID_THRS}}"
@@ -50,6 +51,7 @@ read -r -a OFFICIAL_NMS_DIST_PXS_ARR <<< "${OFFICIAL_NMS_DIST_PXS}"
 read -r -a OFFICIAL_MAX_DETS_ARR <<< "${OFFICIAL_MAX_DETS}"
 read -r -a OFFICIAL_MIN_POINTS_ARR <<< "${OFFICIAL_MIN_POINTS}"
 read -r -a OFFICIAL_COUNT_MODES_ARR <<< "${OFFICIAL_COUNT_MODES}"
+read -r -a EXTRA_TRAIN_ARGS_ARR <<< "${EXTRA_TRAIN_ARGS}"
 read -r -a SWEEP_CONFS_ARR <<< "${SWEEP_CONFS}"
 read -r -a SWEEP_POINT_VALID_THRS_ARR <<< "${SWEEP_POINT_VALID_THRS}"
 read -r -a SWEEP_NMS_DIST_PXS_ARR <<< "${SWEEP_NMS_DIST_PXS}"
@@ -144,6 +146,7 @@ run_train() {
     --gcs-boundary-pseudo-score-thr 0.2 \
     --gcs-boundary-pseudo-envelope-margin-px 30 \
     --gcs-boundary-pseudo-envelope-ratio-thr 0.75 \
+    "${EXTRA_TRAIN_ARGS_ARR[@]}" \
     --gcs-official-best \
     --gcs-official-interval "${OFFICIAL_INTERVAL}" \
     --gcs-official-archive-root "${ARCHIVE_ROOT}" \
@@ -349,6 +352,7 @@ PY
 
 echo "Run name: ${RUN_NAME}"
 echo "Mask-v2 boundary pseudo params: neg=0.02 dist_thr=80 min_valid=4 score_thr=0.2 envelope_margin_px=30 envelope_ratio_thr=0.75"
+echo "Extra train args: ${EXTRA_TRAIN_ARGS:-<none>}"
 echo "Selection GT: ${GT_JSON}"
 echo "Training-time official_best and post-train sweeps use tools/sweep_tusimple_official_cached.py."
 echo "RUN_TESTS=${RUN_TESTS}: official test is reporting-only and must stay off until official-val and diagnostics pass."

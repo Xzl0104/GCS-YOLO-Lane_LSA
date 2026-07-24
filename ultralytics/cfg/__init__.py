@@ -230,6 +230,8 @@ CFG_FLOAT_KEYS = frozenset(
         "gcs_short_geom_gt5_weight",
         "gcs_short_geom_max_weight",
         "gcs_short_geom_curve",
+        "gcs_role_contain",
+        "gcs_role_contain_valid_weight",
         "gcs_exist_pos_weight",
         "gcs_exist_focal_gamma",
         "gcs_exist_focal_alpha",
@@ -326,6 +328,8 @@ CFG_INT_KEYS = frozenset(
         "gcs_spurious_gt_protect_min_overlap",
         "gcs_gt5_short_visible_thr",
         "gcs_short_geom_visible_thr",
+        "gcs_role_gt4_visible_thr",
+        "gcs_role_gt5_visible_thr",
         "gcs_hard_visible_thr",
         "gcs_hard_gt3_visible_thr",
     }
@@ -375,6 +379,7 @@ CFG_BOOL_KEYS = frozenset(
         "gcs_point_x_only",
         "gcs_spurious_disable_gt5",
         "gcs_spurious_gt_protect",
+        "gcs_role_contain_matcher",
     }
 )
 

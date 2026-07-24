@@ -191,6 +191,13 @@ gcs_boundary_pseudo_gt_count: 5 # (int) GT lane count targeted by boundary pseud
 gcs_boundary_pseudo_score_thr: 0.0 # (float) optional existence score floor for boundary pseudo negatives; 0 disables
 gcs_boundary_pseudo_envelope_margin_px: -1.0 # (float) require common-visible query anchors outside GT envelope by this margin; <0 disables
 gcs_boundary_pseudo_envelope_ratio_thr: 0.75 # (float) minimum common-visible anchor ratio outside GT envelope when envelope margin is enabled
+gcs_role_contain: 0.0 # (float) Q24 extra-query role-containment BCE gain; 0 disables
+gcs_role_contain_valid_weight: 0.25 # (float) point-valid zero-target multiplier inside role-containment loss
+gcs_role_contain_matcher: False # (bool) forbid role-invalid Q24 extra-query Hungarian matches
+gcs_role_gt5_queries: 12-17 # (str) GT5 short/weak-visible extra query bank
+gcs_role_gt4_queries: 18-23 # (str) GT4 hard/short extra query bank
+gcs_role_gt4_visible_thr: 20 # (int) GT4 bank may match GT4 lanes at or below this visible-anchor count
+gcs_role_gt5_visible_thr: 20 # (int) GT5 bank may match GT5 lanes at or below this visible-anchor count
 gcs_exist_pos_weight: 1.0 # (float) positive query weight for GCS lane existence BCE
 gcs_exist_focal_gamma: 0.0 # (float) optional focal gamma for GCS existence BCE; 0 disables focal weighting
 gcs_exist_focal_alpha: -1.0 # (float) optional focal alpha for GCS existence BCE; set 0..1 to enable alpha weighting

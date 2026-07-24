@@ -37,6 +37,598 @@ diagnostic scripts, configs, model outputs, or active selected candidates.
 - It includes explicit training-time `official_best` checkpoint preservation for official-val selection.
 - It does not include post-`424ab1c86` short-side hardset/count-contract diagnostics, later mainline `diagnose_gcs_gt5.py`, Count/Quality/Boundary diagnostics, Survival, or near-miss machinery.
 
+## 2026-07-23 Env30 Staticref / Valid-Neg / q7-Only Rejection Records
+
+The recent env30 follow-up family is closed as rejected evidence. These runs
+and diagnostics are not promotable, should not drive TEST tuning, and should
+not be relaunched as the next path without a new official-val/train gate.
+
+### GT4/GT5 Staticref v2
+
+`query_alpha05_env30_gt45staticref_v2` is rejected after full protocol.
+
+```text
+env30 official-val ACC/FP/FN =
+  0.973330 / 0.015748 / 0.009642
+v2 official-val ACC/FP/FN =
+  0.971040 / 0.018825 / 0.012626
+
+env30 reporting-only TEST ACC/FP/FN =
+  0.966780 / 0.028732 / 0.023544
+v2 reporting-only TEST ACC/FP/FN =
+  0.966541 / 0.029601 / 0.022795
+```
+
+The v2 bank fixed the older severe six-lane extra-carrier failure from
+`gt5staticref_v1`, but it did not improve the real target. It traded partial
+TEST GT4 retention for GT3 over-count and GT5 under-count:
+
+```text
+TEST GT4 4->3: 98 -> 81
+TEST GT3 3->4: 50 -> 64
+TEST GT5 5->4: 43 -> 69
+```
+
+Raw-Q12 confirms there is no net geometry gain:
+
+```text
+official-val overall has_match_20px:
+  env30 0.975441 -> v2 0.972371
+train0601 GT4 short has_match_20px:
+  env30 0.473684 -> v2 0.578947
+train0601 GT5 short has_match_20px:
+  env30 0.775956 -> v2 0.737705
+```
+
+Decision: reject v2. Do not select thresholds, weights, or TEST behavior from
+this run.
+
+### GT4-Only Valid-Neg w01
+
+`query_alpha05_env30_gt45staticref_v2_gt4only_validneg_w01` is rejected.
+
+```text
+w01 official-val ACC/FP/FN =
+  0.970965 / 0.024656 / 0.012626
+
+w01 official_best reporting-only TEST ACC/FP/FN =
+  0.966061 / 0.037233 / 0.024712
+w01 best.pt reporting-only TEST ACC/FP/FN =
+  0.965752 / 0.041175 / 0.024053
+```
+
+Raw-Q12 shows partial recovery but not a solution:
+
+```text
+official-val overall has_match_20px:
+  env30 0.975441 -> w01 0.976209
+train0601 GT4 short has_match_20px:
+  env30 0.473684 -> w01 0.736842
+train0601 GT5 short has_match_20px:
+  env30 0.775956 -> w01 0.759563
+train0601 GT5 short point_valid_recall@0.6:
+  env30 0.937601 -> w01 0.935816
+```
+
+The count-shape tradeoff remains unacceptable:
+
+```text
+train0601 4->5:
+  env30 7, v2 4, w01 11
+w01 TEST count_confusion includes:
+  4->5 = 75, 4->6 = 15, 5->4 = 50, 5->6 = 99
+```
+
+Decision: reject w01 and do not launch the `w00` no-valid-negative companion
+as the immediate next full train.
+
+### v3 Static-Bank Diagnostic
+
+The no-training v3 bank diagnostic comparing env30, v2, and w01 is diagnostic
+only and does not justify a full v3 train.
+
+```text
+train0601 GT4 short hit20:
+  env30 9/19, v2 11/19, w01 14/19
+train0601 GT5 short hit20:
+  env30 142/183, v2 135/183, w01 139/183
+
+train0601 GT4 short q5/q6/q7 best-query share:
+  env30 2/19, v2 11/19, w01 10/19
+train0601 GT5 short q5/q6/q7 best-query share:
+  env30 3/183, v2 56/183, w01 58/183
+```
+
+The useful GT4 gains and harmful GT5 losses both concentrate around q7 and
+center visible-count 9-10 lanes. This means the failure is not just
+valid-negative strength; the q5/q6/q7 carrier assignment itself is unstable.
+
+Decision: do not train v3 from the current v2 bank.
+
+### q7-Only Staticref v3a
+
+The q7-only static-reference counterfactual is rejected before training. TEST
+was not used.
+
+```text
+official-val has_match_20px:
+  env30 0.975441 -> q7only 0.975441
+train0601 has_match_20px:
+  env30 0.960828 -> q7only 0.960828
+train0531 has_match_20px:
+  env30 0.983900 -> q7only 0.983900
+
+train0601 GT4 short hit20:
+  env30 9/19 -> q7only 9/19
+train0601 GT5 short hit20:
+  env30 142/183 -> q7only 142/183
+
+GT4_short_gain20_q7only = 0
+GT5_short_lost20_q7only = 1
+```
+
+Decision: reject q7-only v3a. It controls carrier explosion but creates no new
+GT4-short raw coverage, so it should not proceed to full training or TEST.
+
+Integrated bottleneck:
+
+The rejected family shows that env30's remaining gap is not a single decode
+knob, count head, static reference prior, or broad positive/negative loss.
+The bottleneck is coupled: short GT4/GT5 raw geometry coverage and true/extra
+query separation move against each other. A future candidate must first prove
+on official-val plus train0601/train0531 raw-Q12 that it improves GT4-short
+coverage without reducing GT5-short hit20/point-valid and without moving
+q0/q1/q3/q10/q11 true lanes into q5/q6/q7 extra carriers.
+
+### Q12 Joint Static Gate Follow-Up
+
+The stricter Q12 joint-static gate is also closed as rejected diagnostic
+evidence. `protected_gt5` passes the GT5 static gate, raising val GT5 primary
+match20 to `0.5625`, train0601 GT5 primary match20 to `0.2786885`, and val
+GT5 impact match20 to `1.0`, but GT4 remains `0.0/0.0/0.0` on
+val/train0601/train0531. The `require_gt4` variant still has
+`strict_joint_pass_count=0` and `loose_joint_pass_count=0`; its maximum GT4
+match20 is only `0.125` on val, `0.066667` on train0601, and `0.285714` on
+train0531. The five-slot rebalanced search evaluated `6226` designs and found
+`gate_pass=0`.
+
+Interpretation: the current Q12 protected replacement space does not have
+enough separated carriers for both GT5 short/weak-visible raw geometry and
+GT4 hard short/weak-visible geometry. Do not train from this Q12 route. The
+next geometry-capacity experiment should be a default-off Q16 or Q20
+protected dual-bank static gate that preserves `q0..q11` behavior and adds
+separate GT5 and GT4 hard-lane query banks before any formal training or
+reporting-only TEST.
+
+### Q20 Protected Dual-Bank Static Gate Follow-Up
+
+The default-off Q20 protected dual-bank tooling was implemented and run as a
+static gate only. TEST was not used. The search compared `5:3`, `4:4`, and
+`6:2` GT5:GT4 allocations over the extra queries `q12..q19`.
+
+```text
+artifact = .tmp/q20_dualbank_static_gate_alloc/summary.json
+strict_pass = false
+loose_pass = true
+selected_allocation = 6:2
+strict_pass_rows = 0
+loose_pass_rows = 2415
+```
+
+Evidence:
+
+```text
+Q12 base val GT5 primary match20 = 0.0625
+Q20 6:2 val GT5 primary match20 = 0.500000
+Q20 6:2 train0601 GT5 primary match20 = 0.377049
+Q20 6:2 val GT5 impact match20 = 0.750000
+
+Q12 base train0601 GT4 primary match20 = 0.000000
+Q20 6:2 train0601 GT4 primary match20 = 0.133333
+strict gate requires train0601 GT4 primary match20 >= 0.200000
+
+Q20 6:2 val GT5 primary p90 = 86.680450
+strict gate requires val GT5 primary p90 <= 85.000000
+```
+
+Interpretation:
+
+Q20 changes the GT5 short/weak-visible lane as intended and carries no added
+normal GT3/GT4 match20 risk in the selected row, but it still cannot satisfy
+GT5 and GT4 strict geometry coverage at the same time. The old `4:4` fixed
+search improved GT4 more but failed `val_gt5_primary_match20 >= 0.50`; the new
+`6:2` allocation fixes that GT5 match20 threshold but leaves train0601 GT4
+below the strict gate. This is a remaining geometry-capacity and prototype
+diversity bottleneck, not a decode or TEST-threshold problem.
+
+Decision:
+
+Do not publish the Q20 failed bank as a training candidate and do not run a
+Q20 training probe from this result. The next geometry-capacity action should
+increase separated reference capacity or prototype diversity before training,
+for example a default-off Q24 protected dual-bank/static gate or a Q20
+composite/clustered GT4 bank that proves train0601 GT4 reaches the strict gate
+without losing the Q20 `6:2` GT5 gains.
+
+### Q24 Protected Static Gate Follow-Up
+
+The default-off Q24 protected static tooling was implemented and validated as
+the direct follow-up to Q20. TEST was not used. The gate protects `q0..q11`,
+adds `q12..q23`, and requires GT5 coverage, GT4 coverage, and zero added
+normal GT3/GT4 match20 risk across val/train0601/train0531.
+
+```text
+artifact = .tmp/q24_protected_static_gate_server/summary.json
+bank = data/gcs_reference_banks/q24_protected_static_env30_best.json
+strict_pass = true
+loose_pass = true
+selected_allocation = 6:6
+```
+
+Evidence:
+
+```text
+Q12 base val GT5 primary match20 = 0.062500
+Q24 val GT5 primary match20 = 0.500000
+Q24 train0601 GT5 primary match20 = 0.393443
+Q24 val GT5 impact match20 = 0.750000
+
+Q12 base train0601 GT4 primary match20 = 0.000000
+Q24 train0601 GT4 primary match20 = 0.266667
+Q24 val/train0531 GT4 primary match20 = 0.625000 / 0.714286
+
+Q24 val/train0601/train0531 normal GT3/GT4 added match20 risk =
+  0.0 / 0.0 / 0.0
+```
+
+Interpretation:
+
+Q24 breaks the Q20 capacity/prototype-diversity bottleneck. The selected
+`6:6` allocation keeps GT5 at the requested static gate level while raising
+train0601 GT4 beyond the `0.20` threshold and avoiding added normal GT3/GT4
+carrier risk. This is the first protected static bank in this line that
+simultaneously satisfies the GT4 and GT5 raw-geometry gates.
+
+Decision:
+
+Q24 is allowed to enter a 20-40 epoch remote probe using the dedicated Q24 YAML
+and the strict-passed bank. It is not a final candidate yet. The probe must use
+training-time official-val selection and must keep TEST closed. The probe
+should be judged by official-val ACC/FP/FN, GT4/GT5 count shape, Q24 raw
+GT4/GT5 survival, and whether the extra queries become harmful normal-lane
+carriers after training.
+
+### Q24 Protected Static Probe40 Rejection
+
+The Q24 remote probe
+`query_alpha05_env30_q24_protected_static_probe40_v1` is complete and rejected
+for full training. TEST was not used.
+
+```text
+training rows = 40
+official_best source_epoch = 35
+external sweep rows = 864
+```
+
+Primary official-val evidence:
+
+```text
+env30 official-val ACC/FP/FN =
+  0.973330 / 0.015748 / 0.009642
+Q24 probe official-val ACC/FP/FN =
+  0.961733 / 0.068457 / 0.023186
+
+env30 count_acc_3/4/5 =
+  0.968610 / 0.969697 / 0.986486
+Q24 probe count_acc_3/4/5 =
+  0.825112 / 0.803030 / 0.986486
+```
+
+The official-val sweep has no rescue row:
+
+```text
+rows with ACC >= env30 = 0
+rows with FP/FN both <= env30 = 0
+rows passing count_acc_4>=0.954545 and count_acc_5>=0.972973 = 0
+```
+
+The failure shape is high FP and GT3/GT4 overcount, not GT5 undercount:
+
+```text
+Q24 count_confusion:
+  3->4 = 28
+  3->5 = 11
+  4->5 = 13
+  5->4 = 1
+  5->5 = 73
+
+env30 count_confusion:
+  3->4 = 7
+  4->5 = 0
+  5->4 = 1
+  5->5 = 73
+```
+
+Raw diagnostics show the static-bank protection did not survive training:
+
+```text
+Q24 val raw overall has_match20 = 0.925556
+env30 val raw overall has_match20 = 0.975441
+
+Q24 val GT5 visible<=10 has_match20/30 = 0.264151 / 0.584906
+env30 val GT5 visible<=10 has_match20/30 = 0.754717 / 0.811321
+
+Q24 q12..q23 raw-best carrier drift:
+  GT3 = 130/669 lanes, 118 hit20
+  GT4 = 66/264 lanes, 56 hit20
+  GT3/GT4 visible<=20 = 179/311 lanes
+```
+
+Final decoded extra-lane diagnostics on official-val show the extra lanes are
+not mainly duplicate lanes removable by NMS:
+
+```text
+GT3->4 images = 28, duplicate = 0, spurious = 11, boundary_pseudo = 9
+GT4->5 images = 13, duplicate = 0, spurious = 1, boundary_pseudo = 4
+```
+
+Decision:
+
+Reject this Q24 probe as a full-training candidate. Do not extend it to
+160/220 epochs and do not run TEST. The bottleneck is now extra-query role
+containment and existence calibration after training, not raw static capacity
+alone.
+
+Undertraining audit:
+
+Q24 was trained for only 40 epochs from `yolo11s-seg.pt`, so part of the
+absolute ACC gap to env30's 220-epoch final checkpoint is expected. However,
+the same-epoch raw-cache comparison shows the Q24 problem is not only lack of
+epochs:
+
+```text
+env30 epoch040 raw val overall has_match20 = 0.935285
+Q24  epoch040 raw val overall has_match20 = 0.935285
+
+env30 epoch040 GT3GT4 visible<=20 has_match20 = 0.889251
+Q24  epoch040 GT3GT4 visible<=20 has_match20 = 0.925081
+
+env30 epoch040 GT5 visible<=10 has_match20 = 0.576923
+Q24  epoch040 GT5 visible<=10 has_match20 = 0.307692
+
+env30 epoch040 GT5 visible<=20 has_match20 = 0.815534
+Q24  epoch040 GT5 visible<=20 has_match20 = 0.733010
+```
+
+Q24's early overall raw coverage is not worse than env30 at the same age; it
+is misallocated. It improves GT3/GT4 short-visible raw matching while leaving
+GT5 short-visible coverage far weaker. The extra-query carrier drift also
+persists through training:
+
+```text
+Q24 val GT3GT4 visible<=20 q12..q23 raw-best rate:
+  epoch005 0.596091
+  epoch010 0.589577
+  epoch020 0.596091
+  epoch035 0.583062
+  epoch040 0.586319
+```
+
+The official count shape mirrors the same issue. GT5 undercount is repaired
+early, but GT3/GT4 overcount remains: `4->5` is `13` at epoch035 and rebounds
+to `19` at epoch040.
+
+Interpretation:
+
+Undertraining is a contributor to the absolute ACC gap, but the Q24-specific
+bottleneck is extra-query role containment and GT5 short-geometry allocation.
+Full training as-is is not a high-confidence next step unless an intermediate
+continuation probe shows this drift naturally reverses.
+
+Smallest safe next action:
+
+Run only an official-val-only continuation probe to 80 or 100 epochs if the
+team wants to settle the undertraining hypothesis without code changes. Gate it
+on FP, GT3/GT4 overcount, GT5 short raw coverage, and carrier drift. If that
+gate fails, use a default-off Q24 role-containment probe that constrains
+`q12..q23` to their intended GT5 and GT4 hard-lane roles. Do not try to rescue
+the current artifact by changing only thresholds, NMS, `max_det`, or
+`min_points`.
+
+### Q24 Protected Static Cont100 Rejection
+
+The 100-epoch continuation diagnostic
+`query_alpha05_env30_q24_protected_static_cont100_v1` is complete and rejected
+for full training. TEST was not used.
+
+```text
+official_best source_epoch = 100
+official-val ACC/FP/FN = 0.964376 / 0.055096 / 0.016758
+count_acc_3/4/5 = 0.860987 / 0.742424 / 0.986486
+```
+
+It improves over the 40-epoch probe but remains far below env30:
+
+```text
+env30 official-val ACC/FP/FN =
+  0.973330 / 0.015748 / 0.009642
+env30 count_acc_3/4/5 =
+  0.968610 / 0.969697 / 0.986486
+```
+
+The official-val sweep has no rescue row:
+
+```text
+max ACC = 0.964376
+min FP = 0.046511
+max count_acc_4 = 0.803030
+rows with ACC >= env30 = 0
+rows with FP/FN both <= env30 = 0
+rows passing count_acc_4>=0.954545 and count_acc_5>=0.972973 = 0
+```
+
+The remaining failure is GT3/GT4 overcount:
+
+```text
+cont100 count_confusion:
+  3->4 = 19
+  3->5 = 12
+  4->5 = 17
+  5->4 = 1
+  5->5 = 73
+```
+
+Raw geometry improves but remains below env30, especially on train0601 and GT5
+short-visible lanes:
+
+```text
+val raw overall has_match20:
+  env30 0.975441, cont100 0.948580
+train0601 raw overall has_match20:
+  env30 0.960828, cont100 0.893677
+
+val GT5 visible<=10 has_match20:
+  env30 0.754717, cont100 0.490566
+train0601 GT5 visible<=10 has_match20:
+  env30 0.775956, cont100 0.415301
+```
+
+Extra-query carrier drift persists:
+
+```text
+cont100 val GT3GT4 visible<=20 q12..q23 raw-best rate = 0.581994
+cont100 train0601 GT3GT4 visible<=20 q12..q23 raw-best rate = 0.662100
+cont100 train0531 GT3GT4 visible<=20 q12..q23 raw-best rate = 0.654867
+```
+
+Epoch-cache diagnostics show this is stable, not a transient:
+
+```text
+val GT3GT4 visible<=20 q12..q23 raw-best rate:
+  epoch005 0.605863
+  epoch020 0.589577
+  epoch040 0.589577
+  epoch060 0.589577
+  epoch080 0.589577
+  epoch090 0.589577
+  epoch100 0.589577
+```
+
+Interpretation:
+
+Longer training helps GT5 short raw coverage, so undertraining contributed to
+the 40-epoch gap. But the 100-epoch run proves that Q24 does not naturally
+recover into the env30 band: FP stays high, `count_acc_4` remains very low, and
+extra queries keep acting as wrong-count carriers. The bottleneck is Q24
+extra-query role containment and existence/valid calibration, not static
+capacity or training length alone.
+
+Smallest safe next action:
+
+Reject Q24 full training as-is. The default-off Q24 role-containment probe has
+now been implemented for this failure mode: it suppresses wrong-count
+`q12..q23` positives on GT3/GT4 while protecting GT5 from extra containment
+negative pressure. The next action is to run only the 20-40 epoch
+official-val/train-side probe before any formal full training or TEST.
+
+## 2026-07-23 Env30 GT4 Near-20px Geometry Refine v1 Rejection
+
+The `query_alpha05_env30_gt4_near20_geom_refine_v1` full training run is
+complete and rejected. It is not promotable. TEST was not used.
+
+Run and code:
+
+```text
+run = query_alpha05_env30_gt4_near20_geom_refine_v1
+git = c6af4b2 / c6af4b27c Add env30 GT4 near20 geometry refine
+training rows = 186
+official_best source_epoch = 170
+```
+
+The candidate fails the primary official-val gate:
+
+```text
+env30 official-val ACC/FP/FN =
+  0.973330 / 0.015748 / 0.009642
+near20 v1 official-val ACC/FP/FN =
+  0.968943 / 0.035373 / 0.015152
+```
+
+The selected `official_best` decode also has unsafe count shape:
+
+```text
+decode =
+  conf 0.001, point_valid_thr 0.6, nms_dist_px 18,
+  max_det 8, min_points 2, valid_before_maxdet true
+
+count_acc_3/4/5 =
+  0.932735 / 0.878788 / 0.824324
+
+count_confusion includes:
+  3->4 = 14
+  3->5 = 1
+  4->5 = 7
+  5->6 = 9
+  5->7 = 3
+```
+
+The epoch170 official sweep has no rescue row:
+
+```text
+sweep rows = 864
+rows with ACC >= env30 = 0
+rows with FP/FN both <= env30 = 0
+rows passing GT4/GT5 count-shape gate = 0
+```
+
+Raw-Q12 diagnostics show the proposed geometry refine did not fix the target
+and instead damaged broad candidate coverage:
+
+```text
+official-val overall has_match_20px:
+  env30 0.975441 -> near20 0.963162
+train0601 overall has_match_20px:
+  env30 0.960828 -> near20 0.925574
+train0531 overall has_match_20px:
+  env30 0.983900 -> near20 0.975850
+
+train0601 GT4 short hit20:
+  env30 9/19 -> near20 8/19
+train0601 GT5 short hit20:
+  env30 142/183 -> near20 108/183
+```
+
+The intended near-miss repair was too sparse to control training:
+
+```text
+train/gt4_near20_refine_count last20 mean = 0.104903 lanes/batch
+```
+
+Event-level conclusion from the env30 GT4-short miss set:
+
+```text
+env30 train0601 GT4-short miss lanes fixed = 2/10
+env30 train0601 GT4-short hit lanes lost = 3
+```
+
+Decision:
+
+Reject the near20 v1 loss route in its current form. It does not improve the
+official target, does not improve the train0601 GT4-short raw gate, and causes
+a much larger GT5-short raw coverage regression. Do not run TEST, do not tune
+thresholds from this checkpoint, and do not continue by simply raising
+`gcs_gt4_near20_geom_refine` or widening the APE window.
+
+Smallest safe next action:
+
+Do not launch another full near20 training run directly. If this direction is
+reopened, first run a no-training activation/risk scan on env30 over narrow
+query sets such as `0,10`, `0,8,10`, `0,1,8,10`, and `0,6,8,10`, with APE
+windows `20-25` and `20-30`. A later training attempt needs evidence that it
+can cover at least `5/10` train0601 GT4-short env30 misses, lose at most one
+existing env30 GT4-short hit, and avoid any GT5-short risk increase before
+it is allowed to train.
+
 ## 2026-07-11 Boundary Pseudo-Negative Mask Bottleneck
 
 The completed B1 run
