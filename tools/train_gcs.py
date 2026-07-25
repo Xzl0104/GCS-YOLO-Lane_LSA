@@ -237,6 +237,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--gcs-query-count-min-lanes", type=int, default=2)
     parser.add_argument("--gcs-query-count-max-lanes", type=int, default=5)
     parser.add_argument(
+        "--gcs-query-quality",
+        type=float,
+        default=0.0,
+        help="Query-mode independent lane quality/ranking head BCE gain. 0 disables.",
+    )
+    parser.add_argument(
         "--gcs-count-ce",
         nargs="?",
         const=1.0,
@@ -813,6 +819,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=["score_sum"],
         help="Count source modes for training-time query official-val sweeps.",
     )
+    parser.add_argument(
+        "--gcs-official-count-aware-topk",
+        action="store_true",
+        default=False,
+        help="Enable count-aware top-k during training-time query official-val sweeps.",
+    )
+    parser.add_argument("--gcs-official-count-aware-min-k", type=int, default=3)
+    parser.add_argument("--gcs-official-count-aware-max-k", type=int, default=5)
+    parser.add_argument("--gcs-official-count-aware-length-norm", type=float, default=12.0)
+    parser.add_argument("--gcs-official-count-aware-extra-margins", nargs="+", type=int, default=[0])
     official_valid_group = parser.add_mutually_exclusive_group()
     official_valid_group.add_argument(
         "--gcs-official-valid-before-maxdet",
@@ -993,6 +1009,7 @@ def main() -> None:
         "gcs_query_count_ce": args.gcs_query_count_ce,
         "gcs_query_count_min_lanes": args.gcs_query_count_min_lanes,
         "gcs_query_count_max_lanes": args.gcs_query_count_max_lanes,
+        "gcs_query_quality": args.gcs_query_quality,
         "gcs_count_ce": args.gcs_count_ce,
         "gcs_interval": args.gcs_interval,
         "gcs_order": args.gcs_order,
@@ -1130,6 +1147,11 @@ def main() -> None:
         "gcs_official_max_dets": args.gcs_official_max_dets,
         "gcs_official_min_points": args.gcs_official_min_points,
         "gcs_official_count_modes": args.gcs_official_count_modes,
+        "gcs_official_count_aware_topk": args.gcs_official_count_aware_topk,
+        "gcs_official_count_aware_min_k": args.gcs_official_count_aware_min_k,
+        "gcs_official_count_aware_max_k": args.gcs_official_count_aware_max_k,
+        "gcs_official_count_aware_length_norm": args.gcs_official_count_aware_length_norm,
+        "gcs_official_count_aware_extra_margins": args.gcs_official_count_aware_extra_margins,
         "gcs_official_score_fp_weight": args.gcs_official_score_fp_weight,
         "gcs_official_score_fn_weight": args.gcs_official_score_fn_weight,
         "gcs_official_half": args.gcs_official_half,

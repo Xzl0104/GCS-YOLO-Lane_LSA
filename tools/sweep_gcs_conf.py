@@ -437,6 +437,9 @@ def evaluate_conf_grid(
                     pred_lanes = decode_gcs_predictions(
                         preds["pred_points"][0],
                         preds["pred_logits"][0],
+                        pred_quality_logits=preds.get("pred_quality_logits")[0]
+                        if preds.get("pred_quality_logits") is not None
+                        else None,
                         pred_valid_logits=pred_valid[0] if pred_valid is not None else None,
                         image_shape=img.shape[:2],
                         score_thr=conf,

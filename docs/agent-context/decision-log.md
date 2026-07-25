@@ -2,6 +2,128 @@
 
 This file records decisions for branch `codex/5-25-3-k56`.
 
+## 2026-07-25: Add Q12 env30 dual-head count/quality probe
+
+Decision:
+
+Implement a default-off Q12/env30 dual-head probe and stop extending the
+current Q24 event/role/boundary family as the next route. The probe separates
+image-level lane count from query-level lane quality/ranking instead of using
+`pred_logits` simultaneously for existence, decode ranking, and score-sum
+count.
+
+Implementation:
+
+```text
+model:
+  ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-dualhead.yaml
+new optional output:
+  pred_count_logits: B x 4
+  pred_quality_logits: B x 12
+new gain:
+  gcs_query_quality
+new logs:
+  query_quality_loss
+  query_quality_pos_mean
+  query_quality_pos_count
+new script:
+  scripts/run_query_dualhead_quality_count_env30_probe40_v1.sh
+```
+
+Probe policy:
+
+```text
+gcs_count = 0.0
+gcs_count_under5 = 0.0
+gcs_count_boundary = 0.0
+gcs_boundary_pseudo_neg = 0.0
+gcs_role_contain = 0.0
+gcs_q24_event_contain = 0.0
+gcs_q24_event_score_calib = 0.0
+gcs_query_count_ce = 0.5
+gcs_query_quality = 0.5
+official count mode = count_logits
+count-aware top-k = enabled
+TEST = closed
+```
+
+Why:
+
+The Q24 static, continuation, role-containment, role-partition, GT5-safe
+boundary-pseudo, event-containment, and event-v2 probes all failed official-val
+promotion gates. Their shared failure is not simply undertraining: extra
+queries either become GT3/GT4 false-extra carriers or lose true GT5 short
+coverage when suppressed. The remaining structural issue is that the same
+query score has been overloaded. The new probe keeps the Q12/env30 geometry
+line and tests whether an explicit count head plus an independent quality
+ranking head can improve count selection without pulling the existence score
+in incompatible directions.
+
+Validation target:
+
+Run local compile, model shape checks for default Q12, Q24, and the new
+dual-head YAML, the query count/quality contract check, bash syntax checks,
+and `git diff --check`. Remote training must be a 40-epoch official-val probe
+only; no TEST is allowed unless a later official-val-selected candidate is
+promoted.
+
+## 2026-07-25: Reject Q24 event-v2 dynamic score probe40 v1
+
+Decision:
+
+Do not continue, full-train, or TEST
+`query_alpha05_env30_q24_event_v2_dynamic_score_probe40_v1`. The dynamic
+containment and true-short score calibration paths were active, but the
+official-val, sweep, raw, and event-mined gates failed.
+
+Primary evidence:
+
+```text
+official-val ACC/FP/FN =
+  0.960033 / 0.090037 / 0.026630
+count_acc_3/4/5 =
+  0.865471 / 0.772727 / 0.148649
+count_confusion includes:
+  3->4=24, 3->5=6, 4->5=5, 4->6=9, 5->4=1, 5->6=62
+
+external official_best.pt sweep rows = 864
+rows with ACC >= env30 = 0
+rows with FP/FN both <= env30 = 0
+rows with count_acc_4 >= 0.90 = 0
+```
+
+Diagnostics:
+
+```text
+event-v2 val/train0601 GT5 visible<=10 raw match20 =
+  0.245283 / 0.229508
+event-containment v1 val/train0601 GT5 visible<=10 raw match20 =
+  0.509434 / 0.486339
+
+event-v2 val/train0601/train0531 GT3GT4 visible<=20 q12..q23 raw-best rate =
+  0.083601 / 0.132420 / 0.106195
+
+event-mined totals:
+  total_val_gt5_to6 = 61
+  total_val_gt34_false_extra = 44
+  no high-true low-risk query = true
+```
+
+Why:
+
+Event-v2 successfully reduces the broad GT3/GT4 extra-query carrier drift, but
+it does so by destroying true GT5 short raw coverage. Positive score
+calibration on `q13/q15` does not solve the problem because those same queries
+still carry GT5->6 risk and their true-short scores overlap pseudo-extra
+scores. The implementation is active; the mechanism is not sufficient.
+
+Integrated conclusion:
+
+Reject this artifact. The current Q24 family is bottlenecked by event-level
+role/score separation: the query channels that can cover true GT5 short lanes
+also become GT5 pseudo-sixth or GT3/GT4 false-extra carriers. Longer training
+or threshold sweeps are not expected to promote this exact mechanism.
+
 ## 2026-07-25: Add Q24 event-v2 dynamic score probe
 
 Decision:

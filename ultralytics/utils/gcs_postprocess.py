@@ -193,6 +193,7 @@ def _apply_count_aware_topk(lanes: list[dict], k_hat: int, length_norm: float) -
 def decode_gcs_predictions(
     pred_points: torch.Tensor,
     pred_logits: torch.Tensor,
+    pred_quality_logits: torch.Tensor | None = None,
     pred_valid_logits: torch.Tensor | None = None,
     pred_count_logits: torch.Tensor | None = None,
     oracle_count: int | None = None,
@@ -215,6 +216,8 @@ def decode_gcs_predictions(
     Args:
         pred_points: Q x K x 2 normalized point predictions in the GCS training coordinate system.
         pred_logits: Q existence logits for the lane queries.
+        pred_quality_logits: Optional Q quality/ranking logits. When present, decode thresholds and ranks lanes
+            with this score instead of ``pred_logits``.
         pred_valid_logits: Optional Q x K visibility logits. When present, decoded lanes keep full K points
             for metrics but drawing/export uses the longest visible contiguous point run.
         oracle_count: Optional GT lane count used only with diagnostic ``count_mode='oracle_gt'``.
@@ -247,6 +250,14 @@ def decode_gcs_predictions(
             f"pred_logits must have shape Q and match pred_points Q, got {tuple(pred_logits.shape)} "
             f"vs {tuple(pred_points.shape)}."
         )
+    if pred_quality_logits is not None:
+        if pred_quality_logits.ndim == 2 and pred_quality_logits.shape[-1] == 1:
+            pred_quality_logits = pred_quality_logits.squeeze(-1)
+        if pred_quality_logits.ndim != 1 or pred_quality_logits.shape[0] != pred_points.shape[0]:
+            raise ValueError(
+                "pred_quality_logits must have shape Q and match pred_points Q, "
+                f"got {tuple(pred_quality_logits.shape)} vs {tuple(pred_points.shape)}."
+            )
     if pred_valid_logits is not None:
         if pred_valid_logits.ndim == 3 and pred_valid_logits.shape[-1] == 1:
             pred_valid_logits = pred_valid_logits.squeeze(-1)
@@ -257,7 +268,8 @@ def decode_gcs_predictions(
             )
 
     points = pred_points.detach().float().cpu().clamp(0.0, 1.0)
-    scores = pred_logits.detach().float().cpu().sigmoid()
+    score_logits = pred_quality_logits if pred_quality_logits is not None else pred_logits
+    scores = score_logits.detach().float().cpu().sigmoid()
     count_aware_k = None
     count_aware_base_k = None
     if count_aware_topk:
@@ -383,6 +395,7 @@ def decode_gcs_predictions(
             "score": float(score),
             "query": int(query_idx),
             "points_norm": lane_norm,
+            "score_source": "quality_logits" if pred_quality_logits is not None else "pred_logits",
             "count_mode": str(count_mode or "score_sum"),
             "decoded_count_k": int(count_aware_k) if count_aware_k is not None else -1,
             "decoded_count_base_k": int(count_aware_base_k) if count_aware_base_k is not None else -1,

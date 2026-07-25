@@ -530,6 +530,94 @@ GT5 visible<=10 raw match20 must not regress from event-containment v1
 q24_event_dynamic_count and q24_event_score_pos_count must be nonzero
 ```
 
+Completed result:
+
+```text
+run = query_alpha05_env30_q24_event_v2_dynamic_score_probe40_v1
+status = rejected for longer/full training
+training rows = 40
+official_best source_epoch = 40
+TEST used = false
+
+official-val ACC/FP/FN =
+  0.960033 / 0.090037 / 0.026630
+count_acc_3/4/5 =
+  0.865471 / 0.772727 / 0.148649
+count_confusion includes:
+  3->4=24, 3->5=6, 4->5=5, 4->6=9, 5->4=1, 5->6=62
+
+external official_best.pt sweep rows = 864
+rows with ACC >= env30 = 0
+rows with FP/FN both <= env30 = 0
+rows with count_acc_4 >= 0.90 = 0
+max count_acc_4 = 0.772727
+```
+
+The event-v2 mechanisms were active, but the gate failed. Dynamic containment
+reduced GT3/GT4 short-visible `q12..q23` raw-best carrier rate, yet GT5
+visible<=10 raw match20 regressed to `0.245283 / 0.229508` on val/train0601
+versus event-containment v1 `0.509434 / 0.486339`. The event-mined gate found
+`total_val_gt5_to6=61`, `total_val_gt34_false_extra=44`, and no high-true,
+low-risk query. Do not continue this run, do not full-train it, and do not run
+TEST.
+
+## Q12 Env30 Dual-Head Count/Quality Probe
+
+The next default-off path after rejecting the Q24 event/role line is a
+Q12/env30 dual-head probe. It separates image-level count estimation from
+query-level lane quality/ranking:
+
+```text
+model = ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-dualhead.yaml
+count head = pred_count_logits, 2/3/4/5 CE
+quality head = pred_quality_logits, query quality/ranking BCE
+decode = count_logits chooses k_hat, quality_logits ranks/selects top-k
+TEST = closed
+```
+
+Launch only a 40-epoch official-val probe:
+
+```bash
+RUN_NAME=query_dualhead_quality_count_env30_probe40_v1 \
+MODEL=ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-dualhead.yaml \
+EPOCHS=40 \
+RUN_TESTS=0 \
+OVERWRITE_SWEEPS=0 \
+bash scripts/run_query_dualhead_quality_count_env30_probe40_v1.sh
+```
+
+The script explicitly keeps the rejected score-sum count and Q24 patch losses
+off for this probe:
+
+```text
+gcs_count = 0.0
+gcs_count_under5 = 0.0
+gcs_count_boundary = 0.0
+gcs_boundary_pseudo_neg = 0.0
+gcs_role_contain = 0.0
+gcs_q24_event_contain = 0.0
+gcs_q24_event_score_calib = 0.0
+gcs_query_count_ce = 0.5
+gcs_query_quality = 0.5
+OFFICIAL_COUNT_MODES = count_logits
+COUNT_AWARE_TOPK = 1
+```
+
+Promotion gate before longer/full training:
+
+```text
+TEST used = false
+official-val ACC must beat the rejected query-count-only run and move toward env30
+FP/FN must not regress versus env30 in the Q24 failure shape
+count_acc_4 should recover near the env30 band, not Q24 cont100/event-v2
+count_acc_5 must stay high; 5->4 and 5->6 must not rebound
+raw/event diagnostics must show quality top-k chooses true GT4/GT5 lanes, not
+  extra or pseudo lanes
+```
+
+Do not run final TEST, full training, or threshold/NMS expansion from this
+probe unless the official-val and train-side gates pass.
+
 ## Query Count Head CE0.5 Run
 
 The default-off query Count Head ablation is launched through:

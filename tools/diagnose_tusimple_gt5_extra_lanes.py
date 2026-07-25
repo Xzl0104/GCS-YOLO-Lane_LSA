@@ -338,9 +338,11 @@ def main() -> None:
 
         pred_valid = preds.get("pred_valid_logits")
         pred_count_logits = preds.get("pred_count_logits")
+        pred_quality_logits = preds.get("pred_quality_logits")
         final_lanes = decode_gcs_predictions(
             preds["pred_points"][0],
             preds["pred_logits"][0],
+            pred_quality_logits=pred_quality_logits[0] if pred_quality_logits is not None else None,
             pred_valid_logits=pred_valid[0] if pred_valid is not None else None,
             pred_count_logits=pred_count_logits[0] if pred_count_logits is not None else None,
             image_shape=image_shape,

@@ -19,6 +19,17 @@ query-count YAML and emits `pred_count_logits: B x 4` for the fixed 2/3/4/5
 lane-count classes. The default query YAML still emits no `pred_count_logits`,
 and ordered-slot keeps its existing count/slot logic unchanged.
 
+The 2026-07-25 user-requested Q12/env30 dual-head probe is also default-off
+and enabled only by
+`ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-dualhead.yaml` plus the
+dedicated launch script. It keeps the Q12/K56 query contract, adds
+`pred_count_logits: B x 4` for image-level lane count and
+`pred_quality_logits: B x 12` for query-level quality/ranking, and uses
+`count_logits` count-aware top-k with quality-logit ranking during
+official-val selection. The default Q12 YAML, the query-count-only YAML, Q24
+protected-static YAMLs, labels, official metrics, and TEST protocol remain
+unchanged.
+
 The branch also includes the 2026-06-27 user-requested, default-off `gcs_hard_sampling` train-only sampler for short-visible GT3/GT4/GT5 and 0601 samples. It changes only the training dataloader sampling frequency through `WeightedRandomSampler`; it does not change labels, validation/test dataloaders, point/smooth/curve losses, decode, or official metrics.
 
 The branch also includes the 2026-06-27 user-requested, default-off `gcs_spurious_neg` loss for E3-lite. It uses the training Hungarian matcher indices only to select unmatched short duplicate-like queries near matched queries, then adds an extra target-zero BCE on their `pred_logits`. The GT-count weighting extension keeps the old default behavior with `gcs_spurious_gt3_weight=1.0`, `gcs_spurious_gt4_weight=1.0`, `gcs_spurious_gt5_weight=1.0`, and `gcs_spurious_disable_gt5=False`, while allowing GT3-or-sparser, GT4, and GT5-or-denser samples to carry different spurious-negative weights. The 2026-06-28 `gcs_spurious_gt_protect` extension is also default-off and only removes GT-close candidate queries from this extra negative BCE. It does not change data sampling, dataset labels, matcher logic, point/smooth/curve losses, decode, NMS, or official metrics.
@@ -313,6 +324,19 @@ calibration adds a soft positive existence BCE only for configured clean
 queries that are close to true short GT5 lanes. It does not change labels,
 decode, NMS, official metrics, model outputs, or default Q12/Q24 behavior.
 It is a 20-40 epoch official-val/train-side probe only until its gate passes.
+
+The completed event-v2 probe
+`query_alpha05_env30_q24_event_v2_dynamic_score_probe40_v1` is rejected for
+longer or full training. TEST was not used. Its official-val ACC/FP/FN is
+`0.960033 / 0.090037 / 0.026630`, with `count_acc_4=0.772727`,
+`count_acc_5=0.148649`, and count confusion including `4->6=9` and
+`5->6=62`. The external 864-row official-val sweep has zero rows at or above
+env30 ACC, zero rows with FP/FN both at or below env30, and zero rows with
+`count_acc_4 >= 0.90`. The mechanism was active, but GT5 visible<=10 raw
+match20 regressed to `0.245283 / 0.229508` on val/train0601 while the
+event-mined gate still reported `total_val_gt5_to6=61` and
+`total_val_gt34_false_extra=44`. Do not continue, full-train, or TEST this
+artifact.
 
 Training-time `official_best` checkpoint preservation is active as an explicit 2026-06-27 selection-protocol change. It preserves the 5-25-3 algorithm body and only changes how formal TuSimple checkpoints are selected.
 
@@ -644,6 +668,21 @@ pred_count_logits: B x 4
 This optional output is default-off and uses class mapping
 `0->2`, `1->3`, `2->4`, `3->5` lanes.
 
+The optional Q12 dual-head model
+`ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-dualhead.yaml` additionally
+emits:
+
+```text
+pred_count_logits: B x 4
+pred_quality_logits: B x 12
+```
+
+This dual-head output is default-off. `pred_count_logits` is the image-level
+2/3/4/5 count classifier. `pred_quality_logits` is the query-level lane
+quality/ranking score. The original `pred_logits` remain the query
+existence/objectness logits and the default fallback decode score for old
+checkpoints.
+
 ## Loss Contract
 
 Default logged loss items on the active `424ab1c86` rollback state include:
@@ -683,12 +722,26 @@ boundary_pseudo_score_mean
 query_count_ce_loss
 query_count_acc
 query_count_pred_mean
+query_quality_loss
+query_quality_pos_mean
+query_quality_pos_count
 ```
 
 `query_count_ce_loss` is active only when a query model emits
 `pred_count_logits` and `gcs_query_count_ce > 0`; the default gain is `0.0`.
 When logits are absent, the three query-count log items are zero for old-model
 compatibility.
+
+`query_quality_loss` is active only when a query model emits
+`pred_quality_logits` and `gcs_query_quality > 0`; the default gain is `0.0`.
+Its target follows the quality-aware geometry/visible-IoU target family used
+for existence supervision, but it trains a separate decode ranking score. The
+dual-head probe intentionally sets `gcs_count=0.0`, `gcs_count_under5=0.0`,
+`gcs_count_boundary=0.0`, `gcs_boundary_pseudo_neg=0.0`,
+`gcs_role_contain=0.0`, `gcs_q24_event_contain=0.0`, and
+`gcs_q24_event_score_calib=0.0`, so count estimation and lane ranking are not
+implemented by reusing `sum(sigmoid(pred_logits))` or the rejected Q24
+event/role patches.
 
 Post-`424ab1c86` log items such as `short_side_geom_loss`, `far_spur_loss`,
 `farspur_if_loss`, `rank_topk_loss`, `shortside_*`, `rank_*`,
@@ -1091,6 +1144,14 @@ score-sum count source. `count_logits` is valid only for checkpoints whose
 query model actually emits `pred_count_logits`; default query checkpoints
 without the query Count Head must use `score_sum` or leave count-aware top-k
 disabled.
+
+For the optional Q12 dual-head probe, query decode uses
+`pred_quality_logits` as the thresholding, ranking, NMS-order, and
+count-aware top-k quality score whenever that tensor is present. Old
+checkpoints without `pred_quality_logits` fall back to `pred_logits`. The
+recommended probe selection uses `--count-aware-topk --count-mode count_logits`
+so `pred_count_logits` chooses `k_hat` and `pred_quality_logits` chooses the
+top-k lanes. This is still official-val selection only and must not read TEST.
 
 For diagnosis only, `tools/eval_tusimple_official.py --oracle-count` can force
 query count-aware top-k to use `k_hat = GT lane count` internally. This mode

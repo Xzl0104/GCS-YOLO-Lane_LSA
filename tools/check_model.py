@@ -122,6 +122,14 @@ def main():
             )
     elif "pred_count_logits" in y:
         raise RuntimeError("default query GCSLaneHead must not emit pred_count_logits.")
+    if getattr(head, "query_quality_head", False):
+        if tuple(y.get("pred_quality_logits", torch.empty(0)).shape) != (args.batch, expected_q):
+            raise RuntimeError(
+                f"query Quality Head pred_quality_logits must have shape B x {expected_q}, "
+                f"got {tuple(y.get('pred_quality_logits', torch.empty(0)).shape)}."
+            )
+    elif "pred_quality_logits" in y:
+        raise RuntimeError("default query GCSLaneHead must not emit pred_quality_logits.")
     if y["pred_valid_logits"].shape != y["pred_points"].shape[:3]:
         raise RuntimeError(
             "pred_valid_logits must have shape B x Q x K matching pred_points, "

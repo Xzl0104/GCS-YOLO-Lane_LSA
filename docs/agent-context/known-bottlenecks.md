@@ -951,6 +951,106 @@ longer/full-training candidate until the new 20-40 epoch official-val and
 event-mined gates pass. Use `scripts/run_q24_event_v2_mined_gate_v1.sh` after
 training so the diagnostic role labels match the v2 query assignment.
 
+Completed result: `query_alpha05_env30_q24_event_v2_dynamic_score_probe40_v1`
+fails the promotion gate and is rejected for longer/full training. TEST was
+not used.
+
+```text
+official-val ACC/FP/FN =
+  0.960033 / 0.090037 / 0.026630
+count_acc_3/4/5 =
+  0.865471 / 0.772727 / 0.148649
+count_confusion includes:
+  3->4=24, 3->5=6, 4->5=5, 4->6=9, 5->4=1, 5->6=62
+
+official_best.pt sweep:
+  rows = 864
+  rows with ACC >= env30 = 0
+  rows with FP/FN both <= env30 = 0
+  rows with count_acc_4 >= 0.90 = 0
+  max count_acc_4 = 0.772727
+```
+
+The training logs show the new code path was active:
+
+```text
+train q24_event_dynamic_count last10 mean = 4.652944
+train q24_event_score_pos_count last10 mean = 0.684314
+val q24_event_dynamic_count last10 mean = 7.066667
+val q24_event_score_pos_count last10 mean = 1.900000
+```
+
+But the mechanism made the core tradeoff worse. It reduced GT3/GT4
+short-visible `q12..q23` carrier rate to `0.083601 / 0.132420 / 0.106195` on
+val/train0601/train0531, but GT5 visible<=10 raw match20 regressed to
+`0.245283 / 0.229508` on val/train0601. The event-mined gate still found
+`total_val_gt5_to6=61`, `total_val_gt34_false_extra=44`, and no high-true,
+low-risk query. `q13/q15` received true-short score calibration, but their
+true GT5 short scores overlap their GT5->6 scores, so score calibration cannot
+separate true fifth lanes from pseudo sixth lanes in this design.
+
+Conclusion: the current Q24 line has exhausted fixed partition, boundary-safe,
+event-containment, and event-v2 dynamic-score probes. The failure is the
+coupled event-role and score-separation bottleneck, not a no-op implementation
+or only short training. Do not continue Q24 event-v2 or run TEST.
+
+### Q12 Env30 Dual-Head Next Route
+
+Integrated bottleneck after the Q24 rejection chain:
+
+The strongest remaining hypothesis is no longer "add more queries and patch
+their roles." The Q24 line proved that extra capacity creates an unstable
+carrier problem: the channels that can reach GT5 short lanes also become
+GT5 pseudo-sixth or GT3/GT4 false-extra carriers, and suppression damages
+true GT5 short raw coverage. The more general structural problem is that
+`pred_logits` has been overloaded as:
+
+```text
+1. existence/objectness supervision
+2. lane quality and decode ranking score
+3. score-sum lane-count estimator
+```
+
+These objectives conflict after `exist_loss` becomes quality-aware. A matched
+lane with imperfect geometry or visible-IoU receives a lower quality target,
+so `sigmoid(pred_logits)` is no longer a pure lane-count probability.
+Optimizing score-sum count losses or Q24 event score patches on the same logit
+therefore pulls against ranking and geometry quality.
+
+Decision:
+
+Implement the next probe as a default-off Q12/env30 dual-head candidate:
+
+```text
+pred_count_logits: image-level 2/3/4/5 count CE
+pred_quality_logits: query-level lane quality/ranking score
+pred_logits: original query existence/objectness and old-checkpoint fallback
+decode: count_logits chooses k_hat; quality_logits ranks top-k
+```
+
+The new route intentionally disables the rejected score-sum count losses and
+Q24 patch losses for this probe:
+
+```text
+gcs_count = 0.0
+gcs_count_under5 = 0.0
+gcs_count_boundary = 0.0
+gcs_boundary_pseudo_neg = 0.0
+gcs_role_contain = 0.0
+gcs_q24_event_contain = 0.0
+gcs_q24_event_score_calib = 0.0
+```
+
+This is not yet promotion evidence. The 40-epoch probe must pass
+official-val and train-side gates before any longer/full training or TEST:
+
+```text
+count_acc_4 must recover away from the Q24 0.74-0.82 band
+count_acc_5 must remain high without 5->6 rebound
+FP/FN must move toward env30, not Q24 event-v2
+quality top-k must choose true GT4/GT5 lanes rather than pseudo/extra lanes
+```
+
 ## 2026-07-23 Env30 GT4 Near-20px Geometry Refine v1 Rejection
 
 The `query_alpha05_env30_gt4_near20_geom_refine_v1` full training run is

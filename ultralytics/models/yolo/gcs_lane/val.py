@@ -60,6 +60,9 @@ LOSS_NAMES = (
     "query_count_ce_loss",
     "query_count_acc",
     "query_count_pred_mean",
+    "query_quality_loss",
+    "query_quality_pos_mean",
+    "query_quality_pos_count",
     "role_contain_loss",
     "role_contain_exist_loss",
     "role_contain_valid_loss",
@@ -119,6 +122,9 @@ LOSS_GAIN_ARGS = (
     "gcs_query_count_ce",
     None,
     None,
+    "gcs_query_quality",
+    None,
+    None,
     "gcs_role_contain",
     None,
     None,
@@ -149,6 +155,9 @@ DEFAULT_LOSS_GAINS = (
     0.1,
     0.2,
     0.2,
+    0.0,
+    0.0,
+    0.0,
     0.0,
     0.0,
     0.0,
@@ -644,6 +653,9 @@ class GCSLaneValidator:
         pred_valid_logits = preds.get("pred_valid_logits")
         if pred_valid_logits is not None:
             pred_valid_logits = pred_valid_logits.detach()
+        pred_quality_logits = preds.get("pred_quality_logits")
+        if pred_quality_logits is not None:
+            pred_quality_logits = pred_quality_logits.detach()
         if pred_logits.ndim == 3 and pred_logits.shape[-1] == 1:
             pred_logits = pred_logits.squeeze(-1)
         h, w = int(batch["img"].shape[-2]), int(batch["img"].shape[-1])
@@ -680,6 +692,7 @@ class GCSLaneValidator:
                 pred_lanes = decode_gcs_predictions(
                     pred_points[i],
                     pred_logits[i],
+                    pred_quality_logits=pred_quality_logits[i] if pred_quality_logits is not None else None,
                     pred_valid_logits=pred_valid_logits[i] if pred_valid_logits is not None else None,
                     image_shape=(h, w),
                     score_thr=conf,

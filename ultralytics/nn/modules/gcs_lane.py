@@ -220,6 +220,7 @@ class GCSLaneHead(nn.Module):
         query_count_head: bool = False,
         reference_mode: str = "linear",
         reference_bank=None,
+        query_quality_head: bool = False,
     ):
         """Initialize the GCS lane query decoder and training-only auxiliary heads."""
         super().__init__()
@@ -359,6 +360,13 @@ class GCSLaneHead(nn.Module):
                 nn.ReLU(inplace=True),
                 nn.Linear(c1, self.count_classes),
             )
+        self.query_quality_head = self.gcs_mode == "query" and bool(query_quality_head)
+        if self.query_quality_head:
+            self.query_quality_mlp = nn.Sequential(
+                nn.Linear(c1, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, 1),
+            )
         if self.gcs_mode == "ordered_slot":
             self.start_mlp = nn.Sequential(
                 nn.Linear(c1, c1),
@@ -394,6 +402,8 @@ class GCSLaneHead(nn.Module):
             self._init_interval_heads()
         if self.query_count_head:
             self._init_query_count_head()
+        if self.query_quality_head:
+            self._init_query_quality_head()
 
     def _build_fixed_y_anchors(self):
         """Build shared bottom-to-top y anchors for fixed-y x-only prediction."""
@@ -582,6 +592,12 @@ class GCSLaneHead(nn.Module):
     def _init_query_count_head(self):
         """Initialize query-mode explicit count logits near neutral."""
         final = self.query_count_mlp[-1]
+        nn.init.normal_(final.weight, mean=0.0, std=1e-3)
+        nn.init.zeros_(final.bias)
+
+    def _init_query_quality_head(self):
+        """Initialize query-mode quality logits near neutral."""
+        final = self.query_quality_mlp[-1]
         nn.init.normal_(final.weight, mean=0.0, std=1e-3)
         nn.init.zeros_(final.bias)
 
@@ -781,6 +797,8 @@ class GCSLaneHead(nn.Module):
         }
         if getattr(self, "query_count_head", False):
             out["pred_count_logits"] = self.query_count_mlp(hs.mean(dim=1))
+        if getattr(self, "query_quality_head", False):
+            out["pred_quality_logits"] = self.query_quality_mlp(hs).squeeze(-1)
         if self.gcs_mode == "ordered_slot":
             out["pred_exist_logits"] = pred_logits
             out["pred_start_logits"] = self.start_mlp(hs).view(b, self.num_queries, self.num_points)

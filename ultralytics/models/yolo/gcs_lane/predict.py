@@ -141,6 +141,9 @@ class GCSLanePredictor(BasePredictor):
 
         points = preds["pred_points"].detach()
         logits = preds["pred_logits"].detach()
+        quality_logits = preds.get("pred_quality_logits")
+        if quality_logits is not None:
+            quality_logits = quality_logits.detach()
         valid_logits = preds.get("pred_valid_logits")
         if valid_logits is not None:
             valid_logits = valid_logits.detach()
@@ -157,12 +160,16 @@ class GCSLanePredictor(BasePredictor):
             valid_iter = [None] * int(points.shape[0])
         else:
             valid_iter = list(valid_logits)
+        if quality_logits is None:
+            quality_iter = [None] * int(points.shape[0])
+        else:
+            quality_iter = list(quality_logits)
 
         ordered_slot = "pred_count_logits" in preds and "pred_start_logits" in preds and "pred_end_logits" in preds
         ordered_slot_runtime_cfg = ordered_slot_decode_runtime_config(context="predict") if ordered_slot else None
         ordered_slot_params = ordered_slot_decode_params(self.args) if ordered_slot else None
-        for batch_i, (lane_points, lane_logits, lane_valid_logits, orig_img, img_path) in enumerate(
-            zip(points, logits, valid_iter, orig_imgs, self.batch[0])
+        for batch_i, (lane_points, lane_logits, lane_quality_logits, lane_valid_logits, orig_img, img_path) in enumerate(
+            zip(points, logits, quality_iter, valid_iter, orig_imgs, self.batch[0])
         ):
             if ordered_slot:
                 lanes = decode_ordered_slot_predictions(
@@ -181,6 +188,7 @@ class GCSLanePredictor(BasePredictor):
                 lanes = decode_gcs_predictions(
                     lane_points,
                     lane_logits,
+                    pred_quality_logits=lane_quality_logits,
                     pred_valid_logits=lane_valid_logits,
                     image_shape=orig_img.shape[:2],
                     score_thr=conf,

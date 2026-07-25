@@ -36,6 +36,11 @@ OFFICIAL_NMS_DIST_PXS="${OFFICIAL_NMS_DIST_PXS:-0 18 30}"
 OFFICIAL_MAX_DETS="${OFFICIAL_MAX_DETS:-5 6 8}"
 OFFICIAL_MIN_POINTS="${OFFICIAL_MIN_POINTS:-2 3 4 5}"
 OFFICIAL_COUNT_MODES="${OFFICIAL_COUNT_MODES:-score_sum}"
+COUNT_AWARE_TOPK="${COUNT_AWARE_TOPK:-0}"
+COUNT_AWARE_MIN_K="${COUNT_AWARE_MIN_K:-3}"
+COUNT_AWARE_MAX_K="${COUNT_AWARE_MAX_K:-5}"
+COUNT_AWARE_LENGTH_NORM="${COUNT_AWARE_LENGTH_NORM:-12.0}"
+COUNT_AWARE_EXTRA_MARGINS="${COUNT_AWARE_EXTRA_MARGINS:-0}"
 EXTRA_TRAIN_ARGS="${EXTRA_TRAIN_ARGS:-}"
 
 SWEEP_CONFS="${SWEEP_CONFS:-${OFFICIAL_CONFS}}"
@@ -44,6 +49,8 @@ SWEEP_NMS_DIST_PXS="${SWEEP_NMS_DIST_PXS:-${OFFICIAL_NMS_DIST_PXS}}"
 SWEEP_MAX_DETS="${SWEEP_MAX_DETS:-${OFFICIAL_MAX_DETS}}"
 SWEEP_MIN_POINTS="${SWEEP_MIN_POINTS:-${OFFICIAL_MIN_POINTS}}"
 SWEEP_COUNT_MODES="${SWEEP_COUNT_MODES:-${OFFICIAL_COUNT_MODES}}"
+SWEEP_COUNT_AWARE_TOPK="${SWEEP_COUNT_AWARE_TOPK:-${COUNT_AWARE_TOPK}}"
+SWEEP_COUNT_AWARE_EXTRA_MARGINS="${SWEEP_COUNT_AWARE_EXTRA_MARGINS:-${COUNT_AWARE_EXTRA_MARGINS}}"
 
 read -r -a OFFICIAL_CONFS_ARR <<< "${OFFICIAL_CONFS}"
 read -r -a OFFICIAL_POINT_VALID_THRS_ARR <<< "${OFFICIAL_POINT_VALID_THRS}"
@@ -51,6 +58,7 @@ read -r -a OFFICIAL_NMS_DIST_PXS_ARR <<< "${OFFICIAL_NMS_DIST_PXS}"
 read -r -a OFFICIAL_MAX_DETS_ARR <<< "${OFFICIAL_MAX_DETS}"
 read -r -a OFFICIAL_MIN_POINTS_ARR <<< "${OFFICIAL_MIN_POINTS}"
 read -r -a OFFICIAL_COUNT_MODES_ARR <<< "${OFFICIAL_COUNT_MODES}"
+read -r -a COUNT_AWARE_EXTRA_MARGINS_ARR <<< "${COUNT_AWARE_EXTRA_MARGINS}"
 read -r -a EXTRA_TRAIN_ARGS_ARR <<< "${EXTRA_TRAIN_ARGS}"
 read -r -a SWEEP_CONFS_ARR <<< "${SWEEP_CONFS}"
 read -r -a SWEEP_POINT_VALID_THRS_ARR <<< "${SWEEP_POINT_VALID_THRS}"
@@ -58,6 +66,7 @@ read -r -a SWEEP_NMS_DIST_PXS_ARR <<< "${SWEEP_NMS_DIST_PXS}"
 read -r -a SWEEP_MAX_DETS_ARR <<< "${SWEEP_MAX_DETS}"
 read -r -a SWEEP_MIN_POINTS_ARR <<< "${SWEEP_MIN_POINTS}"
 read -r -a SWEEP_COUNT_MODES_ARR <<< "${SWEEP_COUNT_MODES}"
+read -r -a SWEEP_COUNT_AWARE_EXTRA_MARGINS_ARR <<< "${SWEEP_COUNT_AWARE_EXTRA_MARGINS}"
 
 is_true() {
   case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
@@ -98,6 +107,27 @@ SWEEP_HALF_ARGS=()
 if is_true "${HALF}"; then
   OFFICIAL_HALF_ARGS=(--gcs-official-half)
   SWEEP_HALF_ARGS=(--half)
+fi
+
+OFFICIAL_COUNT_AWARE_ARGS=()
+SWEEP_COUNT_AWARE_ARGS=()
+if is_true "${COUNT_AWARE_TOPK}"; then
+  OFFICIAL_COUNT_AWARE_ARGS=(
+    --gcs-official-count-aware-topk
+    --gcs-official-count-aware-min-k "${COUNT_AWARE_MIN_K}"
+    --gcs-official-count-aware-max-k "${COUNT_AWARE_MAX_K}"
+    --gcs-official-count-aware-length-norm "${COUNT_AWARE_LENGTH_NORM}"
+    --gcs-official-count-aware-extra-margins "${COUNT_AWARE_EXTRA_MARGINS_ARR[@]}"
+  )
+fi
+if is_true "${SWEEP_COUNT_AWARE_TOPK}"; then
+  SWEEP_COUNT_AWARE_ARGS=(
+    --count-aware-topk
+    --count-aware-min-k "${COUNT_AWARE_MIN_K}"
+    --count-aware-max-k "${COUNT_AWARE_MAX_K}"
+    --count-aware-length-norm "${COUNT_AWARE_LENGTH_NORM}"
+    --count-aware-extra-margins "${SWEEP_COUNT_AWARE_EXTRA_MARGINS_ARR[@]}"
+  )
 fi
 
 OFFICIAL_BEST_SWEEP_DIR="${OFFICIAL_BEST_SWEEP_DIR:-${PROJECT}/${RUN_NAME}_official_best_val_sweep_${DECODE_TAG}}"
@@ -159,6 +189,7 @@ run_train() {
     --gcs-official-max-dets "${OFFICIAL_MAX_DETS_ARR[@]}" \
     --gcs-official-min-points "${OFFICIAL_MIN_POINTS_ARR[@]}" \
     --gcs-official-count-modes "${OFFICIAL_COUNT_MODES_ARR[@]}" \
+    "${OFFICIAL_COUNT_AWARE_ARGS[@]}" \
     "${TRAIN_VALID_ARGS[@]}" \
     "${OFFICIAL_HALF_ARGS[@]}" \
     --project "${PROJECT}" \
@@ -196,6 +227,7 @@ run_val_sweep() {
     --max-dets "${SWEEP_MAX_DETS_ARR[@]}" \
     --min-points "${SWEEP_MIN_POINTS_ARR[@]}" \
     --count-modes "${SWEEP_COUNT_MODES_ARR[@]}" \
+    "${SWEEP_COUNT_AWARE_ARGS[@]}" \
     "${SWEEP_VALID_ARGS[@]}" \
     --save-dir "${save_dir}"
 }

@@ -80,6 +80,7 @@ QUERY_ROW_KEYS = (
 PREDICTION_KEYS = (
     "pred_points",
     "pred_logits",
+    "pred_quality_logits",
     "pred_valid_logits",
     "pred_count_logits",
     "pred_start_logits",
@@ -578,10 +579,22 @@ class CachedQueryPrediction:
         if logits.ndim != 1 or logits.shape[0] != points.shape[0]:
             raise ValueError(f"pred_logits must have Q for {self.raw_file}, got {logits.shape} vs {points.shape}.")
 
+        quality_logits = None
+        pred_quality_logits = preds.get("pred_quality_logits")
+        if isinstance(pred_quality_logits, torch.Tensor):
+            quality_logits = pred_quality_logits.float().cpu().numpy().astype(np.float32)
+            if quality_logits.ndim == 2 and quality_logits.shape[-1] == 1:
+                quality_logits = np.squeeze(quality_logits, axis=-1)
+            if quality_logits.ndim != 1 or quality_logits.shape[0] != points.shape[0]:
+                raise ValueError(
+                    f"pred_quality_logits must have Q for {self.raw_file}, got {quality_logits.shape} vs {points.shape}."
+                )
+
         points = np.clip(points, 0.0, 1.0)
         order = np.argsort(-points[:, :, 1], axis=1, kind="stable")
         self.points = np.take_along_axis(points, order[:, :, None], axis=1).astype(np.float32)
-        self.scores = _sigmoid_np(logits)
+        self.score_source = "quality_logits" if quality_logits is not None else "pred_logits"
+        self.scores = _sigmoid_np(quality_logits if quality_logits is not None else logits)
         self.query_indices = np.arange(self.points.shape[0], dtype=np.int64)
         self.k = int(self.points.shape[1])
 

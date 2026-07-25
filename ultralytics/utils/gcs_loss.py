@@ -52,6 +52,9 @@ class GCSLoss(nn.Module):
         "query_count_ce_loss",
         "query_count_acc",
         "query_count_pred_mean",
+        "query_quality_loss",
+        "query_quality_pos_mean",
+        "query_quality_pos_count",
         "role_contain_loss",
         "role_contain_exist_loss",
         "role_contain_valid_loss",
@@ -132,6 +135,7 @@ class GCSLoss(nn.Module):
         query_count_ce: float | None = None,
         query_count_min_lanes: int | None = None,
         query_count_max_lanes: int | None = None,
+        query_quality: float | None = None,
         role_contain: float | None = None,
         role_contain_valid_weight: float | None = None,
         role_contain_matcher: bool | None = None,
@@ -205,6 +209,9 @@ class GCSLoss(nn.Module):
         )
         self.query_count_ce_gain = float(
             query_count_ce if query_count_ce is not None else self._arg(args, "gcs_query_count_ce", 0.0)
+        )
+        self.query_quality_gain = float(
+            query_quality if query_quality is not None else self._arg(args, "gcs_query_quality", 0.0)
         )
         self.query_count_min_lanes = int(
             query_count_min_lanes
@@ -519,6 +526,8 @@ class GCSLoss(nn.Module):
             raise ValueError(f"gcs_query_count_classes must be 4 for 2..5 lanes, got {self.query_count_classes}.")
         if self.query_count_ce_gain < 0.0:
             raise ValueError(f"gcs_query_count_ce must be >= 0, got {self.query_count_ce_gain}.")
+        if self.query_quality_gain < 0.0:
+            raise ValueError(f"gcs_query_quality must be >= 0, got {self.query_quality_gain}.")
         if self.count_boundary_margin34 < 0.0:
             raise ValueError(f"gcs_count_boundary_margin34 must be >= 0, got {self.count_boundary_margin34}.")
         if self.count_boundary_margin45 < 0.0:
@@ -1992,6 +2001,69 @@ class GCSLoss(nn.Module):
 
         return loss, acc, pred_count_mean
 
+    def query_quality_loss(
+        self,
+        preds: dict[str, torch.Tensor],
+        pred_points: torch.Tensor,
+        pred_valid_logits: torch.Tensor | None,
+        gt_points: list[torch.Tensor],
+        gt_valid: list[torch.Tensor],
+        indices: list[tuple[torch.Tensor, torch.Tensor]],
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Train an optional query-level quality/ranking head independently from count estimation."""
+        pred_quality_logits = preds.get("pred_quality_logits")
+        if pred_quality_logits is None:
+            if float(self.query_quality_gain) > 0.0:
+                raise ValueError(
+                    "gcs_query_quality requires preds['pred_quality_logits']; use a query_quality_head model YAML "
+                    "or set --gcs-query-quality 0.0."
+                )
+            zero = self._zero_like(pred_points)
+            return zero, zero, zero
+
+        if pred_quality_logits.ndim == 3 and pred_quality_logits.shape[-1] == 1:
+            pred_quality_logits = pred_quality_logits.squeeze(-1)
+        if pred_quality_logits.ndim != 2 or tuple(pred_quality_logits.shape) != tuple(pred_points.shape[:2]):
+            raise ValueError(
+                "pred_quality_logits must have shape B x Q matching pred_points, "
+                f"got {tuple(pred_quality_logits.shape)} vs {tuple(pred_points.shape[:2])}."
+            )
+
+        target = torch.zeros_like(pred_quality_logits)
+        device, dtype = pred_points.device, pred_points.dtype
+        scale = self._pixel_scale_for(pred_points)
+        pos_targets: list[torch.Tensor] = []
+        for b, (src_idx, tgt_idx) in enumerate(indices):
+            if src_idx.numel() == 0:
+                continue
+
+            pred = pred_points[b, src_idx].detach()
+            target_points = gt_points[b].to(device=device, dtype=dtype)[tgt_idx]
+            valid = gt_valid[b].to(device=device, dtype=dtype)[tgt_idx]
+            point_error = torch.norm((pred - target_points) * scale, dim=-1)
+            ape = (point_error * valid).sum(dim=1) / valid.sum(dim=1).clamp_min(1.0)
+            quality = self._exist_quality_from_ape(ape)
+            if pred_valid_logits is not None:
+                valid_prob = pred_valid_logits[b, src_idx].detach().sigmoid().to(dtype=dtype)
+                intersection = (valid_prob * valid).sum(dim=1)
+                union = valid_prob.sum(dim=1) + valid.sum(dim=1) - intersection
+                visible_quality = intersection / union.clamp_min(1e-6)
+                quality = quality * visible_quality.clamp(min=0.0, max=1.0)
+            quality = quality.to(dtype=target.dtype)
+            target[b, src_idx] = quality
+            pos_targets.append(quality.detach())
+
+        pos_weight = pred_quality_logits.new_tensor(self.exist_pos_weight)
+        loss = F.binary_cross_entropy_with_logits(pred_quality_logits, target, pos_weight=pos_weight, reduction="mean")
+        if pos_targets:
+            pos_cat = torch.cat([x.reshape(-1) for x in pos_targets])
+            pos_mean = pos_cat.mean().to(device=pred_points.device, dtype=pred_points.dtype)
+            pos_count = pred_points.new_tensor(float(pos_cat.numel()))
+        else:
+            pos_mean = self._zero_like(pred_points)
+            pos_count = self._zero_like(pred_points)
+        return loss, pos_mean, pos_count
+
     def count_boundary_loss(
         self, count_score: torch.Tensor, target: torch.Tensor, return_details: bool = False
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
@@ -2621,6 +2693,14 @@ class GCSLoss(nn.Module):
             gt_valid,
             target_count=gt_lanes,
         )
+        query_quality_loss, query_quality_pos_mean, query_quality_pos_count = self.query_quality_loss(
+            preds,
+            pred_points,
+            pred_valid_logits,
+            gt_points,
+            gt_valid,
+            indices,
+        )
         (
             spurious_neg_loss,
             spurious_negative_count,
@@ -2714,6 +2794,8 @@ class GCSLoss(nn.Module):
             total = total + self.boundary_pseudo_neg_gain * boundary_pseudo_neg_loss
         if self.query_count_ce_gain != 0.0:
             total = total + self.query_count_ce_gain * query_count_ce_loss
+        if self.query_quality_gain != 0.0:
+            total = total + self.query_quality_gain * query_quality_loss
         if self.spurious_neg_gain != 0.0:
             total = total + self.spurious_neg_gain * self.spurious_neg_weight * spurious_neg_loss
         if self.role_contain_gain != 0.0:
@@ -2760,6 +2842,9 @@ class GCSLoss(nn.Module):
                 query_count_ce_loss.detach(),
                 query_count_acc.detach(),
                 query_count_pred_mean.detach(),
+                query_quality_loss.detach(),
+                query_quality_pos_mean.detach(),
+                query_quality_pos_count.detach(),
                 role_contain_loss.detach(),
                 role_contain_exist_loss.detach(),
                 role_contain_valid_loss.detach(),

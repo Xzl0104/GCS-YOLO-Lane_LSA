@@ -100,6 +100,20 @@ for query models built from
 `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-count.yaml`. The default
 query YAML still emits no `pred_count_logits`.
 
+The optional Q12 dual-head probe adds:
+
+```text
+pred_count_logits: B x 4
+pred_quality_logits: B x 12
+```
+
+for query models built from
+`ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-dualhead.yaml`.
+`pred_count_logits` is for image-level 2/3/4/5 count CE and
+`pred_quality_logits` is for query-level quality/ranking decode. It is a
+default-off experiment path and must not change the default Q12 YAML or Q24
+protected-static YAML behavior.
+
 The default-off protected static Q24 YAML changes only query count:
 
 ```text

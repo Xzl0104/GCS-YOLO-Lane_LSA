@@ -80,6 +80,9 @@ class GCSLaneTrainer(BaseTrainer):
         "query_count_ce_loss",
         "query_count_acc",
         "query_count_pred_mean",
+        "query_quality_loss",
+        "query_quality_pos_mean",
+        "query_quality_pos_count",
         "role_contain_loss",
         "role_contain_exist_loss",
         "role_contain_valid_loss",
@@ -140,6 +143,9 @@ class GCSLaneTrainer(BaseTrainer):
         "qcnt_ce",
         "qcnt_acc",
         "qcnt_pred",
+        "qqual",
+        "qqual_pos",
+        "qqual_n",
         "role_loss",
         "role_ex",
         "role_val",
@@ -1108,6 +1114,11 @@ class GCSLaneTrainer(BaseTrainer):
             "gcs_official_min_points": [4, 5, 6],
             "gcs_official_valid_before_maxdet": False,
             "gcs_official_count_modes": ["score_sum"],
+            "gcs_official_count_aware_topk": False,
+            "gcs_official_count_aware_min_k": 3,
+            "gcs_official_count_aware_max_k": 5,
+            "gcs_official_count_aware_length_norm": 12.0,
+            "gcs_official_count_aware_extra_margins": [0],
         }
         if ordered_slot:
             sweep_arg_values = {}
@@ -1145,8 +1156,45 @@ class GCSLaneTrainer(BaseTrainer):
             count_modes = sorted(
                 {str(x) for x in getattr(self.args, "gcs_official_count_modes", None) or official_query_defaults["gcs_official_count_modes"]}
             )
+            count_aware_topk = bool(
+                getattr(
+                    self.args,
+                    "gcs_official_count_aware_topk",
+                    official_query_defaults["gcs_official_count_aware_topk"],
+                )
+            )
+            count_aware_min_k = int(
+                getattr(
+                    self.args,
+                    "gcs_official_count_aware_min_k",
+                    official_query_defaults["gcs_official_count_aware_min_k"],
+                )
+            )
+            count_aware_max_k = int(
+                getattr(
+                    self.args,
+                    "gcs_official_count_aware_max_k",
+                    official_query_defaults["gcs_official_count_aware_max_k"],
+                )
+            )
+            count_aware_length_norm = float(
+                getattr(
+                    self.args,
+                    "gcs_official_count_aware_length_norm",
+                    official_query_defaults["gcs_official_count_aware_length_norm"],
+                )
+            )
+            count_aware_extra_margins = self._official_int_list(
+                getattr(self.args, "gcs_official_count_aware_extra_margins", None),
+                official_query_defaults["gcs_official_count_aware_extra_margins"],
+            )
         if ordered_slot:
             count_modes = ["score_sum"]
+            count_aware_topk = False
+            count_aware_min_k = 3
+            count_aware_max_k = 5
+            count_aware_length_norm = 12.0
+            count_aware_extra_margins = [0]
         return SimpleNamespace(
             dataset="tusimple",
             archive_root=str(getattr(self.args, "gcs_official_archive_root", "archive") or "archive"),
@@ -1161,6 +1209,11 @@ class GCSLaneTrainer(BaseTrainer):
             nms_dist_pxs=nms_dist_pxs,
             max_dets=max_dets,
             min_points=min_points,
+            count_aware_topk=count_aware_topk,
+            count_aware_min_k=count_aware_min_k,
+            count_aware_max_k=count_aware_max_k,
+            count_aware_length_norm=count_aware_length_norm,
+            count_aware_extra_margins=count_aware_extra_margins,
             count_modes=count_modes,
             gcs_min_lanes=int(getattr(self.args, "gcs_min_lanes", 2)),
             gcs_max_lanes=int(getattr(self.args, "gcs_max_lanes", 5)),
