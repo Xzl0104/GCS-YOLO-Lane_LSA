@@ -68,6 +68,11 @@ class GCSLoss(nn.Module):
         "q24_event_gt5_risk_count",
         "q24_event_gt5_risk_protected_count",
         "q24_event_clean_allowed_count",
+        "q24_event_dynamic_count",
+        "q24_event_dynamic_protected_count",
+        "q24_event_score_loss",
+        "q24_event_score_pos_count",
+        "q24_event_score_prob_mean",
     )
 
     def __init__(
@@ -147,6 +152,23 @@ class GCSLoss(nn.Module):
         q24_event_gt5_risk_protect_short_visible_thr: int | None = None,
         q24_event_gt5_risk_protect_dist_px: float | None = None,
         q24_event_gt5_risk_protect_min_overlap: int | None = None,
+        q24_event_dynamic: bool | None = None,
+        q24_event_dynamic_queries=None,
+        q24_event_dynamic_valid_thr: float | None = None,
+        q24_event_dynamic_min_valid: int | None = None,
+        q24_event_dynamic_max_visible: int | None = None,
+        q24_event_dynamic_score_thr: float | None = None,
+        q24_event_dynamic_protect: bool | None = None,
+        q24_event_dynamic_protect_visible_thr: int | None = None,
+        q24_event_dynamic_protect_dist_px: float | None = None,
+        q24_event_dynamic_protect_min_overlap: int | None = None,
+        q24_event_score_calib: float | None = None,
+        q24_event_score_queries=None,
+        q24_event_score_visible_thr: int | None = None,
+        q24_event_score_valid_thr: float | None = None,
+        q24_event_score_dist_px: float | None = None,
+        q24_event_score_min_overlap: int | None = None,
+        q24_event_score_target: float | None = None,
         boundary_pseudo_gt5_safe: bool | None = None,
         boundary_pseudo_protect_short_visible_thr: int | None = None,
         boundary_pseudo_protect_dist_px: float | None = None,
@@ -389,6 +411,91 @@ class GCSLoss(nn.Module):
             if q24_event_gt5_risk_protect_min_overlap is not None
             else self._arg(args, "gcs_q24_event_gt5_risk_protect_min_overlap", 3)
         )
+        self.q24_event_dynamic = self._bool_arg(
+            q24_event_dynamic
+            if q24_event_dynamic is not None
+            else self._arg(args, "gcs_q24_event_dynamic", False)
+        )
+        self.q24_event_dynamic_queries = self._parse_query_spec(
+            q24_event_dynamic_queries
+            if q24_event_dynamic_queries is not None
+            else self._arg(args, "gcs_q24_event_dynamic_queries", "")
+        )
+        self.q24_event_dynamic_valid_thr = float(
+            q24_event_dynamic_valid_thr
+            if q24_event_dynamic_valid_thr is not None
+            else self._arg(args, "gcs_q24_event_dynamic_valid_thr", 0.5)
+        )
+        self.q24_event_dynamic_min_valid = int(
+            q24_event_dynamic_min_valid
+            if q24_event_dynamic_min_valid is not None
+            else self._arg(args, "gcs_q24_event_dynamic_min_valid", 3)
+        )
+        self.q24_event_dynamic_max_visible = int(
+            q24_event_dynamic_max_visible
+            if q24_event_dynamic_max_visible is not None
+            else self._arg(args, "gcs_q24_event_dynamic_max_visible", 20)
+        )
+        self.q24_event_dynamic_score_thr = float(
+            q24_event_dynamic_score_thr
+            if q24_event_dynamic_score_thr is not None
+            else self._arg(args, "gcs_q24_event_dynamic_score_thr", 0.0)
+        )
+        self.q24_event_dynamic_protect = self._bool_arg(
+            q24_event_dynamic_protect
+            if q24_event_dynamic_protect is not None
+            else self._arg(args, "gcs_q24_event_dynamic_protect", False)
+        )
+        self.q24_event_dynamic_protect_visible_thr = int(
+            q24_event_dynamic_protect_visible_thr
+            if q24_event_dynamic_protect_visible_thr is not None
+            else self._arg(args, "gcs_q24_event_dynamic_protect_visible_thr", 10)
+        )
+        self.q24_event_dynamic_protect_dist_px = float(
+            q24_event_dynamic_protect_dist_px
+            if q24_event_dynamic_protect_dist_px is not None
+            else self._arg(args, "gcs_q24_event_dynamic_protect_dist_px", 20.0)
+        )
+        self.q24_event_dynamic_protect_min_overlap = int(
+            q24_event_dynamic_protect_min_overlap
+            if q24_event_dynamic_protect_min_overlap is not None
+            else self._arg(args, "gcs_q24_event_dynamic_protect_min_overlap", 3)
+        )
+        self.q24_event_score_calib_gain = float(
+            q24_event_score_calib
+            if q24_event_score_calib is not None
+            else self._arg(args, "gcs_q24_event_score_calib", 0.0)
+        )
+        self.q24_event_score_queries = self._parse_query_spec(
+            q24_event_score_queries
+            if q24_event_score_queries is not None
+            else self._arg(args, "gcs_q24_event_score_queries", "")
+        )
+        self.q24_event_score_visible_thr = int(
+            q24_event_score_visible_thr
+            if q24_event_score_visible_thr is not None
+            else self._arg(args, "gcs_q24_event_score_visible_thr", 10)
+        )
+        self.q24_event_score_valid_thr = float(
+            q24_event_score_valid_thr
+            if q24_event_score_valid_thr is not None
+            else self._arg(args, "gcs_q24_event_score_valid_thr", 0.5)
+        )
+        self.q24_event_score_dist_px = float(
+            q24_event_score_dist_px
+            if q24_event_score_dist_px is not None
+            else self._arg(args, "gcs_q24_event_score_dist_px", 40.0)
+        )
+        self.q24_event_score_min_overlap = int(
+            q24_event_score_min_overlap
+            if q24_event_score_min_overlap is not None
+            else self._arg(args, "gcs_q24_event_score_min_overlap", 3)
+        )
+        self.q24_event_score_target = float(
+            q24_event_score_target
+            if q24_event_score_target is not None
+            else self._arg(args, "gcs_q24_event_score_target", 0.75)
+        )
         self.count_under5_min_lanes = int(
             count_under5_min_lanes
             if count_under5_min_lanes is not None
@@ -500,6 +607,39 @@ class GCSLoss(nn.Module):
                 "gcs_q24_event_gt5_risk_protect_min_overlap must be >= 1, "
                 f"got {self.q24_event_gt5_risk_protect_min_overlap}."
             )
+        if not (0.0 <= self.q24_event_dynamic_valid_thr <= 1.0):
+            raise ValueError("gcs_q24_event_dynamic_valid_thr must be in [0, 1].")
+        if self.q24_event_dynamic_min_valid < 0:
+            raise ValueError("gcs_q24_event_dynamic_min_valid must be >= 0.")
+        if self.q24_event_dynamic_max_visible < self.q24_event_dynamic_min_valid:
+            raise ValueError(
+                "gcs_q24_event_dynamic_max_visible must be >= gcs_q24_event_dynamic_min_valid "
+                f"({self.q24_event_dynamic_max_visible} < {self.q24_event_dynamic_min_valid})."
+            )
+        if self.q24_event_dynamic_score_thr < 0.0:
+            raise ValueError("gcs_q24_event_dynamic_score_thr must be >= 0.")
+        if self.q24_event_dynamic_protect_visible_thr < 0:
+            raise ValueError("gcs_q24_event_dynamic_protect_visible_thr must be >= 0.")
+        if self.q24_event_dynamic_protect_dist_px < 0.0:
+            raise ValueError("gcs_q24_event_dynamic_protect_dist_px must be >= 0.")
+        if self.q24_event_dynamic_protect_min_overlap < 1:
+            raise ValueError("gcs_q24_event_dynamic_protect_min_overlap must be >= 1.")
+        if self.q24_event_dynamic and not self.q24_event_dynamic_queries:
+            raise ValueError("gcs_q24_event_dynamic requires non-empty gcs_q24_event_dynamic_queries.")
+        if self.q24_event_score_calib_gain < 0.0:
+            raise ValueError("gcs_q24_event_score_calib must be >= 0.")
+        if self.q24_event_score_visible_thr < 0:
+            raise ValueError("gcs_q24_event_score_visible_thr must be >= 0.")
+        if not (0.0 <= self.q24_event_score_valid_thr <= 1.0):
+            raise ValueError("gcs_q24_event_score_valid_thr must be in [0, 1].")
+        if self.q24_event_score_dist_px < 0.0:
+            raise ValueError("gcs_q24_event_score_dist_px must be >= 0.")
+        if self.q24_event_score_min_overlap < 1:
+            raise ValueError("gcs_q24_event_score_min_overlap must be >= 1.")
+        if not (0.0 <= self.q24_event_score_target <= 1.0):
+            raise ValueError("gcs_q24_event_score_target must be in [0, 1].")
+        if self.q24_event_score_calib_gain > 0.0 and not self.q24_event_score_queries:
+            raise ValueError("gcs_q24_event_score_calib requires non-empty gcs_q24_event_score_queries.")
         event_sets = (
             ("clean_gt5", set(self.q24_event_clean_gt5_queries)),
             ("risk", set(self.q24_event_risk_queries)),
@@ -1497,7 +1637,7 @@ class GCSLoss(nn.Module):
         if short_thr <= 0:
             return False
 
-        q_visible = pred_visible_q > 0.5
+        q_visible = pred_visible_q if pred_visible_q.dtype == torch.bool else pred_visible_q > 0.5
         pred_x = pred_points_q[:, 0] * float(width)
         gt_x = gt_points_b[..., 0] * float(width)
         min_overlap = int(self.q24_event_gt5_risk_protect_min_overlap)
@@ -1515,6 +1655,108 @@ class GCSLoss(nn.Module):
                 return True
         return False
 
+    @staticmethod
+    def _q24_event_gt_close(
+        pred_points_q: torch.Tensor,
+        pred_visible_q: torch.Tensor,
+        gt_points_b: torch.Tensor,
+        gt_valid_b: torch.Tensor,
+        width: float,
+        visible_thr: int,
+        dist_px: float,
+        min_overlap: int,
+    ) -> bool:
+        """Return whether a query is close enough to a visible GT lane to protect or calibrate it."""
+        q_visible = pred_visible_q > 0.5
+        pred_x = pred_points_q[:, 0] * float(width)
+        gt_x = gt_points_b[..., 0] * float(width)
+
+        for gt_i in range(gt_points_b.shape[0]):
+            gt_visible = gt_valid_b[gt_i] > 0.5
+            if visible_thr > 0 and int(gt_visible.sum().item()) > int(visible_thr):
+                continue
+            common = q_visible & gt_visible
+            if int(common.sum().item()) < int(min_overlap):
+                continue
+            mean_dx = (pred_x[common] - gt_x[gt_i, common]).abs().mean()
+            if float(mean_dx.detach().cpu().item()) <= float(dist_px):
+                return True
+        return False
+
+    def q24_event_score_calibration_loss(
+        self,
+        pred_points: torch.Tensor,
+        pred_logits: torch.Tensor,
+        pred_valid_logits: torch.Tensor | None,
+        gt_points: list[torch.Tensor],
+        gt_valid: list[torch.Tensor],
+        gt_lanes: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Raise existence scores for clean queries that are near true GT5 short lanes."""
+        zero = self._zero_like(pred_points)
+        if float(self.q24_event_score_calib_gain) <= 0.0:
+            return zero, zero, zero
+        if pred_valid_logits is None:
+            raise ValueError("gcs_q24_event_score_calib requires pred_valid_logits.")
+
+        if pred_logits.ndim == 3 and pred_logits.shape[-1] == 1:
+            pred_logits_2d = pred_logits.squeeze(-1)
+        else:
+            pred_logits_2d = pred_logits
+        if pred_logits_2d.ndim != 2:
+            raise ValueError(f"pred_logits must be B x Q, got {tuple(pred_logits.shape)}.")
+
+        device = pred_logits_2d.device
+        dtype = pred_points.dtype
+        num_queries = int(pred_logits_2d.shape[1])
+        score_queries = torch.as_tensor(self.q24_event_score_queries, device=device, dtype=torch.long)
+        if score_queries.numel() and int(score_queries.max().item()) >= num_queries:
+            raise ValueError(
+                "Q24 event score-calibration query range exceeds model query count: "
+                f"max configured q{int(score_queries.max().item())}, model has Q={num_queries}."
+            )
+        gt_lanes = torch.as_tensor(gt_lanes, device=device, dtype=pred_logits_2d.dtype).reshape(-1)
+        if gt_lanes.numel() != pred_logits_2d.shape[0]:
+            raise ValueError(f"gt_lanes must have one value per image, got {gt_lanes.numel()} vs B={pred_logits_2d.shape[0]}.")
+
+        width = float(self._pixel_scale_for(pred_points).reshape(-1)[0].detach().cpu().item())
+        valid_prob = pred_valid_logits.detach().sigmoid()
+        points = pred_points.detach()
+        losses = []
+        prob_sum = pred_logits_2d.new_tensor(0.0)
+        pos_count = 0
+
+        for b in range(pred_logits_2d.shape[0]):
+            gt_count = int(round(float(gt_lanes[b].detach().item())))
+            if gt_count < 5:
+                continue
+            gt_points_b = gt_points[b].detach().to(device=device, dtype=dtype)
+            gt_valid_b = gt_valid[b].detach().to(device=device, dtype=dtype)
+            for q in score_queries.tolist():
+                if q < 0 or q >= num_queries:
+                    continue
+                close = self._q24_event_gt_close(
+                    points[b, q],
+                    valid_prob[b, q] > float(self.q24_event_score_valid_thr),
+                    gt_points_b,
+                    gt_valid_b,
+                    width,
+                    int(self.q24_event_score_visible_thr),
+                    float(self.q24_event_score_dist_px),
+                    int(self.q24_event_score_min_overlap),
+                )
+                if not close:
+                    continue
+                target = torch.full_like(pred_logits_2d[b, q], float(self.q24_event_score_target))
+                losses.append(F.binary_cross_entropy_with_logits(pred_logits_2d[b, q], target, reduction="mean"))
+                prob_sum = prob_sum + pred_logits_2d[b, q].detach().sigmoid()
+                pos_count += 1
+
+        score_loss = torch.stack(losses).mean() if losses else zero
+        count_tensor = pred_logits_2d.new_tensor(float(pos_count))
+        prob_mean = prob_sum / count_tensor.clamp_min(1.0)
+        return score_loss, count_tensor, prob_mean
+
     def q24_event_containment_loss(
         self,
         pred_points: torch.Tensor,
@@ -1529,11 +1771,13 @@ class GCSLoss(nn.Module):
         """Suppress event-mined Q24 high-risk queries while keeping clean GT5 carriers isolated."""
         zero = self._zero_like(pred_points)
         if float(self.q24_event_contain_gain) <= 0.0:
-            return zero, zero, zero, zero, zero, zero, zero, zero
+            return zero, zero, zero, zero, zero, zero, zero, zero, zero, zero
         if pred_valid_logits is None and float(self.q24_event_valid_weight) > 0.0:
             raise ValueError(
                 "gcs_q24_event_contain with gcs_q24_event_valid_weight > 0 requires pred_valid_logits."
             )
+        if self.q24_event_dynamic and pred_valid_logits is None:
+            raise ValueError("gcs_q24_event_dynamic requires pred_valid_logits.")
         if event_allowed_masks is None:
             raise ValueError("event_allowed_masks must be provided when gcs_q24_event_contain is enabled.")
 
@@ -1548,6 +1792,12 @@ class GCSLoss(nn.Module):
 
         num_queries = int(pred_logits_2d.shape[1])
         clean_gt5, risk, gt4_queries, all_event = self._q24_event_query_tensors(device, num_queries)
+        dynamic_queries = torch.as_tensor(self.q24_event_dynamic_queries, device=device, dtype=torch.long)
+        if dynamic_queries.numel() and int(dynamic_queries.max().item()) >= num_queries:
+            raise ValueError(
+                "Q24 event dynamic query range exceeds model query count: "
+                f"max configured q{int(dynamic_queries.max().item())}, model has Q={num_queries}."
+            )
         gt_lanes = torch.as_tensor(gt_lanes, device=device, dtype=pred_logits_2d.dtype).reshape(-1)
         if gt_lanes.numel() != pred_logits_2d.shape[0]:
             raise ValueError(f"gt_lanes must have one value per image, got {gt_lanes.numel()} vs B={pred_logits_2d.shape[0]}.")
@@ -1563,6 +1813,8 @@ class GCSLoss(nn.Module):
         gt5_risk_count = 0
         gt5_risk_protected_count = 0
         clean_allowed_count = 0
+        dynamic_count = 0
+        dynamic_protected_count = 0
 
         for b in range(pred_logits_2d.shape[0]):
             gt_count = int(round(float(gt_lanes[b].detach().item())))
@@ -1611,6 +1863,39 @@ class GCSLoss(nn.Module):
                                 gt5_risk_protected_count += 1
                     gt5_risk_count += int(selected[risk].sum().item())
 
+            if self.q24_event_dynamic and dynamic_queries.numel() and valid_prob is not None:
+                gt_points_b = gt_points[b].detach().to(device=device, dtype=dtype)
+                gt_valid_b = gt_valid[b].detach().to(device=device, dtype=dtype)
+                for q in dynamic_queries.tolist():
+                    if q < 0 or q >= num_queries or bool(allowed_positive[q]) or bool(selected[q]):
+                        continue
+                    q_valid = valid_prob[b, q] > float(self.q24_event_dynamic_valid_thr)
+                    visible_len = int(q_valid.sum().item())
+                    if visible_len < int(self.q24_event_dynamic_min_valid):
+                        continue
+                    if visible_len > int(self.q24_event_dynamic_max_visible):
+                        continue
+                    if float(self.q24_event_dynamic_score_thr) > 0.0:
+                        score = float(pred_logits_2d[b, q].detach().sigmoid().cpu().item())
+                        if score < float(self.q24_event_dynamic_score_thr):
+                            continue
+                    if self.q24_event_dynamic_protect:
+                        protected = self._q24_event_gt_close(
+                            points[b, q],
+                            q_valid,
+                            gt_points_b,
+                            gt_valid_b,
+                            width,
+                            int(self.q24_event_dynamic_protect_visible_thr),
+                            float(self.q24_event_dynamic_protect_dist_px),
+                            int(self.q24_event_dynamic_protect_min_overlap),
+                        )
+                        if protected:
+                            dynamic_protected_count += 1
+                            continue
+                    selected[q] = True
+                    dynamic_count += 1
+
             if not bool(selected.any()):
                 continue
 
@@ -1643,6 +1928,8 @@ class GCSLoss(nn.Module):
             pred_logits_2d.new_tensor(float(gt5_risk_count)),
             pred_logits_2d.new_tensor(float(gt5_risk_protected_count)),
             pred_logits_2d.new_tensor(float(clean_allowed_count)),
+            pred_logits_2d.new_tensor(float(dynamic_count)),
+            pred_logits_2d.new_tensor(float(dynamic_protected_count)),
         )
 
     def count_losses(
@@ -2375,6 +2662,8 @@ class GCSLoss(nn.Module):
             q24_event_gt5_risk_count,
             q24_event_gt5_risk_protected_count,
             q24_event_clean_allowed_count,
+            q24_event_dynamic_count,
+            q24_event_dynamic_protected_count,
         ) = self.q24_event_containment_loss(
             pred_points,
             pred_logits,
@@ -2384,6 +2673,18 @@ class GCSLoss(nn.Module):
             gt_valid,
             gt_lanes,
             event_allowed_masks,
+        )
+        (
+            q24_event_score_loss,
+            q24_event_score_pos_count,
+            q24_event_score_prob_mean,
+        ) = self.q24_event_score_calibration_loss(
+            pred_points,
+            pred_logits,
+            pred_valid_logits,
+            gt_points,
+            gt_valid,
+            gt_lanes,
         )
 
         mask_loss = self._zero_like(pred_points)
@@ -2419,6 +2720,8 @@ class GCSLoss(nn.Module):
             total = total + self.role_contain_gain * role_contain_loss
         if self.q24_event_contain_gain != 0.0:
             total = total + self.q24_event_contain_gain * q24_event_contain_loss
+        if self.q24_event_score_calib_gain != 0.0:
+            total = total + self.q24_event_score_calib_gain * q24_event_score_loss
         loss_items = torch.stack(
             (
                 exist_loss.detach(),
@@ -2473,6 +2776,11 @@ class GCSLoss(nn.Module):
                 q24_event_gt5_risk_count.detach(),
                 q24_event_gt5_risk_protected_count.detach(),
                 q24_event_clean_allowed_count.detach(),
+                q24_event_dynamic_count.detach(),
+                q24_event_dynamic_protected_count.detach(),
+                q24_event_score_loss.detach(),
+                q24_event_score_pos_count.detach(),
+                q24_event_score_prob_mean.detach(),
             )
         )
         return total, loss_items

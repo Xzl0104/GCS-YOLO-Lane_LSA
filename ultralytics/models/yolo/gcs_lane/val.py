@@ -76,6 +76,11 @@ LOSS_NAMES = (
     "q24_event_gt5_risk_count",
     "q24_event_gt5_risk_protected_count",
     "q24_event_clean_allowed_count",
+    "q24_event_dynamic_count",
+    "q24_event_dynamic_protected_count",
+    "q24_event_score_loss",
+    "q24_event_score_pos_count",
+    "q24_event_score_prob_mean",
 )
 LOSS_GAIN_ARGS = (
     "gcs_exist",
@@ -130,6 +135,11 @@ LOSS_GAIN_ARGS = (
     None,
     None,
     None,
+    None,
+    None,
+    "gcs_q24_event_score_calib",
+    None,
+    None,
 )
 DEFAULT_LOSS_GAINS = (
     2.0,
@@ -139,6 +149,11 @@ DEFAULT_LOSS_GAINS = (
     0.1,
     0.2,
     0.2,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
     0.0,
     0.0,
     0.0,

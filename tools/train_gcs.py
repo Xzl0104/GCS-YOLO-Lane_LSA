@@ -603,6 +603,104 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=3,
         help="Minimum common anchors required for optional GT5 risk-query protection.",
     )
+    parser.add_argument(
+        "--gcs-q24-event-dynamic",
+        action="store_true",
+        help="Dynamically suppress residual Q24 false-extra carrier queries with GT-close protection.",
+    )
+    parser.add_argument(
+        "--gcs-q24-event-dynamic-queries",
+        default="",
+        help="Residual false-extra carrier query ids for dynamic event containment, e.g. '0,1,11,20'.",
+    )
+    parser.add_argument(
+        "--gcs-q24-event-dynamic-valid-thr",
+        type=float,
+        default=0.5,
+        help="Point-valid probability threshold for dynamic event candidate visible length.",
+    )
+    parser.add_argument(
+        "--gcs-q24-event-dynamic-min-valid",
+        type=int,
+        default=3,
+        help="Minimum predicted-valid anchors for dynamic event containment candidates.",
+    )
+    parser.add_argument(
+        "--gcs-q24-event-dynamic-max-visible",
+        type=int,
+        default=20,
+        help="Maximum predicted-valid anchors for dynamic event containment candidates.",
+    )
+    parser.add_argument(
+        "--gcs-q24-event-dynamic-score-thr",
+        type=float,
+        default=0.0,
+        help="Optional minimum exist probability for dynamic event containment candidates.",
+    )
+    parser.add_argument(
+        "--gcs-q24-event-dynamic-protect",
+        action="store_true",
+        help="Skip dynamic event negatives that are close to a visible GT lane.",
+    )
+    parser.add_argument(
+        "--gcs-q24-event-dynamic-protect-visible-thr",
+        type=int,
+        default=10,
+        help="GT visible-anchor threshold for dynamic GT-close protection; 0 protects all GT lanes.",
+    )
+    parser.add_argument(
+        "--gcs-q24-event-dynamic-protect-dist-px",
+        type=float,
+        default=20.0,
+        help="Maximum mean x distance in pixels for dynamic GT-close protection.",
+    )
+    parser.add_argument(
+        "--gcs-q24-event-dynamic-protect-min-overlap",
+        type=int,
+        default=3,
+        help="Minimum common anchors for dynamic GT-close protection.",
+    )
+    parser.add_argument(
+        "--gcs-q24-event-score-calib",
+        type=float,
+        default=0.0,
+        help="Exist-score calibration loss gain for clean true GT5 short carriers.",
+    )
+    parser.add_argument(
+        "--gcs-q24-event-score-queries",
+        default="",
+        help="Query ids to score-calibrate when near true GT5 short lanes, e.g. '13,15'.",
+    )
+    parser.add_argument(
+        "--gcs-q24-event-score-visible-thr",
+        type=int,
+        default=10,
+        help="GT5 short-lane visible-anchor threshold for score calibration.",
+    )
+    parser.add_argument(
+        "--gcs-q24-event-score-valid-thr",
+        type=float,
+        default=0.5,
+        help="Point-valid probability threshold used for score-calibration GT overlap.",
+    )
+    parser.add_argument(
+        "--gcs-q24-event-score-dist-px",
+        type=float,
+        default=40.0,
+        help="Maximum mean x distance to true GT5 short lane for score calibration.",
+    )
+    parser.add_argument(
+        "--gcs-q24-event-score-min-overlap",
+        type=int,
+        default=3,
+        help="Minimum common anchors for true GT5 short score calibration.",
+    )
+    parser.add_argument(
+        "--gcs-q24-event-score-target",
+        type=float,
+        default=0.75,
+        help="Soft BCE target for true GT5 short score calibration.",
+    )
     parser.add_argument("--gcs-exist-pos-weight", type=float, default=1.0)
     parser.add_argument("--gcs-exist-focal-gamma", type=float, default=0.0, help="Optional focal gamma for existence BCE. 0 disables focal weighting.")
     parser.add_argument(
@@ -974,6 +1072,23 @@ def main() -> None:
         "gcs_q24_event_gt5_risk_protect_short_visible_thr": args.gcs_q24_event_gt5_risk_protect_short_visible_thr,
         "gcs_q24_event_gt5_risk_protect_dist_px": args.gcs_q24_event_gt5_risk_protect_dist_px,
         "gcs_q24_event_gt5_risk_protect_min_overlap": args.gcs_q24_event_gt5_risk_protect_min_overlap,
+        "gcs_q24_event_dynamic": args.gcs_q24_event_dynamic,
+        "gcs_q24_event_dynamic_queries": args.gcs_q24_event_dynamic_queries,
+        "gcs_q24_event_dynamic_valid_thr": args.gcs_q24_event_dynamic_valid_thr,
+        "gcs_q24_event_dynamic_min_valid": args.gcs_q24_event_dynamic_min_valid,
+        "gcs_q24_event_dynamic_max_visible": args.gcs_q24_event_dynamic_max_visible,
+        "gcs_q24_event_dynamic_score_thr": args.gcs_q24_event_dynamic_score_thr,
+        "gcs_q24_event_dynamic_protect": args.gcs_q24_event_dynamic_protect,
+        "gcs_q24_event_dynamic_protect_visible_thr": args.gcs_q24_event_dynamic_protect_visible_thr,
+        "gcs_q24_event_dynamic_protect_dist_px": args.gcs_q24_event_dynamic_protect_dist_px,
+        "gcs_q24_event_dynamic_protect_min_overlap": args.gcs_q24_event_dynamic_protect_min_overlap,
+        "gcs_q24_event_score_calib": args.gcs_q24_event_score_calib,
+        "gcs_q24_event_score_queries": args.gcs_q24_event_score_queries,
+        "gcs_q24_event_score_visible_thr": args.gcs_q24_event_score_visible_thr,
+        "gcs_q24_event_score_valid_thr": args.gcs_q24_event_score_valid_thr,
+        "gcs_q24_event_score_dist_px": args.gcs_q24_event_score_dist_px,
+        "gcs_q24_event_score_min_overlap": args.gcs_q24_event_score_min_overlap,
+        "gcs_q24_event_score_target": args.gcs_q24_event_score_target,
         "gcs_exist_pos_weight": args.gcs_exist_pos_weight,
         "gcs_exist_focal_gamma": args.gcs_exist_focal_gamma,
         "gcs_exist_focal_alpha": args.gcs_exist_focal_alpha,

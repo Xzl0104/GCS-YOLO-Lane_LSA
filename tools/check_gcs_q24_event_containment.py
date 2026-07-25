@@ -69,7 +69,8 @@ def test_gt3_event_queries_are_suppressed() -> None:
         gt_lanes,
         masks,
     )
-    event_loss, _exist, _valid, gt3_count, _gt4_count, _gt5_risk, _protected, _clean = outputs
+    event_loss = outputs[0]
+    gt3_count = outputs[3]
     if int(gt3_count.item()) != 11:
         raise AssertionError(f"GT3 should suppress 11 event queries, got {gt3_count}.")
     if not float(event_loss.item()) > 0.0:
@@ -107,7 +108,9 @@ def test_gt5_risk_queries_are_counted() -> None:
         gt_lanes,
         masks,
     )
-    _event_loss, _exist, _valid, _gt3, _gt4, gt5_risk, protected, clean = outputs
+    gt5_risk = outputs[5]
+    protected = outputs[6]
+    clean = outputs[7]
     if int(gt5_risk.item()) != 4:
         raise AssertionError(f"GT5 should suppress 4 high-risk queries, got {gt5_risk}.")
     if int(protected.item()) != 0:
@@ -138,12 +141,115 @@ def test_forward_loss_items_length_stable() -> None:
         raise AssertionError("Q24 event containment forward produced non-finite values.")
 
 
+def test_dynamic_query_is_suppressed_when_not_gt_close() -> None:
+    loss = _criterion(
+        gcs_q24_event_clean_gt5_queries="13,15",
+        gcs_q24_event_risk_queries="16,21,22,23",
+        gcs_q24_event_dynamic=True,
+        gcs_q24_event_dynamic_queries="0,1,11,20",
+        gcs_q24_event_dynamic_min_valid=3,
+        gcs_q24_event_dynamic_max_visible=20,
+        gcs_q24_event_dynamic_protect=True,
+        gcs_q24_event_dynamic_protect_visible_thr=10,
+        gcs_q24_event_dynamic_protect_dist_px=20.0,
+        gcs_q24_event_dynamic_protect_min_overlap=3,
+    )
+    pred_points, pred_logits, pred_valid_logits = _preds()
+    gt_points, gt_valid = _lane_batch(3)
+    gt_lanes = torch.tensor([3])
+    masks = loss._q24_event_allowed_masks(pred_points, [gt_valid], gt_lanes)
+    outputs = loss.q24_event_containment_loss(
+        pred_points,
+        pred_logits,
+        pred_valid_logits,
+        [(torch.empty(0, dtype=torch.long), torch.empty(0, dtype=torch.long))],
+        [gt_points],
+        [gt_valid],
+        gt_lanes,
+        masks,
+    )
+    dynamic_count = outputs[8]
+    if int(dynamic_count.item()) != 4:
+        raise AssertionError(f"Four residual dynamic queries should be suppressed, got {dynamic_count}.")
+
+
+def test_dynamic_query_is_protected_when_gt_close() -> None:
+    loss = _criterion(
+        gcs_q24_event_clean_gt5_queries="13,15",
+        gcs_q24_event_risk_queries="16,21,22,23",
+        gcs_q24_event_dynamic=True,
+        gcs_q24_event_dynamic_queries="20",
+        gcs_q24_event_dynamic_min_valid=3,
+        gcs_q24_event_dynamic_max_visible=20,
+        gcs_q24_event_dynamic_protect=True,
+        gcs_q24_event_dynamic_protect_visible_thr=10,
+        gcs_q24_event_dynamic_protect_dist_px=25.0,
+        gcs_q24_event_dynamic_protect_min_overlap=3,
+    )
+    pred_points, pred_logits, pred_valid_logits = _preds()
+    gt_points, gt_valid = _lane_batch(5, short_last=True)
+    pred_points[0, 20, :, 0] = gt_points[-1, :, 0]
+    gt_lanes = torch.tensor([5])
+    masks = loss._q24_event_allowed_masks(pred_points, [gt_valid], gt_lanes)
+    outputs = loss.q24_event_containment_loss(
+        pred_points,
+        pred_logits,
+        pred_valid_logits,
+        [(torch.tensor([13]), torch.tensor([4]))],
+        [gt_points],
+        [gt_valid],
+        gt_lanes,
+        masks,
+    )
+    dynamic_count = outputs[8]
+    dynamic_protected = outputs[9]
+    if int(dynamic_count.item()) != 0 or int(dynamic_protected.item()) != 1:
+        raise AssertionError(
+            "GT-close dynamic query should be protected, "
+            f"got dynamic_count={dynamic_count}, protected={dynamic_protected}."
+        )
+
+
+def test_score_calibration_marks_clean_gt5_short_carrier() -> None:
+    loss = _criterion(
+        gcs_q24_event_clean_gt5_queries="13,15",
+        gcs_q24_event_risk_queries="16,21,22,23",
+        gcs_q24_event_score_calib=0.2,
+        gcs_q24_event_score_queries="13,15",
+        gcs_q24_event_score_visible_thr=10,
+        gcs_q24_event_score_valid_thr=0.5,
+        gcs_q24_event_score_dist_px=30.0,
+        gcs_q24_event_score_min_overlap=3,
+        gcs_q24_event_score_target=0.75,
+    )
+    pred_points, pred_logits, pred_valid_logits = _preds()
+    gt_points, gt_valid = _lane_batch(5, short_last=True)
+    pred_points[0, 13, :, 0] = gt_points[-1, :, 0]
+    pred_points[0, 15, :, 0] = gt_points[-1, :, 0] + 0.01
+    gt_lanes = torch.tensor([5])
+    score_loss, score_count, score_prob = loss.q24_event_score_calibration_loss(
+        pred_points,
+        pred_logits,
+        pred_valid_logits,
+        [gt_points],
+        [gt_valid],
+        gt_lanes,
+    )
+    if int(score_count.item()) != 2:
+        raise AssertionError(f"Two clean GT5 score carriers should be calibrated, got {score_count}.")
+    if not float(score_loss.item()) > 0.0 or not torch.isfinite(score_prob):
+        raise AssertionError("Score calibration should produce finite positive diagnostics.")
+
+
 def main() -> None:
     test_gt3_event_queries_are_suppressed()
     test_gt5_mask_isolates_clean_short_carriers()
     test_gt5_risk_queries_are_counted()
     test_forward_loss_items_length_stable()
-    print(json.dumps({"status": "ok", "tests": 4}, indent=2))
+    test_dynamic_query_is_suppressed_when_not_gt_close()
+    test_dynamic_query_is_protected_when_gt_close()
+    test_score_calibration_marks_clean_gt5_short_carrier()
+    print(json.dumps({"status": "ok", "tests": 7}, indent=2))
 
 
 if __name__ == "__main__":

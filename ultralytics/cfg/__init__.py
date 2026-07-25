@@ -242,6 +242,10 @@ CFG_FLOAT_KEYS = frozenset(
         "gcs_q24_event_contain",
         "gcs_q24_event_valid_weight",
         "gcs_q24_event_gt5_risk_protect_dist_px",
+        "gcs_q24_event_dynamic_score_thr",
+        "gcs_q24_event_dynamic_protect_dist_px",
+        "gcs_q24_event_score_calib",
+        "gcs_q24_event_score_dist_px",
         "gcs_exist_pos_weight",
         "gcs_exist_focal_gamma",
         "gcs_exist_focal_alpha",
@@ -304,6 +308,9 @@ CFG_FRACTION_KEYS = frozenset(
         "gcs_exist_quality_alpha",
         "gcs_exist_quality_floor",
         "gcs_eval_point_valid_thr",
+        "gcs_q24_event_dynamic_valid_thr",
+        "gcs_q24_event_score_valid_thr",
+        "gcs_q24_event_score_target",
     }
 )
 CFG_INT_KEYS = frozenset(
@@ -349,6 +356,12 @@ CFG_INT_KEYS = frozenset(
         "gcs_q24_event_gt5_visible_thr",
         "gcs_q24_event_gt5_risk_protect_short_visible_thr",
         "gcs_q24_event_gt5_risk_protect_min_overlap",
+        "gcs_q24_event_dynamic_min_valid",
+        "gcs_q24_event_dynamic_max_visible",
+        "gcs_q24_event_dynamic_protect_visible_thr",
+        "gcs_q24_event_dynamic_protect_min_overlap",
+        "gcs_q24_event_score_visible_thr",
+        "gcs_q24_event_score_min_overlap",
         "gcs_hard_visible_thr",
         "gcs_hard_gt3_visible_thr",
     }
@@ -403,6 +416,8 @@ CFG_BOOL_KEYS = frozenset(
         "gcs_q24_event_matcher",
         "gcs_q24_event_suppress_gt5_risk",
         "gcs_q24_event_gt5_risk_protect",
+        "gcs_q24_event_dynamic",
+        "gcs_q24_event_dynamic_protect",
     }
 )
 

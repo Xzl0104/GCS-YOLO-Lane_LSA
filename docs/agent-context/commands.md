@@ -454,6 +454,82 @@ GT5->6 and GT3/GT4 false-extra must drop materially
 q24_event_* logs must show the event-containment path is active
 ```
 
+Completed result:
+
+```text
+run = query_alpha05_env30_q24_event_containment_probe40_v1
+status = rejected for longer/full training
+training rows = 40
+official_best source_epoch = 40
+TEST used = false
+
+official-val ACC/FP/FN =
+  0.961976 / 0.076860 / 0.025253
+count_acc_3/4/5 =
+  0.834081 / 0.772727 / 0.527027
+count_confusion includes:
+  3->4=33, 3->5=4, 4->5=11, 4->6=3, 5->6=35
+```
+
+The external official-val sweep has no rescue row:
+
+```text
+rows = 864
+rows with ACC >= env30 = 0
+rows with FP/FN both <= env30 = 0
+rows with count_acc_4 >= 0.90 = 0
+max ACC = 0.961976
+min FP = 0.058586
+min FN = 0.025253
+max count_acc_4 = 0.787879
+```
+
+Do not continue this run to 80/100 epochs, do not full-train it, and do not run
+TEST. The next Q24 command must first change the mechanism: include uncovered
+or protected residual carriers (`q16`, `q11`, `q0`, `q1`, and `q20`) in
+event-aware diagnostics/containment without blanket-suppressing true GT5
+short positives, and add positive score calibration for clean true-GT5 short
+carriers such as `q13/q15`.
+
+## Q24 Event-v2 Dynamic Score Probe
+
+The default-off Q24 event-v2 probe is the next action after rejecting
+`query_alpha05_env30_q24_event_containment_probe40_v1`. It keeps TEST closed,
+uses dynamic residual-carrier containment for `q0/q1/q11/q20`, moves `q16` into
+the high-risk event set, removes `q20` from the clean GT5 set, and adds
+true-short score calibration for `q13/q15`.
+
+Launch only a 20-40 epoch probe:
+
+```bash
+RUN_NAME=query_alpha05_env30_q24_event_v2_dynamic_score_probe40_v1 \
+MODEL=ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q24-k56-protected-static.yaml \
+EPOCHS=40 \
+RUN_TESTS=0 \
+OVERWRITE_SWEEPS=0 \
+bash scripts/run_q24_event_v2_dynamic_score_probe_v1.sh
+```
+
+After training and official-val sweeps, run the event-mined diagnostic gate:
+
+```bash
+RUN_NAME=query_alpha05_env30_q24_event_v2_dynamic_score_probe40_v1 \
+OVERWRITE_DIAGS=0 \
+bash scripts/run_q24_event_v2_mined_gate_v1.sh
+```
+
+Promotion gate before any longer run:
+
+```text
+TEST used = false
+official-val ACC/FP/FN must improve over event-containment v1
+count_acc_4 >= 0.90
+count_acc_5 >= 0.972973
+GT3/GT4 false-extra and GT5->6 must drop materially
+GT5 visible<=10 raw match20 must not regress from event-containment v1
+q24_event_dynamic_count and q24_event_score_pos_count must be nonzero
+```
+
 ## Query Count Head CE0.5 Run
 
 The default-off query Count Head ablation is launched through:

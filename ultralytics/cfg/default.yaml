@@ -216,6 +216,23 @@ gcs_q24_event_gt5_risk_protect: False # (bool) optionally protect high-risk GT5 
 gcs_q24_event_gt5_risk_protect_short_visible_thr: 10 # (int) GT5 short-lane threshold for optional risk protection
 gcs_q24_event_gt5_risk_protect_dist_px: 30.0 # (float) max mean x distance for optional risk protection
 gcs_q24_event_gt5_risk_protect_min_overlap: 3 # (int) min common anchors for optional risk protection
+gcs_q24_event_dynamic: False # (bool) dynamically suppress residual false-extra carriers with GT-close protection
+gcs_q24_event_dynamic_queries: "" # (str) residual false-extra carrier query ids
+gcs_q24_event_dynamic_valid_thr: 0.5 # (float) point-valid threshold for dynamic event candidate length
+gcs_q24_event_dynamic_min_valid: 3 # (int) minimum predicted-valid anchors for dynamic event candidates
+gcs_q24_event_dynamic_max_visible: 20 # (int) maximum predicted-valid anchors for dynamic event candidates
+gcs_q24_event_dynamic_score_thr: 0.0 # (float) optional minimum exist probability for dynamic event candidates
+gcs_q24_event_dynamic_protect: False # (bool) skip dynamic negatives that are close to visible GT lanes
+gcs_q24_event_dynamic_protect_visible_thr: 10 # (int) GT visible threshold for dynamic protection; 0 protects all
+gcs_q24_event_dynamic_protect_dist_px: 20.0 # (float) max mean x distance for dynamic protection
+gcs_q24_event_dynamic_protect_min_overlap: 3 # (int) min common anchors for dynamic protection
+gcs_q24_event_score_calib: 0.0 # (float) true-GT5-short clean-carrier exist-score calibration gain
+gcs_q24_event_score_queries: "" # (str) query ids to score-calibrate near true GT5 short lanes
+gcs_q24_event_score_visible_thr: 10 # (int) GT5 short-lane threshold for score calibration
+gcs_q24_event_score_valid_thr: 0.5 # (float) point-valid threshold for score-calibration overlap
+gcs_q24_event_score_dist_px: 40.0 # (float) max mean x distance for true GT5 short score calibration
+gcs_q24_event_score_min_overlap: 3 # (int) min common anchors for score calibration
+gcs_q24_event_score_target: 0.75 # (float) soft BCE target for true GT5 short score calibration
 gcs_exist_pos_weight: 1.0 # (float) positive query weight for GCS lane existence BCE
 gcs_exist_focal_gamma: 0.0 # (float) optional focal gamma for GCS existence BCE; 0 disables focal weighting
 gcs_exist_focal_alpha: -1.0 # (float) optional focal alpha for GCS existence BCE; set 0..1 to enable alpha weighting

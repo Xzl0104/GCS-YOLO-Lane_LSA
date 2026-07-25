@@ -96,6 +96,11 @@ class GCSLaneTrainer(BaseTrainer):
         "q24_event_gt5_risk_count",
         "q24_event_gt5_risk_protected_count",
         "q24_event_clean_allowed_count",
+        "q24_event_dynamic_count",
+        "q24_event_dynamic_protected_count",
+        "q24_event_score_loss",
+        "q24_event_score_pos_count",
+        "q24_event_score_prob_mean",
     )
     # Keep tqdm headers within BaseTrainer's 11-character progress columns.
     progress_loss_names = (
@@ -151,6 +156,11 @@ class GCSLaneTrainer(BaseTrainer):
         "ev_g5",
         "ev_prot",
         "ev_clean",
+        "ev_dyn",
+        "ev_dynpro",
+        "ev_score",
+        "ev_spos",
+        "ev_sprob",
     )
     # YOLO11 backbone -> GCS-YOLO-Lane backbone. LSEM is inserted after old
     # layers 4 and 6, so all later backbone layers must be shifted explicitly.

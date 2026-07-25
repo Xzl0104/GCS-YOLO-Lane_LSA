@@ -848,16 +848,108 @@ the mechanism toward clean-carrier isolation plus event-aware containment for
 `q13/q21/q23/q22`, and must pass another 20-40 epoch official-val/train-side
 gate before any longer run.
 
+### Q24 Event-Containment Probe40 v1 Rejection
+
+The event-containment probe
+`query_alpha05_env30_q24_event_containment_probe40_v1` is complete and
+rejected for longer/full training. TEST was not used.
+
+Primary official-val evidence:
+
+```text
+official_best source_epoch = 40
+official-val ACC/FP/FN = 0.961976 / 0.076860 / 0.025253
+count_acc_3/4/5 = 0.834081 / 0.772727 / 0.527027
+
+env30 official-val ACC/FP/FN = 0.973330 / 0.015748 / 0.009642
+env30 count_acc_3/4/5 = 0.968610 / 0.969697 / 0.986486
+```
+
+The official-val count confusion remains unsafe:
+
+```text
+3->4=33, 3->5=4
+4->3=1, 4->5=11, 4->6=3
+5->5=39, 5->6=35
+```
+
+The 864-row official-val sweep cannot rescue the checkpoint:
+
+```text
+rows with ACC >= env30 = 0
+rows with FP/FN both <= env30 = 0
+rows with count_acc_4 >= 0.90 = 0
+max ACC = 0.961976
+min FP = 0.058586
+min FN = 0.025253
+max count_acc_4 = 0.787879
+```
+
+The event path was active, so this is not an implementation no-op:
+
+```text
+epoch040 train q24_event_contain_loss = 0.00029
+epoch040 val q24_event_contain_loss = 0.00050
+epoch040 train q24_event_gt3_count = 90.1569
+epoch040 train q24_event_gt4_count = 237.912
+epoch040 train q24_event_gt5_risk_count = 8.62745
+```
+
+Raw/event diagnostics show why the result is still bad:
+
+```text
+val/train0601 GT5 visible<=10 raw match20 = 0.509434 / 0.486339
+env30 val/train0601 GT5 visible<=10 raw match20 = 0.754717 / 0.775956
+
+val/train0601/train0531 GT3GT4 visible<=20 q12..q23 raw-best rate =
+  0.578778 / 0.634703 / 0.646018
+
+event gate high-risk queries:
+  q11 risk=26, q16 risk=17, q0 risk=12, q20 risk=12, q1 risk=11
+```
+
+The previous event query assignment was partly wrong. It successfully crushed
+some earlier high-risk carriers (`q21/q22/q23`), but risk migrated to
+uncovered `q16`, protected original queries `q0/q1/q11`, and the supposedly
+clean `q20`. At the same time, clean true-GT5 short raw carriers such as
+`q13/q15` had very low exist scores and therefore did not reliably survive
+decode.
+
+Decision:
+
+Do not continue this artifact, do not full-train it, and do not run TEST. The
+undertraining hypothesis is not enough to explain this failure: the 40-epoch
+trend improves ACC/FN slowly, but `count_acc_4` never approaches the gate,
+`count_acc_5` oscillates, no sweep row reaches an FP/FN-safe region, and the
+prior 100-epoch Q24 continuation already showed the same extra-query carrier
+drift does not naturally disappear.
+
+Smallest safe next action:
+
+Stop fixed query-ID hard partitioning as the main mechanism. The next Q24
+probe, if continued, should be a new 20-40 epoch official-val/train-side
+diagnostic with dynamic event-aware containment and score calibration:
+
+```text
+- suppress false-extra event candidates across all queries, including
+  q0/q1/q11/q16/q20, only when they are not GT-close true positives
+- boost/calibrate true GT5 short clean carriers such as q13/q15 when matched
+  to real GT5 short lanes
+- keep TEST closed
+- require count_acc_4 >= 0.90, count_acc_5 >= 0.972973, FP/FN improvement,
+  lower GT3/GT4 false-extra, lower GT5->6, and no GT5 short raw regression
+```
+
 Implementation status:
 
-The default-off Q24 event-containment probe is implemented through
-`--gcs-q24-event-*` flags and
-`scripts/run_q24_event_containment_probe_v1.sh`. The first probe should keep
-clean GT5 protection on `q12/q15/q20`, stop protecting high-risk
-`q13/q21/q22/q23` in the boundary-pseudo loss, enable event-aware Hungarian
-matching, and suppress high-risk event queries on GT3/GT4/GT5 with low gain.
-This is not a full-training or TEST candidate until the new official-val and
-event-mined gates pass.
+The default-off Q24 event-v2 probe is implemented through the new dynamic and
+score-calibration flags plus `scripts/run_q24_event_v2_dynamic_score_probe_v1.sh`.
+It keeps `q13/q15` as clean score-calibrated true-GT5-short carriers, moves
+`q16` into the high-risk event set, removes `q20` from clean GT5, and watches
+`q0/q1/q11/q20` through dynamic GT-close-protected containment. This is not a
+longer/full-training candidate until the new 20-40 epoch official-val and
+event-mined gates pass. Use `scripts/run_q24_event_v2_mined_gate_v1.sh` after
+training so the diagnostic role labels match the v2 query assignment.
 
 ## 2026-07-23 Env30 GT4 Near-20px Geometry Refine v1 Rejection
 

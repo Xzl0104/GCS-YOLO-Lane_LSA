@@ -263,6 +263,57 @@ does not change labels, decode, NMS, official metrics, model outputs, or the
 default Q12/Q24 behavior. It is a 20-40 epoch probe mechanism only until
 official-val/train-side gates pass.
 
+The completed event-containment probe
+`query_alpha05_env30_q24_event_containment_probe40_v1` is rejected for longer
+or full training. TEST was not used. The mechanism was active, but the
+official-val and event-mined gates failed:
+
+```text
+official-val ACC/FP/FN = 0.961976 / 0.076860 / 0.025253
+count_acc_3/4/5 = 0.834081 / 0.772727 / 0.527027
+count_confusion includes 3->4=33, 3->5=4, 4->5=11, 4->6=3, 5->6=35
+external sweep rows with ACC>=env30 = 0
+external sweep rows with FP/FN both <= env30 = 0
+external sweep rows with count_acc_4>=0.90 = 0
+```
+
+The probe recovered some GT5 short raw geometry versus the previous GT5-safe
+and role-containment probes, but it did not solve the Q24 bottleneck:
+
+```text
+val/train0601 GT5 visible<=10 raw match20 = 0.509434 / 0.486339
+env30 val/train0601 GT5 visible<=10 raw match20 = 0.754717 / 0.775956
+val/train0601/train0531 GT3GT4 visible<=20 q12..q23 raw-best rate =
+  0.578778 / 0.634703 / 0.646018
+```
+
+The failure is event-role coverage and existence/valid calibration, not only
+short training. Previously high-risk queries were suppressed, but risk migrated
+to uncovered or protected carriers (`q11`, `q16`, `q20`, `q0`, `q1`), while
+clean true-GT5 short carriers such as `q13` and `q15` kept too-low exist
+scores. Do not continue this artifact or run TEST. Any next Q24 probe must use
+dynamic event-aware containment and positive score calibration instead of a
+fixed query-ID partition copied from the previous probe.
+
+The branch now includes that default-off Q24 event-v2 probe mechanism. It is
+enabled only by explicit args:
+
+```text
+--gcs-q24-event-dynamic
+--gcs-q24-event-dynamic-queries <ids>
+--gcs-q24-event-dynamic-protect
+--gcs-q24-event-score-calib > 0
+--gcs-q24-event-score-queries <ids>
+```
+
+Dynamic containment adds extra target-zero exist/valid pressure to residual
+false-extra carrier queries only when they are unmatched, short-visible by
+predicted-valid length, and not protected by GT-close overlap. Score
+calibration adds a soft positive existence BCE only for configured clean
+queries that are close to true short GT5 lanes. It does not change labels,
+decode, NMS, official metrics, model outputs, or default Q12/Q24 behavior.
+It is a 20-40 epoch official-val/train-side probe only until its gate passes.
+
 Training-time `official_best` checkpoint preservation is active as an explicit 2026-06-27 selection-protocol change. It preserves the 5-25-3 algorithm body and only changes how formal TuSimple checkpoints are selected.
 
 The 2026-06-29 `ordered_slot_training_protocol_fix_v1` change is a protocol

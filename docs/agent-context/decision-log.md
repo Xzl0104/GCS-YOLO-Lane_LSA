@@ -2,6 +2,137 @@
 
 This file records decisions for branch `codex/5-25-3-k56`.
 
+## 2026-07-25: Add Q24 event-v2 dynamic score probe
+
+Decision:
+
+Implement a default-off Q24 event-v2 probe after rejecting
+`query_alpha05_env30_q24_event_containment_probe40_v1`. This is a new
+20-40 epoch official-val/train-side diagnostic only. It does not promote Q24
+to longer/full training and does not justify TEST.
+
+Implementation:
+
+```text
+new flags:
+  --gcs-q24-event-dynamic
+  --gcs-q24-event-dynamic-queries
+  --gcs-q24-event-dynamic-valid-thr
+  --gcs-q24-event-dynamic-min-valid
+  --gcs-q24-event-dynamic-max-visible
+  --gcs-q24-event-dynamic-score-thr
+  --gcs-q24-event-dynamic-protect
+  --gcs-q24-event-dynamic-protect-visible-thr
+  --gcs-q24-event-dynamic-protect-dist-px
+  --gcs-q24-event-dynamic-protect-min-overlap
+  --gcs-q24-event-score-calib
+  --gcs-q24-event-score-queries
+  --gcs-q24-event-score-visible-thr
+  --gcs-q24-event-score-valid-thr
+  --gcs-q24-event-score-dist-px
+  --gcs-q24-event-score-min-overlap
+  --gcs-q24-event-score-target
+new logs:
+  q24_event_dynamic_count
+  q24_event_dynamic_protected_count
+  q24_event_score_loss
+  q24_event_score_pos_count
+  q24_event_score_prob_mean
+new script:
+  scripts/run_q24_event_v2_dynamic_score_probe_v1.sh
+  scripts/run_q24_event_v2_mined_gate_v1.sh
+```
+
+Behavior:
+
+Dynamic containment adds target-zero exist/valid pressure only to configured
+residual carriers when they are unmatched, short-visible by predicted-valid
+length, and not close enough to visible GT lanes for protection. Score
+calibration applies a soft positive existence target only when configured clean
+queries are close to true short GT5 lanes. The probe script uses clean
+`q13/q15`, high-risk `q16/q21/q22/q23`, dynamic watch `q0/q1/q11/q20`, and no
+TEST.
+
+Validation:
+
+Run local Python compile, `tools/check_gcs_q24_event_containment.py`, Q24 CPU
+model shape check, and bash syntax check before launching the remote probe.
+
+## 2026-07-25: Reject Q24 event-containment probe40 v1
+
+Decision:
+
+Do not continue, full-train, or TEST
+`query_alpha05_env30_q24_event_containment_probe40_v1`. The Q24
+event-containment mechanism executed, but it failed the official-val and
+train-side event gates. It is not a promotable candidate.
+
+Protocol:
+
+```text
+run = runs/gcs_lane/query_alpha05_env30_q24_event_containment_probe40_v1
+model = ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q24-k56-protected-static.yaml
+training rows = 40
+official_best source_epoch = 40
+TEST used = false
+active flags include:
+  gcs_boundary_pseudo_gt5_safe=true
+  gcs_boundary_pseudo_protect_queries=12,15,20
+  gcs_q24_event_contain=0.35
+  gcs_q24_event_valid_weight=0.2
+  gcs_q24_event_matcher=true
+  gcs_q24_event_clean_gt5_queries=12,15,20
+  gcs_q24_event_risk_queries=13,21,22,23
+  gcs_q24_event_gt4_queries=14,17,18,19
+  gcs_q24_event_suppress_gt5_risk=true
+```
+
+Primary official-val evidence:
+
+```text
+event-containment official-val ACC/FP/FN =
+  0.961976 / 0.076860 / 0.025253
+event-containment count_acc_3/4/5 =
+  0.834081 / 0.772727 / 0.527027
+
+env30 official-val ACC/FP/FN =
+  0.973330 / 0.015748 / 0.009642
+env30 count_acc_3/4/5 =
+  0.968610 / 0.969697 / 0.986486
+```
+
+The external official-val sweep cannot rescue the checkpoint:
+
+```text
+rows = 864
+rows with ACC >= env30 = 0
+rows with FP/FN both <= env30 = 0
+rows with count_acc_4 >= 0.90 = 0
+max ACC = 0.961976
+min FP = 0.058586
+min FN = 0.025253
+max count_acc_4 = 0.787879
+```
+
+Why:
+
+The event-containment path was active but targeted the wrong stable set. It
+reduced some previous high-risk carriers, but post-training risk migrated to
+`q11`, `q16`, `q0`, `q20`, and `q1`. `q16` was not covered by the training
+event sets, `q0/q1/q11` were protected original queries, and `q20` was treated
+as clean despite becoming a GT5->6 carrier. Clean true-GT5 short carriers
+`q13/q15` had low exist scores, so raw geometry and final decode survival were
+decoupled.
+
+Integrated conclusion:
+
+Reject this artifact. The result is not just undertraining and not a no-op
+implementation. The bottleneck is event-role coverage plus existence/valid
+calibration for Q24 extra and protected queries. The next Q24 attempt must
+replace fixed query-ID partitioning with dynamic event-aware false-extra
+suppression plus true GT5 short positive score calibration, then pass a new
+20-40 epoch official-val/train-side gate before any longer run.
+
 ## 2026-07-25: Reject Q24 GT5-safe boundary-pseudo probe40 v1
 
 Decision:
