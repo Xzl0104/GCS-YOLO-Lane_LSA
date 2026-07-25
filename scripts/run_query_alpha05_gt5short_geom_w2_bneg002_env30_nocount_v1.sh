@@ -42,6 +42,7 @@ COUNT_AWARE_MAX_K="${COUNT_AWARE_MAX_K:-5}"
 COUNT_AWARE_LENGTH_NORM="${COUNT_AWARE_LENGTH_NORM:-12.0}"
 COUNT_AWARE_EXTRA_MARGINS="${COUNT_AWARE_EXTRA_MARGINS:-0}"
 EXTRA_TRAIN_ARGS="${EXTRA_TRAIN_ARGS:-}"
+export GCS_BOUNDARY_PSEUDO_NEG="${GCS_BOUNDARY_PSEUDO_NEG:-0.02}"
 
 SWEEP_CONFS="${SWEEP_CONFS:-${OFFICIAL_CONFS}}"
 SWEEP_POINT_VALID_THRS="${SWEEP_POINT_VALID_THRS:-${OFFICIAL_POINT_VALID_THRS}}"
@@ -167,7 +168,7 @@ run_train() {
     --gcs-short-geom-max-weight 3.0 \
     --gcs-short-geom-curve 1.0 \
     --gcs-gt5-short-visible-thr 0 \
-    --gcs-boundary-pseudo-neg 0.02 \
+    --gcs-boundary-pseudo-neg "${GCS_BOUNDARY_PSEUDO_NEG}" \
     --gcs-boundary-pseudo-visible-thr 10 \
     --gcs-boundary-pseudo-dist-thr 80 \
     --gcs-boundary-pseudo-valid-thr 0.5 \
@@ -318,6 +319,7 @@ write_protocol_summary() {
     "${BEST_WEIGHTS}" "${BEST_SWEEP_DIR}" "${BEST_TEST_DIR}" \
     "${PROTOCOL_SUMMARY}" <<'PY'
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -359,7 +361,7 @@ output = {
     "do_not_select_from_test": True,
     "best_pt_test_role": "reporting_only_not_selection",
     "mask_v2_params": {
-        "gcs_boundary_pseudo_neg": 0.02,
+        "gcs_boundary_pseudo_neg": float(os.environ.get("GCS_BOUNDARY_PSEUDO_NEG", "0.02")),
         "gcs_boundary_pseudo_dist_thr": 80,
         "gcs_boundary_pseudo_min_valid": 4,
         "gcs_boundary_pseudo_score_thr": 0.2,
@@ -383,7 +385,7 @@ PY
 }
 
 echo "Run name: ${RUN_NAME}"
-echo "Mask-v2 boundary pseudo params: neg=0.02 dist_thr=80 min_valid=4 score_thr=0.2 envelope_margin_px=30 envelope_ratio_thr=0.75"
+echo "Mask-v2 boundary pseudo params: neg=${GCS_BOUNDARY_PSEUDO_NEG} dist_thr=80 min_valid=4 score_thr=0.2 envelope_margin_px=30 envelope_ratio_thr=0.75"
 echo "Extra train args: ${EXTRA_TRAIN_ARGS:-<none>}"
 echo "Selection GT: ${GT_JSON}"
 echo "Training-time official_best and post-train sweeps use tools/sweep_tusimple_official_cached.py."
