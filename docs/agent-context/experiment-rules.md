@@ -40,6 +40,10 @@ Checkpoint/decode selection priority:
 8. if tied, higher `count_acc`
 9. if tied, higher `count_acc_5`
 
+Official sweep selection is recorded as `official_sweep_v4`. For query extent
+decode sweeps, exact ties after the official metric and count tie-breaks prefer
+`extent_decode_mode=none`, then `intersect`, then `interval`.
+
 For ordered-slot training-time official-best candidates, use slot order with
 `order_check=warn` and `uses_runtime_sort=false` so training records order
 violations instead of stopping early. Final ordered-slot official evaluation

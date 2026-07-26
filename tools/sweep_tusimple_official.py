@@ -29,7 +29,7 @@ from gcs_tools.tusimple_official_eval import (  # noqa: E402
     resolve_tusimple_gt_json,
     tusimple_image_path,
 )
-from gcs_tools.official_selection import sweep_selection_policy, sweep_sort_key  # noqa: E402
+from gcs_tools.official_selection import extent_decode_priority, sweep_selection_policy, sweep_sort_key  # noqa: E402
 from gcs_tools.tusimple_split_guard import reject_tusimple_test_search_gt_json  # noqa: E402
 from tools.eval_tusimple_official import _count_diagnostics  # noqa: E402
 from tools.infer_gcs import load_gcs_model, preprocess_image, warn_max_det_mismatch  # noqa: E402
@@ -60,6 +60,7 @@ ORDERED_SLOT_QUERY_ONLY_DEFAULTS = {
     "max_dets": [8],
     "min_points": [6],
     "valid_before_maxdet": False,
+    "extent_decode_modes": ["none"],
     "count_aware_topk": False,
     "count_aware_min_k": 3,
     "count_aware_max_k": 5,
@@ -73,6 +74,9 @@ QUERY_ONLY_ROW_KEYS = (
     "nms_dist_px",
     "max_det",
     "min_points",
+    "extent_decode",
+    "extent_decode_mode",
+    "extent_decode_priority",
     "count_aware_topk",
     "count_aware_min_k",
     "count_aware_max_k",
@@ -154,6 +158,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-dets", nargs="+", type=int, default=[8], help="max_det values to sweep.")
     parser.add_argument("--min-points", nargs="+", type=int, default=[6], help="Minimum visible-anchor floors to sweep.")
     parser.add_argument("--valid-before-maxdet", action="store_true", help="Filter point-valid/min_points failures before max_det truncation.")
+    parser.add_argument(
+        "--extent-decode-modes",
+        nargs="+",
+        choices=("none", "interval", "intersect"),
+        default=["none"],
+        help="Query extent visibility modes to sweep. 'none' preserves point-valid decode.",
+    )
     parser.add_argument("--count-aware-topk", action="store_true", help="Use count_score to keep only the quality-best dynamic lane count.")
     parser.add_argument("--count-aware-min-k", type=int, default=3, help="Minimum k_hat for --count-aware-topk.")
     parser.add_argument("--count-aware-max-k", type=int, default=5, help="Maximum k_hat for --count-aware-topk.")
@@ -212,6 +223,7 @@ def resolve_save_dir(
     count_aware_topk: bool = False,
     count_aware_extra_margins: list[int] | tuple[int, ...] | None = None,
     valid_before_maxdet: bool = False,
+    extent_decode_modes: list[str] | tuple[str, ...] | None = None,
     decode_mode: str = "auto",
 ) -> Path:
     if save_dir is not None and str(save_dir).strip():
@@ -227,6 +239,9 @@ def resolve_save_dir(
                 suffix += "_extra_margin"
         if valid_before_maxdet:
             suffix += "_valid_before_maxdet"
+        extent_modes = sorted({str(x).strip().lower() for x in (extent_decode_modes or ["none"])})
+        if any(mode != "none" for mode in extent_modes):
+            suffix += "_extent"
     run_dir = _weight_run_dir(weights)
     if run_dir is not None:
         return run_dir / f"official_sweep_{split}{suffix}"
@@ -248,6 +263,7 @@ def _combo_key(combo: dict) -> tuple:
         float(combo["nms_dist_px"]),
         int(combo["max_det"]),
         int(combo["min_points"]),
+        str(combo.get("extent_decode_mode", "none")),
         str(combo.get("count_mode", "score_sum")),
         int(combo.get("count_aware_extra_margin", 0)),
     )
@@ -287,8 +303,14 @@ def build_combos(args: argparse.Namespace, decode_yaml_cfg: dict | None = None) 
     count_aware_extra_margins = sorted({int(x) for x in getattr(args, "count_aware_extra_margins", [0])})
     count_modes = sorted({str(x) for x in getattr(args, "count_modes", ["score_sum"])})
     valid_before_maxdet = bool(getattr(args, "valid_before_maxdet", False))
+    extent_decode_modes = sorted({str(x).strip().lower() for x in getattr(args, "extent_decode_modes", ["none"])})
     if any(int(x) < 0 for x in count_aware_extra_margins):
         raise ValueError(f"count-aware extra margins must be >= 0, got {count_aware_extra_margins}.")
+    if not extent_decode_modes:
+        raise ValueError("extent_decode_modes must not be empty.")
+    unsupported_extent_modes = sorted(set(extent_decode_modes) - {"none", "interval", "intersect"})
+    if unsupported_extent_modes:
+        raise ValueError(f"Unsupported extent decode modes: {unsupported_extent_modes}.")
     if count_aware_topk:
         if count_aware_min_k < 0 or count_aware_max_k < 0 or count_aware_min_k > count_aware_max_k:
             raise ValueError(
@@ -299,12 +321,13 @@ def build_combos(args: argparse.Namespace, decode_yaml_cfg: dict | None = None) 
             raise ValueError(f"count-aware length norm must be > 0, got {count_aware_length_norm}.")
     else:
         count_aware_extra_margins = [0]
-    for conf, point_valid_thr, nms_dist_px, max_det, min_points, count_mode, count_aware_extra_margin in product(
+    for conf, point_valid_thr, nms_dist_px, max_det, min_points, extent_mode, count_mode, count_aware_extra_margin in product(
         sorted({float(x) for x in args.confs}),
         sorted({float(x) for x in args.point_valid_thrs}),
         sorted({float(x) for x in args.nms_dist_pxs}),
         sorted({int(x) for x in args.max_dets}),
         sorted({int(x) for x in args.min_points}),
+        extent_decode_modes,
         count_modes,
         count_aware_extra_margins,
     ):
@@ -324,6 +347,9 @@ def build_combos(args: argparse.Namespace, decode_yaml_cfg: dict | None = None) 
                 "max_det": max_det,
                 "min_points": min_points,
                 "valid_before_maxdet": valid_before_maxdet,
+                "extent_decode": str(extent_mode) != "none",
+                "extent_decode_mode": str(extent_mode),
+                "extent_decode_priority": extent_decode_priority(extent_mode),
                 "count_aware_topk": count_aware_topk,
                 "count_aware_min_k": count_aware_min_k,
                 "count_aware_max_k": count_aware_max_k,
@@ -351,6 +377,7 @@ def _row_sort_key(row: dict) -> tuple:
         float(row["nms_dist_px"]),
         int(row["max_det"]),
         int(row["min_points"]),
+        str(row.get("extent_decode_mode", "none")),
         str(row.get("count_mode", "score_sum")),
         int(row.get("count_aware_extra_margin", 0)),
     )
@@ -368,6 +395,9 @@ def write_csv(path: Path, rows: list[dict]) -> None:
         "max_det",
         "min_points",
         "valid_before_maxdet",
+        "extent_decode",
+        "extent_decode_mode",
+        "extent_decode_priority",
         "count_aware_topk",
         "count_aware_min_k",
         "count_aware_max_k",
@@ -440,6 +470,8 @@ def sweep(args: argparse.Namespace) -> dict:
             args.max_dets = [int(decode_yaml_cfg["max_det"])]
             args.min_points = [int(decode_yaml_cfg["min_points"])]
             args.valid_before_maxdet = bool(decode_yaml_cfg.get("valid_before_maxdet", False))
+            extent_mode = str(decode_yaml_cfg.get("extent_decode_mode", "none") or "none")
+            args.extent_decode_modes = [extent_mode if bool(decode_yaml_cfg.get("extent_decode", False)) else "none"]
             args.count_aware_topk = bool(decode_yaml_cfg["count_aware_topk"])
             args.count_aware_min_k = int(decode_yaml_cfg["count_aware_min_k"])
             args.count_aware_max_k = int(decode_yaml_cfg["count_aware_max_k"])
@@ -510,12 +542,16 @@ def sweep(args: argparse.Namespace) -> dict:
                 pred_valid = preds.get("pred_valid_logits")
                 pred_count_logits = preds.get("pred_count_logits")
                 pred_quality_logits = preds.get("pred_quality_logits")
+                pred_start_logits = preds.get("pred_start_logits")
+                pred_end_logits = preds.get("pred_end_logits")
                 lanes = decode_gcs_predictions(
                     preds["pred_points"][0],
                     preds["pred_logits"][0],
                     pred_quality_logits=pred_quality_logits[0] if pred_quality_logits is not None else None,
                     pred_valid_logits=pred_valid[0] if pred_valid is not None else None,
                     pred_count_logits=pred_count_logits[0] if pred_count_logits is not None else None,
+                    pred_start_logits=pred_start_logits[0] if pred_start_logits is not None else None,
+                    pred_end_logits=pred_end_logits[0] if pred_end_logits is not None else None,
                     image_shape=original_shape,
                     score_thr=combo["conf"],
                     point_valid_thr=combo["point_valid_thr"],
@@ -523,6 +559,8 @@ def sweep(args: argparse.Namespace) -> dict:
                     max_det=combo["max_det"],
                     nms_dist_px=combo["nms_dist_px"],
                     valid_before_maxdet=combo["valid_before_maxdet"],
+                    extent_decode=combo["extent_decode"],
+                    extent_decode_mode=combo["extent_decode_mode"],
                     count_aware_topk=combo["count_aware_topk"],
                     count_aware_min_k=combo["count_aware_min_k"],
                     count_aware_max_k=combo["count_aware_max_k"],
@@ -575,6 +613,9 @@ def sweep(args: argparse.Namespace) -> dict:
     effective_count_aware_extra_margins = sorted(
         {int(combo.get("count_aware_extra_margin", 0)) for combo in combos if combo.get("decode_mode") == "query"}
     )
+    effective_extent_decode_modes = sorted(
+        {str(combo.get("extent_decode_mode", "none")) for combo in combos if combo.get("decode_mode") == "query"}
+    )
     save_dir = resolve_save_dir(
         args.save_dir,
         args.weights,
@@ -582,6 +623,7 @@ def sweep(args: argparse.Namespace) -> dict:
         count_aware_topk=bool(getattr(args, "count_aware_topk", False)),
         count_aware_extra_margins=effective_count_aware_extra_margins,
         valid_before_maxdet=bool(getattr(args, "valid_before_maxdet", False)),
+        extent_decode_modes=effective_extent_decode_modes,
         decode_mode=str(getattr(args, "decode_mode", "query")),
     )
     save_dir.mkdir(parents=True, exist_ok=True)
@@ -647,6 +689,7 @@ def sweep(args: argparse.Namespace) -> dict:
                 "max_dets": [int(x) for x in sorted({int(x) for x in args.max_dets})],
                 "min_points": [int(x) for x in sorted({int(x) for x in args.min_points})],
                 "valid_before_maxdet": bool(getattr(args, "valid_before_maxdet", False)),
+                "extent_decode_modes": effective_extent_decode_modes,
                 "count_aware_topk": bool(getattr(args, "count_aware_topk", False)),
                 "count_aware_min_k": int(getattr(args, "count_aware_min_k", 3)),
                 "count_aware_max_k": int(getattr(args, "count_aware_max_k", 5)),

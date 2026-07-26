@@ -196,6 +196,8 @@ def decode_gcs_predictions(
     pred_quality_logits: torch.Tensor | None = None,
     pred_valid_logits: torch.Tensor | None = None,
     pred_count_logits: torch.Tensor | None = None,
+    pred_start_logits: torch.Tensor | None = None,
+    pred_end_logits: torch.Tensor | None = None,
     oracle_count: int | None = None,
     image_shape: tuple[int, int] | None = None,
     score_thr: float = 0.5,
@@ -204,6 +206,8 @@ def decode_gcs_predictions(
     max_det: int | None = None,
     nms_dist_px: float = 0.0,
     valid_before_maxdet: bool = False,
+    extent_decode: bool = False,
+    extent_decode_mode: str = "interval",
     count_aware_topk: bool = False,
     count_aware_min_k: int = 3,
     count_aware_max_k: int = 5,
@@ -220,6 +224,8 @@ def decode_gcs_predictions(
             with this score instead of ``pred_logits``.
         pred_valid_logits: Optional Q x K visibility logits. When present, decoded lanes keep full K points
             for metrics but drawing/export uses the longest visible contiguous point run.
+        pred_start_logits: Optional Q x K query extent start logits for first visible fixed-y anchor.
+        pred_end_logits: Optional Q x K query extent end logits for last visible fixed-y anchor.
         oracle_count: Optional GT lane count used only with diagnostic ``count_mode='oracle_gt'``.
         image_shape: Optional original image shape as (height, width). If provided, pixel points are added.
         score_thr: Existence probability threshold.
@@ -228,6 +234,9 @@ def decode_gcs_predictions(
         max_det: Optional maximum number of kept lanes after score sorting.
         nms_dist_px: Optional duplicate-lane suppression threshold in pixels. 0 disables lane NMS.
         valid_before_maxdet: If true, discard point-valid/min_points failures before ``max_det`` truncation.
+        extent_decode: If true, use query start/end logits to build the visible anchor interval.
+        extent_decode_mode: ``interval`` uses the predicted interval directly; ``intersect`` intersects it
+            with the point-valid continuous segment; ``none`` disables extent decode.
         count_aware_topk: If true, keep only the quality-best ``k_hat`` lanes after conf/NMS.
         count_aware_min_k: Minimum dynamic lane count when count-aware top-k is enabled.
         count_aware_max_k: Maximum dynamic lane count when count-aware top-k is enabled.
@@ -265,6 +274,28 @@ def decode_gcs_predictions(
             raise ValueError(
                 "pred_valid_logits must have shape Q x K matching pred_points, "
                 f"got {tuple(pred_valid_logits.shape)} vs {tuple(pred_points.shape[:2])}."
+            )
+    extent_mode = str(extent_decode_mode or "interval").strip().lower()
+    if extent_mode in {"none", "off", "false", "0"}:
+        if bool(extent_decode):
+            raise ValueError("extent_decode=True requires extent_decode_mode 'interval' or 'intersect', got 'none'.")
+        extent_mode = "none"
+        extent_decode = False
+    elif extent_mode not in {"interval", "intersect"}:
+        raise ValueError(f"Unsupported extent_decode_mode={extent_decode_mode!r}; use 'interval', 'intersect', or 'none'.")
+    extent_decode_enabled = bool(extent_decode)
+    if extent_decode_enabled:
+        if pred_start_logits is None or pred_end_logits is None:
+            raise ValueError("extent_decode requires pred_start_logits and pred_end_logits.")
+        if pred_start_logits.shape != pred_points.shape[:2]:
+            raise ValueError(
+                "pred_start_logits must have shape Q x K matching pred_points, "
+                f"got {tuple(pred_start_logits.shape)} vs {tuple(pred_points.shape[:2])}."
+            )
+        if pred_end_logits.shape != pred_points.shape[:2]:
+            raise ValueError(
+                "pred_end_logits must have shape Q x K matching pred_points, "
+                f"got {tuple(pred_end_logits.shape)} vs {tuple(pred_points.shape[:2])}."
             )
 
     points = pred_points.detach().float().cpu().clamp(0.0, 1.0)
@@ -311,6 +342,18 @@ def decode_gcs_predictions(
         length_norm = float(count_aware_length_norm)
         extra_margin = int(count_aware_extra_margin)
     point_valid_scores = pred_valid_logits.detach().float().cpu().sigmoid() if pred_valid_logits is not None else None
+    extent_masks_raw = None
+    extent_start_idx = None
+    extent_end_idx = None
+    if extent_decode_enabled:
+        start_logits = pred_start_logits.detach().float().cpu()
+        end_logits = pred_end_logits.detach().float().cpu()
+        start_argmax = start_logits.argmax(dim=1)
+        end_argmax = end_logits.argmax(dim=1)
+        extent_start_idx = torch.minimum(start_argmax, end_argmax).long()
+        extent_end_idx = torch.maximum(start_argmax, end_argmax).long()
+        anchor_idx = torch.arange(points.shape[1], dtype=torch.long).view(1, -1)
+        extent_masks_raw = (anchor_idx >= extent_start_idx.view(-1, 1)) & (anchor_idx <= extent_end_idx.view(-1, 1))
     query_indices = torch.arange(points.shape[0], dtype=torch.long)
 
     if min_points > points.shape[1]:
@@ -322,15 +365,53 @@ def decode_gcs_predictions(
 
     sorted_points = []
     sorted_valid_scores = []
+    sorted_extent_masks = []
     for i in keep:
         order_i = torch.argsort(points[i, :, 1], descending=True, stable=True)
         sorted_points.append(points[i][order_i])
         if point_valid_scores is not None:
             sorted_valid_scores.append(point_valid_scores[i][order_i])
+        if extent_masks_raw is not None:
+            sorted_extent_masks.append(extent_masks_raw[i][order_i])
     points = torch.stack(sorted_points, dim=0)
     point_valid_scores = torch.stack(sorted_valid_scores, dim=0) if sorted_valid_scores else None
+    extent_masks = torch.stack(sorted_extent_masks, dim=0) if sorted_extent_masks else None
+    if extent_start_idx is not None:
+        extent_start_idx = extent_start_idx[keep]
+        extent_end_idx = extent_end_idx[keep]
     scores = scores[keep]
     query_indices = query_indices[keep]
+
+    def visible_masks_for(valid_scores: torch.Tensor | None, interval_masks: torch.Tensor | None) -> torch.Tensor | None:
+        if extent_decode_enabled:
+            if interval_masks is None:
+                raise ValueError("extent_decode requires decoded interval masks.")
+            interval_masks = interval_masks.detach().bool().cpu()
+            if extent_mode == "interval":
+                return interval_masks
+            if valid_scores is None:
+                raise ValueError("extent_decode_mode='intersect' requires pred_valid_logits.")
+            if int(valid_scores.shape[0]) == 0:
+                return torch.zeros_like(interval_masks, dtype=torch.bool)
+            valid_runs = torch.stack(
+                [
+                    longest_contiguous_valid_mask(v >= float(point_valid_thr), min_points=min_points)
+                    for v in valid_scores
+                ],
+                dim=0,
+            )
+            return interval_masks & valid_runs
+        if valid_scores is None:
+            return None
+        if int(valid_scores.shape[0]) == 0:
+            return torch.zeros(tuple(valid_scores.shape), dtype=torch.bool)
+        return torch.stack(
+            [
+                longest_contiguous_valid_mask(v >= float(point_valid_thr), min_points=min_points)
+                for v in valid_scores
+            ],
+            dim=0,
+        )
 
     order = torch.argsort(scores, descending=True)
     if nms_dist_px > 0.0:
@@ -339,15 +420,8 @@ def decode_gcs_predictions(
         sorted_points = points[order]
         sorted_scores = scores[order]
         sorted_queries = query_indices[order]
-        sorted_valid_masks = None
-        if point_valid_scores is not None:
-            sorted_valid_masks = torch.stack(
-                [
-                    longest_contiguous_valid_mask(v >= float(point_valid_thr), min_points=min_points)
-                    for v in point_valid_scores[order]
-                ],
-                dim=0,
-            ).to(device=sorted_points.device)
+        current_visible_masks = visible_masks_for(point_valid_scores, extent_masks)
+        sorted_valid_masks = current_visible_masks[order].to(device=sorted_points.device) if current_visible_masks is not None else None
         keep_sorted = lane_nms(
             sorted_points,
             sorted_scores,
@@ -360,20 +434,24 @@ def decode_gcs_predictions(
         query_indices = sorted_queries[keep_sorted]
         if point_valid_scores is not None:
             point_valid_scores = point_valid_scores[order][keep_sorted]
+        if extent_masks is not None:
+            extent_masks = extent_masks[order][keep_sorted]
+            extent_start_idx = extent_start_idx[order][keep_sorted]
+            extent_end_idx = extent_end_idx[order][keep_sorted]
         order = torch.arange(scores.shape[0], dtype=torch.long)
-    if valid_before_maxdet and point_valid_scores is not None:
-        valid_masks = torch.stack(
-            [
-                longest_contiguous_valid_mask(v >= float(point_valid_thr), min_points=min_points)
-                for v in point_valid_scores
-            ],
-            dim=0,
-        )
+    current_visible_masks = visible_masks_for(point_valid_scores, extent_masks)
+    if valid_before_maxdet and current_visible_masks is not None:
+        valid_masks = current_visible_masks
         keep_valid = torch.nonzero(valid_masks.sum(dim=1) >= int(min_points), as_tuple=False).flatten()
         points = points[keep_valid]
         scores = scores[keep_valid]
         query_indices = query_indices[keep_valid]
-        point_valid_scores = point_valid_scores[keep_valid]
+        if point_valid_scores is not None:
+            point_valid_scores = point_valid_scores[keep_valid]
+        if extent_masks is not None:
+            extent_masks = extent_masks[keep_valid]
+            extent_start_idx = extent_start_idx[keep_valid]
+            extent_end_idx = extent_end_idx[keep_valid]
         order = torch.argsort(scores, descending=True)
     if max_det is not None and max_det > 0:
         order = order[: int(max_det)]
@@ -382,6 +460,11 @@ def decode_gcs_predictions(
     query_indices = query_indices[order]
     if point_valid_scores is not None:
         point_valid_scores = point_valid_scores[order]
+    if extent_masks is not None:
+        extent_masks = extent_masks[order]
+        extent_start_idx = extent_start_idx[order]
+        extent_end_idx = extent_end_idx[order]
+    final_visible_masks = visible_masks_for(point_valid_scores, extent_masks)
 
     scale = None
     if image_shape is not None:
@@ -402,17 +485,19 @@ def decode_gcs_predictions(
             "count_aware_extra_margin": int(extra_margin),
         }
         visible_mask = None
-        if point_valid_scores is not None:
-            visible_mask_t = longest_contiguous_valid_mask(
-                point_valid_scores[lane_i] >= float(point_valid_thr),
-                min_points=min_points,
-            )
+        if final_visible_masks is not None:
+            visible_mask_t = final_visible_masks[lane_i].detach().bool().cpu()
             if int(visible_mask_t.sum()) < int(min_points):
                 continue
             visible_mask = visible_mask_t.numpy().astype(bool)
-            item["point_valid_scores"] = point_valid_scores[lane_i].numpy().astype(np.float32)
+            if point_valid_scores is not None:
+                item["point_valid_scores"] = point_valid_scores[lane_i].numpy().astype(np.float32)
             item["point_valid"] = visible_mask.astype(np.float32)
             item["visible_points_norm"] = lane_norm[visible_mask]
+        if extent_decode_enabled:
+            item["extent_start_idx"] = int(extent_start_idx[lane_i])
+            item["extent_end_idx"] = int(extent_end_idx[lane_i])
+            item["extent_visible_source"] = str(extent_mode)
         if scale is not None:
             points_px = (lane_points.unsqueeze(0) * scale).squeeze(0).numpy().astype(np.float32)
             item["points"] = points_px

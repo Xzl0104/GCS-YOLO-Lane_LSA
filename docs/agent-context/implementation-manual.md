@@ -100,6 +100,19 @@ for query models built from
 `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-count.yaml`. The default
 query YAML still emits no `pred_count_logits`.
 
+The optional query extent probe adds only:
+
+```text
+pred_start_logits: B x 12 x 56
+pred_end_logits: B x 12 x 56
+```
+
+for query models built from
+`ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-extent.yaml`. These are
+first/last visible fixed-y anchor classifiers for the K56 bottom-to-top order.
+The default query YAML still emits no query extent logits, and ordered-slot
+keeps its separate `B x 5 x 56` interval contract.
+
 The optional Q12 dual-head probe adds:
 
 ```text

@@ -138,6 +138,10 @@ gcs_query_count_ce: 0.0 # (float) query-mode explicit Count Head CE gain; 0 disa
 gcs_query_count_min_lanes: 2 # (int) query Count Head class 0 lane count
 gcs_query_count_max_lanes: 5 # (int) query Count Head max lane count; classes cover 2/3/4/5
 gcs_query_quality: 0.0 # (float) query-mode explicit Quality/Ranking Head BCE gain; 0 disables
+gcs_query_extent: 0.0 # (float) query-mode explicit start/end extent CE gain; 0 disables
+gcs_query_extent_short_visible_thr: 10 # (int) visible-anchor threshold for short-lane extent weighting
+gcs_query_extent_short_weight: 2.0 # (float) extra lane weight for short GT4/GT5 extent supervision
+gcs_query_extent_gt_min_lanes: 4 # (int) minimum image GT lane count for short-lane extent weighting
 gcs_count_ce: 1.0 # (float) ordered_slot 2/3/4/5 count cross-entropy gain
 gcs_interval: 1.0 # (float) ordered_slot start/end interval cross-entropy gain
 gcs_order: 0.2 # (float) ordered_slot common-anchor adjacent-slot order loss gain
@@ -263,6 +267,8 @@ gcs_eval_min_overlap: 2 # (int) minimum valid overlapping GT points required for
 gcs_eval_nms_dist_px: 50.0 # (float) optional lane duplicate suppression distance in pixels; 0 disables
 gcs_eval_point_valid_thr: 0.5 # (float) per-point visibility threshold used when decoding fixed-y lanes for validation
 gcs_eval_max_det: 8 # (int) maximum decoded lane queries kept for GCS validation metrics
+gcs_extent_decode: False # (bool) use query start/end extent logits for query-mode decode visibility
+gcs_extent_decode_mode: interval # (str) query extent decode mode when enabled: interval or intersect
 gcs_official_best: False # (bool) run periodic TuSimple official-val sweeps and preserve weights/official_best.pt
 gcs_allow_internal_best: False # (bool) allow ordered_slot debug training without official_best checkpoint selection
 gcs_official_interval: 5 # (int) epoch interval for periodic official-val checkpoint selection
@@ -277,6 +283,7 @@ gcs_official_nms_dist_pxs: [0.0, 18.0, 30.0, 50.0] # (list[float]) official-val 
 gcs_official_max_dets: [5, 6, 8] # (list[int]) official-val sweep max_det values
 gcs_official_min_points: [4, 5, 6] # (list[int]) official-val sweep visible-anchor floors
 gcs_official_valid_before_maxdet: False # (bool) filter point-valid/min_points failures before max_det in official sweeps
+gcs_official_extent_decode_modes: [none] # (list[str]) query extent decode modes for official sweeps
 gcs_official_count_modes: [score_sum] # (list[str]) query count-aware top-k count sources for official sweeps
 gcs_official_count_aware_topk: False # (bool) enable training-time official-val count-aware top-k
 gcs_official_count_aware_min_k: 3 # (int) min score_sum k_hat for official count-aware top-k

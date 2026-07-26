@@ -1051,6 +1051,146 @@ FP/FN must move toward env30, not Q24 event-v2
 quality top-k must choose true GT4/GT5 lanes rather than pseudo/extra lanes
 ```
 
+Completed 40-epoch review:
+
+```text
+run = query_dualhead_quality_count_env30_probe40_v1
+status = not promoted to full training; TEST closed
+official_best source_epoch = 40
+official-val ACC/FP/FN = 0.962494 / 0.025941 / 0.021579
+count_acc_3/4/5 = 0.991031 / 0.954545 / 0.972973
+```
+
+What worked:
+
+- `pred_count_logits` learned the image count quickly:
+  `val/query_count_acc` reached `0.96233` by epoch040, and official-val
+  `count_acc=0.980716`.
+- The count shape is much safer than Q24 event/role probes:
+  only `3->4=2`, `4->3=3`, and `5->4=2`.
+- At the same epoch040 point, it is stronger than env30 official-val:
+  `0.962494` versus env30 epoch040 `0.958436`.
+
+What failed:
+
+- The primary official-val gate is still far below env30 epoch220
+  `0.973330 / 0.015748 / 0.009642`.
+- The 864-row official-val sweep has zero rows at or above env30 ACC and zero
+  rows with FP/FN both at or below env30.
+- GT-count oracle-rank only raises ACC to `0.963281`, and removing the oracle
+  pool cap gives the same result. This rules out count/rank/max-det truncation
+  as the main 40-epoch bottleneck.
+- Raw candidate geometry is weak: official-val `has_match20=0.933998` versus
+  env30 final `0.976209`. The largest bucket regression is GT5
+  visible<=10: `0.509434` versus env30 final `0.754717`.
+
+Interpretation:
+
+The 40-epoch result is not a full-training candidate, but it is not a Q24-style
+mechanism rejection. The current bottleneck is undertrained or interfered
+candidate geometry/valid quality after adding the dual auxiliary heads; count
+estimation itself is no longer the bottleneck. The quality head has not yet
+proven ranking value, because count/rank oracle controls can recover less than
+`+0.001` ACC.
+
+Smallest safe next action:
+
+Run a 100-epoch official-val-only diagnostic of the same dual-head route. Do
+not run TEST. Promote to 160/220 only if epoch100 beats the old query-count-only
+`0.968473` official-val ACC, approaches env30 epoch100 `0.969213`, and raw
+GT5 visible<=10 match20 recovers toward at least `0.65`. If that fails, stop
+this exact dual-head loss/decode and change the mechanism: keep the count head,
+but reduce or remove the quality-head training/decode dependency and re-check
+whether restoring env30's geometry/objectness path recovers raw match20.
+
+## Q12 Dual-Head Probe100 Final Review
+
+The 100-epoch run
+`query_dualhead_quality_count_env30_probe100_v1` is rejected for blind
+220-epoch continuation. TEST was run once only as a reporting-only evaluation
+using the frozen official-val decode; it is closed for this artifact.
+
+Official-val:
+
+```text
+ACC/FP/FN = 0.966268 / 0.015335 / 0.015840
+count_acc_3/4/5 = 0.991031 / 0.939394 / 0.972973
+GT-count oracle-rank ACC = 0.966877
+raw has_match20 = 0.959325
+GT5 visible<=10 raw match20 = 0.754717
+```
+
+The training-length hypothesis is partially confirmed: from the 40-epoch
+dual-head run to epoch100, official-val ACC rises from `0.962494` to
+`0.966268`, raw `has_match20` rises from `0.933998` to `0.959325`, and GT5
+short raw match20 rises from `0.509434` to `0.754717`. However, epoch100
+still fails the continuation gate: it is below query-count-only `0.968473`,
+below env30 epoch100 `0.969213`, and `count_acc_4=0.939394` is below
+`0.954545`.
+
+TEST reporting-only result:
+
+```text
+ACC/FP/FN = 0.963288 / 0.028481 / 0.031332
+count_acc/count_acc_4/count_acc_5 = 0.877067 / 0.611111 / 0.776801
+count confusion includes 4->3=119, 4->5=62, 5->4=105, 5->5=442
+```
+
+This exposes a large official-val-to-TEST count generalization gap. It is
+consistent with the official-val GT4 weakness and shows that the current
+count-aware dual-head calibration is not robust on GT4/GT5 images.
+
+Integrated conclusion:
+
+- Longer training improves geometry, especially GT5 short lanes.
+- The current count/quality split does not yet produce a promotable model.
+- Oracle rank adds only `+0.000609` ACC at epoch100, so count/ranking is no
+  longer the dominant bottleneck.
+- Do not spend the next full 220-epoch run on the unchanged dual-head path.
+  Keep the count head, but first change the quality-head dependency or restore
+  env30's geometry/objectness behavior, then run a new official-val probe.
+
+## 2026-07-26 Q12 Count Head-only Review And Query Extent Direction
+
+The Count Head-only 100-epoch probe
+`query_count_head_ce025_env30_probe100_v1` is rejected for blind 220-epoch
+continuation. It confirms count/rank is not the current bottleneck:
+
+```text
+official-val ACC/FP/FN = 0.968109 / 0.016667 / 0.016070
+count_acc = 0.975207
+count_acc_4 = 0.924242
+oracle-rank ACC = 0.968244
+oracle-rank gain = +0.000135
+raw official-val has_match20 = 0.960860
+```
+
+The weak cases are short GT4/GT5 candidate geometry and endpoint/visibility
+quality, not query count capacity:
+
+```text
+official-val short GT4 visible<=10:
+  lanes = 8
+  has_match20 = 0.125
+  best_ape_px_p90 = 32.301349
+
+official-val short GT5 visible<=10:
+  lanes = 53
+  has_match20 = 0.698113
+  best_ape_px_p90 = 38.932954
+```
+
+Decision:
+
+Do not continue patching Q24 extra-query carrier drift and do not add another
+Count Head / Quality Head variant as the immediate next path. The next
+controlled experiment is the default-off Q12/env30 query extent v1 probe,
+which makes each query explicitly learn a continuous first/last visible fixed-y
+interval on top of the env30 parent protocol (`gcs_short_geom=1.0`) and then
+compares `none`, `interval`, and `intersect` decode modes on official-val
+only. If endpoint/interval learning fails, investigate coarse
+geometry/reference coverage before implementing extent-guided local refine.
+
 ## 2026-07-23 Env30 GT4 Near-20px Geometry Refine v1 Rejection
 
 The `query_alpha05_env30_gt4_near20_geom_refine_v1` full training run is

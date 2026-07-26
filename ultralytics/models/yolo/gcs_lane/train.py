@@ -83,6 +83,11 @@ class GCSLaneTrainer(BaseTrainer):
         "query_quality_loss",
         "query_quality_pos_mean",
         "query_quality_pos_count",
+        "query_extent_loss",
+        "query_extent_start_acc",
+        "query_extent_end_acc",
+        "query_extent_iou",
+        "query_extent_short_count",
         "role_contain_loss",
         "role_contain_exist_loss",
         "role_contain_valid_loss",
@@ -146,6 +151,11 @@ class GCSLaneTrainer(BaseTrainer):
         "qqual",
         "qqual_pos",
         "qqual_n",
+        "qext",
+        "qext_sacc",
+        "qext_eacc",
+        "qext_iou",
+        "qext_short",
         "role_loss",
         "role_ex",
         "role_val",
@@ -1113,6 +1123,7 @@ class GCSLaneTrainer(BaseTrainer):
             "gcs_official_max_dets": [5, 6, 8],
             "gcs_official_min_points": [4, 5, 6],
             "gcs_official_valid_before_maxdet": False,
+            "gcs_official_extent_decode_modes": ["none"],
             "gcs_official_count_modes": ["score_sum"],
             "gcs_official_count_aware_topk": False,
             "gcs_official_count_aware_min_k": 3,
@@ -1156,6 +1167,18 @@ class GCSLaneTrainer(BaseTrainer):
             count_modes = sorted(
                 {str(x) for x in getattr(self.args, "gcs_official_count_modes", None) or official_query_defaults["gcs_official_count_modes"]}
             )
+            extent_decode_modes = sorted(
+                {
+                    str(x).strip().lower()
+                    for x in (
+                        getattr(self.args, "gcs_official_extent_decode_modes", None)
+                        or official_query_defaults["gcs_official_extent_decode_modes"]
+                    )
+                }
+            )
+            unsupported_extent_modes = sorted(set(extent_decode_modes) - {"none", "interval", "intersect"})
+            if unsupported_extent_modes:
+                raise ValueError(f"Unsupported gcs_official_extent_decode_modes: {unsupported_extent_modes}.")
             count_aware_topk = bool(
                 getattr(
                     self.args,
@@ -1195,6 +1218,7 @@ class GCSLaneTrainer(BaseTrainer):
             count_aware_max_k = 5
             count_aware_length_norm = 12.0
             count_aware_extra_margins = [0]
+            extent_decode_modes = ["none"]
         return SimpleNamespace(
             dataset="tusimple",
             archive_root=str(getattr(self.args, "gcs_official_archive_root", "archive") or "archive"),
@@ -1215,6 +1239,7 @@ class GCSLaneTrainer(BaseTrainer):
             count_aware_length_norm=count_aware_length_norm,
             count_aware_extra_margins=count_aware_extra_margins,
             count_modes=count_modes,
+            extent_decode_modes=extent_decode_modes,
             gcs_min_lanes=int(getattr(self.args, "gcs_min_lanes", 2)),
             gcs_max_lanes=int(getattr(self.args, "gcs_max_lanes", 5)),
             gcs_num_slots=int(getattr(self.args, "gcs_num_slots", 5)),

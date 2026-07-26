@@ -30,6 +30,85 @@ official-val selection. The default Q12 YAML, the query-count-only YAML, Q24
 protected-static YAMLs, labels, official metrics, and TEST protocol remain
 unchanged.
 
+The 2026-07-26 user-requested Q12/env30 query extent probe is default-off and
+enabled only by
+`ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-extent.yaml` plus the
+dedicated launch/gate scripts. It keeps Q=12/K=56 query mode, adds
+`pred_start_logits: B x 12 x 56` and `pred_end_logits: B x 12 x 56` for the
+first/last visible fixed-y anchor interval, and runs on top of the env30
+parent protocol (`gcs_short_geom=1.0` in the parent launch script). It does
+not enable Count Head, Quality Head, Q24, local-refine v2, or later mainline
+ranking/count-contract mechanisms. The default Q12 YAML still emits no query
+extent logits.
+
+The completed 40-epoch dual-head probe
+`query_dualhead_quality_count_env30_probe40_v1` is not promoted to full
+training or TEST. It is also not closed as a dead mechanism, because it beats
+the env30 same-age epoch040 official-val ACC while remaining far below the
+env30 epoch220 checkpoint:
+
+```text
+dual-head epoch040 official-val ACC/FP/FN =
+  0.962494 / 0.025941 / 0.021579
+env30 epoch040 official-val ACC/FP/FN =
+  0.958436 / 0.065702 / 0.031221
+env30 epoch220 official-val ACC/FP/FN =
+  0.973330 / 0.015748 / 0.009642
+```
+
+The count head works (`count_acc=0.980716`), but the current 40-epoch
+checkpoint is capped by lane candidate geometry/valid quality: GT-count
+oracle-rank only reaches `ACC=0.963281`, and official-val raw
+`has_match_20px` is `0.933998` versus env30 final `0.976209`. The next action
+is a 100-epoch official-val-only undertraining diagnostic, not TEST or a blind
+full 220-epoch promotion.
+
+The 100-epoch dual-head diagnostic
+`query_dualhead_quality_count_env30_probe100_v1` is rejected for continuation
+to 220 epochs as-is. It improves raw candidate coverage, but fails the
+official-val promotion gate:
+
+```text
+official-val ACC/FP/FN =
+  0.966268 / 0.015335 / 0.015840
+count_acc_3/4/5 =
+  0.991031 / 0.939394 / 0.972973
+GT-count oracle-rank ACC =
+  0.966877
+raw has_match20 = 0.959325
+GT5 visible<=10 raw match20 = 0.754717
+```
+
+A single reporting-only TEST was run with the frozen official-val decode. It
+is not promotion or tuning evidence and must not be rerun for this candidate:
+
+```text
+TEST ACC/FP/FN =
+  0.963288 / 0.028481 / 0.031332
+TEST count_acc/count_acc_4/count_acc_5 =
+  0.877067 / 0.611111 / 0.776801
+TEST count confusion includes:
+  4->3=119, 4->5=62, 5->4=105, 5->5=442
+```
+
+Decision: do not complete 220 epochs on the current dual-head loss/decode
+unchanged. The next candidate must keep the count head but change the quality
+head training/decode dependency or otherwise restore the env30 geometry and
+objectness path, then pass a fresh official-val/train-side gate. TEST remains
+closed for subsequent selection.
+
+The user-requested Q24 dual-head follow-up is also default-off and isolated
+from the rejected Q24 role/event mechanisms. It is enabled only by
+`ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q24-k56-dualhead.yaml` and
+`scripts/run_query_q24_dualhead_quality_count_probe40_v1.sh`. It emits
+`pred_count_logits: B x 4` and `pred_quality_logits: B x 24`, keeps the
+strict-passed Q24 protected static reference bank, uses `count_logits` for
+count-aware top-k, and uses quality logits for lane ranking. The probe uses
+`gcs_query_count_ce=0.25` and `gcs_query_quality=0.25`, keeps the parent
+AdamW protocol (`lr0=5e-4`, `lrf=0.05`, `weight_decay=1e-4`,
+`warmup_epochs=0`), and keeps TEST closed. The score-sum count losses,
+Q24 role containment, and Q24 event containment/calibration remain disabled.
+
 The branch also includes the 2026-06-27 user-requested, default-off `gcs_hard_sampling` train-only sampler for short-visible GT3/GT4/GT5 and 0601 samples. It changes only the training dataloader sampling frequency through `WeightedRandomSampler`; it does not change labels, validation/test dataloaders, point/smooth/curve losses, decode, or official metrics.
 
 The branch also includes the 2026-06-27 user-requested, default-off `gcs_spurious_neg` loss for E3-lite. It uses the training Hungarian matcher indices only to select unmatched short duplicate-like queries near matched queries, then adds an extra target-zero BCE on their `pred_logits`. The GT-count weighting extension keeps the old default behavior with `gcs_spurious_gt3_weight=1.0`, `gcs_spurious_gt4_weight=1.0`, `gcs_spurious_gt5_weight=1.0`, and `gcs_spurious_disable_gt5=False`, while allowing GT3-or-sparser, GT4, and GT5-or-denser samples to carry different spurious-negative weights. The 2026-06-28 `gcs_spurious_gt_protect` extension is also default-off and only removes GT-close candidate queries from this extra negative BCE. It does not change data sampling, dataset labels, matcher logic, point/smooth/curve losses, decode, NMS, or official metrics.
@@ -683,6 +762,31 @@ quality/ranking score. The original `pred_logits` remain the query
 existence/objectness logits and the default fallback decode score for old
 checkpoints.
 
+The optional query extent model
+`ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-extent.yaml` additionally
+emits:
+
+```text
+pred_start_logits: B x 12 x 56
+pred_end_logits: B x 12 x 56
+```
+
+These logits classify the first and last visible fixed-y anchor indexes in
+the bottom-to-top K56 order (`710, 700, ..., 160`). They are default-off,
+query-only, and independent of ordered-slot interval heads. This YAML must not
+emit `pred_count_logits` or `pred_quality_logits`.
+
+The optional Q24 dual-head protected-static model
+`ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q24-k56-dualhead.yaml` emits:
+
+```text
+pred_count_logits: B x 4
+pred_quality_logits: B x 24
+```
+
+It preserves the Q24 protected static bank and is only a 40-epoch
+official-val diagnostic until its official-val and train-side gates pass.
+
 ## Loss Contract
 
 Default logged loss items on the active `424ab1c86` rollback state include:
@@ -1170,6 +1274,31 @@ queries with too few valid anchors from occupying a final `max_det` slot. The
 default remains `false`, preserving old sweep/eval behavior. This does not
 change training, labels, losses, model outputs, official metrics, Count Head,
 Quality Head, Survival Head, or default decode behavior.
+
+The branch also includes a default-off query extent decode ablation. When
+explicitly enabled with `--extent-decode`, `extent_decode_mode=interval`
+builds a continuous visible mask from `argmax(pred_start_logits)` to
+`argmax(pred_end_logits)`; `extent_decode_mode=intersect` intersects that
+interval with the normal point-valid contiguous mask. Decode uses only model
+predictions, never GT. Official-val sweeps may compare `none`, `interval`, and
+`intersect`; final selection remains official-val only and TEST remains closed
+until a candidate is selected. Official sweep selection policy
+`official_sweep_v4` breaks exact metric ties by preferring `none`, then
+`intersect`, then `interval`, so extent decode must earn a metric improvement
+instead of winning by incidental row order.
+
+When query `count-aware top-k` is enabled, both normal decode and cached sweep
+still compute lane quality with mean `pred_valid_logits` probability over the
+selected visible mask. Therefore `extent_decode_mode=interval` is independent
+of point-valid only for survival/visibility, not for count-aware ranking. The
+Q12/env30 extent-only probe keeps `COUNT_AWARE_TOPK=0` so the first gate tests
+extent visibility without that ranking dependency.
+
+`tools/diagnose_tusimple_query_extent_gate.py` keeps the historical flat
+summary fields mapped to `primary_extent_mode` for gate compatibility, and
+also writes `by_extent_mode` with the same short GT4/GT5, raw-geometry-strata,
+survival, extra-rate, and count-accuracy diagnostics for every decoded mode.
+Use `by_extent_mode` when comparing `interval` against `intersect`.
 
 This branch includes `tools/eval_tusimple_official.py`,
 `tools/sweep_tusimple_official_cached.py`, `tools/sweep_tusimple_official.py`,

@@ -36,6 +36,7 @@ OFFICIAL_NMS_DIST_PXS="${OFFICIAL_NMS_DIST_PXS:-0 18 30}"
 OFFICIAL_MAX_DETS="${OFFICIAL_MAX_DETS:-5 6 8}"
 OFFICIAL_MIN_POINTS="${OFFICIAL_MIN_POINTS:-2 3 4 5}"
 OFFICIAL_COUNT_MODES="${OFFICIAL_COUNT_MODES:-score_sum}"
+OFFICIAL_EXTENT_DECODE_MODES="${OFFICIAL_EXTENT_DECODE_MODES:-none}"
 COUNT_AWARE_TOPK="${COUNT_AWARE_TOPK:-0}"
 COUNT_AWARE_MIN_K="${COUNT_AWARE_MIN_K:-3}"
 COUNT_AWARE_MAX_K="${COUNT_AWARE_MAX_K:-5}"
@@ -50,6 +51,7 @@ SWEEP_NMS_DIST_PXS="${SWEEP_NMS_DIST_PXS:-${OFFICIAL_NMS_DIST_PXS}}"
 SWEEP_MAX_DETS="${SWEEP_MAX_DETS:-${OFFICIAL_MAX_DETS}}"
 SWEEP_MIN_POINTS="${SWEEP_MIN_POINTS:-${OFFICIAL_MIN_POINTS}}"
 SWEEP_COUNT_MODES="${SWEEP_COUNT_MODES:-${OFFICIAL_COUNT_MODES}}"
+SWEEP_EXTENT_DECODE_MODES="${SWEEP_EXTENT_DECODE_MODES:-${OFFICIAL_EXTENT_DECODE_MODES}}"
 SWEEP_COUNT_AWARE_TOPK="${SWEEP_COUNT_AWARE_TOPK:-${COUNT_AWARE_TOPK}}"
 SWEEP_COUNT_AWARE_EXTRA_MARGINS="${SWEEP_COUNT_AWARE_EXTRA_MARGINS:-${COUNT_AWARE_EXTRA_MARGINS}}"
 
@@ -59,6 +61,7 @@ read -r -a OFFICIAL_NMS_DIST_PXS_ARR <<< "${OFFICIAL_NMS_DIST_PXS}"
 read -r -a OFFICIAL_MAX_DETS_ARR <<< "${OFFICIAL_MAX_DETS}"
 read -r -a OFFICIAL_MIN_POINTS_ARR <<< "${OFFICIAL_MIN_POINTS}"
 read -r -a OFFICIAL_COUNT_MODES_ARR <<< "${OFFICIAL_COUNT_MODES}"
+read -r -a OFFICIAL_EXTENT_DECODE_MODES_ARR <<< "${OFFICIAL_EXTENT_DECODE_MODES}"
 read -r -a COUNT_AWARE_EXTRA_MARGINS_ARR <<< "${COUNT_AWARE_EXTRA_MARGINS}"
 read -r -a EXTRA_TRAIN_ARGS_ARR <<< "${EXTRA_TRAIN_ARGS}"
 read -r -a SWEEP_CONFS_ARR <<< "${SWEEP_CONFS}"
@@ -67,6 +70,7 @@ read -r -a SWEEP_NMS_DIST_PXS_ARR <<< "${SWEEP_NMS_DIST_PXS}"
 read -r -a SWEEP_MAX_DETS_ARR <<< "${SWEEP_MAX_DETS}"
 read -r -a SWEEP_MIN_POINTS_ARR <<< "${SWEEP_MIN_POINTS}"
 read -r -a SWEEP_COUNT_MODES_ARR <<< "${SWEEP_COUNT_MODES}"
+read -r -a SWEEP_EXTENT_DECODE_MODES_ARR <<< "${SWEEP_EXTENT_DECODE_MODES}"
 read -r -a SWEEP_COUNT_AWARE_EXTRA_MARGINS_ARR <<< "${SWEEP_COUNT_AWARE_EXTRA_MARGINS}"
 
 is_true() {
@@ -190,6 +194,7 @@ run_train() {
     --gcs-official-max-dets "${OFFICIAL_MAX_DETS_ARR[@]}" \
     --gcs-official-min-points "${OFFICIAL_MIN_POINTS_ARR[@]}" \
     --gcs-official-count-modes "${OFFICIAL_COUNT_MODES_ARR[@]}" \
+    --gcs-official-extent-decode-modes "${OFFICIAL_EXTENT_DECODE_MODES_ARR[@]}" \
     "${OFFICIAL_COUNT_AWARE_ARGS[@]}" \
     "${TRAIN_VALID_ARGS[@]}" \
     "${OFFICIAL_HALF_ARGS[@]}" \
@@ -228,6 +233,7 @@ run_val_sweep() {
     --max-dets "${SWEEP_MAX_DETS_ARR[@]}" \
     --min-points "${SWEEP_MIN_POINTS_ARR[@]}" \
     --count-modes "${SWEEP_COUNT_MODES_ARR[@]}" \
+    --extent-decode-modes "${SWEEP_EXTENT_DECODE_MODES_ARR[@]}" \
     "${SWEEP_COUNT_AWARE_ARGS[@]}" \
     "${SWEEP_VALID_ARGS[@]}" \
     --save-dir "${save_dir}"
@@ -301,11 +307,15 @@ if int(max_images) > 0:
     cmd.extend(["--max-images", str(int(max_images))])
 if bool(best.get("valid_before_maxdet", False)):
     cmd.append("--valid-before-maxdet")
+if bool(best.get("extent_decode", False)):
+    cmd.append("--extent-decode")
+    cmd.extend(["--extent-decode-mode", str(best.get("extent_decode_mode", "interval"))])
 if bool(best.get("count_aware_topk", False)):
     cmd.append("--count-aware-topk")
     cmd.extend(["--count-aware-min-k", str(int(best.get("count_aware_min_k", 3)))])
     cmd.extend(["--count-aware-max-k", str(int(best.get("count_aware_max_k", 5)))])
     cmd.extend(["--count-aware-length-norm", str(float(best.get("count_aware_length_norm", 12.0)))])
+    cmd.extend(["--count-aware-extra-margin", str(int(best.get("count_aware_extra_margin", 0)))])
 
 print("[test] " + " ".join(shlex.quote(part) for part in cmd), flush=True)
 subprocess.run(cmd, check=True)

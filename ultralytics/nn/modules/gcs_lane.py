@@ -221,6 +221,7 @@ class GCSLaneHead(nn.Module):
         reference_mode: str = "linear",
         reference_bank=None,
         query_quality_head: bool = False,
+        query_extent_head: bool = False,
     ):
         """Initialize the GCS lane query decoder and training-only auxiliary heads."""
         super().__init__()
@@ -367,6 +368,18 @@ class GCSLaneHead(nn.Module):
                 nn.ReLU(inplace=True),
                 nn.Linear(c1, 1),
             )
+        self.query_extent_head = self.gcs_mode == "query" and bool(query_extent_head)
+        if self.query_extent_head:
+            self.query_start_mlp = nn.Sequential(
+                nn.Linear(c1, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, num_points),
+            )
+            self.query_end_mlp = nn.Sequential(
+                nn.Linear(c1, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, num_points),
+            )
         if self.gcs_mode == "ordered_slot":
             self.start_mlp = nn.Sequential(
                 nn.Linear(c1, c1),
@@ -404,6 +417,8 @@ class GCSLaneHead(nn.Module):
             self._init_query_count_head()
         if self.query_quality_head:
             self._init_query_quality_head()
+        if self.query_extent_head:
+            self._init_query_extent_head()
 
     def _build_fixed_y_anchors(self):
         """Build shared bottom-to-top y anchors for fixed-y x-only prediction."""
@@ -600,6 +615,13 @@ class GCSLaneHead(nn.Module):
         final = self.query_quality_mlp[-1]
         nn.init.normal_(final.weight, mean=0.0, std=1e-3)
         nn.init.zeros_(final.bias)
+
+    def _init_query_extent_head(self):
+        """Initialize query-mode start/end extent logits near neutral."""
+        for mlp in (self.query_start_mlp, self.query_end_mlp):
+            final = mlp[-1]
+            nn.init.normal_(final.weight, mean=0.0, std=1e-3)
+            nn.init.zeros_(final.bias)
 
     def _sample_point_features(self, xs, points):
         """Sample high-resolution image features at normalized point coordinates.
@@ -799,6 +821,9 @@ class GCSLaneHead(nn.Module):
             out["pred_count_logits"] = self.query_count_mlp(hs.mean(dim=1))
         if getattr(self, "query_quality_head", False):
             out["pred_quality_logits"] = self.query_quality_mlp(hs).squeeze(-1)
+        if getattr(self, "query_extent_head", False):
+            out["pred_start_logits"] = self.query_start_mlp(hs).view(b, self.num_queries, self.num_points)
+            out["pred_end_logits"] = self.query_end_mlp(hs).view(b, self.num_queries, self.num_points)
         if self.gcs_mode == "ordered_slot":
             out["pred_exist_logits"] = pred_logits
             out["pred_start_logits"] = self.start_mlp(hs).view(b, self.num_queries, self.num_points)

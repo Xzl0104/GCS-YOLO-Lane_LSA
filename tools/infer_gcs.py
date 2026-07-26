@@ -118,6 +118,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-det", type=int, default=8, help="Maximum lane queries to keep after score sorting.")
     parser.add_argument("--min-points", type=int, default=2, help="Minimum visible anchors required to keep a lane.")
     parser.add_argument("--valid-before-maxdet", action="store_true", help="Filter point-valid/min_points failures before max_det truncation.")
+    parser.add_argument("--extent-decode", action="store_true", help="Use query start/end extent logits for query-mode visibility.")
+    parser.add_argument(
+        "--extent-decode-mode",
+        choices=("none", "interval", "intersect"),
+        default="interval",
+        help="Query extent decode mode. 'interval' uses extent logits directly; 'intersect' also requires point-valid survival.",
+    )
     parser.add_argument("--count-aware-topk", action="store_true", help="Use count_score to keep only the quality-best dynamic lane count.")
     parser.add_argument("--count-aware-min-k", type=int, default=3, help="Minimum k_hat for --count-aware-topk.")
     parser.add_argument("--count-aware-max-k", type=int, default=5, help="Maximum k_hat for --count-aware-topk.")
@@ -259,6 +266,12 @@ def _json_lane(lane: dict) -> dict:
         item["visible_points"] = np.asarray(lane["visible_points"], dtype=float).round(2).tolist()
     if "count_aware_quality" in lane:
         item["count_aware_quality"] = round(float(lane["count_aware_quality"]), 6)
+    if "extent_start_idx" in lane:
+        item["extent_start_idx"] = int(lane["extent_start_idx"])
+    if "extent_end_idx" in lane:
+        item["extent_end_idx"] = int(lane["extent_end_idx"])
+    if "extent_visible_source" in lane:
+        item["extent_visible_source"] = str(lane["extent_visible_source"])
     return item
 
 
@@ -276,6 +289,8 @@ def run_inference(
     max_det: int = 8,
     min_points: int = 2,
     valid_before_maxdet: bool = False,
+    extent_decode: bool = False,
+    extent_decode_mode: str = "interval",
     count_aware_topk: bool = False,
     count_aware_min_k: int = 3,
     count_aware_max_k: int = 5,
@@ -361,11 +376,15 @@ def run_inference(
         else:
             pred_valid = preds.get("pred_valid_logits")
             pred_quality_logits = preds.get("pred_quality_logits")
+            pred_start_logits = preds.get("pred_start_logits")
+            pred_end_logits = preds.get("pred_end_logits")
             lanes = decode_gcs_predictions(
                 preds["pred_points"][0],
                 preds["pred_logits"][0],
                 pred_quality_logits=pred_quality_logits[0] if pred_quality_logits is not None else None,
                 pred_valid_logits=pred_valid[0] if pred_valid is not None else None,
+                pred_start_logits=pred_start_logits[0] if pred_start_logits is not None else None,
+                pred_end_logits=pred_end_logits[0] if pred_end_logits is not None else None,
                 image_shape=img.shape[:2],
                 score_thr=conf,
                 point_valid_thr=point_valid_thr,
@@ -373,6 +392,8 @@ def run_inference(
                 max_det=max_det,
                 nms_dist_px=nms_dist_px,
                 valid_before_maxdet=valid_before_maxdet,
+                extent_decode=extent_decode,
+                extent_decode_mode=extent_decode_mode,
                 count_aware_topk=count_aware_topk,
                 count_aware_min_k=count_aware_min_k,
                 count_aware_max_k=count_aware_max_k,
@@ -419,6 +440,8 @@ def run_inference(
             "max_det": int(max_det),
             "min_points": int(min_points),
             "valid_before_maxdet": bool(valid_before_maxdet),
+            "extent_decode": bool(extent_decode),
+            "extent_decode_mode": str(extent_decode_mode),
             "count_aware_topk": bool(count_aware_topk),
             "count_aware_min_k": int(count_aware_min_k),
             "count_aware_max_k": int(count_aware_max_k),
@@ -475,6 +498,8 @@ def main() -> None:
         max_det=args.max_det,
         min_points=args.min_points,
         valid_before_maxdet=args.valid_before_maxdet,
+        extent_decode=args.extent_decode,
+        extent_decode_mode=args.extent_decode_mode,
         count_aware_topk=args.count_aware_topk,
         count_aware_min_k=args.count_aware_min_k,
         count_aware_max_k=args.count_aware_max_k,

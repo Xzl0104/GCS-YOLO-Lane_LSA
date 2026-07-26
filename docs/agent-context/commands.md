@@ -618,6 +618,213 @@ raw/event diagnostics must show quality top-k chooses true GT4/GT5 lanes, not
 Do not run final TEST, full training, or threshold/NMS expansion from this
 probe unless the official-val and train-side gates pass.
 
+Completed 40-epoch result:
+
+```text
+run = query_dualhead_quality_count_env30_probe40_v1
+status = not promoted to full training or TEST
+training rows = 40
+official_best source_epoch = 40
+TEST used = false
+
+official-val ACC/FP/FN =
+  0.962494 / 0.025941 / 0.021579
+count_acc_3/4/5 =
+  0.991031 / 0.954545 / 0.972973
+count_confusion =
+  3->4=2, 4->3=3, 5->4=2
+```
+
+Diagnostics:
+
+```text
+external official_best sweep rows = 864
+rows with ACC >= env30 = 0
+rows with FP/FN both <= env30 = 0
+GT-count oracle-rank ACC/FP/FN =
+  0.963281 / 0.020569 / 0.019972
+no-pool-cap oracle-rank = unchanged
+raw official-val has_match20 =
+  dual-head 0.933998, env30 final 0.976209
+GT5 visible<=10 raw match20 =
+  dual-head 0.509434, env30 final 0.754717
+```
+
+Interpretation:
+
+The image-level count head works and the current count-aware decode is count
+safe, but count/rank cannot rescue the 40-epoch checkpoint because candidate
+geometry and valid quality are still weak. The run is stronger than env30 at
+the same epoch040 official-val point (`0.962494` vs `0.958436`), so the
+undertraining hypothesis is still open.
+
+Next official-val-only diagnostic, if continuing this route:
+
+```bash
+RUN_NAME=query_dualhead_quality_count_env30_probe100_v1 \
+MODEL=ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-dualhead.yaml \
+EPOCHS=100 \
+RUN_TESTS=0 \
+OVERWRITE_SWEEPS=0 \
+bash scripts/run_query_dualhead_quality_count_env30_probe40_v1.sh
+```
+
+Gate before any 160/220 epoch run:
+
+```text
+official-val ACC should beat query_count_head_ce05_v1 (0.968473) and approach
+  env30 epoch100 (0.969213)
+raw official-val has_match20 should recover toward >= 0.95
+GT5 visible<=10 raw match20 should recover toward >= 0.65
+GT-count oracle-rank upper bound should move clearly above 0.968
+count_acc_4 >= 0.954545 and count_acc_5 >= 0.972973
+TEST remains closed
+```
+
+Completed 100-epoch result:
+
+```text
+run = query_dualhead_quality_count_env30_probe100_v1
+status = rejected for 220-epoch continuation as-is
+training rows = 100
+official_best source_epoch = 100
+TEST used = one reporting-only evaluation with frozen official-val decode
+
+official-val ACC/FP/FN =
+  0.966268 / 0.015335 / 0.015840
+count_acc_3/4/5 =
+  0.991031 / 0.939394 / 0.972973
+GT-count oracle-rank ACC/FP/FN =
+  0.966877 / 0.013728 / 0.014233
+raw has_match20 = 0.959325
+GT5 visible<=10 raw match20 = 0.754717
+```
+
+Reporting-only TEST with the frozen decode
+`conf=0.001, point_valid_thr=0.6, nms=0, max_det=5, min_points=2,
+valid_before_maxdet=true, count_mode=count_logits`:
+
+```text
+TEST ACC/FP/FN =
+  0.963288 / 0.028481 / 0.031332
+TEST count_acc/count_acc_4/count_acc_5 =
+  0.877067 / 0.611111 / 0.776801
+TEST count confusion =
+  4->3=119, 4->5=62, 5->4=105, 5->5=442
+```
+
+The TEST result is reporting-only and must not be used to tune this or any
+subsequent candidate. Do not rerun TEST for this artifact.
+
+Final decision: do not extend this exact run to 220 epochs. The next run must
+change the quality-head training/decode dependency or restore env30's
+geometry/objectness path, then pass official-val gates before any new TEST.
+
+## Q12 Env30 Query Extent Probe
+
+The next default-off path after the Count Head-only and dual-head reviews is a
+Q12/env30 query extent probe. It adds explicit visible-interval prediction on
+top of the env30 parent protocol, where `gcs_short_geom=1.0` is inherited from
+the parent launch script:
+
+```text
+model = ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-extent.yaml
+extent heads = pred_start_logits / pred_end_logits, each B x 12 x 56
+decode sweep = none, interval, intersect
+TEST = closed
+```
+
+Launch only a 40-epoch official-val probe:
+
+```bash
+RUN_NAME=query_extent_env30_probe40_v1 \
+MODEL=ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-extent.yaml \
+EPOCHS=40 \
+RUN_TESTS=0 \
+OVERWRITE_SWEEPS=0 \
+bash scripts/run_query_extent_env30_probe40_v1.sh
+```
+
+The probe keeps Count Head, Quality Head, score-sum count losses,
+boundary-pseudo loss, and Q24 role/event losses off:
+
+```text
+gcs_query_extent = 0.5
+gcs_query_extent_short_visible_thr = 10
+gcs_query_extent_short_weight = 2.0
+gcs_query_extent_gt_min_lanes = 4
+gcs_short_geom = 1.0
+gcs_query_count_ce = 0.0
+gcs_query_quality = 0.0
+gcs_count = 0.0
+gcs_count_under5 = 0.0
+gcs_count_boundary = 0.0
+gcs_boundary_pseudo_neg = 0.0
+OFFICIAL_EXTENT_DECODE_MODES = none interval intersect
+```
+
+After training, run the diagnostic gate without TEST:
+
+```bash
+RUN_NAME=query_extent_env30_probe40_v1 \
+RUN_TESTS=0 \
+OVERWRITE_DIAGS=0 \
+bash scripts/run_query_extent_env30_gate_v1.sh
+```
+
+Promotion gate before any longer/full training:
+
+```text
+official-val ACC >= query_count_head_ce025_env30_probe100_v1 ACC 0.968109
+short GT4 has_match20 >= 0.35
+short GT5 has_match20 >= 0.75
+short GT5 best_ape_p90 <= 30px
+count_acc_4 >= 0.90
+count_acc_5 >= 0.972973
+normal GT3/GT4 false-extra does not increase
+oracle-rank gain stays small
+```
+
+If the extent gate passes, the next implementation can add extent-guided local
+refine as a separate default-off v2. If extent endpoint/interval accuracy
+does not improve, do not add local refine; investigate coarse geometry or
+reference coverage instead.
+
+## Q24 Protected-Static Dual-Head Probe
+
+The requested Q24 follow-up adds the explicit Count Head and Quality Head to
+the strict-passed Q24 protected static bank. It is a 40-epoch
+official-val-only diagnostic; TEST stays closed:
+
+```bash
+RUN_NAME=query_alpha05_env30_q24_dualhead_quality_count_probe40_v1 \
+MODEL=ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q24-k56-dualhead.yaml \
+EPOCHS=40 \
+RUN_TESTS=0 \
+OVERWRITE_SWEEPS=0 \
+bash scripts/run_query_q24_dualhead_quality_count_probe40_v1.sh
+```
+
+The script keeps the parent Q24/env30 optimizer protocol:
+
+```text
+optimizer = AdamW
+lr0 = 0.0005
+lrf = 0.05
+weight_decay = 0.0001
+warmup_epochs = 0
+gcs_query_count_ce = 0.25
+gcs_query_quality = 0.25
+OFFICIAL_COUNT_MODES = count_logits
+COUNT_AWARE_TOPK = 1
+TEST = closed
+```
+
+It explicitly disables the score-sum count losses and the rejected Q24
+role/event containment/calibration losses. Do not extend this run or evaluate
+TEST until official-val ACC, GT4/GT5 count shape, raw candidate coverage, and
+extra-query carrier diagnostics pass the gate.
+
 ## Query Count Head CE0.5 Run
 
 The default-off query Count Head ablation is launched through:

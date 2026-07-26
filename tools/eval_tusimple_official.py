@@ -100,6 +100,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-points", type=int, default=6, help="Minimum visible anchors required to keep a lane.")
     parser.add_argument("--max-det", type=int, default=8, help="Maximum decoded lane queries kept before official evaluation.")
     parser.add_argument("--valid-before-maxdet", action="store_true", help="Filter point-valid/min_points failures before max_det truncation.")
+    parser.add_argument("--extent-decode", action="store_true", help="Use query start/end extent logits for query visibility.")
+    parser.add_argument(
+        "--extent-decode-mode",
+        choices=("none", "interval", "intersect"),
+        default="interval",
+        help="Query extent visibility mode. 'none' preserves point-valid decode.",
+    )
     parser.add_argument("--count-aware-topk", action="store_true", help="Use count_score to keep only the quality-best dynamic lane count.")
     parser.add_argument("--count-aware-min-k", type=int, default=3, help="Minimum k_hat for --count-aware-topk.")
     parser.add_argument("--count-aware-max-k", type=int, default=5, help="Maximum k_hat for --count-aware-topk.")
@@ -177,6 +184,8 @@ def resolve_save_dir(
     count_aware_extra_margin: int = 0,
     count_aware_topk: bool = False,
     valid_before_maxdet: bool = False,
+    extent_decode: bool = False,
+    extent_decode_mode: str = "interval",
     oracle_count: bool = False,
     decode_mode: str = "auto",
 ) -> Path:
@@ -190,9 +199,12 @@ def resolve_save_dir(
             count_tag += f"_extra{int(count_aware_extra_margin)}"
         oracle_tag = "_oraclecount" if oracle_count else ""
         valid_tag = "_validbeforemaxdet" if valid_before_maxdet else ""
+        extent_mode = str(extent_decode_mode or "none").strip().lower()
+        extent_tag = f"_extent{extent_mode}" if bool(extent_decode) and extent_mode != "none" else ""
         tag = (
             f"official_{split}_conf{float(conf):.4g}_pvalid{float(point_valid_thr):.4g}_"
-            f"nms{float(nms_dist_px):.4g}_maxdet{int(max_det)}_minp{int(min_points)}{count_tag}{oracle_tag}{valid_tag}"
+            f"nms{float(nms_dist_px):.4g}_maxdet{int(max_det)}_minp{int(min_points)}"
+            f"{count_tag}{oracle_tag}{valid_tag}{extent_tag}"
         ).replace(".", "p")
     run_dir = _weight_run_dir(weights)
     if run_dir is not None:
@@ -220,6 +232,8 @@ def _apply_query_decode_yaml(args: argparse.Namespace, decode_yaml_cfg: dict) ->
     args.max_det = int(decode_yaml_cfg["max_det"])
     args.min_points = int(decode_yaml_cfg["min_points"])
     args.valid_before_maxdet = bool(decode_yaml_cfg.get("valid_before_maxdet", False))
+    args.extent_decode = bool(decode_yaml_cfg.get("extent_decode", False))
+    args.extent_decode_mode = str(decode_yaml_cfg.get("extent_decode_mode", "none") or "none")
     args.count_aware_topk = bool(decode_yaml_cfg["count_aware_topk"])
     args.count_aware_min_k = int(decode_yaml_cfg["count_aware_min_k"])
     args.count_aware_max_k = int(decode_yaml_cfg["count_aware_max_k"])
@@ -228,10 +242,25 @@ def _apply_query_decode_yaml(args: argparse.Namespace, decode_yaml_cfg: dict) ->
     args.count_mode = str(decode_yaml_cfg.get("count_mode", "score_sum"))
 
 
+def _normalize_extent_decode_args(extent_decode: bool, extent_decode_mode: str) -> tuple[bool, str]:
+    """Normalize disabled extent decode so ordered-slot guards see default query args."""
+    enabled = bool(extent_decode)
+    mode = str(extent_decode_mode or "interval").strip().lower()
+    if mode in {"off", "false", "0"}:
+        mode = "none"
+    if not enabled:
+        return False, "none"
+    return True, mode
+
+
 def resolve_pred_json_decode_contract(args: argparse.Namespace) -> tuple[str, dict | None] | None:
     """Resolve the explicit decode contract for --pred-json mode."""
     if not getattr(args, "pred_json", None):
         return None
+    args.extent_decode, args.extent_decode_mode = _normalize_extent_decode_args(
+        getattr(args, "extent_decode", False),
+        getattr(args, "extent_decode_mode", "interval"),
+    )
 
     if getattr(args, "decode_yaml", None):
         _, decode_yaml_cfg = load_decode_yaml(args.decode_yaml)
@@ -313,6 +342,8 @@ def generate_predictions(
     count_mode: str = "score_sum",
     oracle_count: bool = False,
     valid_before_maxdet: bool = False,
+    extent_decode: bool = False,
+    extent_decode_mode: str = "interval",
     decode_mode: str = "auto",
     decode_yaml_cfg: dict | None = None,
     gcs_min_lanes: int = 2,
@@ -334,6 +365,8 @@ def generate_predictions(
             max_det = int(decode_yaml_cfg["max_det"])
             min_points = int(decode_yaml_cfg["min_points"])
             valid_before_maxdet = bool(decode_yaml_cfg.get("valid_before_maxdet", False))
+            extent_decode = bool(decode_yaml_cfg.get("extent_decode", False))
+            extent_decode_mode = str(decode_yaml_cfg.get("extent_decode_mode", "none") or "none")
             count_aware_topk = bool(decode_yaml_cfg["count_aware_topk"])
             count_aware_min_k = int(decode_yaml_cfg["count_aware_min_k"])
             count_aware_max_k = int(decode_yaml_cfg["count_aware_max_k"])
@@ -347,6 +380,7 @@ def generate_predictions(
             raise RuntimeError("--oracle-count is query-decode diagnostic only and is not valid for ordered_slot.")
         count_aware_topk = True
         count_mode = "oracle_gt"
+    extent_decode, extent_decode_mode = _normalize_extent_decode_args(extent_decode, extent_decode_mode)
     if str(decode_mode) == "ordered_slot" and query_decode_defaults is not None:
         guard_no_query_decode_args_for_ordered_slot(
             {
@@ -356,6 +390,8 @@ def generate_predictions(
                 "min_points": min_points,
                 "max_det": max_det,
                 "valid_before_maxdet": valid_before_maxdet,
+                "extent_decode": extent_decode,
+                "extent_decode_mode": extent_decode_mode,
                 "count_aware_topk": count_aware_topk,
                 "count_aware_min_k": count_aware_min_k,
                 "count_aware_max_k": count_aware_max_k,
@@ -430,12 +466,16 @@ def generate_predictions(
             pred_valid = preds.get("pred_valid_logits")
             pred_count_logits = preds.get("pred_count_logits")
             pred_quality_logits = preds.get("pred_quality_logits")
+            pred_start_logits = preds.get("pred_start_logits")
+            pred_end_logits = preds.get("pred_end_logits")
             lanes = decode_gcs_predictions(
                 preds["pred_points"][0],
                 preds["pred_logits"][0],
                 pred_quality_logits=pred_quality_logits[0] if pred_quality_logits is not None else None,
                 pred_valid_logits=pred_valid[0] if pred_valid is not None else None,
                 pred_count_logits=pred_count_logits[0] if pred_count_logits is not None else None,
+                pred_start_logits=pred_start_logits[0] if pred_start_logits is not None else None,
+                pred_end_logits=pred_end_logits[0] if pred_end_logits is not None else None,
                 oracle_count=_gt_lane_count(record) if oracle_count else None,
                 image_shape=original_shape,
                 score_thr=conf,
@@ -444,6 +484,8 @@ def generate_predictions(
                 max_det=max_det,
                 nms_dist_px=nms_dist_px,
                 valid_before_maxdet=valid_before_maxdet,
+                extent_decode=extent_decode,
+                extent_decode_mode=extent_decode_mode,
                 count_aware_topk=count_aware_topk,
                 count_aware_min_k=count_aware_min_k,
                 count_aware_max_k=count_aware_max_k,
@@ -510,6 +552,8 @@ def evaluate_official(args: argparse.Namespace) -> dict:
         query_max_det = int(getattr(args, "max_det", 8))
         query_min_points = int(getattr(args, "min_points", 6))
         query_valid_before_maxdet = bool(getattr(args, "valid_before_maxdet", False))
+        query_extent_decode = bool(getattr(args, "extent_decode", False))
+        query_extent_decode_mode = str(getattr(args, "extent_decode_mode", "interval") or "interval")
         query_count_aware_topk = bool(getattr(args, "count_aware_topk", False))
         query_count_aware_min_k = int(getattr(args, "count_aware_min_k", 3))
         query_count_aware_max_k = int(getattr(args, "count_aware_max_k", 5))
@@ -520,6 +564,10 @@ def evaluate_official(args: argparse.Namespace) -> dict:
         if query_oracle_count:
             query_count_aware_topk = True
             query_count_mode = "oracle_gt"
+        query_extent_decode, query_extent_decode_mode = _normalize_extent_decode_args(
+            query_extent_decode,
+            query_extent_decode_mode,
+        )
         pred_records, timing, active_decode_mode, ordered_slot_order_stats = generate_predictions(
             weights=args.weights,
             archive_root=archive_root,
@@ -532,6 +580,8 @@ def evaluate_official(args: argparse.Namespace) -> dict:
             max_det=query_max_det,
             min_points=query_min_points,
             valid_before_maxdet=query_valid_before_maxdet,
+            extent_decode=query_extent_decode,
+            extent_decode_mode=query_extent_decode_mode,
             count_aware_topk=query_count_aware_topk,
             count_aware_min_k=query_count_aware_min_k,
             count_aware_max_k=query_count_aware_max_k,
@@ -562,6 +612,8 @@ def evaluate_official(args: argparse.Namespace) -> dict:
     query_max_det = int(getattr(args, "max_det", 8))
     query_min_points = int(getattr(args, "min_points", 6))
     query_valid_before_maxdet = bool(getattr(args, "valid_before_maxdet", False))
+    query_extent_decode = bool(getattr(args, "extent_decode", False))
+    query_extent_decode_mode = str(getattr(args, "extent_decode_mode", "interval") or "interval")
     query_count_aware_topk = bool(getattr(args, "count_aware_topk", False))
     query_count_aware_min_k = int(getattr(args, "count_aware_min_k", 3))
     query_count_aware_max_k = int(getattr(args, "count_aware_max_k", 5))
@@ -572,6 +624,10 @@ def evaluate_official(args: argparse.Namespace) -> dict:
     if query_oracle_count:
         query_count_aware_topk = True
         query_count_mode = "oracle_gt"
+    query_extent_decode, query_extent_decode_mode = _normalize_extent_decode_args(
+        query_extent_decode,
+        query_extent_decode_mode,
+    )
 
     save_dir = resolve_save_dir(
         args.save_dir,
@@ -585,6 +641,8 @@ def evaluate_official(args: argparse.Namespace) -> dict:
         count_aware_extra_margin=query_count_aware_extra_margin,
         count_aware_topk=query_count_aware_topk,
         valid_before_maxdet=query_valid_before_maxdet,
+        extent_decode=query_extent_decode,
+        extent_decode_mode=query_extent_decode_mode,
         oracle_count=query_oracle_count,
         decode_mode=active_decode_mode,
     )
@@ -674,6 +732,8 @@ def evaluate_official(args: argparse.Namespace) -> dict:
                 "max_det": query_max_det,
                 "min_points": query_min_points,
                 "valid_before_maxdet": query_valid_before_maxdet,
+                "extent_decode": query_extent_decode,
+                "extent_decode_mode": query_extent_decode_mode,
                 "count_aware_topk": query_count_aware_topk,
                 "count_aware_min_k": query_count_aware_min_k,
                 "count_aware_max_k": query_count_aware_max_k,

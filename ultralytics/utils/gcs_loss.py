@@ -55,6 +55,11 @@ class GCSLoss(nn.Module):
         "query_quality_loss",
         "query_quality_pos_mean",
         "query_quality_pos_count",
+        "query_extent_loss",
+        "query_extent_start_acc",
+        "query_extent_end_acc",
+        "query_extent_iou",
+        "query_extent_short_count",
         "role_contain_loss",
         "role_contain_exist_loss",
         "role_contain_valid_loss",
@@ -136,6 +141,10 @@ class GCSLoss(nn.Module):
         query_count_min_lanes: int | None = None,
         query_count_max_lanes: int | None = None,
         query_quality: float | None = None,
+        query_extent: float | None = None,
+        query_extent_short_visible_thr: int | None = None,
+        query_extent_short_weight: float | None = None,
+        query_extent_gt_min_lanes: int | None = None,
         role_contain: float | None = None,
         role_contain_valid_weight: float | None = None,
         role_contain_matcher: bool | None = None,
@@ -212,6 +221,24 @@ class GCSLoss(nn.Module):
         )
         self.query_quality_gain = float(
             query_quality if query_quality is not None else self._arg(args, "gcs_query_quality", 0.0)
+        )
+        self.query_extent_gain = float(
+            query_extent if query_extent is not None else self._arg(args, "gcs_query_extent", 0.0)
+        )
+        self.query_extent_short_visible_thr = int(
+            query_extent_short_visible_thr
+            if query_extent_short_visible_thr is not None
+            else self._arg(args, "gcs_query_extent_short_visible_thr", 10)
+        )
+        self.query_extent_short_weight = float(
+            query_extent_short_weight
+            if query_extent_short_weight is not None
+            else self._arg(args, "gcs_query_extent_short_weight", 2.0)
+        )
+        self.query_extent_gt_min_lanes = int(
+            query_extent_gt_min_lanes
+            if query_extent_gt_min_lanes is not None
+            else self._arg(args, "gcs_query_extent_gt_min_lanes", 4)
         )
         self.query_count_min_lanes = int(
             query_count_min_lanes
@@ -528,6 +555,23 @@ class GCSLoss(nn.Module):
             raise ValueError(f"gcs_query_count_ce must be >= 0, got {self.query_count_ce_gain}.")
         if self.query_quality_gain < 0.0:
             raise ValueError(f"gcs_query_quality must be >= 0, got {self.query_quality_gain}.")
+        if self.query_extent_gain < 0.0:
+            raise ValueError(f"gcs_query_extent must be >= 0, got {self.query_extent_gain}.")
+        if self.query_extent_short_visible_thr < 0:
+            raise ValueError(
+                "gcs_query_extent_short_visible_thr must be >= 0, "
+                f"got {self.query_extent_short_visible_thr}."
+            )
+        if self.query_extent_short_weight < 0.0:
+            raise ValueError(
+                "gcs_query_extent_short_weight must be >= 0, "
+                f"got {self.query_extent_short_weight}."
+            )
+        if self.query_extent_gt_min_lanes < 0:
+            raise ValueError(
+                "gcs_query_extent_gt_min_lanes must be >= 0, "
+                f"got {self.query_extent_gt_min_lanes}."
+            )
         if self.count_boundary_margin34 < 0.0:
             raise ValueError(f"gcs_count_boundary_margin34 must be >= 0, got {self.count_boundary_margin34}.")
         if self.count_boundary_margin45 < 0.0:
@@ -2064,6 +2108,119 @@ class GCSLoss(nn.Module):
             pos_count = self._zero_like(pred_points)
         return loss, pos_mean, pos_count
 
+    def query_extent_loss(
+        self,
+        preds: dict[str, torch.Tensor],
+        pred_points: torch.Tensor,
+        gt_valid: list[torch.Tensor],
+        indices: list[tuple[torch.Tensor, torch.Tensor]],
+        gt_lanes: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Train optional query-mode first/last visible anchor classifiers."""
+        pred_start_logits = preds.get("pred_start_logits")
+        pred_end_logits = preds.get("pred_end_logits")
+        if pred_start_logits is None or pred_end_logits is None:
+            if float(self.query_extent_gain) > 0.0:
+                raise ValueError(
+                    "gcs_query_extent requires preds['pred_start_logits'] and preds['pred_end_logits']; "
+                    "use a query_extent_head model YAML or set --gcs-query-extent 0.0."
+                )
+            zero = self._zero_like(pred_points)
+            return zero, zero, zero, zero, zero
+
+        expected_shape = tuple(pred_points.shape[:3])
+        if tuple(pred_start_logits.shape) != expected_shape:
+            raise ValueError(
+                "pred_start_logits must have shape B x Q x K matching pred_points, "
+                f"got {tuple(pred_start_logits.shape)} vs {expected_shape}."
+            )
+        if tuple(pred_end_logits.shape) != expected_shape:
+            raise ValueError(
+                "pred_end_logits must have shape B x Q x K matching pred_points, "
+                f"got {tuple(pred_end_logits.shape)} vs {expected_shape}."
+            )
+
+        device = pred_points.device
+        dtype = pred_points.dtype
+        loss_sum = pred_points.new_zeros(())
+        weight_sum = pred_points.new_zeros(())
+        start_correct = pred_points.new_zeros(())
+        end_correct = pred_points.new_zeros(())
+        interval_iou_sum = pred_points.new_zeros(())
+        matched_count = 0
+        short_count = 0
+
+        gt_lanes_t = None
+        if gt_lanes is not None:
+            gt_lanes_t = torch.as_tensor(gt_lanes, device=device, dtype=dtype).reshape(-1)
+            if gt_lanes_t.numel() != pred_points.shape[0]:
+                raise ValueError(f"gt_lanes must have one value per image, got {gt_lanes_t.numel()} vs B={pred_points.shape[0]}.")
+
+        for b, (src_idx, tgt_idx) in enumerate(indices):
+            if src_idx.numel() == 0:
+                continue
+            src_idx = src_idx.to(device=device, dtype=torch.long)
+            tgt_idx = tgt_idx.to(device=device, dtype=torch.long)
+            target_valid = gt_valid[b].to(device=device, dtype=dtype)[tgt_idx]
+            visible = target_valid > 0.5
+            has_visible = visible.any(dim=1)
+            if not bool(has_visible.any()):
+                continue
+
+            src_idx = src_idx[has_visible]
+            visible = visible[has_visible]
+            visible_float = visible.to(dtype=dtype)
+            k = int(visible.shape[1])
+            start_targets = visible_float.argmax(dim=1).long()
+            end_targets = (k - 1 - torch.flip(visible_float, dims=[1]).argmax(dim=1)).long()
+
+            start_logits = pred_start_logits[b, src_idx]
+            end_logits = pred_end_logits[b, src_idx]
+            start_loss = F.cross_entropy(start_logits, start_targets, reduction="none")
+            end_loss = F.cross_entropy(end_logits, end_targets, reduction="none")
+
+            lane_weights = torch.ones_like(start_loss, dtype=dtype)
+            visible_counts = visible_float.sum(dim=1)
+            gt_count = int(round(float(gt_lanes_t[b].detach().item()))) if gt_lanes_t is not None else 0
+            short_mask = (visible_counts <= float(self.query_extent_short_visible_thr)) & (
+                gt_count >= int(self.query_extent_gt_min_lanes)
+            )
+            if bool(short_mask.any()):
+                lane_weights[short_mask] = lane_weights[short_mask] + float(self.query_extent_short_weight)
+                short_count += int(short_mask.sum().item())
+
+            loss_sum = loss_sum + ((start_loss + end_loss) * lane_weights).sum()
+            weight_sum = weight_sum + lane_weights.sum()
+
+            pred_start = start_logits.detach().argmax(dim=1)
+            pred_end = end_logits.detach().argmax(dim=1)
+            pred_lo = torch.minimum(pred_start, pred_end)
+            pred_hi = torch.maximum(pred_start, pred_end)
+            target_lo = torch.minimum(start_targets, end_targets)
+            target_hi = torch.maximum(start_targets, end_targets)
+            inter = (torch.minimum(pred_hi, target_hi) - torch.maximum(pred_lo, target_lo) + 1).clamp_min(0)
+            union = (torch.maximum(pred_hi, target_hi) - torch.minimum(pred_lo, target_lo) + 1).clamp_min(1)
+            interval_iou = inter.to(dtype=dtype) / union.to(dtype=dtype)
+
+            start_correct = start_correct + (pred_start == start_targets).to(dtype=dtype).sum()
+            end_correct = end_correct + (pred_end == end_targets).to(dtype=dtype).sum()
+            interval_iou_sum = interval_iou_sum + interval_iou.sum()
+            matched_count += int(start_targets.numel())
+
+        if matched_count == 0:
+            zero = self._zero_like(pred_points)
+            return zero, zero, zero, zero, zero
+
+        denom = weight_sum.clamp_min(1.0)
+        count_t = pred_points.new_tensor(float(matched_count))
+        return (
+            loss_sum / denom,
+            start_correct / count_t,
+            end_correct / count_t,
+            interval_iou_sum / count_t,
+            pred_points.new_tensor(float(short_count)),
+        )
+
     def count_boundary_loss(
         self, count_score: torch.Tensor, target: torch.Tensor, return_details: bool = False
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
@@ -2702,6 +2859,19 @@ class GCSLoss(nn.Module):
             indices,
         )
         (
+            query_extent_loss,
+            query_extent_start_acc,
+            query_extent_end_acc,
+            query_extent_iou,
+            query_extent_short_count,
+        ) = self.query_extent_loss(
+            preds,
+            pred_points,
+            gt_valid,
+            indices,
+            gt_lanes=gt_lanes,
+        )
+        (
             spurious_neg_loss,
             spurious_negative_count,
             spur_cand,
@@ -2796,6 +2966,8 @@ class GCSLoss(nn.Module):
             total = total + self.query_count_ce_gain * query_count_ce_loss
         if self.query_quality_gain != 0.0:
             total = total + self.query_quality_gain * query_quality_loss
+        if self.query_extent_gain != 0.0:
+            total = total + self.query_extent_gain * query_extent_loss
         if self.spurious_neg_gain != 0.0:
             total = total + self.spurious_neg_gain * self.spurious_neg_weight * spurious_neg_loss
         if self.role_contain_gain != 0.0:
@@ -2845,6 +3017,11 @@ class GCSLoss(nn.Module):
                 query_quality_loss.detach(),
                 query_quality_pos_mean.detach(),
                 query_quality_pos_count.detach(),
+                query_extent_loss.detach(),
+                query_extent_start_acc.detach(),
+                query_extent_end_acc.detach(),
+                query_extent_iou.detach(),
+                query_extent_short_count.detach(),
                 role_contain_loss.detach(),
                 role_contain_exist_loss.detach(),
                 role_contain_valid_loss.detach(),

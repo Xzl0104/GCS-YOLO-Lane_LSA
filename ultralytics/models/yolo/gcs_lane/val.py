@@ -63,6 +63,11 @@ LOSS_NAMES = (
     "query_quality_loss",
     "query_quality_pos_mean",
     "query_quality_pos_count",
+    "query_extent_loss",
+    "query_extent_start_acc",
+    "query_extent_end_acc",
+    "query_extent_iou",
+    "query_extent_short_count",
     "role_contain_loss",
     "role_contain_exist_loss",
     "role_contain_valid_loss",
@@ -125,6 +130,11 @@ LOSS_GAIN_ARGS = (
     "gcs_query_quality",
     None,
     None,
+    "gcs_query_extent",
+    None,
+    None,
+    None,
+    None,
     "gcs_role_contain",
     None,
     None,
@@ -155,6 +165,11 @@ DEFAULT_LOSS_GAINS = (
     0.1,
     0.2,
     0.2,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
     0.0,
     0.0,
     0.0,
@@ -515,6 +530,19 @@ class GCSLaneValidator:
         """Return the maximum number of decoded lanes retained per image."""
         return int(self._arg(self.args, "gcs_eval_max_det", 8))
 
+    def _eval_extent_decode(self) -> bool:
+        """Return whether query validation decode should use start/end extent logits."""
+        return bool(self._arg(self.args, "gcs_extent_decode", False))
+
+    def _eval_extent_decode_mode(self) -> str:
+        """Return normalized query extent decode mode for validation metrics."""
+        mode = str(self._arg(self.args, "gcs_extent_decode_mode", "interval") or "interval").strip().lower()
+        if mode in {"off", "false", "0"}:
+            mode = "none"
+        if mode not in {"none", "interval", "intersect"}:
+            raise ValueError(f"Unsupported gcs_extent_decode_mode={mode!r}; use 'none', 'interval', or 'intersect'.")
+        return mode
+
     @staticmethod
     def _empty_metric_state() -> dict:
         """Create mutable validation metric accumulators."""
@@ -656,6 +684,12 @@ class GCSLaneValidator:
         pred_quality_logits = preds.get("pred_quality_logits")
         if pred_quality_logits is not None:
             pred_quality_logits = pred_quality_logits.detach()
+        pred_start_logits = preds.get("pred_start_logits")
+        if pred_start_logits is not None:
+            pred_start_logits = pred_start_logits.detach()
+        pred_end_logits = preds.get("pred_end_logits")
+        if pred_end_logits is not None:
+            pred_end_logits = pred_end_logits.detach()
         if pred_logits.ndim == 3 and pred_logits.shape[-1] == 1:
             pred_logits = pred_logits.squeeze(-1)
         h, w = int(batch["img"].shape[-2]), int(batch["img"].shape[-1])
@@ -667,6 +701,8 @@ class GCSLaneValidator:
         nms_dist_px = self._eval_nms_dist_px()
         point_valid_thr = self._eval_point_valid_thr()
         max_det = self._eval_max_det()
+        extent_decode = self._eval_extent_decode()
+        extent_decode_mode = self._eval_extent_decode_mode()
         ordered_slot = self._gcs_mode() == "ordered_slot"
         ordered_slot_runtime_cfg = ordered_slot_decode_runtime_config(context="training_val") if ordered_slot else None
         ordered_slot_params = ordered_slot_decode_params(self.args) if ordered_slot else None
@@ -694,11 +730,15 @@ class GCSLaneValidator:
                     pred_logits[i],
                     pred_quality_logits=pred_quality_logits[i] if pred_quality_logits is not None else None,
                     pred_valid_logits=pred_valid_logits[i] if pred_valid_logits is not None else None,
+                    pred_start_logits=pred_start_logits[i] if pred_start_logits is not None else None,
+                    pred_end_logits=pred_end_logits[i] if pred_end_logits is not None else None,
                     image_shape=(h, w),
                     score_thr=conf,
                     point_valid_thr=point_valid_thr,
                     max_det=max_det,
                     nms_dist_px=nms_dist_px,
+                    extent_decode=extent_decode,
+                    extent_decode_mode=extent_decode_mode,
                 )
             gt_lanes, gt_valid = self._valid_gt_lanes(gt_lanes_t, gt_valid_t)
             tp, fp, fn, apes_tp, apes_all, apes_fp = self._match_lanes(

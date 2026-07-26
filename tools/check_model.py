@@ -130,6 +130,21 @@ def main():
             )
     elif "pred_quality_logits" in y:
         raise RuntimeError("default query GCSLaneHead must not emit pred_quality_logits.")
+    if gcs_mode != "ordered_slot" and getattr(head, "query_extent_head", False):
+        expected_extent_shape = (args.batch, expected_q, expected_k)
+        if tuple(y.get("pred_start_logits", torch.empty(0)).shape) != expected_extent_shape:
+            raise RuntimeError(
+                f"query Extent Head pred_start_logits must have shape B x {expected_q} x {expected_k}, "
+                f"got {tuple(y.get('pred_start_logits', torch.empty(0)).shape)}."
+            )
+        if tuple(y.get("pred_end_logits", torch.empty(0)).shape) != expected_extent_shape:
+            raise RuntimeError(
+                f"query Extent Head pred_end_logits must have shape B x {expected_q} x {expected_k}, "
+                f"got {tuple(y.get('pred_end_logits', torch.empty(0)).shape)}."
+            )
+    elif gcs_mode != "ordered_slot":
+        if "pred_start_logits" in y or "pred_end_logits" in y:
+            raise RuntimeError("default query GCSLaneHead must not emit pred_start_logits/pred_end_logits.")
     if y["pred_valid_logits"].shape != y["pred_points"].shape[:3]:
         raise RuntimeError(
             "pred_valid_logits must have shape B x Q x K matching pred_points, "

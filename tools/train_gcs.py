@@ -243,6 +243,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Query-mode independent lane quality/ranking head BCE gain. 0 disables.",
     )
     parser.add_argument(
+        "--gcs-query-extent",
+        type=float,
+        default=0.0,
+        help="Query-mode first/last visible anchor extent CE gain. 0 disables.",
+    )
+    parser.add_argument("--gcs-query-extent-short-visible-thr", type=int, default=10)
+    parser.add_argument("--gcs-query-extent-short-weight", type=float, default=2.0)
+    parser.add_argument("--gcs-query-extent-gt-min-lanes", type=int, default=4)
+    parser.add_argument(
         "--gcs-count-ce",
         nargs="?",
         const=1.0,
@@ -813,6 +822,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--gcs-official-max-dets", nargs="+", type=int, default=[5, 6, 8])
     parser.add_argument("--gcs-official-min-points", nargs="+", type=int, default=[4, 5, 6])
     parser.add_argument(
+        "--gcs-official-extent-decode-modes",
+        nargs="+",
+        choices=("none", "interval", "intersect"),
+        default=["none"],
+        help="Query extent visibility modes for training-time query official-val sweeps.",
+    )
+    parser.add_argument(
         "--gcs-official-count-modes",
         nargs="+",
         choices=("score_sum", "count_logits"),
@@ -1010,6 +1026,10 @@ def main() -> None:
         "gcs_query_count_min_lanes": args.gcs_query_count_min_lanes,
         "gcs_query_count_max_lanes": args.gcs_query_count_max_lanes,
         "gcs_query_quality": args.gcs_query_quality,
+        "gcs_query_extent": args.gcs_query_extent,
+        "gcs_query_extent_short_visible_thr": args.gcs_query_extent_short_visible_thr,
+        "gcs_query_extent_short_weight": args.gcs_query_extent_short_weight,
+        "gcs_query_extent_gt_min_lanes": args.gcs_query_extent_gt_min_lanes,
         "gcs_count_ce": args.gcs_count_ce,
         "gcs_interval": args.gcs_interval,
         "gcs_order": args.gcs_order,
@@ -1146,6 +1166,7 @@ def main() -> None:
         "gcs_official_nms_dist_pxs": args.gcs_official_nms_dist_pxs,
         "gcs_official_max_dets": args.gcs_official_max_dets,
         "gcs_official_min_points": args.gcs_official_min_points,
+        "gcs_official_extent_decode_modes": args.gcs_official_extent_decode_modes,
         "gcs_official_count_modes": args.gcs_official_count_modes,
         "gcs_official_count_aware_topk": args.gcs_official_count_aware_topk,
         "gcs_official_count_aware_min_k": args.gcs_official_count_aware_min_k,
