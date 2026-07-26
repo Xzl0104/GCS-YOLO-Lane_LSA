@@ -145,6 +145,21 @@ def main():
     elif gcs_mode != "ordered_slot":
         if "pred_start_logits" in y or "pred_end_logits" in y:
             raise RuntimeError("default query GCSLaneHead must not emit pred_start_logits/pred_end_logits.")
+    if gcs_mode != "ordered_slot" and getattr(head, "query_short_local_refine_head", False):
+        if tuple(y.get("pred_coarse_points", torch.empty(0)).shape) != expected_points_shape:
+            raise RuntimeError(
+                f"query short local refine pred_coarse_points must have shape {expected_points_shape}, "
+                f"got {tuple(y.get('pred_coarse_points', torch.empty(0)).shape)}."
+            )
+        expected_delta_shape = (args.batch, expected_q, expected_k)
+        if tuple(y.get("pred_short_refine_delta_logits", torch.empty(0)).shape) != expected_delta_shape:
+            raise RuntimeError(
+                f"query short local refine pred_short_refine_delta_logits must have shape {expected_delta_shape}, "
+                f"got {tuple(y.get('pred_short_refine_delta_logits', torch.empty(0)).shape)}."
+            )
+    elif gcs_mode != "ordered_slot":
+        if "pred_coarse_points" in y or "pred_short_refine_delta_logits" in y:
+            raise RuntimeError("default query GCSLaneHead must not emit short local refine diagnostic outputs.")
     if y["pred_valid_logits"].shape != y["pred_points"].shape[:3]:
         raise RuntimeError(
             "pred_valid_logits must have shape B x Q x K matching pred_points, "
@@ -193,6 +208,7 @@ def main():
         print(f"GCSLaneHead gcs_mode: {getattr(head, 'gcs_mode', None)}")
         print(f"GCSLaneHead point_dims: {getattr(head, 'point_dims', None)}")
         print(f"GCSLaneHead reference_mode: {getattr(head, 'reference_mode', None)}")
+        print(f"GCSLaneHead query_short_local_refine_head: {getattr(head, 'query_short_local_refine_head', None)}")
 
     print(type(y))
     for k, v in y.items():

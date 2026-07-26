@@ -83,6 +83,8 @@ QUERY_ROW_KEYS = (
 PREDICTION_KEYS = (
     "pred_points",
     "pred_logits",
+    "pred_coarse_points",
+    "pred_short_refine_delta_logits",
     "pred_quality_logits",
     "pred_valid_logits",
     "pred_count_logits",

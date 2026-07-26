@@ -113,6 +113,20 @@ first/last visible fixed-y anchor classifiers for the K56 bottom-to-top order.
 The default query YAML still emits no query extent logits, and ordered-slot
 keeps its separate `B x 5 x 56` interval contract.
 
+The optional Q12 short local x-refine probe adds only:
+
+```text
+pred_coarse_points: B x 12 x 56 x 2
+pred_short_refine_delta_logits: B x 12 x 56
+```
+
+for query models built from
+`ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-short-local-refine.yaml`.
+`pred_points` is the final refined lane geometry used by normal decode, while
+`pred_coarse_points` records the pre-second-stage carrier geometry used by
+training matching and raw/refined diagnostics. The default query YAML still
+emits no short-local-refine diagnostic tensors.
+
 The optional Q12 dual-head probe adds:
 
 ```text

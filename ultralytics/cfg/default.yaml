@@ -142,6 +142,10 @@ gcs_query_extent: 0.0 # (float) query-mode explicit start/end extent CE gain; 0 
 gcs_query_extent_short_visible_thr: 10 # (int) visible-anchor threshold for short-lane extent weighting
 gcs_query_extent_short_weight: 2.0 # (float) extra lane weight for short GT4/GT5 extent supervision
 gcs_query_extent_gt_min_lanes: 4 # (int) minimum image GT lane count for short-lane extent weighting
+gcs_short_local_refine: 0.0 # (float) second-stage local x-refine loss gain for matched short GT4/GT5 lanes; 0 disables
+gcs_short_local_refine_visible_thr: 10 # (int) visible-anchor threshold for short local x-refine supervision
+gcs_short_local_refine_gt_min_lanes: 4 # (int) minimum image GT lane count for short local x-refine supervision
+gcs_short_local_refine_beta_px: 5.0 # (float) SmoothL1 beta in pixels for short local x-refine loss
 gcs_count_ce: 1.0 # (float) ordered_slot 2/3/4/5 count cross-entropy gain
 gcs_interval: 1.0 # (float) ordered_slot start/end interval cross-entropy gain
 gcs_order: 0.2 # (float) ordered_slot common-anchor adjacent-slot order loss gain

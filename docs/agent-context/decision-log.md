@@ -2,6 +2,225 @@
 
 This file records decisions for branch `codex/5-25-3-k56`.
 
+## 2026-07-27: Add Q12/env30 short local x-refine probe
+
+Decision:
+
+Implement a default-off short-lane coarse-to-fine local x-refine probe as the
+next experiment after raw-miss mining rejected Q12 dataref/reference-only as
+the root fix. The experiment preserves env30 Q12 carrier assignment, keeps
+normal decode unchanged, and targets the 20-40px local x-offset band on short
+GT4/GT5 lanes. TEST remains closed.
+
+Implementation:
+
+```text
+model:
+  ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-short-local-refine.yaml
+new optional outputs:
+  pred_coarse_points: B x 12 x 56 x 2
+  pred_short_refine_delta_logits: B x 12 x 56
+new loss/logs:
+  short_local_refine_loss
+  short_local_refine_count
+  short_local_refine_coarse_ape
+  short_local_refine_refined_ape
+  short_local_refine_gain20
+scripts:
+  scripts/run_query_short_local_refine_env30_probe40_v1.sh
+  scripts/run_query_short_local_refine_env30_gate_v1.sh
+diagnostics:
+  tools/check_gcs_short_local_refine_head.py
+  tools/diagnose_tusimple_raw_q12_filters.py coarse/refined summary
+```
+
+Important contract:
+
+When `pred_coarse_points` is present, `GCSLoss` matches Hungarian assignments
+on coarse geometry to avoid changing env30 Q12 carrier ownership, then applies
+normal point/smooth/curve losses to final `pred_points`. The new refine loss is
+x-only, selected by short-visible GT4/GT5 criteria, and is disabled unless
+`gcs_short_local_refine > 0`. The point-valid refinement samples at coarse
+points for this probe, so the second-stage x update does not silently move the
+point-valid feature sampling path. Count Head, Quality Head, query extent,
+count-aware top-k, Q24 role/event paths, and TEST remain disabled in the probe
+script.
+
+Promotion gate:
+
+```text
+official-val and train-side only
+coarse/refined short GT4/GT5 has_match20 improves
+coarse_miss20_refined_hit20 clearly exceeds coarse_hit20_refined_miss20
+official-val ACC/FP/FN does not regress from env30
+GT3/GT4 false-extra does not increase
+```
+
+## 2026-07-26: Raw-miss mining rejects Q12 dataref as root fix
+
+Decision:
+
+Do not continue the Q12 ultrashort dataref/reference-only route as the root fix
+for the short GT4/GT5 bottleneck. Server-side raw-miss mining shows that the
+dataref variant trades a few short-lane gains for larger GT5 short and normal
+lane losses. TEST was not used.
+
+Server diagnostic artifacts:
+
+```text
+runs/gcs_lane/raw_miss_mining_20260726/failure_mining_summary.json
+runs/gcs_lane/raw_miss_mining_20260726/short_gt45_env30_vs_dataref_cases.csv
+```
+
+Official-val comparison:
+
+```text
+env30 official-val ACC/FP/FN =
+  0.973330 / 0.015748 / 0.009642
+env30 raw has_match20 =
+  0.975441
+
+q12 ultrashort dataref official-val ACC/FP/FN =
+  0.972403 / 0.022498 / 0.009642
+q12 ultrashort dataref raw has_match20 =
+  0.972371
+```
+
+Short-lane raw comparison:
+
+```text
+official-val short GT4:
+  env30 1/8 -> dataref 2/8
+official-val short GT5:
+  env30 40/53 -> dataref 38/53
+
+train0601 short GT4:
+  env30 9/19 -> dataref 8/19
+train0601 short GT5:
+  env30 142/183 -> dataref 127/183
+
+train0531 short GT4:
+  env30 2/3 -> dataref 0/3
+```
+
+Pairwise env30 -> dataref changes:
+
+```text
+val short GT4: gain 2, loss 1, both_miss 5
+val short GT5: gain 4, loss 6, both_miss 9
+train0601 short GT4: gain 3, loss 4, both_miss 7
+train0601 short GT5: gain 10, loss 25, both_miss 31
+train0531 short GT4: gain 0, loss 2, both_miss 1
+```
+
+Interpretation:
+
+The remaining env30 short-lane misses are mostly not a pure reference-coverage
+absence. On env30, many actionable misses are near 20-40px:
+
+```text
+val short GT5:
+  hit20 40, near20_30 3, near30_40 6, far40_80 3, ultra_visible_le2 1
+train0601 short GT5:
+  hit20 142, near20_30 8, near30_40 18, far40_80 11, ultra_visible_le2 4
+train0601 short GT4:
+  hit20 9, near20_30 6, near30_40 1, far40_80 3
+```
+
+Therefore the next root-level fix should not be another static/dataref
+reference bank. It should be a default-off coarse-to-fine short-lane geometry
+head: preserve env30's Q12 carrier assignment, keep normal decode unchanged,
+and add feature-conditioned local x refinement for matched short GT4/GT5
+near-miss lanes. Gate it first on raw/refined `has_match20`, not TEST.
+
+## 2026-07-26: Reject Q12/env30 query extent probe40 v1
+
+Decision:
+
+Do not promote `query_extent_env30_probe40_v1`, do not extend this exact
+extent-only setup to 100/220 epochs, do not enable `extent_decode=interval` or
+`intersect` for official evaluation, and do not implement extent-guided local
+refine v2 on top of this checkpoint family. TEST remains closed for this
+candidate.
+
+Official-val evidence:
+
+```text
+run = query_extent_env30_probe40_v1
+selected checkpoint = weights/official_best.pt
+selected decode =
+  conf 0.001, point_valid_thr 0.6, nms_dist_px 30,
+  max_det 5, min_points 2, valid_before_maxdet true,
+  extent_decode false
+
+official_best ACC/FP/FN =
+  0.966997 / 0.052020 / 0.019972
+count_acc_3/4/5 =
+  0.856502 / 0.818182 / 0.986486
+
+best.pt post-train sweep best ACC/FP/FN =
+  0.967358 / 0.055326 / 0.023416
+best.pt count_acc_4/count_acc_5 =
+  0.772727 / 0.959459
+```
+
+Both checkpoints remain below the Count Head-only probe100 official-val ACC
+`0.968109`, below the env30 final official-val ACC `0.973330`, and below the
+required `count_acc_4 >= 0.90` gate. Therefore neither checkpoint is a valid
+TEST candidate.
+
+Extent/decode diagnosis:
+
+```text
+official_best post-train sweep best by extent mode:
+  none      ACC 0.966997, count_acc_4 0.818182
+  intersect ACC 0.964296, count_acc_4 0.818182
+  interval  ACC 0.964134, count_acc_4 0.621212
+
+selected-decode extent gate:
+  interval normal_gt3_extra_rate = 0.919283
+  interval normal_gt4_extra_rate = 0.727273
+  none/intersect normal_gt3_extra_rate = 0.147982
+  none/intersect normal_gt4_extra_rate = 0.166667
+```
+
+The extent head learned useful interval structure, especially when raw
+geometry already has a 20px candidate, but interval decode releases many
+extra query carriers. The raw-geometry-stratified endpoint metrics show that
+poor endpoint accuracy on raw misses is not evidence against the extent head;
+those lanes first need a valid 20px geometry candidate.
+
+Raw geometry diagnosis:
+
+```text
+official-val raw Q12:
+  overall has_match20 = 0.930929
+  short GT4 visible<=10 = 1/8, finite p90 APE 53.089px, inf 4
+  short GT5 visible<=10 = 23/53, finite p90 APE 100.806px, inf 1
+
+train0601 raw Q12:
+  overall has_match20 = 0.874650
+  short GT4 visible<=10 = 6/19, p90 APE 58.760px
+  short GT5 visible<=10 = 71/183, finite p90 APE 95.287px, inf 4
+
+oracle-rank:
+  current ACC = 0.966997
+  GT-count oracle-rank ACC = 0.967058
+  gain = +0.000061
+```
+
+The dominant failure is short GT4/GT5 coarse geometry/query-carrier coverage,
+especially train0601 and short center lanes carried mostly by q0/q11. Count,
+ranking, and pure visible-interval decode are not the current bottleneck.
+
+Next action:
+
+Run a failure-mining pass over official-val plus train0601/train0531 short
+GT4/GT5 raw misses, then design a default-off coarse geometry/reference
+coverage experiment. The next candidate must first improve raw 20px coverage
+for short GT4/GT5 without increasing GT3/GT4 false-extra before any long
+training or TEST.
+
 ## 2026-07-26: Add Q12/env30 query extent v1 probe
 
 Decision:

@@ -252,6 +252,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--gcs-query-extent-short-weight", type=float, default=2.0)
     parser.add_argument("--gcs-query-extent-gt-min-lanes", type=int, default=4)
     parser.add_argument(
+        "--gcs-short-local-refine",
+        type=float,
+        default=0.0,
+        help="Second-stage local x-refine loss gain for matched short GT4/GT5 lanes. 0 disables.",
+    )
+    parser.add_argument("--gcs-short-local-refine-visible-thr", type=int, default=10)
+    parser.add_argument("--gcs-short-local-refine-gt-min-lanes", type=int, default=4)
+    parser.add_argument(
+        "--gcs-short-local-refine-beta-px",
+        type=float,
+        default=5.0,
+        help="SmoothL1 beta in pixels for short local x-refine supervision.",
+    )
+    parser.add_argument(
         "--gcs-count-ce",
         nargs="?",
         const=1.0,
@@ -1030,6 +1044,10 @@ def main() -> None:
         "gcs_query_extent_short_visible_thr": args.gcs_query_extent_short_visible_thr,
         "gcs_query_extent_short_weight": args.gcs_query_extent_short_weight,
         "gcs_query_extent_gt_min_lanes": args.gcs_query_extent_gt_min_lanes,
+        "gcs_short_local_refine": args.gcs_short_local_refine,
+        "gcs_short_local_refine_visible_thr": args.gcs_short_local_refine_visible_thr,
+        "gcs_short_local_refine_gt_min_lanes": args.gcs_short_local_refine_gt_min_lanes,
+        "gcs_short_local_refine_beta_px": args.gcs_short_local_refine_beta_px,
         "gcs_count_ce": args.gcs_count_ce,
         "gcs_interval": args.gcs_interval,
         "gcs_order": args.gcs_order,

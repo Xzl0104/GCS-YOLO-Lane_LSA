@@ -1191,6 +1191,161 @@ compares `none`, `interval`, and `intersect` decode modes on official-val
 only. If endpoint/interval learning fails, investigate coarse
 geometry/reference coverage before implementing extent-guided local refine.
 
+## 2026-07-26 Q12/env30 Query Extent Probe40 Rejection
+
+The 40-epoch default-off extent probe
+`query_extent_env30_probe40_v1` is complete and rejected. TEST was not used.
+
+```text
+official_best ACC/FP/FN =
+  0.966997 / 0.052020 / 0.019972
+official_best count_acc_3/4/5 =
+  0.856502 / 0.818182 / 0.986486
+
+best.pt post-train sweep best ACC/FP/FN =
+  0.967358 / 0.055326 / 0.023416
+best.pt count_acc_4/count_acc_5 =
+  0.772727 / 0.959459
+```
+
+Neither checkpoint passes the probe gate. The selected `official_best` decode
+is `extent_decode=false`. In the post-train sweep, the best rows by extent mode
+are:
+
+```text
+none      ACC 0.966997, FP 0.052020, FN 0.019972, count_acc_4 0.818182
+intersect ACC 0.964296, FP 0.053627, FN 0.021579, count_acc_4 0.818182
+interval  ACC 0.964134, FP 0.103489, FN 0.023186, count_acc_4 0.621212
+```
+
+`interval` is not a viable rescue path. At the selected decode settings it
+changes the prediction count histogram from `3:191, 4:86, 5:86` to
+`3:18, 4:133, 5:212`, raising false-extra rates to:
+
+```text
+normal_gt3_extra_rate = 0.919283
+normal_gt4_extra_rate = 0.727273
+```
+
+The endpoint/extent diagnostics must be read with raw-geometry strata. When
+short GT5 already has a 20px raw candidate, endpoint prediction is good:
+
+```text
+short GT5 raw-hit count = 23
+endpoint_start_acc_1 = 0.956522
+endpoint_end_acc_1 = 0.956522
+interval_iou = 0.865525
+best_ape_p90 = 19.172512
+```
+
+The failures are dominated by raw candidate absence or large raw APE:
+
+```text
+official-val short GT4 visible<=10:
+  raw hit20 = 1/8
+  finite p90 APE = 53.089px
+  inf APE count = 4
+
+official-val short GT5 visible<=10:
+  raw hit20 = 23/53
+  finite p90 APE = 100.806px
+  inf APE count = 1
+
+train0601 short GT4 visible<=10:
+  raw hit20 = 6/19
+  p90 APE = 58.760px
+
+train0601 short GT5 visible<=10:
+  raw hit20 = 71/183
+  finite p90 APE = 95.287px
+  inf APE count = 4
+```
+
+The worst short GT5 failures often keep high point-valid recall while the x
+geometry is off by 90-150px, so point-valid survival is not the dominant
+cause. Query assignment is also concentrated: official-val short GT5 raw-best
+queries are mostly q0 (`40/53`) and q11 (`12/53`), with q11 hit20 only
+`1/12`; train0601 short GT5 is q0 (`130/183`) and q11 (`46/183`), with q11
+hit20 only `2/46`.
+
+Conclusion:
+
+Do not continue extent-only v1, do not enable extent decode, and do not build
+extent-guided local refine v2 until raw geometry coverage improves. The next
+experiment should mine short GT4/GT5 raw misses on official-val plus
+train0601/train0531 and then test a default-off coarse geometry/reference
+coverage change that improves raw 20px hit rate without increasing GT3/GT4
+false-extra or reducing GT5-short coverage.
+
+### Raw-Miss Mining After Extent Rejection
+
+The server-side raw-miss mining pass was run under:
+
+```text
+artifact root =
+  runs/gcs_lane/raw_miss_mining_20260726
+summary =
+  runs/gcs_lane/raw_miss_mining_20260726/failure_mining_summary.json
+cases =
+  runs/gcs_lane/raw_miss_mining_20260726/short_gt45_env30_vs_dataref_cases.csv
+TEST used = false
+```
+
+It compared the env30 strong baseline against the existing Q12 ultrashort
+dataref/reference variant on official-val, train0601, and train0531. Dataref
+does not solve the bottleneck:
+
+```text
+official-val short GT4:
+  env30 1/8 -> dataref 2/8
+official-val short GT5:
+  env30 40/53 -> dataref 38/53
+
+train0601 short GT4:
+  env30 9/19 -> dataref 8/19
+train0601 short GT5:
+  env30 142/183 -> dataref 127/183
+
+train0531 short GT4:
+  env30 2/3 -> dataref 0/3
+```
+
+Pairwise changes show a negative tradeoff rather than a root fix:
+
+```text
+val short GT4: gain 2, loss 1, both_miss 5
+val short GT5: gain 4, loss 6, both_miss 9
+train0601 short GT4: gain 3, loss 4, both_miss 7
+train0601 short GT5: gain 10, loss 25, both_miss 31
+train0531 short GT4: gain 0, loss 2, both_miss 1
+```
+
+The actionable env30 misses are often near the 20px gate rather than missing by
+an entirely different reference:
+
+```text
+env30 val short GT5:
+  hit20 40, near20_30 3, near30_40 6, far40_80 3, ultra_visible_le2 1
+env30 train0601 short GT5:
+  hit20 142, near20_30 8, near30_40 18, far40_80 11, ultra_visible_le2 4
+env30 train0601 short GT4:
+  hit20 9, near20_30 6, near30_40 1, far40_80 3
+```
+
+Conclusion: the next mechanism should preserve env30's Q12 carriers and add a
+default-off coarse-to-fine local x-refinement path for short GT4/GT5 near-miss
+geometry. Do not relaunch Q12 dataref/reference-only as the immediate next
+experiment. Gate the next run on refined raw `has_match20` for short GT4/GT5,
+GT3/GT4 false-extra, and official-val only; TEST remains closed.
+
+2026-07-27 implementation note: the default-off probe is now implemented as
+`ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-short-local-refine.yaml`
+with `scripts/run_query_short_local_refine_env30_probe40_v1.sh` and
+`scripts/run_query_short_local_refine_env30_gate_v1.sh`. It should be treated
+as an unproven 20-40 epoch probe until official-val plus train0601/train0531
+coarse/refined geometry gates show real short GT4/GT5 `has_match20` gains
+without GT3/GT4 false-extra regression.
+
 ## 2026-07-23 Env30 GT4 Near-20px Geometry Refine v1 Rejection
 
 The `query_alpha05_env30_gt4_near20_geom_refine_v1` full training run is

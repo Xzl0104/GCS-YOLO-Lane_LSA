@@ -68,6 +68,39 @@ q7-only full training, v3 staticref full training, or near20 full training from
 these records. Any future reopen must start with official-val plus
 train0601/train0531 raw-Q12 gates and must not use TEST for selection.
 
+## Q12 Env30 Short Local X-Refine Probe
+
+The default-off Q12/env30 short-lane coarse-to-fine local x-refine probe keeps
+the default Q12 carrier bank, disables Count/Quality/extent/count-aware paths,
+and only adds a second-stage local x residual for matched short GT4/GT5 lanes.
+Run only a 20-40 epoch probe first; TEST stays closed.
+
+```bash
+RUN_TESTS=0 bash scripts/run_query_short_local_refine_env30_probe40_v1.sh
+```
+
+After training, run the raw/refined geometry gate on official-val plus
+train0601/train0531:
+
+```bash
+RUN_NAME=query_short_local_refine_env30_probe40_v1 \
+RUN_TESTS=0 \
+OVERWRITE_DIAGS=0 \
+bash scripts/run_query_short_local_refine_env30_gate_v1.sh
+```
+
+Promotion gate before any longer run:
+
+```text
+TEST used = false
+official-val ACC/FP/FN must not regress from env30
+coarse/refined short GT4/GT5 has_match20 must improve on official-val
+train0601 short GT5 refined hit20 should move toward >=160/183
+train0601 short GT4 refined hit20 should move toward >=14/19
+GT3/GT4 false-extra must not increase
+coarse_hit20_refined_miss20 must stay low
+```
+
 ## Q20 Protected Dual-Bank Static Gate
 
 The default-off Q20 dual-bank path is a gate-only diagnostic before any
@@ -789,6 +822,27 @@ If the extent gate passes, the next implementation can add extent-guided local
 refine as a separate default-off v2. If extent endpoint/interval accuracy
 does not improve, do not add local refine; investigate coarse geometry or
 reference coverage instead.
+
+Completed result:
+
+```text
+run = query_extent_env30_probe40_v1
+official_best ACC/FP/FN =
+  0.966997 / 0.052020 / 0.019972
+official_best decode =
+  conf 0.001, point_valid_thr 0.6, nms_dist_px 30,
+  max_det 5, min_points 2, valid_before_maxdet true,
+  extent_decode false
+
+post-train best.pt sweep best ACC/FP/FN =
+  0.967358 / 0.055326 / 0.023416
+```
+
+Decision: rejected. Do not run TEST, do not extend this exact extent-only run
+to 100/220 epochs, do not enable `extent_decode=interval` or `intersect`, and
+do not implement extent-guided local refine v2 from this result. The next
+action is raw-miss failure mining and a coarse geometry/reference coverage
+experiment.
 
 ## Q24 Protected-Static Dual-Head Probe
 

@@ -41,6 +41,51 @@ not enable Count Head, Quality Head, Q24, local-refine v2, or later mainline
 ranking/count-contract mechanisms. The default Q12 YAML still emits no query
 extent logits.
 
+The completed 40-epoch extent probe `query_extent_env30_probe40_v1` is
+rejected. Its official-val selected decode keeps `extent_decode=false` and
+reaches only:
+
+```text
+official_best ACC/FP/FN =
+  0.966997 / 0.052020 / 0.019972
+count_acc_3/4/5 =
+  0.856502 / 0.818182 / 0.986486
+```
+
+Post-train official-val sweeps show that `none` is better than both
+`intersect` and `interval`. `interval` strongly increases GT3/GT4 false-extra
+rates, while raw-geometry-stratified diagnostics show the remaining short
+GT4/GT5 failures are mostly missing 20px raw candidates rather than endpoint
+classification failures. Do not extend this exact setup, enable extent decode,
+run TEST for it, or build local-refine v2 on top of it. The next route must
+target coarse geometry/reference coverage first.
+
+The 2026-07-27 user-requested Q12/env30 short-lane coarse-to-fine local
+x-refine probe is default-off and enabled only by
+`ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-short-local-refine.yaml`
+plus explicit `gcs_short_local_refine > 0`. It keeps Q=12/K=56 query mode,
+does not enable Count Head, Quality Head, query extent decode, Q24, or
+count-aware top-k, and runs on top of the env30 parent protocol
+(`gcs_short_geom=1.0` in the parent launch script). When enabled, the head
+emits:
+
+```text
+pred_points: B x 12 x 56 x 2                  # refined final points for decode/loss
+pred_coarse_points: B x 12 x 56 x 2           # before second-stage local x-refine
+pred_short_refine_delta_logits: B x 12 x 56   # second-stage x-logit residual
+```
+
+The second-stage head samples image features at detached coarse points and
+only changes x logits; fixed-y anchors must stay unchanged. To preserve env30
+Q12 carrier assignment, `GCSLoss` uses `pred_coarse_points` for Hungarian
+matching whenever that tensor is present, then applies normal point/smooth/
+curve losses to final `pred_points`. The optional
+`short_local_refine_loss` adds x-only SmoothL1 supervision only for matched
+short GT4/GT5 lanes selected by `gcs_short_local_refine_visible_thr` and
+`gcs_short_local_refine_gt_min_lanes`. Decode and official metrics remain
+unchanged and use only model predictions; TEST is closed until official-val
+and raw/refined geometry gates pass.
+
 The completed 40-epoch dual-head probe
 `query_dualhead_quality_count_env30_probe40_v1` is not promoted to full
 training or TEST. It is also not closed as a dead mechanism, because it beats
@@ -776,6 +821,18 @@ the bottom-to-top K56 order (`710, 700, ..., 160`). They are default-off,
 query-only, and independent of ordered-slot interval heads. This YAML must not
 emit `pred_count_logits` or `pred_quality_logits`.
 
+The optional Q12 short local x-refine model
+`ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-short-local-refine.yaml`
+additionally emits:
+
+```text
+pred_coarse_points: B x 12 x 56 x 2
+pred_short_refine_delta_logits: B x 12 x 56
+```
+
+This output is default-off. The default Q12 YAML must not emit
+`pred_coarse_points` or `pred_short_refine_delta_logits`.
+
 The optional Q24 dual-head protected-static model
 `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q24-k56-dualhead.yaml` emits:
 
@@ -823,12 +880,24 @@ cnt_score
 boundary_pseudo_neg_loss
 boundary_pseudo_count
 boundary_pseudo_score_mean
+boundary_pseudo_candidate_count
+boundary_pseudo_protected_count
 query_count_ce_loss
 query_count_acc
 query_count_pred_mean
 query_quality_loss
 query_quality_pos_mean
 query_quality_pos_count
+query_extent_loss
+query_extent_start_acc
+query_extent_end_acc
+query_extent_iou
+query_extent_short_count
+short_local_refine_loss
+short_local_refine_count
+short_local_refine_coarse_ape
+short_local_refine_refined_ape
+short_local_refine_gain20
 ```
 
 `query_count_ce_loss` is active only when a query model emits
@@ -846,6 +915,11 @@ dual-head probe intentionally sets `gcs_count=0.0`, `gcs_count_under5=0.0`,
 `gcs_q24_event_score_calib=0.0`, so count estimation and lane ranking are not
 implemented by reusing `sum(sigmoid(pred_logits))` or the rejected Q24
 event/role patches.
+
+`short_local_refine_loss` is active only when a query model emits
+`pred_coarse_points` and `gcs_short_local_refine > 0`; the default gain is
+`0.0`. When logits are absent or the gain is zero, the five short-local-refine
+log items are zero for old-model compatibility.
 
 Post-`424ab1c86` log items such as `short_side_geom_loss`, `far_spur_loss`,
 `farspur_if_loss`, `rank_topk_loss`, `shortside_*`, `rank_*`,
@@ -1299,6 +1373,13 @@ summary fields mapped to `primary_extent_mode` for gate compatibility, and
 also writes `by_extent_mode` with the same short GT4/GT5, raw-geometry-strata,
 survival, extra-rate, and count-accuracy diagnostics for every decoded mode.
 Use `by_extent_mode` when comparing `interval` against `intersect`.
+
+For the rejected `query_extent_env30_probe40_v1`, the raw-geometry strata are
+the decisive reading: raw-hit short GT5 endpoints are accurate
+(`start/end acc = 0.956522/0.956522`, interval IoU `0.865525`), but short GT5
+raw misses are `30/53` and short GT4 raw hits are only `1/8`. Therefore do not
+interpret the flat endpoint metrics as a pure extent-head failure, and do not
+interpret interval decode as independent of query-carrier quality.
 
 This branch includes `tools/eval_tusimple_official.py`,
 `tools/sweep_tusimple_official_cached.py`, `tools/sweep_tusimple_official.py`,
