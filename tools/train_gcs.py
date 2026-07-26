@@ -263,7 +263,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--gcs-short-local-refine-beta-px",
         type=float,
         default=5.0,
-        help="SmoothL1 beta in pixels for short local x-refine supervision.",
+        help="SmoothL1 beta source in pixels; converted to normalized x by image width.",
+    )
+    parser.add_argument(
+        "--gcs-short-local-refine-max-delta-px",
+        type=float,
+        default=40.0,
+        help="Maximum auxiliary short local x-refine residual in pixels.",
     )
     parser.add_argument(
         "--gcs-count-ce",
@@ -1048,6 +1054,7 @@ def main() -> None:
         "gcs_short_local_refine_visible_thr": args.gcs_short_local_refine_visible_thr,
         "gcs_short_local_refine_gt_min_lanes": args.gcs_short_local_refine_gt_min_lanes,
         "gcs_short_local_refine_beta_px": args.gcs_short_local_refine_beta_px,
+        "gcs_short_local_refine_max_delta_px": args.gcs_short_local_refine_max_delta_px,
         "gcs_count_ce": args.gcs_count_ce,
         "gcs_interval": args.gcs_interval,
         "gcs_order": args.gcs_order,

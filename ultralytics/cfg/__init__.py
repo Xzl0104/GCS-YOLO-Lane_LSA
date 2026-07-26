@@ -204,6 +204,7 @@ CFG_FLOAT_KEYS = frozenset(
         "gcs_query_extent_short_weight",
         "gcs_short_local_refine",
         "gcs_short_local_refine_beta_px",
+        "gcs_short_local_refine_max_delta_px",
         "gcs_count_ce",
         "gcs_interval",
         "gcs_order",

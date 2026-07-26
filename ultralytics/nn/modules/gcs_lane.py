@@ -223,6 +223,7 @@ class GCSLaneHead(nn.Module):
         query_quality_head: bool = False,
         query_extent_head: bool = False,
         query_short_local_refine_head: bool = False,
+        short_local_refine_max_delta_px: float = 40.0,
     ):
         """Initialize the GCS lane query decoder and training-only auxiliary heads."""
         super().__init__()
@@ -385,6 +386,12 @@ class GCSLaneHead(nn.Module):
         if requested_short_local_refine and (self.gcs_mode != "query" or self.point_mode != "fixed_y"):
             raise ValueError("query_short_local_refine_head requires query mode with point_mode='fixed_y'.")
         self.query_short_local_refine_head = requested_short_local_refine
+        self.short_local_refine_max_delta_px = float(short_local_refine_max_delta_px)
+        if self.query_short_local_refine_head and self.short_local_refine_max_delta_px <= 0.0:
+            raise ValueError(
+                "short_local_refine_max_delta_px must be > 0 when query_short_local_refine_head is enabled, "
+                f"got {self.short_local_refine_max_delta_px}."
+            )
         if self.query_short_local_refine_head:
             self.query_short_local_refine_mlp = nn.Sequential(
                 nn.Linear(c1 * 2, c1),
@@ -637,9 +644,9 @@ class GCSLaneHead(nn.Module):
             nn.init.zeros_(final.bias)
 
     def _init_query_short_local_refine_head(self):
-        """Initialize query-mode second-stage local x refinement near zero residual."""
+        """Initialize query-mode auxiliary local x refinement to exact zero residual."""
         final = self.query_short_local_refine_mlp[-1]
-        nn.init.normal_(final.weight, mean=0.0, std=1e-3)
+        nn.init.zeros_(final.weight)
         nn.init.zeros_(final.bias)
 
     def _sample_point_features(self, xs, points):
@@ -694,16 +701,25 @@ class GCSLaneHead(nn.Module):
         refine_delta = self.point_refine_mlp(refine_tokens).squeeze(-1)
         return coarse_logits + refine_delta
 
-    def _short_local_refine_fixed_y_logits(self, xs, hs, coarse_logits, fixed_y):
-        """Apply optional second-stage local x residual from features sampled at coarse points."""
-        b, q, k = coarse_logits.shape
-        y = fixed_y.to(device=coarse_logits.device, dtype=coarse_logits.dtype).view(1, 1, k).expand(b, q, -1)
-        coarse_x = torch.sigmoid(coarse_logits)
-        coarse_points = torch.stack((coarse_x, y), dim=-1)
+    def _short_local_refine_fixed_y_points(self, xs, hs, base_points, image_width: int | float | None):
+        """Build auxiliary short-lane refined points without changing the main fixed-y geometry."""
+        if base_points.ndim != 4 or base_points.shape[-1] != 2:
+            raise ValueError(f"Expected base_points with shape B x Q x K x 2, got {tuple(base_points.shape)}.")
+        if image_width is None:
+            raise ValueError("query_short_local_refine_head requires orig_size=(H, W) to normalize max_delta_px.")
+        width = float(image_width)
+        if width <= 0.0:
+            raise ValueError(f"image_width must be positive for short local x-refine, got {image_width}.")
 
-        refine_tokens = self._point_refine_tokens(xs, hs, coarse_points.detach())
-        refine_delta = self.query_short_local_refine_mlp(refine_tokens).squeeze(-1)
-        return coarse_logits + refine_delta, coarse_points, refine_delta
+        base_detached = base_points.detach()
+        refine_tokens = self._point_refine_tokens(xs, hs.detach(), base_detached).detach()
+        delta_logits = self.query_short_local_refine_mlp(refine_tokens).squeeze(-1)
+        max_delta_px = float(getattr(self, "short_local_refine_max_delta_px", 40.0))
+        max_delta_norm = base_points.new_tensor(max_delta_px / width)
+        delta_norm = torch.tanh(delta_logits) * max_delta_norm
+        refined_x = (base_detached[..., 0] + delta_norm).clamp(0.0, 1.0)
+        refined_points = torch.stack((refined_x, base_detached[..., 1]), dim=-1)
+        return refined_points, delta_logits, delta_norm
 
     def _refine_fixed_y_valid_logits(self, xs, hs, pred_points):
         """Refine fixed-y point visibility logits with point-level sampled image features."""
@@ -814,7 +830,9 @@ class GCSLaneHead(nn.Module):
         point_ref = getattr(self, "point_reference_logits", None)
         point_mode = getattr(self, "point_mode", "free")
         pred_coarse_points = None
+        pred_short_refined_points = None
         short_refine_delta = None
+        short_refine_delta_norm = None
         if point_mode == "fixed_y":
             if point_ref is None:
                 x_logits = point_delta.squeeze(-1)
@@ -825,14 +843,16 @@ class GCSLaneHead(nn.Module):
             if fixed_y is None:
                 fixed_y = self._build_fixed_y_anchors()
             x_logits = self._refine_fixed_y_logits(xs, hs, x_logits, fixed_y)
-            if getattr(self, "query_short_local_refine_head", False):
-                x_logits, pred_coarse_points, short_refine_delta = self._short_local_refine_fixed_y_logits(
-                    xs, hs, x_logits, fixed_y
-                )
             pred_x = torch.sigmoid(x_logits)
             y = fixed_y.to(device=pred_x.device, dtype=pred_x.dtype).view(1, 1, self.num_points)
             pred_y = y.expand(b, self.num_queries, -1)
             pred_points = torch.stack((pred_x, pred_y), dim=-1)
+            if getattr(self, "query_short_local_refine_head", False):
+                image_width = None if orig_size is None else int(orig_size[1])
+                pred_short_refined_points, short_refine_delta, short_refine_delta_norm = (
+                    self._short_local_refine_fixed_y_points(xs, hs, pred_points, image_width)
+                )
+                pred_coarse_points = pred_points
         elif point_ref is None:
             # Backward compatibility for checkpoints created before query-specific references existed.
             pred_points = torch.sigmoid(point_delta)
@@ -842,8 +862,7 @@ class GCSLaneHead(nn.Module):
         pred_logits = self.exist_mlp(hs).squeeze(-1)
         if hasattr(self, "point_valid_mlp"):
             if point_mode == "fixed_y" and hasattr(self, "point_valid_refine_mlp"):
-                valid_points = pred_coarse_points if pred_coarse_points is not None else pred_points
-                pred_valid_logits = self._refine_fixed_y_valid_logits(xs, hs, valid_points)
+                pred_valid_logits = self._refine_fixed_y_valid_logits(xs, hs, pred_points)
             else:
                 pred_valid_logits = self.point_valid_mlp(hs).view(b, self.num_queries, self.num_points)
         else:
@@ -856,7 +875,10 @@ class GCSLaneHead(nn.Module):
         }
         if pred_coarse_points is not None:
             out["pred_coarse_points"] = pred_coarse_points
+        if pred_short_refined_points is not None:
+            out["pred_short_refined_points"] = pred_short_refined_points
             out["pred_short_refine_delta_logits"] = short_refine_delta
+            out["pred_short_refine_delta_norm"] = short_refine_delta_norm
         if getattr(self, "query_count_head", False):
             out["pred_count_logits"] = self.query_count_mlp(hs.mean(dim=1))
         if getattr(self, "query_quality_head", False):

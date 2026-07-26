@@ -68,25 +68,36 @@ q7-only full training, v3 staticref full training, or near20 full training from
 these records. Any future reopen must start with official-val plus
 train0601/train0531 raw-Q12 gates and must not use TEST for selection.
 
-## Q12 Env30 Short Local X-Refine Probe
+## Q12 Env30 Auxiliary Short Local X-Refine v2 Probe
 
-The default-off Q12/env30 short-lane coarse-to-fine local x-refine probe keeps
-the default Q12 carrier bank, disables Count/Quality/extent/count-aware paths,
-and only adds a second-stage local x residual for matched short GT4/GT5 lanes.
-Run only a 20-40 epoch probe first; TEST stays closed.
+The default-off Q12/env30 auxiliary short-lane local x-refine v2 probe keeps
+the default Q12 carrier bank and main `pred_points` decode path, disables
+Count/Quality/extent/count-aware paths, and only adds a bounded auxiliary local
+x residual for matched short GT4/GT5 lanes. Run only a 20-epoch probe first;
+TEST stays closed.
 
 ```bash
-RUN_TESTS=0 bash scripts/run_query_short_local_refine_env30_probe40_v1.sh
+RUN_TESTS=0 bash scripts/run_query_short_local_refine_env30_aux_v2_probe20.sh
 ```
 
 After training, run the raw/refined geometry gate on official-val plus
 train0601/train0531:
 
 ```bash
-RUN_NAME=query_short_local_refine_env30_probe40_v1 \
+RUN_NAME=query_short_local_refine_env30_aux_v2_probe20 \
 RUN_TESTS=0 \
 OVERWRITE_DIAGS=0 \
-bash scripts/run_query_short_local_refine_env30_gate_v1.sh
+bash scripts/run_query_short_local_refine_env30_aux_v2_gate.sh
+```
+
+Default v2 parameters:
+
+```text
+PRETRAINED = runs/gcs_lane/query_alpha05_gt5short_geom_w2_bneg002_env30_nocount_v1/weights/official_best.pt
+EPOCHS = 20
+gcs_short_local_refine = 0.02
+gcs_short_local_refine_beta_px = 5.0
+gcs_short_local_refine_max_delta_px = 40.0
 ```
 
 Promotion gate before any longer run:

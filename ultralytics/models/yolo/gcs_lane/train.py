@@ -796,6 +796,20 @@ class GCSLaneTrainer(BaseTrainer):
         self.model.args = self.args
         self.model.task = "gcs_lane"
 
+    def _sync_short_local_refine_head_args(self, model: nn.Module) -> None:
+        """Apply CLI-controlled short-local-refine head parameters after YAML construction."""
+        max_delta_px = float(getattr(self.args, "gcs_short_local_refine_max_delta_px", 40.0))
+        if max_delta_px <= 0.0:
+            raise ValueError(f"gcs_short_local_refine_max_delta_px must be > 0, got {max_delta_px}.")
+
+        updated = 0
+        for module in model.modules():
+            if isinstance(module, GCSLaneHead) and bool(getattr(module, "query_short_local_refine_head", False)):
+                module.short_local_refine_max_delta_px = max_delta_px
+                updated += 1
+        if updated:
+            LOGGER.info(f"short-local-refine head contract: max_delta_px={max_delta_px:g}, updated_heads={updated}.")
+
     def set_class_weights(self):
         """GCS lane training uses existence loss, not class-frequency weights."""
         return None
@@ -804,6 +818,7 @@ class GCSLaneTrainer(BaseTrainer):
         """Return a GCS lane model with GCSLoss wiring."""
         model = GCSLaneModel(cfg, nc=self.data["nc"], ch=self.data.get("channels", 3), verbose=verbose and RANK == -1)
         self._assert_model_gcs_mode(model)
+        self._sync_short_local_refine_head_args(model)
         self._warn_if_ordered_slot_without_official_best()
         self._record_ordered_slot_loss_contract()
         self._rewrite_args_yaml_after_gcs_mode_sync()

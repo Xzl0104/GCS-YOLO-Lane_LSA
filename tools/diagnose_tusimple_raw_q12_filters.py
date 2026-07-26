@@ -372,7 +372,7 @@ def _ape_column_summary(rows: list[dict], ape_key: str, match_prefix: str, match
 
 def _coarse_refined_summary(rows: list[dict], match_thrs: list[float]) -> dict:
     if not rows or all("coarse_best_ape_px" not in row for row in rows):
-        return {"has_coarse_points": False}
+        return {"has_coarse_points": False, "has_short_refined_points": False}
 
     groups = {
         "all": list(rows),
@@ -387,7 +387,10 @@ def _coarse_refined_summary(rows: list[dict], match_thrs: list[float]) -> dict:
             if int(row.get("gt_count", 0)) == 5 and bool(row.get("short_visible_lane", False))
         ],
     }
-    out: dict[str, dict] = {"has_coarse_points": True}
+    out: dict[str, dict] = {
+        "has_coarse_points": True,
+        "has_short_refined_points": any(bool(row.get("short_refined_available", False)) for row in rows),
+    }
     for name, items in groups.items():
         gain20 = [row for row in items if bool(row.get("coarse_miss20_refined_hit20", False))]
         loss20 = [row for row in items if bool(row.get("coarse_hit20_refined_miss20", False))]
@@ -719,6 +722,15 @@ def main() -> None:
                 min_points=args.min_points,
                 points_key="pred_coarse_points",
             )
+        short_refined_queries = None
+        if isinstance(preds, dict) and isinstance(preds.get("pred_short_refined_points"), torch.Tensor):
+            short_refined_queries = _query_arrays(
+                preds,
+                image_shape=original_shape,
+                h_samples=h_samples,
+                min_points=args.min_points,
+                points_key="pred_short_refined_points",
+            )
         pool_lanes, pool_trace = _trace_decode(
             preds,
             image_shape=original_shape,
@@ -745,6 +757,7 @@ def main() -> None:
         lane_positions = _lane_position_map(record)
         pred_raw_xs = [q["pred_xs"] for q in raw_queries]
         pred_coarse_xs = [q["pred_xs"] for q in coarse_queries] if coarse_queries is not None else None
+        pred_short_refined_xs = [q["pred_xs"] for q in short_refined_queries] if short_refined_queries is not None else None
         final_pred_xs = [
             _interp_lane_xs(np.asarray(lane["points_norm"], dtype=np.float32), h_samples, original_shape)
             for lane in final_lanes
@@ -768,6 +781,16 @@ def main() -> None:
                     min_overlap=args.match_min_overlap,
                 )
                 coarse_best_query = coarse_queries[coarse_best_query_list_idx] if coarse_best_query_list_idx >= 0 else None
+            refined_best_ape = best_ape
+            refined_best_query = best_query
+            refined_best_overlap = best_overlap
+            if pred_short_refined_xs is not None and short_refined_queries is not None:
+                refined_best_ape, refined_best_query_list_idx, refined_best_overlap = _best_ape(
+                    pred_short_refined_xs,
+                    gt_lane,
+                    min_overlap=args.match_min_overlap,
+                )
+                refined_best_query = short_refined_queries[refined_best_query_list_idx] if refined_best_query_list_idx >= 0 else None
             decoded_best_ape, decoded_best_idx, decoded_best_overlap = _best_ape(
                 final_pred_xs,
                 gt_lane,
@@ -796,9 +819,10 @@ def main() -> None:
                 "raw_best_valid_len@0.6": "" if best_query is None else int(best_query["valid_len_0.6"]),
                 "raw_best_valid_count@0.5": "" if best_query is None else int(best_query["valid_count_0.5"]),
                 "raw_best_valid_count@0.6": "" if best_query is None else int(best_query["valid_count_0.6"]),
-                "refined_best_ape_px": best_ape,
-                "refined_best_query_id": "" if best_query is None else int(best_query["query"]),
-                "refined_best_overlap": int(best_overlap),
+                "refined_best_ape_px": refined_best_ape,
+                "refined_best_query_id": "" if refined_best_query is None else int(refined_best_query["query"]),
+                "refined_best_overlap": int(refined_best_overlap),
+                "short_refined_available": bool(short_refined_queries is not None),
                 "pred_valid_points@0.5": "" if best_query is None else int(best_query["valid_len_0.5"]),
                 "pred_valid_points@0.6": "" if best_query is None else int(best_query["valid_len_0.6"]),
                 "point_valid_recall@0.5": ""
@@ -830,12 +854,12 @@ def main() -> None:
             for thr in match_thrs:
                 key = _match_key(thr)
                 row[f"raw_has_match_{key}px"] = bool(best_ape <= float(thr))
-                row[f"refined_has_match_{key}px"] = bool(best_ape <= float(thr))
+                row[f"refined_has_match_{key}px"] = bool(refined_best_ape <= float(thr))
                 if pred_coarse_xs is not None:
                     row[f"coarse_has_match_{key}px"] = bool(coarse_best_ape <= float(thr))
             if pred_coarse_xs is not None:
                 coarse_f = _finite_float(coarse_best_ape)
-                refined_f = _finite_float(best_ape)
+                refined_f = _finite_float(refined_best_ape)
                 delta = "" if coarse_f is None or refined_f is None else coarse_f - refined_f
                 row.update(
                     {
@@ -846,8 +870,8 @@ def main() -> None:
                         else round(float(coarse_best_query["score"]), 8),
                         "coarse_best_overlap": int(coarse_best_overlap),
                         "coarse_to_refined_best_ape_delta_px": delta,
-                        "coarse_miss20_refined_hit20": bool(coarse_best_ape > 20.0 and best_ape <= 20.0),
-                        "coarse_hit20_refined_miss20": bool(coarse_best_ape <= 20.0 and best_ape > 20.0),
+                        "coarse_miss20_refined_hit20": bool(coarse_best_ape > 20.0 and refined_best_ape <= 20.0),
+                        "coarse_hit20_refined_miss20": bool(coarse_best_ape <= 20.0 and refined_best_ape > 20.0),
                     }
                 )
             lane_rows.append(row)
@@ -870,7 +894,7 @@ def main() -> None:
                         "lane_position": pos.get("lane_position", ""),
                         "side_group": pos.get("side_group", ""),
                         "visible_points_gt": int(visible),
-                        "geometry_source": "refined",
+                        "geometry_source": "main",
                         "query": int(query["query"]),
                         "ape_px": ape,
                         "overlap": int(overlap),
@@ -881,6 +905,30 @@ def main() -> None:
                         "valid_count@0.6": int(query["valid_count_0.6"]),
                     }
                 )
+            if short_refined_queries is not None:
+                for query in short_refined_queries:
+                    ape, overlap = _ape_px(query["pred_xs"], gt_lane, min_overlap=args.match_min_overlap)
+                    query_rows.append(
+                        {
+                            "raw_file": raw_file,
+                            "date": date,
+                            "session": session,
+                            "gt_count": gt_count,
+                            "gt_lane_id": int(gt_lane_id),
+                            "lane_position": pos.get("lane_position", ""),
+                            "side_group": pos.get("side_group", ""),
+                            "visible_points_gt": int(visible),
+                            "geometry_source": "short_refined",
+                            "query": int(query["query"]),
+                            "ape_px": ape,
+                            "overlap": int(overlap),
+                            "exist_score": round(float(query["score"]), 8),
+                            "valid_len@0.5": int(query["valid_len_0.5"]),
+                            "valid_len@0.6": int(query["valid_len_0.6"]),
+                            "valid_count@0.5": int(query["valid_count_0.5"]),
+                            "valid_count@0.6": int(query["valid_count_0.6"]),
+                        }
+                    )
             if coarse_queries is not None:
                 for query in coarse_queries:
                     ape, overlap = _ape_px(query["pred_xs"], gt_lane, min_overlap=args.match_min_overlap)
@@ -956,6 +1004,7 @@ def main() -> None:
         "refined_best_ape_px",
         "refined_best_query_id",
         "refined_best_overlap",
+        "short_refined_available",
         "coarse_best_ape_px",
         "coarse_best_query_id",
         "coarse_best_exist_score",

@@ -110,6 +110,10 @@ if as_int("gcs_short_local_refine_gt_min_lanes", 4) != 4:
     bad.append(f"gcs_short_local_refine_gt_min_lanes={args.get('gcs_short_local_refine_gt_min_lanes')!r}, expected 4")
 if not math.isclose(as_float("gcs_short_local_refine_beta_px", 5.0), 5.0, rel_tol=0.0, abs_tol=1e-12):
     bad.append(f"gcs_short_local_refine_beta_px={args.get('gcs_short_local_refine_beta_px')!r}, expected 5.0")
+if not math.isclose(as_float("gcs_short_local_refine_max_delta_px", 40.0), 40.0, rel_tol=0.0, abs_tol=1e-12):
+    bad.append(
+        f"gcs_short_local_refine_max_delta_px={args.get('gcs_short_local_refine_max_delta_px')!r}, expected 40.0"
+    )
 
 expected_zero = (
     "gcs_query_count_ce",
@@ -190,7 +194,7 @@ run_raw_refined_gate() {
 }
 
 echo "Q12/env30 short local x-refine gate: run=${RUN_NAME}, tests=${RUN_TESTS}"
-echo "TEST remains closed; running official-val and train-side coarse/refined geometry diagnostics."
+echo "TEST remains closed; running official-val and train-side main/aux-refined geometry diagnostics."
 
 run_raw_refined_gate val val "${GT_JSON}"
 run_raw_refined_gate train0601 train "${TRAIN0601_GT_JSON}"
@@ -209,8 +213,8 @@ for label, path_s in zip(("official-val", "train0601", "train0531"), sys.argv[1:
     data = json.loads(path.read_text(encoding="utf-8"))
     cr = data.get("coarse_refined", {})
     print(f"\n[{label}] {path}")
-    if not cr.get("has_coarse_points"):
-        print("  missing pred_coarse_points: this checkpoint is not a short-local-refine model")
+    if not cr.get("has_short_refined_points"):
+        print("  missing pred_short_refined_points: this checkpoint is not a v2 short-local-refine model")
         continue
     for group in ("short_gt4", "short_gt5"):
         item = cr.get(group, {})

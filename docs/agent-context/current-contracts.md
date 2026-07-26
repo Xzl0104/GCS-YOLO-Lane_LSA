@@ -61,7 +61,7 @@ run TEST for it, or build local-refine v2 on top of it. The next route must
 target coarse geometry/reference coverage first.
 
 The 2026-07-27 user-requested Q12/env30 short-lane coarse-to-fine local
-x-refine probe is default-off and enabled only by
+x-refine v2 probe is default-off and enabled only by
 `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-short-local-refine.yaml`
 plus explicit `gcs_short_local_refine > 0`. It keeps Q=12/K=56 query mode,
 does not enable Count Head, Quality Head, query extent decode, Q24, or
@@ -70,21 +70,27 @@ count-aware top-k, and runs on top of the env30 parent protocol
 emits:
 
 ```text
-pred_points: B x 12 x 56 x 2                  # refined final points for decode/loss
-pred_coarse_points: B x 12 x 56 x 2           # before second-stage local x-refine
-pred_short_refine_delta_logits: B x 12 x 56   # second-stage x-logit residual
+pred_points: B x 12 x 56 x 2                   # env30 main path for matcher/loss/decode
+pred_coarse_points: B x 12 x 56 x 2            # diagnostic alias of the main path for gate compatibility
+pred_short_refined_points: B x 12 x 56 x 2     # auxiliary bounded local x-refine output
+pred_short_refine_delta_logits: B x 12 x 56    # auxiliary raw residual logits
+pred_short_refine_delta_norm: B x 12 x 56      # bounded normalized x residual
 ```
 
-The second-stage head samples image features at detached coarse points and
-only changes x logits; fixed-y anchors must stay unchanged. To preserve env30
-Q12 carrier assignment, `GCSLoss` uses `pred_coarse_points` for Hungarian
-matching whenever that tensor is present, then applies normal point/smooth/
-curve losses to final `pred_points`. The optional
-`short_local_refine_loss` adds x-only SmoothL1 supervision only for matched
-short GT4/GT5 lanes selected by `gcs_short_local_refine_visible_thr` and
-`gcs_short_local_refine_gt_min_lanes`. Decode and official metrics remain
-unchanged and use only model predictions; TEST is closed until official-val
-and raw/refined geometry gates pass.
+The auxiliary head samples image features at detached main points, detaches the
+resulting refinement tokens, and only changes normalized x by `tanh(delta) *
+gcs_short_local_refine_max_delta_px / image_width`; fixed-y anchors must stay
+unchanged. To preserve env30 Q12 carrier assignment, `GCSLoss` matches
+Hungarian assignments on the main `pred_points`, and normal point/smooth/curve/
+exist/valid losses plus official decode also use the main `pred_points`. The optional
+`short_local_refine_loss` supervises only `pred_short_refined_points` with
+normalized-x SmoothL1, selected by short GT4/GT5 criteria
+`gcs_short_local_refine_visible_thr` and
+`gcs_short_local_refine_gt_min_lanes`. The recommended v2 probe starts from
+the env30 `weights/official_best.pt`, uses `gcs_short_local_refine=0.02`,
+`gcs_short_local_refine_beta_px=5.0`, and
+`gcs_short_local_refine_max_delta_px=40.0`, and keeps TEST closed until
+official-val and raw/refined geometry gates pass.
 
 The completed 40-epoch dual-head probe
 `query_dualhead_quality_count_env30_probe40_v1` is not promoted to full
@@ -827,11 +833,14 @@ additionally emits:
 
 ```text
 pred_coarse_points: B x 12 x 56 x 2
+pred_short_refined_points: B x 12 x 56 x 2
 pred_short_refine_delta_logits: B x 12 x 56
+pred_short_refine_delta_norm: B x 12 x 56
 ```
 
 This output is default-off. The default Q12 YAML must not emit
-`pred_coarse_points` or `pred_short_refine_delta_logits`.
+`pred_coarse_points`, `pred_short_refined_points`,
+`pred_short_refine_delta_logits`, or `pred_short_refine_delta_norm`.
 
 The optional Q24 dual-head protected-static model
 `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q24-k56-dualhead.yaml` emits:
@@ -917,9 +926,12 @@ implemented by reusing `sum(sigmoid(pred_logits))` or the rejected Q24
 event/role patches.
 
 `short_local_refine_loss` is active only when a query model emits
-`pred_coarse_points` and `gcs_short_local_refine > 0`; the default gain is
-`0.0`. When logits are absent or the gain is zero, the five short-local-refine
-log items are zero for old-model compatibility.
+`pred_short_refined_points` and `gcs_short_local_refine > 0`; the default gain
+is `0.0`. The loss is normalized-x SmoothL1 with
+`gcs_short_local_refine_beta_px / image_width` as beta. The auxiliary residual
+is bounded by `gcs_short_local_refine_max_delta_px / image_width`, default
+`40px`. When auxiliary refined points are absent or the gain is zero, the five
+short-local-refine log items are zero for old-model compatibility.
 
 Post-`424ab1c86` log items such as `short_side_geom_loss`, `far_spur_loss`,
 `farspur_if_loss`, `rank_topk_loss`, `shortside_*`, `rank_*`,

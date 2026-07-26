@@ -1338,13 +1338,22 @@ geometry. Do not relaunch Q12 dataref/reference-only as the immediate next
 experiment. Gate the next run on refined raw `has_match20` for short GT4/GT5,
 GT3/GT4 false-extra, and official-val only; TEST remains closed.
 
-2026-07-27 implementation note: the default-off probe is now implemented as
+2026-07-27 implementation note: the default-off v1 probe was implemented as
 `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-short-local-refine.yaml`
 with `scripts/run_query_short_local_refine_env30_probe40_v1.sh` and
-`scripts/run_query_short_local_refine_env30_gate_v1.sh`. It should be treated
-as an unproven 20-40 epoch probe until official-val plus train0601/train0531
-coarse/refined geometry gates show real short GT4/GT5 `has_match20` gains
-without GT3/GT4 false-extra regression.
+`scripts/run_query_short_local_refine_env30_gate_v1.sh`.
+
+2026-07-27 v1 failure note: the first 40-epoch implementation is rejected
+because it changed `pred_points` itself, used pixel-scale auxiliary loss, and
+trained from scratch. That made the auxiliary branch dominate the main lane
+geometry, causing official-val geometry/count collapse. This does not reject
+the local x-refine idea. The corrected v2 path keeps main `pred_points` for
+matcher/loss/decode, emits `pred_short_refined_points` only as an auxiliary
+bounded output, uses normalized-x SmoothL1 with
+`gcs_short_local_refine=0.02`, caps the residual by
+`gcs_short_local_refine_max_delta_px=40.0`, and starts from the env30
+`official_best.pt` for a 20-epoch official-val/train-side probe. TEST remains
+closed.
 
 ## 2026-07-23 Env30 GT4 Near-20px Geometry Refine v1 Rejection
 

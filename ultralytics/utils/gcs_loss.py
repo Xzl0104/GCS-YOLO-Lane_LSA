@@ -154,6 +154,7 @@ class GCSLoss(nn.Module):
         short_local_refine_visible_thr: int | None = None,
         short_local_refine_gt_min_lanes: int | None = None,
         short_local_refine_beta_px: float | None = None,
+        short_local_refine_max_delta_px: float | None = None,
         role_contain: float | None = None,
         role_contain_valid_weight: float | None = None,
         role_contain_matcher: bool | None = None,
@@ -268,6 +269,11 @@ class GCSLoss(nn.Module):
             short_local_refine_beta_px
             if short_local_refine_beta_px is not None
             else self._arg(args, "gcs_short_local_refine_beta_px", 5.0)
+        )
+        self.short_local_refine_max_delta_px = float(
+            short_local_refine_max_delta_px
+            if short_local_refine_max_delta_px is not None
+            else self._arg(args, "gcs_short_local_refine_max_delta_px", 40.0)
         )
         self.query_count_min_lanes = int(
             query_count_min_lanes
@@ -615,6 +621,10 @@ class GCSLoss(nn.Module):
             )
         if self.short_local_refine_beta_px <= 0.0:
             raise ValueError(f"gcs_short_local_refine_beta_px must be > 0, got {self.short_local_refine_beta_px}.")
+        if self.short_local_refine_max_delta_px <= 0.0:
+            raise ValueError(
+                f"gcs_short_local_refine_max_delta_px must be > 0, got {self.short_local_refine_max_delta_px}."
+            )
         if self.count_boundary_margin34 < 0.0:
             raise ValueError(f"gcs_count_boundary_margin34 must be >= 0, got {self.count_boundary_margin34}.")
         if self.count_boundary_margin45 < 0.0:
@@ -2273,19 +2283,25 @@ class GCSLoss(nn.Module):
         indices: list[tuple[torch.Tensor, torch.Tensor]],
         gt_lanes: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Supervise optional second-stage local x refinement on matched short GT4/GT5 lanes."""
-        pred_coarse_points = preds.get("pred_coarse_points")
-        if pred_coarse_points is None:
+        """Supervise optional auxiliary local x refinement on matched short GT4/GT5 lanes."""
+        pred_short_refined_points = preds.get("pred_short_refined_points")
+        if pred_short_refined_points is None:
             if float(self.short_local_refine_gain) > 0.0:
                 raise ValueError(
-                    "gcs_short_local_refine requires preds['pred_coarse_points']; "
+                    "gcs_short_local_refine requires preds['pred_short_refined_points']; "
                     "use a query_short_local_refine_head model YAML or set --gcs-short-local-refine 0.0."
                 )
             zero = self._zero_like(pred_points)
             return zero, zero, zero, zero, zero
-        if tuple(pred_coarse_points.shape) != tuple(pred_points.shape):
+        if tuple(pred_short_refined_points.shape) != tuple(pred_points.shape):
             raise ValueError(
-                "pred_coarse_points must have shape B x Q x K x 2 matching pred_points, "
+                "pred_short_refined_points must have shape B x Q x K x 2 matching pred_points, "
+                f"got {tuple(pred_short_refined_points.shape)} vs {tuple(pred_points.shape)}."
+            )
+        pred_coarse_points = preds.get("pred_coarse_points")
+        if isinstance(pred_coarse_points, torch.Tensor) and tuple(pred_coarse_points.shape) != tuple(pred_points.shape):
+            raise ValueError(
+                "pred_coarse_points must have shape B x Q x K x 2 matching pred_points when present, "
                 f"got {tuple(pred_coarse_points.shape)} vs {tuple(pred_points.shape)}."
             )
 
@@ -2297,6 +2313,8 @@ class GCSLoss(nn.Module):
                 raise ValueError(f"gt_lanes must have one value per image, got {gt_lanes_t.numel()} vs B={pred_points.shape[0]}.")
 
         width = self._pixel_scale_for(pred_points).reshape(-1)[0].to(device=device, dtype=dtype)
+        width_float = max(float(width.detach().item()), 1.0)
+        beta_norm = max(float(self.short_local_refine_beta_px) / width_float, 1e-12)
         selected_losses: list[torch.Tensor] = []
         coarse_apes: list[torch.Tensor] = []
         refined_apes: list[torch.Tensor] = []
@@ -2324,17 +2342,15 @@ class GCSLoss(nn.Module):
             src_short = src_idx[short_mask]
             target_short = target[short_mask]
             valid_short = valid[short_mask]
-            refined_short = pred_points[b, src_short]
-            coarse_short = pred_coarse_points[b, src_short]
+            refined_short = pred_short_refined_points[b, src_short]
+            coarse_short = pred_coarse_points[b, src_short] if isinstance(pred_coarse_points, torch.Tensor) else pred_points[b, src_short]
             mask = valid_short.to(dtype=dtype)
             valid_den = mask.sum(dim=1).clamp_min(1.0)
 
-            refined_x_px = refined_short[..., 0] * width
-            target_x_px = target_short[..., 0] * width
             per_anchor = F.smooth_l1_loss(
-                refined_x_px,
-                target_x_px,
-                beta=float(self.short_local_refine_beta_px),
+                refined_short[..., 0],
+                target_short[..., 0],
+                beta=beta_norm,
                 reduction="none",
             )
             selected_losses.append((per_anchor * mask).sum(dim=1) / valid_den)
@@ -2938,7 +2954,6 @@ class GCSLoss(nn.Module):
                     "pred_coarse_points must have shape B x Q x K x 2 matching pred_points, "
                     f"got {tuple(pred_coarse_points.shape)} vs {tuple(pred_points.shape)}."
                 )
-            matcher_points = pred_coarse_points
 
         role_allowed_masks = self._role_allowed_masks(matcher_points, gt_valid, gt_lanes)
         event_allowed_masks = self._q24_event_allowed_masks(matcher_points, gt_valid, gt_lanes)

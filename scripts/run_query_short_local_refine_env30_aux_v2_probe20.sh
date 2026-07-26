@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Default-off Q12/env30 short-lane coarse-to-fine local x-refine probe.
-# Keeps Count Head, Quality Head, and query extent decode disabled.
-# TEST stays closed; use official-val and raw/refined geometry gates first.
+# Default-off Q12/env30 auxiliary short-lane local x-refine v2 probe.
+# Main pred_points/decode stay on the env30 path; pred_short_refined_points is
+# auxiliary-only and is judged by raw/refined geometry diagnostics.
 
-export RUN_NAME="${RUN_NAME:-query_short_local_refine_env30_probe40_v1}"
+export RUN_NAME="${RUN_NAME:-query_short_local_refine_env30_aux_v2_probe20}"
 export MODEL="${MODEL:-ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-short-local-refine.yaml}"
-export EPOCHS="${EPOCHS:-40}"
+export PRETRAINED="${PRETRAINED:-runs/gcs_lane/query_alpha05_gt5short_geom_w2_bneg002_env30_nocount_v1/weights/official_best.pt}"
+export EPOCHS="${EPOCHS:-20}"
 export RUN_TESTS="${RUN_TESTS:-0}"
 export OFFICIAL_EXTENT_DECODE_MODES="${OFFICIAL_EXTENT_DECODE_MODES:-none}"
 export SWEEP_EXTENT_DECODE_MODES="${SWEEP_EXTENT_DECODE_MODES:-${OFFICIAL_EXTENT_DECODE_MODES}}"
@@ -39,12 +40,11 @@ else
   export EXTRA_TRAIN_ARGS="${SHORT_REFINE_EXTRA_ARGS[*]}"
 fi
 
-echo "Q12/env30 short local x-refine probe: model=${MODEL}, epochs=${EPOCHS}, tests=${RUN_TESTS}"
-echo "Short local refine loss gain: gcs_short_local_refine=${GCS_SHORT_LOCAL_REFINE:-0.02}"
-echo "Short local refine max delta px: ${GCS_SHORT_LOCAL_REFINE_MAX_DELTA_PX:-40.0}"
+echo "Q12/env30 auxiliary short local x-refine v2: model=${MODEL}, epochs=${EPOCHS}, tests=${RUN_TESTS}"
+echo "Pretrained: ${PRETRAINED}"
+echo "Short local refine: gain=${GCS_SHORT_LOCAL_REFINE:-0.02}, beta_px=${GCS_SHORT_LOCAL_REFINE_BETA_PX:-5.0}, max_delta_px=${GCS_SHORT_LOCAL_REFINE_MAX_DELTA_PX:-40.0}"
 echo "Official extent decode modes: ${OFFICIAL_EXTENT_DECODE_MODES}"
 echo "Count-aware top-k: ${COUNT_AWARE_TOPK}"
-echo "Inherited env30 parent protocol, including gcs_short_geom=1.0 and parent boundary-pseudo settings."
 echo "Disabled: Count Head CE, Quality Head loss, query extent loss/decode, score-sum count losses, Q24 role/event losses."
 
 bash scripts/run_query_alpha05_gt5short_geom_w2_bneg002_env30_nocount_v1.sh

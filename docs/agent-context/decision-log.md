@@ -2,7 +2,61 @@
 
 This file records decisions for branch `codex/5-25-3-k56`.
 
-## 2026-07-27: Add Q12/env30 short local x-refine probe
+## 2026-07-27: Revise Q12/env30 short local x-refine to auxiliary v2
+
+Decision:
+
+The first short-local-refine implementation is rejected as an implementation
+shape, not as evidence against local x refinement. It fed the second-stage
+refinement back into `pred_points`, used pixel-scale SmoothL1, and trained from
+scratch; the result collapsed official-val geometry/count behavior. The next
+implementation must keep the env30 main path intact and make local refinement
+an auxiliary bounded output only.
+
+Implementation:
+
+```text
+model:
+  ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-short-local-refine.yaml
+main output:
+  pred_points: B x 12 x 56 x 2
+auxiliary outputs:
+  pred_coarse_points: B x 12 x 56 x 2
+  pred_short_refined_points: B x 12 x 56 x 2
+  pred_short_refine_delta_logits: B x 12 x 56
+  pred_short_refine_delta_norm: B x 12 x 56
+new script:
+  scripts/run_query_short_local_refine_env30_aux_v2_probe20.sh
+```
+
+Important contract:
+
+`pred_points` remains the env30 main geometry for Hungarian matching, normal
+losses, point-valid refinement, and official decode. `pred_short_refined_points`
+is supervised only by `short_local_refine_loss`; its base points and feature
+tokens are detached so this auxiliary loss trains the new refine MLP without
+directly backpropagating into the main geometry path. The loss uses
+normalized-x SmoothL1 and reports APE diagnostics in pixels. The auxiliary
+residual is bounded by `gcs_short_local_refine_max_delta_px`, default `40.0`,
+and the auxiliary final layer is zero-initialized so a new head starts as
+identity.
+The v2 probe should start from
+`runs/gcs_lane/query_alpha05_gt5short_geom_w2_bneg002_env30_nocount_v1/weights/official_best.pt`,
+use `EPOCHS=20`, `gcs_short_local_refine=0.02`,
+`gcs_short_local_refine_beta_px=5.0`,
+`gcs_short_local_refine_max_delta_px=40.0`, and keep TEST closed.
+
+Promotion gate:
+
+```text
+official-val and train-side only
+main/refined short GT4/GT5 has_match20 improves
+coarse_miss20_refined_hit20 clearly exceeds coarse_hit20_refined_miss20
+official-val ACC/FP/FN does not regress from env30
+GT3/GT4 false-extra does not increase
+```
+
+## 2026-07-27: Add Q12/env30 short local x-refine probe v1
 
 Decision:
 
@@ -36,15 +90,10 @@ diagnostics:
 
 Important contract:
 
-When `pred_coarse_points` is present, `GCSLoss` matches Hungarian assignments
-on coarse geometry to avoid changing env30 Q12 carrier ownership, then applies
-normal point/smooth/curve losses to final `pred_points`. The new refine loss is
-x-only, selected by short-visible GT4/GT5 criteria, and is disabled unless
-`gcs_short_local_refine > 0`. The point-valid refinement samples at coarse
-points for this probe, so the second-stage x update does not silently move the
-point-valid feature sampling path. Count Head, Quality Head, query extent,
-count-aware top-k, Q24 role/event paths, and TEST remain disabled in the probe
-script.
+This is the historical v1 contract. It is superseded by the auxiliary v2
+contract above after the 40-epoch probe showed the second-stage loss and
+decode-path coupling can dominate the main geometry. Do not relaunch v1 as the
+next experiment.
 
 Promotion gate:
 

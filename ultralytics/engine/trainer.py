@@ -922,6 +922,7 @@ class BaseTrainer:
                     "gcs_short_local_refine_visible_thr",
                     "gcs_short_local_refine_gt_min_lanes",
                     "gcs_short_local_refine_beta_px",
+                    "gcs_short_local_refine_max_delta_px",
                     "gcs_official_best",
                     "gcs_official_interval",
                     "gcs_official_archive_root",

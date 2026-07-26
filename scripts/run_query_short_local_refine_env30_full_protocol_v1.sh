@@ -2,15 +2,15 @@
 set -euo pipefail
 
 # Full reporting protocol for the default-off Q12/env30 short local x-refine probe.
-# Selection is official-val only. TEST results are reporting-only from each
-# checkpoint's post-train official-val-selected decode.
+# Selection is official-val only. TEST reporting must be explicitly enabled
+# after the official-val/raw-refined gate passes.
 
 export RUN_NAME="${RUN_NAME:-query_short_local_refine_env30_full_protocol_v1}"
 export PROJECT="${PROJECT:-runs/gcs_lane}"
 export MODEL="${MODEL:-ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-short-local-refine.yaml}"
 export DATA="${DATA:-data/tusimple_gcs_fixed_y_960x544.yaml}"
 export EPOCHS="${EPOCHS:-40}"
-export RUN_TESTS="${RUN_TESTS:-1}"
+export RUN_TESTS="${RUN_TESTS:-0}"
 export RUN_PREFLIGHT_CHECKS="${RUN_PREFLIGHT_CHECKS:-1}"
 export RUN_FINAL_DIAGS="${RUN_FINAL_DIAGS:-1}"
 export OVERWRITE_DIAGS="${OVERWRITE_DIAGS:-0}"
@@ -85,10 +85,11 @@ if [[ -f /root/miniconda3/etc/profile.d/conda.sh ]]; then
 fi
 
 SHORT_REFINE_EXTRA_ARGS=(
-  --gcs-short-local-refine "${GCS_SHORT_LOCAL_REFINE:-0.25}"
+  --gcs-short-local-refine "${GCS_SHORT_LOCAL_REFINE:-0.02}"
   --gcs-short-local-refine-visible-thr "${GCS_SHORT_LOCAL_REFINE_VISIBLE_THR:-10}"
   --gcs-short-local-refine-gt-min-lanes "${GCS_SHORT_LOCAL_REFINE_GT_MIN_LANES:-4}"
   --gcs-short-local-refine-beta-px "${GCS_SHORT_LOCAL_REFINE_BETA_PX:-5.0}"
+  --gcs-short-local-refine-max-delta-px "${GCS_SHORT_LOCAL_REFINE_MAX_DELTA_PX:-40.0}"
   --gcs-query-count-ce 0.0
   --gcs-query-quality 0.0
   --gcs-query-extent 0.0
@@ -165,7 +166,7 @@ if is_true(os.environ.get("COUNT_AWARE_TOPK", "0")):
 if is_true(os.environ.get("SWEEP_COUNT_AWARE_TOPK", "0")):
     bad.append("SWEEP_COUNT_AWARE_TOPK must stay false")
 
-if float(os.environ.get("GCS_SHORT_LOCAL_REFINE", "0.25")) <= 0.0:
+if float(os.environ.get("GCS_SHORT_LOCAL_REFINE", "0.02")) <= 0.0:
     bad.append("GCS_SHORT_LOCAL_REFINE must be > 0")
 if int(os.environ.get("GCS_SHORT_LOCAL_REFINE_VISIBLE_THR", "10")) != 10:
     bad.append("GCS_SHORT_LOCAL_REFINE_VISIBLE_THR must be 10")
@@ -173,6 +174,8 @@ if int(os.environ.get("GCS_SHORT_LOCAL_REFINE_GT_MIN_LANES", "4")) != 4:
     bad.append("GCS_SHORT_LOCAL_REFINE_GT_MIN_LANES must be 4")
 if abs(float(os.environ.get("GCS_SHORT_LOCAL_REFINE_BETA_PX", "5.0")) - 5.0) > 1e-12:
     bad.append("GCS_SHORT_LOCAL_REFINE_BETA_PX must be 5.0")
+if abs(float(os.environ.get("GCS_SHORT_LOCAL_REFINE_MAX_DELTA_PX", "40.0")) - 40.0) > 1e-12:
+    bad.append("GCS_SHORT_LOCAL_REFINE_MAX_DELTA_PX must be 40.0")
 
 if bad:
     raise SystemExit("short-local-refine full-protocol preflight failed: " + "; ".join(bad))
@@ -415,6 +418,10 @@ if as_int(args, "gcs_short_local_refine_gt_min_lanes", 4) != 4:
     bad.append(f"gcs_short_local_refine_gt_min_lanes={args.get('gcs_short_local_refine_gt_min_lanes')!r}, expected 4")
 if not math.isclose(as_float(args, "gcs_short_local_refine_beta_px", 5.0), 5.0, rel_tol=0.0, abs_tol=1e-12):
     bad.append(f"gcs_short_local_refine_beta_px={args.get('gcs_short_local_refine_beta_px')!r}, expected 5.0")
+if not math.isclose(as_float(args, "gcs_short_local_refine_max_delta_px", 40.0), 40.0, rel_tol=0.0, abs_tol=1e-12):
+    bad.append(
+        f"gcs_short_local_refine_max_delta_px={args.get('gcs_short_local_refine_max_delta_px')!r}, expected 40.0"
+    )
 
 for key in (
     "gcs_query_count_ce",
@@ -499,6 +506,7 @@ summary = {
         "gcs_short_local_refine_visible_thr": as_int(args, "gcs_short_local_refine_visible_thr", 10),
         "gcs_short_local_refine_gt_min_lanes": as_int(args, "gcs_short_local_refine_gt_min_lanes", 4),
         "gcs_short_local_refine_beta_px": as_float(args, "gcs_short_local_refine_beta_px", 5.0),
+        "gcs_short_local_refine_max_delta_px": as_float(args, "gcs_short_local_refine_max_delta_px", 40.0),
         "gcs_short_geom": as_float(args, "gcs_short_geom", 0.0),
         "gcs_boundary_pseudo_neg": as_float(args, "gcs_boundary_pseudo_neg", 0.0),
         "extent_decode_modes": as_list(args.get("gcs_official_extent_decode_modes")),
@@ -550,7 +558,7 @@ echo "epochs=${EPOCHS}"
 echo "RUN_TESTS=${RUN_TESTS} (TEST is reporting-only from official-val-selected decode)"
 echo "official extent modes=${OFFICIAL_EXTENT_DECODE_MODES}; sweep extent modes=${SWEEP_EXTENT_DECODE_MODES}"
 echo "official count modes=${OFFICIAL_COUNT_MODES}; count-aware=${COUNT_AWARE_TOPK}/${SWEEP_COUNT_AWARE_TOPK}"
-echo "short local refine: gain=${GCS_SHORT_LOCAL_REFINE:-0.25}, visible_thr=${GCS_SHORT_LOCAL_REFINE_VISIBLE_THR:-10}, gt_min_lanes=${GCS_SHORT_LOCAL_REFINE_GT_MIN_LANES:-4}, beta_px=${GCS_SHORT_LOCAL_REFINE_BETA_PX:-5.0}"
+echo "short local refine: gain=${GCS_SHORT_LOCAL_REFINE:-0.02}, visible_thr=${GCS_SHORT_LOCAL_REFINE_VISIBLE_THR:-10}, gt_min_lanes=${GCS_SHORT_LOCAL_REFINE_GT_MIN_LANES:-4}, beta_px=${GCS_SHORT_LOCAL_REFINE_BETA_PX:-5.0}, max_delta_px=${GCS_SHORT_LOCAL_REFINE_MAX_DELTA_PX:-40.0}"
 echo "inherited env30 parent: gcs_short_geom=1.0, gcs_boundary_pseudo_neg=${GCS_BOUNDARY_PSEUDO_NEG}"
 
 if is_true "${RUN_PREFLIGHT_CHECKS}"; then

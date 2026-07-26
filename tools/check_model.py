@@ -151,14 +151,38 @@ def main():
                 f"query short local refine pred_coarse_points must have shape {expected_points_shape}, "
                 f"got {tuple(y.get('pred_coarse_points', torch.empty(0)).shape)}."
             )
+        if tuple(y.get("pred_short_refined_points", torch.empty(0)).shape) != expected_points_shape:
+            raise RuntimeError(
+                f"query short local refine pred_short_refined_points must have shape {expected_points_shape}, "
+                f"got {tuple(y.get('pred_short_refined_points', torch.empty(0)).shape)}."
+            )
         expected_delta_shape = (args.batch, expected_q, expected_k)
         if tuple(y.get("pred_short_refine_delta_logits", torch.empty(0)).shape) != expected_delta_shape:
             raise RuntimeError(
                 f"query short local refine pred_short_refine_delta_logits must have shape {expected_delta_shape}, "
                 f"got {tuple(y.get('pred_short_refine_delta_logits', torch.empty(0)).shape)}."
             )
+        if tuple(y.get("pred_short_refine_delta_norm", torch.empty(0)).shape) != expected_delta_shape:
+            raise RuntimeError(
+                f"query short local refine pred_short_refine_delta_norm must have shape {expected_delta_shape}, "
+                f"got {tuple(y.get('pred_short_refine_delta_norm', torch.empty(0)).shape)}."
+            )
+        aux_y_err = float((y["pred_short_refined_points"][..., 1] - y["pred_points"][..., 1]).abs().max().cpu().item())
+        if aux_y_err > 1e-6:
+            raise RuntimeError(f"short local x-refine must not change fixed-y anchors, max y error={aux_y_err:.6g}.")
+        max_delta_norm = float(y["pred_short_refine_delta_norm"].abs().max().detach().cpu().item())
+        max_allowed_norm = float(getattr(head, "short_local_refine_max_delta_px", 40.0)) / float(img_w)
+        if max_delta_norm > max_allowed_norm + 1e-6:
+            raise RuntimeError(
+                f"short local x-refine delta exceeds max_delta_px contract: {max_delta_norm:.6g} > {max_allowed_norm:.6g}."
+            )
     elif gcs_mode != "ordered_slot":
-        if "pred_coarse_points" in y or "pred_short_refine_delta_logits" in y:
+        if (
+            "pred_coarse_points" in y
+            or "pred_short_refined_points" in y
+            or "pred_short_refine_delta_logits" in y
+            or "pred_short_refine_delta_norm" in y
+        ):
             raise RuntimeError("default query GCSLaneHead must not emit short local refine diagnostic outputs.")
     if y["pred_valid_logits"].shape != y["pred_points"].shape[:3]:
         raise RuntimeError(
