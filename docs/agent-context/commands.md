@@ -3041,6 +3041,13 @@ keep valid weights unchanged and move to data-driven reference clustering.
 
 ## Q12 Env30 Lateral Candidate Probe
 
+Status: rejected after `query_short_candidate_env30_probe20_fix1`. Do not
+rerun this command unchanged or enable TEST. The candidate pool has useful
+raw validation coverage (`0.70238`), but candidate score selection falls to
+`0.35..0.39` hit20 on validation and candidate decode reduces official-val
+ACC from `0.973330` to `0.946994` at epoch 5. A future command must use a
+new gated/visibility-aware candidate implementation.
+
 Run the first candidate-generation probe on the remote CUDA server. It starts
 from the env30 `official_best.pt`, freezes the base model, trains only the
 candidate score head, runs training-time official-val selection, and keeps

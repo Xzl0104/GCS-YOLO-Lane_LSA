@@ -201,6 +201,33 @@ for the first probe.
 Official-val selection must first verify raw candidate `has_match20` gains
 without increasing GT3/GT4 false-extra behavior.
 
+The completed
+`query_short_candidate_env30_probe20_fix1` is rejected. The frozen env30
+main path is intact: with the same checkpoint and the same official-val
+decode, `candidate_decode=false` returns the env30 result
+`ACC/FP/FN = 0.973330 / 0.015748 / 0.009642`, while
+`candidate_decode=true` reaches only
+`0.946994 / 0.048714 / 0.040404` at epoch 5 and
+`0.893279 / 0.120202 / 0.101469` at epoch 10. The official-best candidate
+checkpoint is therefore not a TEST candidate and must not be continued.
+
+The failure is in the candidate score/decode contract, not base geometry:
+
+- training `short_candidate_best_hit20` rises to about `0.81`, but official-val
+  stays at `0.35..0.39` while raw candidate coverage is `0.70238`;
+- the score head is trained only on matched short GT4/GT5 lanes but candidate
+  decode selects a hypothesis for every Q12 query, including normal GT3/GT4
+  lanes and unmatched queries;
+- candidate score evidence is an unweighted mean over all 56 anchors, while
+  the target APE uses only visible anchors, diluting short-lane evidence;
+- the selected relative logit is added to the base query score, so an
+  out-of-distribution candidate score can change ordinary lane ranking.
+
+Any future candidate-generation follow-up must keep the normal decode path
+unchanged by default, add an explicit prediction-only short-lane applicability
+gate, and use visibility-aware anchor aggregation. Do not tune learning rate,
+candidate loss gain, or epoch count before those contract changes.
+
 The completed 40-epoch dual-head probe
 `query_dualhead_quality_count_env30_probe40_v1` is not promoted to full
 training or TEST. It is also not closed as a dead mechanism, because it beats

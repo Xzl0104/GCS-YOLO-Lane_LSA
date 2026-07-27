@@ -2,6 +2,48 @@
 
 This file records decisions for branch `codex/5-25-3-k56`.
 
+## 2026-07-27: Reject Q12/env30 lateral candidate-generation probe
+
+Decision:
+
+Reject `query_short_candidate_env30_probe20_fix1` for promotion, do not run
+TEST, and do not continue it to 20/100/220 epochs. The candidate score head
+was initialized from the env30 official-best checkpoint with the base frozen.
+
+Evidence:
+
+```text
+same checkpoint, candidate_decode=false:
+  official-val ACC/FP/FN = 0.973330 / 0.015748 / 0.009642
+
+candidate_decode=true:
+  epoch005 ACC/FP/FN = 0.946994 / 0.048714 / 0.040404
+  epoch010 ACC/FP/FN = 0.893279 / 0.120202 / 0.101469
+```
+
+Candidate training diagnostics show the score head overfits:
+
+```text
+train best_hit20: 0.27377 -> about 0.81
+val best_hit20:   0.34524..0.38690
+val raw_hit20:    0.70238
+```
+
+The raw candidate pool is not empty, but the learned score chooses the wrong
+hypothesis. The root implementation error is that candidate selection is
+trained on matched short GT4/GT5 lanes but applied to all Q12 queries at
+decode. The all-anchor mean over K=56 also mismatches the visible-anchor-only
+training target, and adding the candidate relative logit to the base query
+score lets the auxiliary head perturb normal lane ranking.
+
+Next action:
+
+Do not tune candidate loss gain, learning rate, or epoch count. A follow-up
+must keep the normal env30 decode path unchanged, add a prediction-only
+short-lane applicability gate, score candidates with visibility-aware
+anchor aggregation, and measure candidate decode only on the gated subset
+before considering a formal decode path.
+
 ## 2026-07-27: Add Q12/env30 lateral candidate-generation probe
 
 Decision:

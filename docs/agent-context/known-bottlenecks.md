@@ -2,6 +2,53 @@
 
 This file applies to branch `codex/5-25-3-k56`.
 
+## 2026-07-27 Q12/env30 Lateral Candidate Probe Rejection
+
+The run `query_short_candidate_env30_probe20_fix1` is rejected. It trained
+only the 33k-parameter candidate score head from the env30
+`official_best.pt`; the base model and main `pred_points` path stayed frozen.
+
+The decisive same-checkpoint official-val comparison is:
+
+```text
+candidate_decode=false:
+  ACC/FP/FN = 0.973330 / 0.015748 / 0.009642
+
+candidate_decode=true, epoch005:
+  ACC/FP/FN = 0.946994 / 0.048714 / 0.040404
+
+candidate_decode=true, epoch010:
+  ACC/FP/FN = 0.893279 / 0.120202 / 0.101469
+```
+
+The normal decode result proves that the env30 carrier geometry was not
+damaged. The candidate path itself is harmful:
+
+```text
+train short_candidate_best_hit20: 0.27377 -> about 0.81
+val   short_candidate_best_hit20: 0.34524..0.38690
+val   short_candidate_raw_hit20:  0.70238
+```
+
+The raw candidate pool contains useful hypotheses on validation, but the
+learned score selects the wrong one. The implementation has two structural
+distribution mismatches:
+
+1. The loss supervises only matched short GT4/GT5 lanes, while decode applies
+   candidate selection to every Q12 query. Normal lanes and unmatched queries
+   therefore receive an out-of-distribution score perturbation.
+2. Candidate features are averaged over all K=56 anchors without predicted
+   visibility weighting, although the target geometry is computed only over
+   visible anchors. For short lanes, most pooled features are irrelevant
+   background.
+
+The relative candidate logit is also added to the main query existence score,
+which makes an unstable auxiliary score alter ordinary ranking. Do not
+continue this run, enable TEST, or tune only `gcs_short_candidate`/learning
+rate/epochs. The next experiment must isolate candidate selection from the
+normal path, gate it with prediction-only short-lane applicability, and use
+visibility-aware scoring before any new official-val probe.
+
 ## 2026-07-27 Q12/env30 Windowed Short Local X-Refine v3 Rejection
 
 The 10-epoch `query_short_local_refine_env30_window_v3_probe10` run is
