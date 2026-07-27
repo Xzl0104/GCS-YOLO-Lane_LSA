@@ -75,6 +75,7 @@ QUERY_ONLY_ROW_KEYS = (
     "max_det",
     "min_points",
     "query_points_source",
+    "candidate_decode",
     "extent_decode",
     "extent_decode_mode",
     "extent_decode_priority",
@@ -165,6 +166,11 @@ def parse_args() -> argparse.Namespace:
         choices=("none", "interval", "intersect"),
         default=["none"],
         help="Query extent visibility modes to sweep. 'none' preserves point-valid decode.",
+    )
+    parser.add_argument(
+        "--candidate-decode",
+        action="store_true",
+        help="Flatten fixed lateral candidate hypotheses into the query decode pool.",
     )
     parser.add_argument("--count-aware-topk", action="store_true", help="Use count_score to keep only the quality-best dynamic lane count.")
     parser.add_argument("--count-aware-min-k", type=int, default=3, help="Minimum k_hat for --count-aware-topk.")
@@ -264,6 +270,7 @@ def _combo_key(combo: dict) -> tuple:
         float(combo["nms_dist_px"]),
         int(combo["max_det"]),
         int(combo["min_points"]),
+        bool(combo.get("candidate_decode", False)),
         str(combo.get("extent_decode_mode", "none")),
         str(combo.get("count_mode", "score_sum")),
         int(combo.get("count_aware_extra_margin", 0)),
@@ -298,6 +305,7 @@ def build_combos(args: argparse.Namespace, decode_yaml_cfg: dict | None = None) 
             }
         ]
     count_aware_topk = bool(getattr(args, "count_aware_topk", False))
+    candidate_decode = bool(getattr(args, "candidate_decode", False))
     count_aware_min_k = int(getattr(args, "count_aware_min_k", 3))
     count_aware_max_k = int(getattr(args, "count_aware_max_k", 5))
     count_aware_length_norm = float(getattr(args, "count_aware_length_norm", 12.0))
@@ -322,6 +330,11 @@ def build_combos(args: argparse.Namespace, decode_yaml_cfg: dict | None = None) 
             raise ValueError(f"count-aware length norm must be > 0, got {count_aware_length_norm}.")
     else:
         count_aware_extra_margins = [0]
+    if candidate_decode:
+        if count_aware_topk:
+            raise ValueError("candidate_decode cannot be combined with count-aware top-k.")
+        if any(str(mode) != "none" for mode in extent_decode_modes):
+            raise ValueError("candidate_decode cannot be combined with extent decode.")
     for conf, point_valid_thr, nms_dist_px, max_det, min_points, extent_mode, count_mode, count_aware_extra_margin in product(
         sorted({float(x) for x in args.confs}),
         sorted({float(x) for x in args.point_valid_thrs}),
@@ -347,6 +360,8 @@ def build_combos(args: argparse.Namespace, decode_yaml_cfg: dict | None = None) 
                 "nms_dist_px": nms_dist_px,
                 "max_det": max_det,
                 "min_points": min_points,
+                "query_points_source": "main",
+                "candidate_decode": candidate_decode,
                 "valid_before_maxdet": valid_before_maxdet,
                 "extent_decode": str(extent_mode) != "none",
                 "extent_decode_mode": str(extent_mode),
@@ -378,6 +393,7 @@ def _row_sort_key(row: dict) -> tuple:
         float(row["nms_dist_px"]),
         int(row["max_det"]),
         int(row["min_points"]),
+        bool(row.get("candidate_decode", False)),
         str(row.get("extent_decode_mode", "none")),
         str(row.get("count_mode", "score_sum")),
         int(row.get("count_aware_extra_margin", 0)),
@@ -396,6 +412,7 @@ def write_csv(path: Path, rows: list[dict]) -> None:
         "max_det",
         "min_points",
         "query_points_source",
+        "candidate_decode",
         "valid_before_maxdet",
         "extent_decode",
         "extent_decode_mode",
@@ -546,6 +563,8 @@ def sweep(args: argparse.Namespace) -> dict:
                 pred_quality_logits = preds.get("pred_quality_logits")
                 pred_start_logits = preds.get("pred_start_logits")
                 pred_end_logits = preds.get("pred_end_logits")
+                pred_short_candidate_points = preds.get("pred_short_candidate_points")
+                pred_short_candidate_logits = preds.get("pred_short_candidate_logits")
                 lanes = decode_gcs_predictions(
                     preds["pred_points"][0],
                     preds["pred_logits"][0],
@@ -554,6 +573,12 @@ def sweep(args: argparse.Namespace) -> dict:
                     pred_count_logits=pred_count_logits[0] if pred_count_logits is not None else None,
                     pred_start_logits=pred_start_logits[0] if pred_start_logits is not None else None,
                     pred_end_logits=pred_end_logits[0] if pred_end_logits is not None else None,
+                    pred_short_candidate_points=(
+                        pred_short_candidate_points[0] if pred_short_candidate_points is not None else None
+                    ),
+                    pred_short_candidate_logits=(
+                        pred_short_candidate_logits[0] if pred_short_candidate_logits is not None else None
+                    ),
                     image_shape=original_shape,
                     score_thr=combo["conf"],
                     point_valid_thr=combo["point_valid_thr"],
@@ -563,6 +588,7 @@ def sweep(args: argparse.Namespace) -> dict:
                     valid_before_maxdet=combo["valid_before_maxdet"],
                     extent_decode=combo["extent_decode"],
                     extent_decode_mode=combo["extent_decode_mode"],
+                    candidate_decode=bool(combo.get("candidate_decode", False)),
                     count_aware_topk=combo["count_aware_topk"],
                     count_aware_min_k=combo["count_aware_min_k"],
                     count_aware_max_k=combo["count_aware_max_k"],

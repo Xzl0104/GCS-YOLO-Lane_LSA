@@ -252,6 +252,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--gcs-query-extent-short-weight", type=float, default=2.0)
     parser.add_argument("--gcs-query-extent-gt-min-lanes", type=int, default=4)
     parser.add_argument(
+        "--gcs-candidate-decode",
+        action="store_true",
+        help="Use the optional query lateral candidate pool during GCS validation and official-val selection.",
+    )
+    parser.add_argument(
         "--gcs-short-local-refine",
         type=float,
         default=0.0,
@@ -302,6 +307,34 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--gcs-short-local-refine-nearmiss-thr-px", type=float, default=80.0)
     parser.add_argument("--gcs-short-local-refine-identity-weight", type=float, default=1.0)
     parser.add_argument("--gcs-short-local-refine-nearmiss-weight", type=float, default=1.0)
+    parser.add_argument(
+        "--gcs-short-candidate",
+        type=float,
+        default=0.0,
+        help="Feature-conditioned lateral candidate score/coverage loss gain. 0 disables.",
+    )
+    parser.add_argument("--gcs-short-candidate-visible-thr", type=int, default=10)
+    parser.add_argument("--gcs-short-candidate-gt-min-lanes", type=int, default=4)
+    parser.add_argument(
+        "--gcs-short-candidate-beta-px",
+        type=float,
+        default=3.0,
+        help="Soft target temperature in pixels for candidate APE weighting.",
+    )
+    parser.add_argument(
+        "--gcs-short-candidate-score-temperature",
+        type=float,
+        default=1.0,
+        help="Temperature used for candidate score softmax supervision.",
+    )
+    parser.add_argument("--gcs-short-candidate-count", type=int, default=7)
+    parser.add_argument("--gcs-short-candidate-radius-px", type=float, default=60.0)
+    parser.add_argument("--gcs-short-candidate-step-px", type=float, default=20.0)
+    parser.add_argument(
+        "--gcs-short-candidate-freeze-base",
+        action="store_true",
+        help="Freeze env30/base parameters and train only the query_short_candidate head.",
+    )
     parser.add_argument(
         "--gcs-count-ce",
         nargs="?",
@@ -1049,6 +1082,37 @@ def validate_short_local_refine_v3_args(args: argparse.Namespace) -> None:
         )
 
 
+def validate_short_candidate_args(args: argparse.Namespace) -> None:
+    """Fail fast when the lateral-candidate probe is launched with an invalid contract."""
+    model = str(getattr(args, "model", ""))
+    if not model.endswith("gcs-yolo-lane-s-q12-k56-short-candidate.yaml"):
+        return
+    if str(getattr(args, "gcs_mode", "query")) != "query":
+        raise SystemExit("short-candidate YAML requires --gcs-mode query.")
+    if int(args.gcs_short_candidate_count) <= 0 or int(args.gcs_short_candidate_count) % 2 != 1:
+        raise SystemExit("gcs_short_candidate_count must be a positive odd integer.")
+    if float(args.gcs_short_candidate_radius_px) <= 0.0 or float(args.gcs_short_candidate_step_px) <= 0.0:
+        raise SystemExit("gcs_short_candidate_radius_px and gcs_short_candidate_step_px must be > 0.")
+    ratio = float(args.gcs_short_candidate_radius_px) / float(args.gcs_short_candidate_step_px)
+    expected_count = 2 * round(ratio) + 1
+    if abs(ratio - round(ratio)) > 1e-6 or int(args.gcs_short_candidate_count) != expected_count:
+        raise SystemExit(
+            "short-candidate YAML requires count=2*(radius/step)+1; "
+            f"got count={args.gcs_short_candidate_count}, radius={args.gcs_short_candidate_radius_px}, "
+            f"step={args.gcs_short_candidate_step_px}."
+        )
+    if float(args.gcs_short_candidate) <= 0.0:
+        raise SystemExit("short-candidate probe requires --gcs-short-candidate > 0.")
+    if int(args.gcs_short_candidate_visible_thr) < 0 or int(args.gcs_short_candidate_gt_min_lanes) < 0:
+        raise SystemExit("short-candidate visibility/lane thresholds must be >= 0.")
+    if float(args.gcs_short_candidate_beta_px) <= 0.0 or float(args.gcs_short_candidate_score_temperature) <= 0.0:
+        raise SystemExit("short-candidate beta_px and score_temperature must be > 0.")
+    if bool(args.gcs_short_candidate_freeze_base) is not True:
+        raise SystemExit("short-candidate probe requires --gcs-short-candidate-freeze-base.")
+    if bool(args.gcs_query_count_ce) or bool(args.gcs_query_quality) or bool(args.gcs_query_extent):
+        raise SystemExit("short-candidate probe must keep Count Head, Quality Head, and extent loss disabled.")
+
+
 def resolve_project(value: str) -> str:
     """Keep run outputs under the project root when a relative project path is passed."""
     path = Path(value)
@@ -1058,6 +1122,7 @@ def resolve_project(value: str) -> str:
 def main() -> None:
     args = maybe_switch_ordered_slot_model(parse_args())
     validate_short_local_refine_v3_args(args)
+    validate_short_candidate_args(args)
     defaults = dataset_defaults(args.dataset)
     gcs_imgsz = normalize_imgsz(args.imgsz, dataset=args.dataset)
     model_path = args.model
@@ -1128,6 +1193,7 @@ def main() -> None:
         "gcs_query_extent_short_visible_thr": args.gcs_query_extent_short_visible_thr,
         "gcs_query_extent_short_weight": args.gcs_query_extent_short_weight,
         "gcs_query_extent_gt_min_lanes": args.gcs_query_extent_gt_min_lanes,
+        "gcs_candidate_decode": args.gcs_candidate_decode,
         "gcs_short_local_refine": args.gcs_short_local_refine,
         "gcs_short_local_refine_visible_thr": args.gcs_short_local_refine_visible_thr,
         "gcs_short_local_refine_gt_min_lanes": args.gcs_short_local_refine_gt_min_lanes,
@@ -1142,6 +1208,15 @@ def main() -> None:
         "gcs_short_local_refine_nearmiss_thr_px": args.gcs_short_local_refine_nearmiss_thr_px,
         "gcs_short_local_refine_identity_weight": args.gcs_short_local_refine_identity_weight,
         "gcs_short_local_refine_nearmiss_weight": args.gcs_short_local_refine_nearmiss_weight,
+        "gcs_short_candidate": args.gcs_short_candidate,
+        "gcs_short_candidate_visible_thr": args.gcs_short_candidate_visible_thr,
+        "gcs_short_candidate_gt_min_lanes": args.gcs_short_candidate_gt_min_lanes,
+        "gcs_short_candidate_beta_px": args.gcs_short_candidate_beta_px,
+        "gcs_short_candidate_score_temperature": args.gcs_short_candidate_score_temperature,
+        "gcs_short_candidate_count": args.gcs_short_candidate_count,
+        "gcs_short_candidate_radius_px": args.gcs_short_candidate_radius_px,
+        "gcs_short_candidate_step_px": args.gcs_short_candidate_step_px,
+        "gcs_short_candidate_freeze_base": args.gcs_short_candidate_freeze_base,
         "gcs_count_ce": args.gcs_count_ce,
         "gcs_interval": args.gcs_interval,
         "gcs_order": args.gcs_order,

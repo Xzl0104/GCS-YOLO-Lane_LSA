@@ -2,6 +2,89 @@
 
 This file records decisions for branch `codex/5-25-3-k56`.
 
+## 2026-07-27: Add Q12/env30 lateral candidate-generation probe
+
+Decision:
+
+After the v3 local-refine probe failed to improve short-lane 20px coverage,
+the next experiment changes candidate generation rather than increasing
+residual capacity. The first implementation is default-off and keeps the
+env30 main path, matcher, normal losses, and fixed-y contract unchanged.
+
+Implementation:
+
+- add `pred_short_candidate_points` with seven fixed lateral hypotheses
+  `[0, -20, +20, -40, +40, -60, +60]` pixels around each Q12 query;
+- add a feature-conditioned relative score head
+  `pred_short_candidate_logits: B x 12 x 7`;
+- freeze the env30/base parameters and train only this score head in the first
+  probe;
+- select one highest-scoring lateral hypothesis per Q12 query only when
+  `candidate_decode=true`;
+- reject candidate decode with extent decode or count-aware top-k;
+- keep Count Head, Quality Head, query extent loss/decode, and TEST disabled.
+
+The first training command is
+`scripts/run_query_short_candidate_env30_probe20.sh`. Promotion requires
+official-val raw short GT4/GT5 `has_match20` improvement without increasing
+GT3/GT4 false-extra behavior.
+
+## 2026-07-27: Reject Q12/env30 short local x-refine v3 probe10
+
+Decision:
+
+Reject `query_short_local_refine_env30_window_v3_probe10` for promotion and
+do not continue the exact artifact to longer training. TEST was run only as
+reporting evidence after freezing the official-val decode; it was not used
+for selection or tuning.
+
+The implementation contract worked as intended:
+
+- `pred_points` and the env30/base parameters stayed on the main path.
+- only `query_short_local_refine_*` parameters were trainable;
+- identity guard produced no coarse-hit to refined-miss losses;
+- Count Head, Quality Head, query extent, count-aware top-k, and refined
+  official decode stayed disabled.
+
+Official-val:
+
+```text
+official_best.pt ACC/FP/FN = 0.973365 / 0.015748 / 0.009642
+best.pt          ACC/FP/FN = 0.973330 / 0.015748 / 0.009642
+```
+
+Raw/refined geometry:
+
+```text
+official-val short GT4 = 1/8 -> 2/8
+official-val short GT5 = 40/53 -> 40/53
+train0601 short GT4    = 9/19 -> 9/19
+train0601 short GT5    = 142/183 -> 142/183
+```
+
+The branch lowers continuous refined APE at 30-40px thresholds, but it does
+not produce a meaningful 20px promotion gain. The remaining failures include
+far/absent raw query carriers, which cannot be recovered reliably by
+refining an existing query around its coarse x position. Because formal
+decode still uses `pred_points`, the v3 auxiliary output cannot improve
+official ACC by itself.
+
+Reporting-only TEST:
+
+```text
+official_best.pt ACC/FP/FN = 0.966680 / 0.027924 / 0.023724
+best.pt          ACC/FP/FN = 0.966684 / 0.027995 / 0.023724
+```
+
+Next action:
+
+1. Add a prediction-only refined-points official-val decode/sweep, without
+   opening TEST, to measure whether the auxiliary geometry can improve formal
+   metrics at all.
+2. If that decode still fails the 20px gate, stop local residual tuning and
+   change the candidate-generation mechanism so a short lane can obtain a new
+   lateral hypothesis rather than only moving an existing carrier.
+
 ## 2026-07-27: Add Q12/env30 short local x-refine v3
 
 Decision:

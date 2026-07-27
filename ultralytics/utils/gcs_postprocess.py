@@ -198,6 +198,8 @@ def decode_gcs_predictions(
     pred_count_logits: torch.Tensor | None = None,
     pred_start_logits: torch.Tensor | None = None,
     pred_end_logits: torch.Tensor | None = None,
+    pred_short_candidate_points: torch.Tensor | None = None,
+    pred_short_candidate_logits: torch.Tensor | None = None,
     oracle_count: int | None = None,
     image_shape: tuple[int, int] | None = None,
     score_thr: float = 0.5,
@@ -208,6 +210,7 @@ def decode_gcs_predictions(
     valid_before_maxdet: bool = False,
     extent_decode: bool = False,
     extent_decode_mode: str = "interval",
+    candidate_decode: bool = False,
     count_aware_topk: bool = False,
     count_aware_min_k: int = 3,
     count_aware_max_k: int = 5,
@@ -226,6 +229,8 @@ def decode_gcs_predictions(
             for metrics but drawing/export uses the longest visible contiguous point run.
         pred_start_logits: Optional Q x K query extent start logits for first visible fixed-y anchor.
         pred_end_logits: Optional Q x K query extent end logits for last visible fixed-y anchor.
+        pred_short_candidate_points: Optional Q x H x K x 2 fixed-y lateral candidate points.
+        pred_short_candidate_logits: Optional Q x H candidate-relative score logits.
         oracle_count: Optional GT lane count used only with diagnostic ``count_mode='oracle_gt'``.
         image_shape: Optional original image shape as (height, width). If provided, pixel points are added.
         score_thr: Existence probability threshold.
@@ -237,6 +242,8 @@ def decode_gcs_predictions(
         extent_decode: If true, use query start/end logits to build the visible anchor interval.
         extent_decode_mode: ``interval`` uses the predicted interval directly; ``intersect`` intersects it
             with the point-valid continuous segment; ``none`` disables extent decode.
+        candidate_decode: If true, choose one highest-scoring lateral hypothesis per base query before
+            ordinary confidence filtering, NMS, and max-det truncation.
         count_aware_topk: If true, keep only the quality-best ``k_hat`` lanes after conf/NMS.
         count_aware_min_k: Minimum dynamic lane count when count-aware top-k is enabled.
         count_aware_max_k: Maximum dynamic lane count when count-aware top-k is enabled.
@@ -275,6 +282,39 @@ def decode_gcs_predictions(
                 "pred_valid_logits must have shape Q x K matching pred_points, "
                 f"got {tuple(pred_valid_logits.shape)} vs {tuple(pred_points.shape[:2])}."
             )
+    candidate_decode_enabled = bool(candidate_decode)
+    candidate_indices = None
+    candidate_offsets_px = None
+    if candidate_decode_enabled:
+        if count_aware_topk:
+            raise ValueError(
+                "candidate_decode cannot be combined with count_aware_topk: "
+                "candidate alternatives are not a valid query-count score source."
+            )
+        if pred_short_candidate_points is None or pred_short_candidate_logits is None:
+            raise ValueError("candidate_decode requires pred_short_candidate_points and pred_short_candidate_logits.")
+        if extent_decode:
+            raise ValueError("candidate_decode and extent_decode cannot be enabled together in the isolated candidate probe.")
+        if (
+            pred_short_candidate_points.ndim != 4
+            or pred_short_candidate_points.shape[0] != pred_points.shape[0]
+            or pred_short_candidate_points.shape[-1] != 2
+        ):
+            raise ValueError(
+                "pred_short_candidate_points must have shape Q x H x K x 2, got "
+                f"{tuple(pred_short_candidate_points.shape)}."
+            )
+        candidate_count = int(pred_short_candidate_points.shape[1])
+        if pred_short_candidate_points.shape[2] != pred_points.shape[1]:
+            raise ValueError(
+                "pred_short_candidate_points K dimension must match pred_points, got "
+                f"{pred_short_candidate_points.shape[2]} vs {pred_points.shape[1]}."
+            )
+        if pred_short_candidate_logits.shape != (pred_points.shape[0], candidate_count):
+            raise ValueError(
+                "pred_short_candidate_logits must have shape Q x H matching candidate points, got "
+                f"{tuple(pred_short_candidate_logits.shape)} vs {(pred_points.shape[0], candidate_count)}."
+            )
     extent_mode = str(extent_decode_mode or "interval").strip().lower()
     if extent_mode in {"none", "off", "false", "0"}:
         if bool(extent_decode):
@@ -299,7 +339,26 @@ def decode_gcs_predictions(
             )
 
     points = pred_points.detach().float().cpu().clamp(0.0, 1.0)
+    base_points = points
     score_logits = pred_quality_logits if pred_quality_logits is not None else pred_logits
+    if candidate_decode_enabled:
+        candidate_points = pred_short_candidate_points.detach().float().cpu().clamp(0.0, 1.0)
+        candidate_delta = pred_short_candidate_logits.detach().float().cpu()
+        base_score_logits = score_logits.detach().float().cpu()
+        candidate_count = int(candidate_points.shape[1])
+        base_query_indices = torch.arange(pred_points.shape[0], dtype=torch.long)
+        candidate_indices = candidate_delta.argmax(dim=1).to(dtype=torch.long)
+        points = candidate_points[base_query_indices, candidate_indices]
+        score_logits = base_score_logits + candidate_delta[base_query_indices, candidate_indices]
+        query_indices = base_query_indices
+        if image_shape is not None:
+            candidate_offsets_px = (
+                points[..., 0] - base_points[..., 0]
+            ).mean(dim=1) * float(image_shape[1])
+        else:
+            candidate_offsets_px = (points[..., 0] - base_points[..., 0]).mean(dim=1)
+    else:
+        query_indices = torch.arange(points.shape[0], dtype=torch.long)
     scores = score_logits.detach().float().cpu().sigmoid()
     count_aware_k = None
     count_aware_base_k = None
@@ -354,8 +413,6 @@ def decode_gcs_predictions(
         extent_end_idx = torch.maximum(start_argmax, end_argmax).long()
         anchor_idx = torch.arange(points.shape[1], dtype=torch.long).view(1, -1)
         extent_masks_raw = (anchor_idx >= extent_start_idx.view(-1, 1)) & (anchor_idx <= extent_end_idx.view(-1, 1))
-    query_indices = torch.arange(points.shape[0], dtype=torch.long)
-
     if min_points > points.shape[1]:
         return []
 
@@ -366,6 +423,8 @@ def decode_gcs_predictions(
     sorted_points = []
     sorted_valid_scores = []
     sorted_extent_masks = []
+    sorted_candidate_indices = []
+    sorted_candidate_offsets = []
     for i in keep:
         order_i = torch.argsort(points[i, :, 1], descending=True, stable=True)
         sorted_points.append(points[i][order_i])
@@ -373,9 +432,15 @@ def decode_gcs_predictions(
             sorted_valid_scores.append(point_valid_scores[i][order_i])
         if extent_masks_raw is not None:
             sorted_extent_masks.append(extent_masks_raw[i][order_i])
+        if candidate_indices is not None:
+            sorted_candidate_indices.append(candidate_indices[i])
+            sorted_candidate_offsets.append(candidate_offsets_px[i])
     points = torch.stack(sorted_points, dim=0)
     point_valid_scores = torch.stack(sorted_valid_scores, dim=0) if sorted_valid_scores else None
     extent_masks = torch.stack(sorted_extent_masks, dim=0) if sorted_extent_masks else None
+    if candidate_indices is not None:
+        candidate_indices = torch.stack(sorted_candidate_indices, dim=0)
+        candidate_offsets_px = torch.stack(sorted_candidate_offsets, dim=0)
     if extent_start_idx is not None:
         extent_start_idx = extent_start_idx[keep]
         extent_end_idx = extent_end_idx[keep]
@@ -420,6 +485,8 @@ def decode_gcs_predictions(
         sorted_points = points[order]
         sorted_scores = scores[order]
         sorted_queries = query_indices[order]
+        sorted_candidates = candidate_indices[order] if candidate_indices is not None else None
+        sorted_offsets = candidate_offsets_px[order] if candidate_offsets_px is not None else None
         current_visible_masks = visible_masks_for(point_valid_scores, extent_masks)
         sorted_valid_masks = current_visible_masks[order].to(device=sorted_points.device) if current_visible_masks is not None else None
         keep_sorted = lane_nms(
@@ -432,6 +499,9 @@ def decode_gcs_predictions(
         points = sorted_points[keep_sorted]
         scores = sorted_scores[keep_sorted]
         query_indices = sorted_queries[keep_sorted]
+        if candidate_indices is not None:
+            candidate_indices = sorted_candidates[keep_sorted]
+            candidate_offsets_px = sorted_offsets[keep_sorted]
         if point_valid_scores is not None:
             point_valid_scores = point_valid_scores[order][keep_sorted]
         if extent_masks is not None:
@@ -446,6 +516,9 @@ def decode_gcs_predictions(
         points = points[keep_valid]
         scores = scores[keep_valid]
         query_indices = query_indices[keep_valid]
+        if candidate_indices is not None:
+            candidate_indices = candidate_indices[keep_valid]
+            candidate_offsets_px = candidate_offsets_px[keep_valid]
         if point_valid_scores is not None:
             point_valid_scores = point_valid_scores[keep_valid]
         if extent_masks is not None:
@@ -458,6 +531,9 @@ def decode_gcs_predictions(
     points = points[order]
     scores = scores[order]
     query_indices = query_indices[order]
+    if candidate_indices is not None:
+        candidate_indices = candidate_indices[order]
+        candidate_offsets_px = candidate_offsets_px[order]
     if point_valid_scores is not None:
         point_valid_scores = point_valid_scores[order]
     if extent_masks is not None:
@@ -478,12 +554,24 @@ def decode_gcs_predictions(
             "score": float(score),
             "query": int(query_idx),
             "points_norm": lane_norm,
-            "score_source": "quality_logits" if pred_quality_logits is not None else "pred_logits",
+            "score_source": (
+                "candidate_logits+quality_logits"
+                if candidate_indices is not None and pred_quality_logits is not None
+                else "candidate_logits+pred_logits"
+                if candidate_indices is not None
+                else "quality_logits"
+                if pred_quality_logits is not None
+                else "pred_logits"
+            ),
             "count_mode": str(count_mode or "score_sum"),
             "decoded_count_k": int(count_aware_k) if count_aware_k is not None else -1,
             "decoded_count_base_k": int(count_aware_base_k) if count_aware_base_k is not None else -1,
             "count_aware_extra_margin": int(extra_margin),
         }
+        if candidate_indices is not None:
+            item["candidate_query_idx"] = int(query_idx)
+            item["candidate_idx"] = int(candidate_indices[lane_i])
+            item["candidate_offset_px"] = float(candidate_offsets_px[lane_i])
         visible_mask = None
         if final_visible_masks is not None:
             visible_mask_t = final_visible_masks[lane_i].detach().bool().cpu()

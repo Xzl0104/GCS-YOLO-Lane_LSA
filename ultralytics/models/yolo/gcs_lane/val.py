@@ -76,6 +76,13 @@ LOSS_NAMES = (
     "short_local_refine_loss20",
     "short_local_refine_identity_count",
     "short_local_refine_pull_count",
+    "short_candidate_loss",
+    "short_candidate_count",
+    "short_candidate_score_loss",
+    "short_candidate_geometry_loss",
+    "short_candidate_best_offset_px",
+    "short_candidate_raw_hit20",
+    "short_candidate_best_hit20",
     "role_contain_loss",
     "role_contain_exist_loss",
     "role_contain_valid_loss",
@@ -145,6 +152,13 @@ LOSS_GAIN_ARGS = (
     None,
     "gcs_short_local_refine",
     None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    "gcs_short_candidate",
     None,
     None,
     None,
@@ -651,6 +665,12 @@ class GCSLaneValidator:
         pred_end_logits = preds.get("pred_end_logits")
         if pred_end_logits is not None:
             pred_end_logits = pred_end_logits.detach()
+        pred_short_candidate_points = preds.get("pred_short_candidate_points")
+        if pred_short_candidate_points is not None:
+            pred_short_candidate_points = pred_short_candidate_points.detach()
+        pred_short_candidate_logits = preds.get("pred_short_candidate_logits")
+        if pred_short_candidate_logits is not None:
+            pred_short_candidate_logits = pred_short_candidate_logits.detach()
         if pred_logits.ndim == 3 and pred_logits.shape[-1] == 1:
             pred_logits = pred_logits.squeeze(-1)
         h, w = int(batch["img"].shape[-2]), int(batch["img"].shape[-1])
@@ -664,6 +684,7 @@ class GCSLaneValidator:
         max_det = self._eval_max_det()
         extent_decode = self._eval_extent_decode()
         extent_decode_mode = self._eval_extent_decode_mode()
+        candidate_decode = bool(self._arg(self.args, "gcs_candidate_decode", False))
         ordered_slot = self._gcs_mode() == "ordered_slot"
         ordered_slot_runtime_cfg = ordered_slot_decode_runtime_config(context="training_val") if ordered_slot else None
         ordered_slot_params = ordered_slot_decode_params(self.args) if ordered_slot else None
@@ -693,6 +714,12 @@ class GCSLaneValidator:
                     pred_valid_logits=pred_valid_logits[i] if pred_valid_logits is not None else None,
                     pred_start_logits=pred_start_logits[i] if pred_start_logits is not None else None,
                     pred_end_logits=pred_end_logits[i] if pred_end_logits is not None else None,
+                    pred_short_candidate_points=(
+                        pred_short_candidate_points[i] if pred_short_candidate_points is not None else None
+                    ),
+                    pred_short_candidate_logits=(
+                        pred_short_candidate_logits[i] if pred_short_candidate_logits is not None else None
+                    ),
                     image_shape=(h, w),
                     score_thr=conf,
                     point_valid_thr=point_valid_thr,
@@ -700,6 +727,7 @@ class GCSLaneValidator:
                     nms_dist_px=nms_dist_px,
                     extent_decode=extent_decode,
                     extent_decode_mode=extent_decode_mode,
+                    candidate_decode=candidate_decode,
                 )
             gt_lanes, gt_valid = self._valid_gt_lanes(gt_lanes_t, gt_valid_t)
             tp, fp, fn, apes_tp, apes_all, apes_fp = self._match_lanes(

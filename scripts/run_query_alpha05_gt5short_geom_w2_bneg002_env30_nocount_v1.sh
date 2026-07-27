@@ -29,6 +29,7 @@ OVERWRITE_SWEEPS="${OVERWRITE_SWEEPS:-0}"
 OVERWRITE_TESTS="${OVERWRITE_TESTS:-0}"
 RUN_TESTS="${RUN_TESTS:-0}"
 VALID_BEFORE_MAXDET="${VALID_BEFORE_MAXDET:-1}"
+CANDIDATE_DECODE="${CANDIDATE_DECODE:-0}"
 
 OFFICIAL_CONFS="${OFFICIAL_CONFS:-0.001 0.003 0.005 0.008 0.01 0.02}"
 OFFICIAL_POINT_VALID_THRS="${OFFICIAL_POINT_VALID_THRS:-0.45 0.50 0.55 0.60}"
@@ -135,6 +136,13 @@ if is_true "${SWEEP_COUNT_AWARE_TOPK}"; then
   )
 fi
 
+OFFICIAL_CANDIDATE_ARGS=()
+SWEEP_CANDIDATE_ARGS=()
+if is_true "${CANDIDATE_DECODE}"; then
+  OFFICIAL_CANDIDATE_ARGS=(--gcs-candidate-decode)
+  SWEEP_CANDIDATE_ARGS=(--candidate-decode)
+fi
+
 OFFICIAL_BEST_SWEEP_DIR="${OFFICIAL_BEST_SWEEP_DIR:-${PROJECT}/${RUN_NAME}_official_best_val_sweep_${DECODE_TAG}}"
 BEST_SWEEP_DIR="${BEST_SWEEP_DIR:-${PROJECT}/${RUN_NAME}_best_val_sweep_${DECODE_TAG}}"
 OFFICIAL_BEST_TEST_DIR="${OFFICIAL_BEST_TEST_DIR:-${PROJECT}/${RUN_NAME}_official_best_test_from_val_sweep_${DECODE_TAG}}"
@@ -196,6 +204,7 @@ run_train() {
     --gcs-official-count-modes "${OFFICIAL_COUNT_MODES_ARR[@]}" \
     --gcs-official-extent-decode-modes "${OFFICIAL_EXTENT_DECODE_MODES_ARR[@]}" \
     "${OFFICIAL_COUNT_AWARE_ARGS[@]}" \
+    "${OFFICIAL_CANDIDATE_ARGS[@]}" \
     "${TRAIN_VALID_ARGS[@]}" \
     "${OFFICIAL_HALF_ARGS[@]}" \
     --project "${PROJECT}" \
@@ -235,6 +244,7 @@ run_val_sweep() {
     --count-modes "${SWEEP_COUNT_MODES_ARR[@]}" \
     --extent-decode-modes "${SWEEP_EXTENT_DECODE_MODES_ARR[@]}" \
     "${SWEEP_COUNT_AWARE_ARGS[@]}" \
+    "${SWEEP_CANDIDATE_ARGS[@]}" \
     "${SWEEP_VALID_ARGS[@]}" \
     --save-dir "${save_dir}"
 }
@@ -310,6 +320,8 @@ if bool(best.get("valid_before_maxdet", False)):
 if bool(best.get("extent_decode", False)):
     cmd.append("--extent-decode")
     cmd.extend(["--extent-decode-mode", str(best.get("extent_decode_mode", "interval"))])
+if bool(best.get("candidate_decode", False)):
+    cmd.append("--candidate-decode")
 if bool(best.get("count_aware_topk", False)):
     cmd.append("--count-aware-topk")
     cmd.extend(["--count-aware-min-k", str(int(best.get("count_aware_min_k", 3)))])

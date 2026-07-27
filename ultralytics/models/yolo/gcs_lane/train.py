@@ -96,6 +96,13 @@ class GCSLaneTrainer(BaseTrainer):
         "short_local_refine_loss20",
         "short_local_refine_identity_count",
         "short_local_refine_pull_count",
+        "short_candidate_loss",
+        "short_candidate_count",
+        "short_candidate_score_loss",
+        "short_candidate_geometry_loss",
+        "short_candidate_best_offset_px",
+        "short_candidate_raw_hit20",
+        "short_candidate_best_hit20",
         "role_contain_loss",
         "role_contain_exist_loss",
         "role_contain_valid_loss",
@@ -169,6 +176,13 @@ class GCSLaneTrainer(BaseTrainer):
         "slref_cape",
         "slref_rape",
         "slref_g20",
+        "slcand_loss",
+        "slcand_n",
+        "slcand_score",
+        "slcand_geom",
+        "slcand_off",
+        "slcand_raw20",
+        "slcand_best20",
         "role_loss",
         "role_ex",
         "role_val",
@@ -848,6 +862,54 @@ class GCSLaneTrainer(BaseTrainer):
                 f"window_radius_px={window_radius_px:g}, window_step_px={window_step_px:g}, updated_heads={updated}."
             )
 
+    def _sync_short_candidate_head_args(self, model: nn.Module) -> None:
+        """Validate CLI-controlled lateral candidate geometry against the constructed head."""
+        candidate_count = int(getattr(self.args, "gcs_short_candidate_count", 7))
+        radius_px = float(getattr(self.args, "gcs_short_candidate_radius_px", 60.0))
+        step_px = float(getattr(self.args, "gcs_short_candidate_step_px", 20.0))
+        if candidate_count <= 0 or candidate_count % 2 != 1:
+            raise ValueError(f"gcs_short_candidate_count must be a positive odd integer, got {candidate_count}.")
+        if radius_px <= 0.0 or step_px <= 0.0:
+            raise ValueError(
+                f"gcs_short_candidate_radius_px and gcs_short_candidate_step_px must be > 0, got {radius_px}/{step_px}."
+            )
+        ratio = radius_px / step_px
+        if abs(round(ratio) - ratio) > 1e-6:
+            raise ValueError(
+                "gcs_short_candidate_radius_px must be an integer multiple of "
+                f"gcs_short_candidate_step_px, got {radius_px}/{step_px}."
+            )
+        expected_count = 2 * int(round(ratio)) + 1
+        if candidate_count != expected_count:
+            raise ValueError(
+                "gcs_short_candidate_count must equal 2 * (radius / step) + 1, "
+                f"got count={candidate_count}, expected={expected_count}."
+            )
+
+        candidate_heads = [
+            module
+            for module in model.modules()
+            if isinstance(module, GCSLaneHead) and bool(getattr(module, "query_short_candidate_head", False))
+        ]
+        if not candidate_heads:
+            if float(getattr(self.args, "gcs_short_candidate", 0.0)) > 0.0:
+                raise ValueError(
+                    "gcs_short_candidate > 0 requires a model YAML with query_short_candidate_head enabled."
+                )
+            return
+        for module in candidate_heads:
+            if int(getattr(module, "short_candidate_count", -1)) != candidate_count:
+                raise ValueError(
+                    "Model YAML short_candidate_count does not match CLI "
+                    f"({getattr(module, 'short_candidate_count', None)} != {candidate_count})."
+                )
+            module.short_candidate_radius_px = radius_px
+            module.short_candidate_step_px = step_px
+        LOGGER.info(
+            "short-candidate head contract: "
+            f"count={candidate_count}, radius_px={radius_px:g}, step_px={step_px:g}, heads={len(candidate_heads)}."
+        )
+
     @staticmethod
     def _bool_arg(value) -> bool:
         """Parse bool-like config values without treating the string 'False' as true."""
@@ -860,32 +922,50 @@ class GCSLaneTrainer(BaseTrainer):
         """Return true for parameters/modules owned by the optional short-local-refine head."""
         return "query_short_local_refine" in str(name)
 
+    @staticmethod
+    def _is_short_candidate_name(name: str) -> bool:
+        """Return true for parameters/modules owned by the optional lateral candidate head."""
+        return "query_short_candidate" in str(name)
+
     def _apply_task_specific_freezing(self):
-        """Freeze env30 base parameters when training the auxiliary short-local-refine head only."""
-        if not self._bool_arg(getattr(self.args, "gcs_short_local_refine_freeze_base", False)):
+        """Freeze env30/base parameters when training one isolated geometry auxiliary head."""
+        refine_freeze = self._bool_arg(getattr(self.args, "gcs_short_local_refine_freeze_base", False))
+        candidate_freeze = self._bool_arg(getattr(self.args, "gcs_short_candidate_freeze_base", False))
+        if refine_freeze and candidate_freeze:
+            raise ValueError("Only one of gcs_short_local_refine_freeze_base and gcs_short_candidate_freeze_base may be enabled.")
+        if not refine_freeze and not candidate_freeze:
             return None
         model = unwrap_model(self.model)
+        head_attr = "query_short_local_refine_head" if refine_freeze else "query_short_candidate_head"
+        name_predicate = self._is_short_local_refine_name if refine_freeze else self._is_short_candidate_name
+        head_label = "short-local-refine" if refine_freeze else "short-candidate"
         has_head = any(
             isinstance(module, GCSLaneHead) and bool(getattr(module, "query_short_local_refine_head", False))
             for module in model.modules()
         )
+        if not refine_freeze:
+            has_head = any(
+                isinstance(module, GCSLaneHead) and bool(getattr(module, head_attr, False))
+                for module in model.modules()
+            )
         if not has_head:
             raise ValueError(
-                "gcs_short_local_refine_freeze_base requires a model YAML with query_short_local_refine_head enabled."
+                f"{'gcs_short_local_refine_freeze_base' if refine_freeze else 'gcs_short_candidate_freeze_base'} "
+                f"requires a model YAML with {head_attr} enabled."
             )
         trainable = 0
         frozen = 0
         for name, param in model.named_parameters():
-            keep_trainable = self._is_short_local_refine_name(name)
+            keep_trainable = name_predicate(name)
             param.requires_grad = keep_trainable
             if keep_trainable:
                 trainable += int(param.numel())
             else:
                 frozen += int(param.numel())
         if trainable <= 0:
-            raise ValueError("gcs_short_local_refine_freeze_base found no query_short_local_refine parameters to train.")
+            raise ValueError(f"{head_label} freeze-base found no {head_label} parameters to train.")
         LOGGER.info(
-            "short-local-refine freeze-base contract: "
+            f"{head_label} freeze-base contract: "
             f"trainable_params={trainable}, frozen_base_params={frozen}."
         )
         return None
@@ -893,11 +973,15 @@ class GCSLaneTrainer(BaseTrainer):
     def _model_train(self):
         """Set train mode while keeping the frozen env30 base BatchNorm statistics fixed."""
         super()._model_train()
-        if not self._bool_arg(getattr(self.args, "gcs_short_local_refine_freeze_base", False)):
+        if not (
+            self._bool_arg(getattr(self.args, "gcs_short_local_refine_freeze_base", False))
+            or self._bool_arg(getattr(self.args, "gcs_short_candidate_freeze_base", False))
+        ):
             return
         model = unwrap_model(self.model)
         for name, module in model.named_modules():
-            if not self._is_short_local_refine_name(name) and isinstance(module, nn.modules.batchnorm._BatchNorm):
+            keep_trainable = self._is_short_local_refine_name(name) or self._is_short_candidate_name(name)
+            if not keep_trainable and isinstance(module, nn.modules.batchnorm._BatchNorm):
                 module.eval()
 
     def set_class_weights(self):
@@ -909,6 +993,7 @@ class GCSLaneTrainer(BaseTrainer):
         model = GCSLaneModel(cfg, nc=self.data["nc"], ch=self.data.get("channels", 3), verbose=verbose and RANK == -1)
         self._assert_model_gcs_mode(model)
         self._sync_short_local_refine_head_args(model)
+        self._sync_short_candidate_head_args(model)
         self._warn_if_ordered_slot_without_official_best()
         self._record_ordered_slot_loss_contract()
         self._rewrite_args_yaml_after_gcs_mode_sync()
@@ -1355,6 +1440,7 @@ class GCSLaneTrainer(BaseTrainer):
             count_aware_extra_margins=count_aware_extra_margins,
             count_modes=count_modes,
             extent_decode_modes=extent_decode_modes,
+            candidate_decode=bool(getattr(self.args, "gcs_candidate_decode", False)),
             gcs_min_lanes=int(getattr(self.args, "gcs_min_lanes", 2)),
             gcs_max_lanes=int(getattr(self.args, "gcs_max_lanes", 5)),
             gcs_num_slots=int(getattr(self.args, "gcs_num_slots", 5)),

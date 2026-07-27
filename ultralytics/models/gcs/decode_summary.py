@@ -19,6 +19,7 @@ QUERY_DECODE_KEYS = frozenset(
         "max_det",
         "min_points",
         "valid_before_maxdet",
+        "candidate_decode",
         "extent_decode",
         "extent_decode_mode",
         "count_aware_topk",
@@ -48,6 +49,7 @@ ORDERED_SLOT_QUERY_DECODE_DEFAULTS = {
     "min_points": 6,
     "max_det": 8,
     "valid_before_maxdet": False,
+    "candidate_decode": False,
     "extent_decode": False,
     "extent_decode_mode": "none",
     "count_aware_topk": False,
@@ -312,6 +314,7 @@ def query_decode_cfg(
         "max_det": int(best_row["max_det"]),
         "min_points": int(best_row["min_points"]),
         "valid_before_maxdet": _bool_value(valid_before_maxdet),
+        "candidate_decode": _bool_value(best_row.get("candidate_decode", False)),
         "extent_decode": _bool_value(extent_decode),
         "extent_decode_mode": str(extent_decode_mode or "none"),
         "count_aware_topk": _bool_value(best_row.get("count_aware_topk", False)),
@@ -394,6 +397,7 @@ def validate_decode_yaml_for_model(decode_cfg: Mapping[str, Any], model_mode: st
             raise RuntimeError(f"Invalid query schema={schema!r}. Expected {QUERY_DECODE_SCHEMA}.")
         required = QUERY_DECODE_KEYS - {
             "valid_before_maxdet",
+            "candidate_decode",
             "extent_decode",
             "extent_decode_mode",
             "count_mode",
@@ -412,6 +416,15 @@ def validate_decode_yaml_for_model(decode_cfg: Mapping[str, Any], model_mode: st
             raise RuntimeError(
                 "Invalid query decode yaml: extent_decode_mode must be 'none' when extent_decode is false."
             )
+        if _bool_value(decode_cfg.get("candidate_decode", False)):
+            if _bool_value(decode_cfg.get("extent_decode", False)) or extent_mode != "none":
+                raise RuntimeError(
+                    "Invalid query decode yaml: candidate_decode cannot be combined with extent_decode."
+                )
+            if _bool_value(decode_cfg.get("count_aware_topk", False)):
+                raise RuntimeError(
+                    "Invalid query decode yaml: candidate_decode cannot be combined with count_aware_topk."
+                )
         count_mode = str(decode_cfg.get("count_mode", "score_sum") or "score_sum")
         if count_mode not in {"score_sum", "count_logits"}:
             raise RuntimeError(

@@ -107,6 +107,43 @@ The recommended first v3 probe uses `EPOCHS=10`,
 `gcs_short_local_refine_identity_guard=True`. TEST remains closed until
 official-val and train-side raw/refined geometry gates pass.
 
+The completed `query_short_local_refine_env30_window_v3_probe10` is rejected
+for promotion. The frozen main path remains at the env30 raw geometry level,
+and the auxiliary branch improves continuous APE mostly inside the 20px gate
+without materially increasing short GT4/GT5 hit20:
+
+```text
+official-val raw/refined:
+  short GT4 1/8 -> 2/8, gain=1, loss=0
+  short GT5 40/53 -> 40/53, gain=0, loss=0
+train0601 raw/refined:
+  short GT4 9/19 -> 9/19, gain=0, loss=0
+  short GT5 142/183 -> 142/183, gain=0, loss=0
+```
+
+The refined auxiliary p90 APE improves at 30-40px thresholds, but the
+dominant misses remain far or absent raw carriers. The official decode still
+uses `pred_points`, so the auxiliary refined points do not change formal
+official metrics. The post-train official-val results are:
+
+```text
+official_best.pt ACC/FP/FN = 0.973365 / 0.015748 / 0.009642
+best.pt          ACC/FP/FN = 0.973330 / 0.015748 / 0.009642
+```
+
+Reporting-only TEST with the frozen official-val decode gives:
+
+```text
+official_best.pt ACC/FP/FN = 0.966680 / 0.027924 / 0.023724
+best.pt          ACC/FP/FN = 0.966684 / 0.027995 / 0.023724
+```
+
+Do not continue this exact 10-epoch v3 artifact to longer training, enable
+refined decode, or use it for another TEST. The next experiment must first
+test a prediction-only refined decode on official-val and, if that still
+does not cross the 20px gate, change candidate generation rather than only
+increase the local residual capacity.
+
 The superseded 2026-07-27 Q12/env30 short-lane coarse-to-fine local
 x-refine v2 probe is default-off and enabled only by
 `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-short-local-refine.yaml`
@@ -139,6 +176,30 @@ normalized-x SmoothL1, selected by short GT4/GT5 criteria
 `gcs_short_local_refine=0.02`, `gcs_short_local_refine_beta_px=5.0`, and
 `gcs_short_local_refine_max_delta_px=40.0`. Do not launch v2 for the current
 next step; use the v3 window/freeze/identity probe instead.
+
+The 2026-07-27 Q12/env30 lateral candidate-generation probe is default-off
+and enabled only by
+`ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-short-candidate.yaml`
+plus positive `gcs_short_candidate`. It keeps the env30 main
+`pred_points` path unchanged and adds fixed-y lateral hypotheses around each
+query:
+
+```text
+pred_short_candidate_points: B x 12 x 7 x 56 x 2
+pred_short_candidate_logits: B x 12 x 7
+candidate offsets: [0, -20, +20, -40, +40, -60, +60] px
+```
+
+The candidate score head is the only trainable head in the first probe,
+initialized at zero so the base checkpoint is unchanged before training.
+Candidate decode selects one highest-scoring lateral hypothesis per base
+query, then combines the base query logit with that candidate-relative logit
+before ordinary confidence filtering, NMS, and max-det truncation. Candidate
+decode is mutually exclusive with query extent decode and count-aware top-k.
+Count Head, Quality Head, query extent loss/decode, and TEST remain disabled
+for the first probe.
+Official-val selection must first verify raw candidate `has_match20` gains
+without increasing GT3/GT4 false-extra behavior.
 
 The completed 40-epoch dual-head probe
 `query_dualhead_quality_count_env30_probe40_v1` is not promoted to full

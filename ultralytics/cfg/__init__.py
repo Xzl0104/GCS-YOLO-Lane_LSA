@@ -211,6 +211,11 @@ CFG_FLOAT_KEYS = frozenset(
         "gcs_short_local_refine_nearmiss_thr_px",
         "gcs_short_local_refine_identity_weight",
         "gcs_short_local_refine_nearmiss_weight",
+        "gcs_short_candidate",
+        "gcs_short_candidate_beta_px",
+        "gcs_short_candidate_score_temperature",
+        "gcs_short_candidate_radius_px",
+        "gcs_short_candidate_step_px",
         "gcs_count_ce",
         "gcs_interval",
         "gcs_order",
@@ -362,6 +367,9 @@ CFG_INT_KEYS = frozenset(
         "gcs_query_extent_gt_min_lanes",
         "gcs_short_local_refine_visible_thr",
         "gcs_short_local_refine_gt_min_lanes",
+        "gcs_short_candidate_visible_thr",
+        "gcs_short_candidate_gt_min_lanes",
+        "gcs_short_candidate_count",
         "gcs_spurious_max_points",
         "gcs_spurious_min_overlap",
         "gcs_spurious_gt_protect_min_overlap",
@@ -429,6 +437,7 @@ CFG_BOOL_KEYS = frozenset(
         "gcs_allow_disable_order_loss",
         "gcs_official_valid_before_maxdet",
         "gcs_extent_decode",
+        "gcs_candidate_decode",
         "gcs_official_count_aware_topk",
         "gcs_lane_count_balanced",
         "gcs_hard_sampling",
@@ -445,6 +454,7 @@ CFG_BOOL_KEYS = frozenset(
         "gcs_short_local_refine_window_search",
         "gcs_short_local_refine_freeze_base",
         "gcs_short_local_refine_identity_guard",
+        "gcs_short_candidate_freeze_base",
     }
 )
 

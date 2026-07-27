@@ -156,6 +156,15 @@ gcs_short_local_refine_identity_thr_px: 20.0 # (float) coarse APE threshold for 
 gcs_short_local_refine_nearmiss_thr_px: 80.0 # (float) max coarse APE for near-miss lanes supervised toward GT
 gcs_short_local_refine_identity_weight: 1.0 # (float) identity-guard SmoothL1 lane weight
 gcs_short_local_refine_nearmiss_weight: 1.0 # (float) near-miss SmoothL1 lane weight
+gcs_short_candidate: 0.0 # (float) fixed lateral candidate score/coverage loss gain; 0 disables
+gcs_short_candidate_visible_thr: 10 # (int) visible-anchor threshold for short candidate supervision
+gcs_short_candidate_gt_min_lanes: 4 # (int) minimum image GT lane count for short candidate supervision
+gcs_short_candidate_beta_px: 3.0 # (float) soft candidate target temperature in pixels
+gcs_short_candidate_score_temperature: 1.0 # (float) candidate score softmax temperature
+gcs_short_candidate_count: 7 # (int) number of symmetric center-first lateral candidates
+gcs_short_candidate_radius_px: 60.0 # (float) lateral candidate radius in original-image pixels
+gcs_short_candidate_step_px: 20.0 # (float) lateral candidate spacing in original-image pixels
+gcs_short_candidate_freeze_base: False # (bool) freeze env30/base and train only the candidate score head
 gcs_count_ce: 1.0 # (float) ordered_slot 2/3/4/5 count cross-entropy gain
 gcs_interval: 1.0 # (float) ordered_slot start/end interval cross-entropy gain
 gcs_order: 0.2 # (float) ordered_slot common-anchor adjacent-slot order loss gain
@@ -283,6 +292,7 @@ gcs_eval_point_valid_thr: 0.5 # (float) per-point visibility threshold used when
 gcs_eval_max_det: 8 # (int) maximum decoded lane queries kept for GCS validation metrics
 gcs_extent_decode: False # (bool) use query start/end extent logits for query-mode decode visibility
 gcs_extent_decode_mode: interval # (str) query extent decode mode when enabled: interval or intersect
+gcs_candidate_decode: False # (bool) use query lateral candidate-generation outputs for decode
 gcs_official_best: False # (bool) run periodic TuSimple official-val sweeps and preserve weights/official_best.pt
 gcs_allow_internal_best: False # (bool) allow ordered_slot debug training without official_best checkpoint selection
 gcs_official_interval: 5 # (int) epoch interval for periodic official-val checkpoint selection

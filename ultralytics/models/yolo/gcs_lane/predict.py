@@ -182,6 +182,12 @@ class GCSLanePredictor(BasePredictor):
         end_logits = preds.get("pred_end_logits")
         if end_logits is not None:
             end_logits = end_logits.detach()
+        short_candidate_points = preds.get("pred_short_candidate_points")
+        if short_candidate_points is not None:
+            short_candidate_points = short_candidate_points.detach()
+        short_candidate_logits = preds.get("pred_short_candidate_logits")
+        if short_candidate_logits is not None:
+            short_candidate_logits = short_candidate_logits.detach()
         conf = 0.25 if self.args.conf is None else float(self.args.conf)
         max_det = int(self.args.max_det) if getattr(self.args, "max_det", None) else None
         nms_dist_px = float(getattr(self.args, "gcs_eval_nms_dist_px", 0.0) or 0.0)
@@ -191,6 +197,7 @@ class GCSLanePredictor(BasePredictor):
         point_valid_thr = float(point_valid_thr)
         extent_decode = bool(self._arg_value(self.args, "gcs_extent_decode") or False)
         extent_decode_mode = str(self._arg_value(self.args, "gcs_extent_decode_mode") or "interval")
+        candidate_decode = bool(self._arg_value(self.args, "gcs_candidate_decode") or False)
 
         results = []
         if valid_logits is None:
@@ -209,6 +216,14 @@ class GCSLanePredictor(BasePredictor):
             end_iter = [None] * int(points.shape[0])
         else:
             end_iter = list(end_logits)
+        if short_candidate_points is None:
+            candidate_points_iter = [None] * int(points.shape[0])
+        else:
+            candidate_points_iter = list(short_candidate_points)
+        if short_candidate_logits is None:
+            candidate_logits_iter = [None] * int(points.shape[0])
+        else:
+            candidate_logits_iter = list(short_candidate_logits)
 
         ordered_slot = self._model_gcs_mode() == "ordered_slot"
         ordered_slot_runtime_cfg = ordered_slot_decode_runtime_config(context="predict") if ordered_slot else None
@@ -220,10 +235,23 @@ class GCSLanePredictor(BasePredictor):
             lane_valid_logits,
             lane_start_logits,
             lane_end_logits,
+            lane_candidate_points,
+            lane_candidate_logits,
             orig_img,
             img_path,
         ) in enumerate(
-            zip(points, logits, quality_iter, valid_iter, start_iter, end_iter, orig_imgs, self.batch[0])
+            zip(
+                points,
+                logits,
+                quality_iter,
+                valid_iter,
+                start_iter,
+                end_iter,
+                candidate_points_iter,
+                candidate_logits_iter,
+                orig_imgs,
+                self.batch[0],
+            )
         ):
             if ordered_slot:
                 lanes = decode_ordered_slot_predictions(
@@ -246,6 +274,8 @@ class GCSLanePredictor(BasePredictor):
                     pred_valid_logits=lane_valid_logits,
                     pred_start_logits=lane_start_logits,
                     pred_end_logits=lane_end_logits,
+                    pred_short_candidate_points=lane_candidate_points,
+                    pred_short_candidate_logits=lane_candidate_logits,
                     image_shape=orig_img.shape[:2],
                     score_thr=conf,
                     point_valid_thr=point_valid_thr,
@@ -253,6 +283,7 @@ class GCSLanePredictor(BasePredictor):
                     nms_dist_px=nms_dist_px,
                     extent_decode=extent_decode,
                     extent_decode_mode=extent_decode_mode,
+                    candidate_decode=candidate_decode,
                 )
             result = GCSLaneResults(orig_img, path=img_path, names=self.model.names, lanes=lanes)
             if not lanes:

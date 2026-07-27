@@ -107,6 +107,11 @@ def parse_args() -> argparse.Namespace:
         default="interval",
         help="Query extent visibility mode. 'none' preserves point-valid decode.",
     )
+    parser.add_argument(
+        "--candidate-decode",
+        action="store_true",
+        help="Flatten fixed lateral candidate hypotheses into the query decode pool.",
+    )
     parser.add_argument("--count-aware-topk", action="store_true", help="Use count_score to keep only the quality-best dynamic lane count.")
     parser.add_argument("--count-aware-min-k", type=int, default=3, help="Minimum k_hat for --count-aware-topk.")
     parser.add_argument("--count-aware-max-k", type=int, default=5, help="Maximum k_hat for --count-aware-topk.")
@@ -344,6 +349,7 @@ def generate_predictions(
     valid_before_maxdet: bool = False,
     extent_decode: bool = False,
     extent_decode_mode: str = "interval",
+    candidate_decode: bool = False,
     decode_mode: str = "auto",
     decode_yaml_cfg: dict | None = None,
     gcs_min_lanes: int = 2,
@@ -367,6 +373,7 @@ def generate_predictions(
             valid_before_maxdet = bool(decode_yaml_cfg.get("valid_before_maxdet", False))
             extent_decode = bool(decode_yaml_cfg.get("extent_decode", False))
             extent_decode_mode = str(decode_yaml_cfg.get("extent_decode_mode", "none") or "none")
+            candidate_decode = bool(decode_yaml_cfg.get("candidate_decode", False))
             count_aware_topk = bool(decode_yaml_cfg["count_aware_topk"])
             count_aware_min_k = int(decode_yaml_cfg["count_aware_min_k"])
             count_aware_max_k = int(decode_yaml_cfg["count_aware_max_k"])
@@ -392,6 +399,7 @@ def generate_predictions(
                 "valid_before_maxdet": valid_before_maxdet,
                 "extent_decode": extent_decode,
                 "extent_decode_mode": extent_decode_mode,
+                "candidate_decode": candidate_decode,
                 "count_aware_topk": count_aware_topk,
                 "count_aware_min_k": count_aware_min_k,
                 "count_aware_max_k": count_aware_max_k,
@@ -468,6 +476,8 @@ def generate_predictions(
             pred_quality_logits = preds.get("pred_quality_logits")
             pred_start_logits = preds.get("pred_start_logits")
             pred_end_logits = preds.get("pred_end_logits")
+            pred_short_candidate_points = preds.get("pred_short_candidate_points")
+            pred_short_candidate_logits = preds.get("pred_short_candidate_logits")
             lanes = decode_gcs_predictions(
                 preds["pred_points"][0],
                 preds["pred_logits"][0],
@@ -476,6 +486,12 @@ def generate_predictions(
                 pred_count_logits=pred_count_logits[0] if pred_count_logits is not None else None,
                 pred_start_logits=pred_start_logits[0] if pred_start_logits is not None else None,
                 pred_end_logits=pred_end_logits[0] if pred_end_logits is not None else None,
+                pred_short_candidate_points=(
+                    pred_short_candidate_points[0] if pred_short_candidate_points is not None else None
+                ),
+                pred_short_candidate_logits=(
+                    pred_short_candidate_logits[0] if pred_short_candidate_logits is not None else None
+                ),
                 oracle_count=_gt_lane_count(record) if oracle_count else None,
                 image_shape=original_shape,
                 score_thr=conf,
@@ -486,6 +502,7 @@ def generate_predictions(
                 valid_before_maxdet=valid_before_maxdet,
                 extent_decode=extent_decode,
                 extent_decode_mode=extent_decode_mode,
+                candidate_decode=candidate_decode,
                 count_aware_topk=count_aware_topk,
                 count_aware_min_k=count_aware_min_k,
                 count_aware_max_k=count_aware_max_k,
@@ -554,6 +571,7 @@ def evaluate_official(args: argparse.Namespace) -> dict:
         query_valid_before_maxdet = bool(getattr(args, "valid_before_maxdet", False))
         query_extent_decode = bool(getattr(args, "extent_decode", False))
         query_extent_decode_mode = str(getattr(args, "extent_decode_mode", "interval") or "interval")
+        query_candidate_decode = bool(getattr(args, "candidate_decode", False))
         query_count_aware_topk = bool(getattr(args, "count_aware_topk", False))
         query_count_aware_min_k = int(getattr(args, "count_aware_min_k", 3))
         query_count_aware_max_k = int(getattr(args, "count_aware_max_k", 5))
@@ -582,6 +600,7 @@ def evaluate_official(args: argparse.Namespace) -> dict:
             valid_before_maxdet=query_valid_before_maxdet,
             extent_decode=query_extent_decode,
             extent_decode_mode=query_extent_decode_mode,
+            candidate_decode=query_candidate_decode,
             count_aware_topk=query_count_aware_topk,
             count_aware_min_k=query_count_aware_min_k,
             count_aware_max_k=query_count_aware_max_k,
@@ -614,6 +633,7 @@ def evaluate_official(args: argparse.Namespace) -> dict:
     query_valid_before_maxdet = bool(getattr(args, "valid_before_maxdet", False))
     query_extent_decode = bool(getattr(args, "extent_decode", False))
     query_extent_decode_mode = str(getattr(args, "extent_decode_mode", "interval") or "interval")
+    query_candidate_decode = bool(getattr(args, "candidate_decode", False))
     query_count_aware_topk = bool(getattr(args, "count_aware_topk", False))
     query_count_aware_min_k = int(getattr(args, "count_aware_min_k", 3))
     query_count_aware_max_k = int(getattr(args, "count_aware_max_k", 5))
@@ -643,6 +663,7 @@ def evaluate_official(args: argparse.Namespace) -> dict:
         valid_before_maxdet=query_valid_before_maxdet,
         extent_decode=query_extent_decode,
         extent_decode_mode=query_extent_decode_mode,
+        candidate_decode=query_candidate_decode,
         oracle_count=query_oracle_count,
         decode_mode=active_decode_mode,
     )
@@ -734,6 +755,7 @@ def evaluate_official(args: argparse.Namespace) -> dict:
                 "valid_before_maxdet": query_valid_before_maxdet,
                 "extent_decode": query_extent_decode,
                 "extent_decode_mode": query_extent_decode_mode,
+                "candidate_decode": query_candidate_decode,
                 "count_aware_topk": query_count_aware_topk,
                 "count_aware_min_k": query_count_aware_min_k,
                 "count_aware_max_k": query_count_aware_max_k,

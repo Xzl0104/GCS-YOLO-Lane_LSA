@@ -2,6 +2,59 @@
 
 This file applies to branch `codex/5-25-3-k56`.
 
+## 2026-07-27 Q12/env30 Windowed Short Local X-Refine v3 Rejection
+
+The 10-epoch `query_short_local_refine_env30_window_v3_probe10` run is
+complete and rejected for promotion. It was initialized from the env30
+official-best checkpoint, froze the base path, and trained only the
+window-search auxiliary head. TEST was run once with the frozen official-val
+decode for reporting only.
+
+Official-val:
+
+```text
+official_best.pt ACC/FP/FN = 0.973365 / 0.015748 / 0.009642
+best.pt          ACC/FP/FN = 0.973330 / 0.015748 / 0.009642
+```
+
+Raw/refined short-lane gate:
+
+```text
+official-val short GT4: 1/8 -> 2/8
+official-val short GT5: 40/53 -> 40/53
+train0601 short GT4:    9/19 -> 9/19
+train0601 short GT5:    142/183 -> 142/183
+```
+
+The useful signal is only continuous-error reduction. For example, train0601
+short GT5 refined p90 APE moves from `36.315779px` to `32.862357px`, and the
+30px/40px hit rates improve, but the 20px hit20 count does not change. The
+identity guard prevents coarse-hit regressions, but it also means this probe
+does not create a new candidate when the raw query is far from the GT lane.
+
+Reporting-only TEST:
+
+```text
+official_best.pt ACC/FP/FN = 0.966680 / 0.027924 / 0.023724
+best.pt          ACC/FP/FN = 0.966684 / 0.027995 / 0.023724
+```
+
+Compared with the env30 official-best reporting result
+`0.966780 / 0.028732 / 0.023544`, v3 does not improve ACC, and GT5 retention
+is lower (`count_acc_5=0.880492` versus `0.891037`). This is not a reason to
+tune TEST. It confirms that the current auxiliary local residual path is not
+yet a solution.
+
+Integrated conclusion:
+
+The v3 mechanism learns to smooth existing carriers, but the dominant
+short-lane failure is still candidate coverage and 20px crossing, not
+ranking or count selection. Do not continue this exact artifact to 20/100/220
+epochs and do not enable refined decode from it. The smallest informative next
+step is an official-val-only prediction-only refined decode/sweep. If that
+does not improve formal ACC and short hit20, replace residual refinement with
+a candidate-generation mechanism that can produce a new lateral hypothesis.
+
 ## Branch Scope
 
 The current mainline imports the historical `5-25-3.zip` algorithm and changes the TuSimple fixed-y contract to Q=12/K=56 with official h-sample anchors. It also includes the 2026-06-27 user-requested default-off `count_boundary_loss` for GT3/GT4/GT5 adjacent count-score boundaries, default-off train-only `gcs_hard_sampling` for 0601 and short-visible GT3/GT4/GT5 samples, default-off E3-lite `gcs_spurious_neg` loss for short unmatched duplicate-like queries, training-time `official_best`, and the default-off `valid_before_maxdet` query decode option present at `424ab1c86`. Follow-up code before that boundary keeps the old default behavior while adding default-preserving GT-count spurious weights, default-off GT spurious candidate protection, and default-effectively-off GT5 short point-valid rescue controls.

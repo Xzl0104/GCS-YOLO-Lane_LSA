@@ -86,6 +86,29 @@ coarse_hit20_refined_miss20 must stay clearly below coarse_miss20_refined_hit20
 GT3/GT4 false-extra must not increase
 ```
 
+Completed result:
+
+```text
+run = query_short_local_refine_env30_window_v3_probe10
+status = rejected for promotion
+official_best official-val ACC/FP/FN = 0.973365 / 0.015748 / 0.009642
+official_best reporting-only TEST ACC/FP/FN = 0.966680 / 0.027924 / 0.023724
+```
+
+Short raw/refined hit20 did not pass the promotion gate:
+
+```text
+official-val GT4 1/8 -> 2/8
+official-val GT5 40/53 -> 40/53
+train0601 GT4 9/19 -> 9/19
+train0601 GT5 142/183 -> 142/183
+```
+
+Do not continue this exact v3 artifact, enable refined decode, or run another
+TEST for it. The next candidate must first use an official-val-only
+prediction-only refined decode/sweep; if that fails, change candidate
+generation instead of increasing this residual head.
+
 ## Rejected Env30 Follow-Up Commands
 
 The following recent env30-family commands are historical rejected records, not
@@ -3013,6 +3036,42 @@ both audited checkpoints. The failure is the hard-gate result itself.
 Only consider valid-loss follow-up when raw geometry clearly improves and
 `geometry_bad` clearly drops, but point-valid survival remains low. Otherwise,
 keep valid weights unchanged and move to data-driven reference clustering.
+
+## TuSimple Final Test
+
+## Q12 Env30 Lateral Candidate Probe
+
+Run the first candidate-generation probe on the remote CUDA server. It starts
+from the env30 `official_best.pt`, freezes the base model, trains only the
+candidate score head, runs training-time official-val selection, and keeps
+TEST closed:
+
+```bash
+RUN_NAME=query_short_candidate_env30_probe20 \
+EPOCHS=20 \
+RUN_TESTS=0 \
+bash scripts/run_query_short_candidate_env30_probe20.sh
+```
+
+The dedicated script uses:
+
+```text
+MODEL=ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-short-candidate.yaml
+PRETRAINED=runs/gcs_lane/query_alpha05_gt5short_geom_w2_bneg002_env30_nocount_v1/weights/official_best.pt
+gcs_short_candidate=0.05
+gcs_short_candidate_count=7
+gcs_short_candidate_radius_px=60
+gcs_short_candidate_step_px=20
+gcs_short_candidate_freeze_base=true
+gcs_candidate_decode=true
+gcs_query_count_ce=0
+gcs_query_quality=0
+gcs_query_extent=0
+COUNT_AWARE_TOPK=0
+```
+
+Do not enable TEST until official-val raw candidate coverage and short
+GT4/GT5 gates have been inspected.
 
 ## TuSimple Final Test
 

@@ -68,6 +68,13 @@ class GCSLoss(nn.Module):
         "short_local_refine_loss20",
         "short_local_refine_identity_count",
         "short_local_refine_pull_count",
+        "short_candidate_loss",
+        "short_candidate_count",
+        "short_candidate_score_loss",
+        "short_candidate_geometry_loss",
+        "short_candidate_best_offset_px",
+        "short_candidate_raw_hit20",
+        "short_candidate_best_hit20",
         "role_contain_loss",
         "role_contain_exist_loss",
         "role_contain_valid_loss",
@@ -163,6 +170,12 @@ class GCSLoss(nn.Module):
         short_local_refine_nearmiss_thr_px: float | None = None,
         short_local_refine_identity_weight: float | None = None,
         short_local_refine_nearmiss_weight: float | None = None,
+        short_candidate: float | None = None,
+        short_candidate_visible_thr: int | None = None,
+        short_candidate_gt_min_lanes: int | None = None,
+        short_candidate_beta_px: float | None = None,
+        short_candidate_score_temperature: float | None = None,
+        short_candidate_step_px: float | None = None,
         role_contain: float | None = None,
         role_contain_valid_weight: float | None = None,
         role_contain_matcher: bool | None = None,
@@ -307,6 +320,34 @@ class GCSLoss(nn.Module):
             short_local_refine_nearmiss_weight
             if short_local_refine_nearmiss_weight is not None
             else self._arg(args, "gcs_short_local_refine_nearmiss_weight", 1.0)
+        )
+        self.short_candidate_gain = float(
+            short_candidate if short_candidate is not None else self._arg(args, "gcs_short_candidate", 0.0)
+        )
+        self.short_candidate_visible_thr = int(
+            short_candidate_visible_thr
+            if short_candidate_visible_thr is not None
+            else self._arg(args, "gcs_short_candidate_visible_thr", 10)
+        )
+        self.short_candidate_gt_min_lanes = int(
+            short_candidate_gt_min_lanes
+            if short_candidate_gt_min_lanes is not None
+            else self._arg(args, "gcs_short_candidate_gt_min_lanes", 4)
+        )
+        self.short_candidate_beta_px = float(
+            short_candidate_beta_px
+            if short_candidate_beta_px is not None
+            else self._arg(args, "gcs_short_candidate_beta_px", 3.0)
+        )
+        self.short_candidate_score_temperature = float(
+            short_candidate_score_temperature
+            if short_candidate_score_temperature is not None
+            else self._arg(args, "gcs_short_candidate_score_temperature", 1.0)
+        )
+        self.short_candidate_step_px = float(
+            short_candidate_step_px
+            if short_candidate_step_px is not None
+            else self._arg(args, "gcs_short_candidate_step_px", 20.0)
         )
         self.query_count_min_lanes = int(
             query_count_min_lanes
@@ -679,6 +720,25 @@ class GCSLoss(nn.Module):
                 "gcs_short_local_refine_nearmiss_weight must be >= 0, "
                 f"got {self.short_local_refine_nearmiss_weight}."
             )
+        if self.short_candidate_gain < 0.0:
+            raise ValueError(f"gcs_short_candidate must be >= 0, got {self.short_candidate_gain}.")
+        if self.short_candidate_visible_thr < 0:
+            raise ValueError(
+                f"gcs_short_candidate_visible_thr must be >= 0, got {self.short_candidate_visible_thr}."
+            )
+        if self.short_candidate_gt_min_lanes < 0:
+            raise ValueError(
+                f"gcs_short_candidate_gt_min_lanes must be >= 0, got {self.short_candidate_gt_min_lanes}."
+            )
+        if self.short_candidate_beta_px <= 0.0:
+            raise ValueError(f"gcs_short_candidate_beta_px must be > 0, got {self.short_candidate_beta_px}.")
+        if self.short_candidate_score_temperature <= 0.0:
+            raise ValueError(
+                "gcs_short_candidate_score_temperature must be > 0, "
+                f"got {self.short_candidate_score_temperature}."
+            )
+        if self.short_candidate_step_px <= 0.0:
+            raise ValueError(f"gcs_short_candidate_step_px must be > 0, got {self.short_candidate_step_px}.")
         if self.count_boundary_margin34 < 0.0:
             raise ValueError(f"gcs_count_boundary_margin34 must be >= 0, got {self.count_boundary_margin34}.")
         if self.count_boundary_margin45 < 0.0:
@@ -2468,6 +2528,138 @@ class GCSLoss(nn.Module):
         pull_count_t = torch.cat(pull_counts).sum() if pull_counts else self._zero_like(pred_points)
         return loss, count_t, coarse_cat.mean(), refined_cat.mean(), gain20, loss20, identity_count_t, pull_count_t
 
+    def short_candidate_loss(
+        self,
+        preds: dict[str, torch.Tensor],
+        pred_points: torch.Tensor,
+        gt_points: list[torch.Tensor],
+        gt_valid: list[torch.Tensor],
+        indices: list[tuple[torch.Tensor, torch.Tensor]],
+        gt_lanes: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Train feature-conditioned scores for fixed lateral candidates around matched short lanes."""
+        candidate_points = preds.get("pred_short_candidate_points")
+        candidate_logits = preds.get("pred_short_candidate_logits")
+        if candidate_points is None or candidate_logits is None:
+            if float(self.short_candidate_gain) > 0.0:
+                raise ValueError(
+                    "gcs_short_candidate requires preds['pred_short_candidate_points'] and "
+                    "preds['pred_short_candidate_logits']; use a query_short_candidate_head model YAML "
+                    "or set --gcs-short-candidate 0.0."
+                )
+            zero = self._zero_like(pred_points)
+            return zero, zero, zero, zero, zero, zero, zero
+
+        bsz, num_queries, num_points, _ = pred_points.shape
+        if candidate_points.ndim != 5 or candidate_points.shape[:2] != (bsz, num_queries) or candidate_points.shape[-1] != 2:
+            raise ValueError(
+                "pred_short_candidate_points must have shape B x Q x H x K x 2, got "
+                f"{tuple(candidate_points.shape)}."
+            )
+        candidate_count = int(candidate_points.shape[2])
+        if candidate_points.shape[3] != num_points:
+            raise ValueError(
+                "pred_short_candidate_points K dimension must match pred_points, got "
+                f"{candidate_points.shape[3]} vs {num_points}."
+            )
+        if candidate_logits.shape != (bsz, num_queries, candidate_count):
+            raise ValueError(
+                "pred_short_candidate_logits must have shape B x Q x H matching candidate points, got "
+                f"{tuple(candidate_logits.shape)} vs {(bsz, num_queries, candidate_count)}."
+            )
+
+        device, dtype = pred_points.device, pred_points.dtype
+        width = self._pixel_scale_for(pred_points).reshape(-1)[0].to(device=device, dtype=dtype)
+        width_float = max(float(width.detach().item()), 1.0)
+        beta_px = float(self.short_candidate_beta_px)
+        temperature = float(self.short_candidate_score_temperature)
+        offsets_px = pred_points.new_tensor([0.0])
+        if candidate_count > 1:
+            step_px = float(self.short_candidate_step_px)
+            half = (candidate_count - 1) // 2
+            offsets = [0.0]
+            for i in range(1, half + 1):
+                offsets.extend((-i * step_px, i * step_px))
+            offsets_px = pred_points.new_tensor(offsets)
+        if offsets_px.numel() != candidate_count:
+            offsets_px = pred_points.new_zeros((candidate_count,))
+
+        selected_score_losses: list[torch.Tensor] = []
+        selected_geometry_losses: list[torch.Tensor] = []
+        best_offsets: list[torch.Tensor] = []
+        raw_hits: list[torch.Tensor] = []
+        best_hits: list[torch.Tensor] = []
+
+        gt_lanes_t = None
+        if gt_lanes is not None:
+            gt_lanes_t = torch.as_tensor(gt_lanes, device=device, dtype=dtype).reshape(-1)
+            if gt_lanes_t.numel() != bsz:
+                raise ValueError(f"gt_lanes must have one value per image, got {gt_lanes_t.numel()} vs B={bsz}.")
+
+        for b, (src_idx, tgt_idx) in enumerate(indices):
+            if src_idx.numel() == 0:
+                continue
+            src_idx = src_idx.to(device=device, dtype=torch.long)
+            tgt_idx = tgt_idx.to(device=device, dtype=torch.long)
+            target_all = gt_points[b].to(device=device, dtype=dtype)
+            valid_all = gt_valid[b].to(device=device, dtype=dtype)
+            target = target_all[tgt_idx]
+            valid = valid_all[tgt_idx] > 0.5
+            visible_counts = valid.to(dtype=dtype).sum(dim=1)
+            gt_count = int(round(float(gt_lanes_t[b].detach().item()))) if gt_lanes_t is not None else 0
+            short_mask = (visible_counts <= float(self.short_candidate_visible_thr)) & (
+                gt_count >= int(self.short_candidate_gt_min_lanes)
+            )
+            if not bool(short_mask.any()):
+                continue
+
+            src_short = src_idx[short_mask]
+            target_short = target[short_mask]
+            valid_short = valid[short_mask].to(dtype=dtype)
+            candidate_short = candidate_points[b, src_short]
+            candidate_x = candidate_short[..., 0]
+            target_x = target_short[..., 0].unsqueeze(1)
+            mask = valid_short.unsqueeze(1)
+            valid_den = valid_short.sum(dim=1, keepdim=True).clamp_min(1.0)
+            ape_px = ((candidate_x - target_x).abs() * width * mask).sum(dim=-1) / valid_den
+
+            target_prob = F.softmax(-ape_px / beta_px, dim=1)
+            logits = candidate_logits[b, src_short]
+            predicted_prob = F.softmax(logits / temperature, dim=1)
+            score_loss = -(target_prob * F.log_softmax(logits / temperature, dim=1)).sum(dim=1)
+            geometry_loss = (predicted_prob * ape_px).sum(dim=1) / width_float
+            selected_score_losses.append(score_loss)
+            selected_geometry_losses.append(geometry_loss)
+
+            raw_best_ape, raw_best_idx = ape_px.detach().min(dim=1)
+            predicted_idx = logits.detach().argmax(dim=1)
+            predicted_ape = ape_px.detach().gather(1, predicted_idx[:, None]).squeeze(1)
+            best_offsets.append(offsets_px[raw_best_idx].abs().reshape(-1))
+            raw_hits.append((raw_best_ape <= 20.0).to(dtype=dtype).reshape(-1))
+            best_hits.append((predicted_ape <= 20.0).to(dtype=dtype).reshape(-1))
+
+        if not selected_score_losses:
+            zero = self._zero_like(pred_points)
+            return zero, zero, zero, zero, zero, zero, zero
+
+        score_cat = torch.cat([value.reshape(-1) for value in selected_score_losses])
+        geometry_cat = torch.cat([value.reshape(-1) for value in selected_geometry_losses])
+        offset_cat = torch.cat(best_offsets)
+        raw_hit_cat = torch.cat(raw_hits)
+        best_hit_cat = torch.cat(best_hits)
+        count_t = pred_points.new_tensor(float(score_cat.numel()))
+        score_loss = score_cat.mean()
+        geometry_loss = geometry_cat.mean()
+        return (
+            score_loss + geometry_loss,
+            count_t,
+            score_loss,
+            geometry_loss,
+            offset_cat.mean(),
+            raw_hit_cat.mean(),
+            best_hit_cat.mean(),
+        )
+
     def count_boundary_loss(
         self, count_score: torch.Tensor, target: torch.Tensor, return_details: bool = False
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
@@ -3145,6 +3337,22 @@ class GCSLoss(nn.Module):
             gt_lanes=gt_lanes,
         )
         (
+            short_candidate_loss,
+            short_candidate_count,
+            short_candidate_score_loss,
+            short_candidate_geometry_loss,
+            short_candidate_best_offset_px,
+            short_candidate_raw_hit20,
+            short_candidate_best_hit20,
+        ) = self.short_candidate_loss(
+            preds,
+            pred_points,
+            gt_points,
+            gt_valid,
+            indices,
+            gt_lanes=gt_lanes,
+        )
+        (
             spurious_neg_loss,
             spurious_negative_count,
             spur_cand,
@@ -3243,6 +3451,8 @@ class GCSLoss(nn.Module):
             total = total + self.query_extent_gain * query_extent_loss
         if self.short_local_refine_gain != 0.0:
             total = total + self.short_local_refine_gain * short_local_refine_loss
+        if self.short_candidate_gain != 0.0:
+            total = total + self.short_candidate_gain * short_candidate_loss
         if self.spurious_neg_gain != 0.0:
             total = total + self.spurious_neg_gain * self.spurious_neg_weight * spurious_neg_loss
         if self.role_contain_gain != 0.0:
@@ -3305,6 +3515,13 @@ class GCSLoss(nn.Module):
                 short_local_refine_loss20.detach(),
                 short_local_refine_identity_count.detach(),
                 short_local_refine_pull_count.detach(),
+                short_candidate_loss.detach(),
+                short_candidate_count.detach(),
+                short_candidate_score_loss.detach(),
+                short_candidate_geometry_loss.detach(),
+                short_candidate_best_offset_px.detach(),
+                short_candidate_raw_hit20.detach(),
+                short_candidate_best_hit20.detach(),
                 role_contain_loss.detach(),
                 role_contain_exist_loss.detach(),
                 role_contain_valid_loss.detach(),

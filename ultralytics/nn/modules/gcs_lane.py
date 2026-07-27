@@ -228,6 +228,10 @@ class GCSLaneHead(nn.Module):
         short_local_refine_window_search: bool = False,
         short_local_refine_window_radius_px: float = 40.0,
         short_local_refine_window_step_px: float = 20.0,
+        query_short_candidate_head: bool = False,
+        short_candidate_count: int = 7,
+        short_candidate_radius_px: float = 60.0,
+        short_candidate_step_px: float = 20.0,
     ):
         """Initialize the GCS lane query decoder and training-only auxiliary heads."""
         super().__init__()
@@ -429,6 +433,44 @@ class GCSLaneHead(nn.Module):
                 nn.ReLU(inplace=True),
                 nn.Linear(c1, 1),
             )
+        requested_short_candidate = bool(query_short_candidate_head)
+        if requested_short_candidate and (self.gcs_mode != "query" or self.point_mode != "fixed_y"):
+            raise ValueError("query_short_candidate_head requires query mode with point_mode='fixed_y'.")
+        self.query_short_candidate_head = requested_short_candidate
+        self.short_candidate_count = int(short_candidate_count)
+        self.short_candidate_radius_px = float(short_candidate_radius_px)
+        self.short_candidate_step_px = float(short_candidate_step_px)
+        if self.query_short_candidate_head:
+            if self.short_candidate_count <= 0 or self.short_candidate_count % 2 != 1:
+                raise ValueError(
+                    "short_candidate_count must be a positive odd integer for center-first symmetric hypotheses, "
+                    f"got {self.short_candidate_count}."
+                )
+            if self.short_candidate_radius_px <= 0.0:
+                raise ValueError(
+                    f"short_candidate_radius_px must be > 0 when candidate generation is enabled, got {self.short_candidate_radius_px}."
+                )
+            if self.short_candidate_step_px <= 0.0:
+                raise ValueError(
+                    f"short_candidate_step_px must be > 0 when candidate generation is enabled, got {self.short_candidate_step_px}."
+                )
+            candidate_steps = self.short_candidate_radius_px / self.short_candidate_step_px
+            if not math.isclose(candidate_steps, round(candidate_steps), rel_tol=0.0, abs_tol=1e-6):
+                raise ValueError(
+                    "short_candidate_radius_px must be an integer multiple of short_candidate_step_px, got "
+                    f"{self.short_candidate_radius_px}/{self.short_candidate_step_px}."
+                )
+            expected_count = 2 * int(round(candidate_steps)) + 1
+            if self.short_candidate_count != expected_count:
+                raise ValueError(
+                    "short_candidate_count must equal 2 * (short_candidate_radius_px / short_candidate_step_px) + 1 "
+                    f"for symmetric hypotheses, got count={self.short_candidate_count}, expected={expected_count}."
+                )
+            self.query_short_candidate_mlp = nn.Sequential(
+                nn.Linear(c1 * 2, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, 1),
+            )
         if self.gcs_mode == "ordered_slot":
             self.start_mlp = nn.Sequential(
                 nn.Linear(c1, c1),
@@ -470,6 +512,8 @@ class GCSLaneHead(nn.Module):
             self._init_query_extent_head()
         if self.query_short_local_refine_head:
             self._init_query_short_local_refine_head()
+        if self.query_short_candidate_head:
+            self._init_query_short_candidate_head()
 
     def _build_fixed_y_anchors(self):
         """Build shared bottom-to-top y anchors for fixed-y x-only prediction."""
@@ -680,6 +724,12 @@ class GCSLaneHead(nn.Module):
         nn.init.zeros_(final.weight)
         nn.init.zeros_(final.bias)
 
+    def _init_query_short_candidate_head(self):
+        """Initialize candidate score deltas so the disabled-equivalent center hypothesis is neutral."""
+        final = self.query_short_candidate_mlp[-1]
+        nn.init.zeros_(final.weight)
+        nn.init.zeros_(final.bias)
+
     def _sample_point_features(self, xs, points):
         """Sample high-resolution image features at normalized point coordinates.
 
@@ -743,6 +793,51 @@ class GCSLaneHead(nn.Module):
                 f"got {radius_px} > {max_delta_px}."
             )
         return torch.arange(-steps, steps + 1, device=device, dtype=dtype) * step_px
+
+    def _short_candidate_offsets_px(self, device, dtype):
+        """Return center-first fixed lateral hypotheses for short-lane candidate generation."""
+        radius_px = float(getattr(self, "short_candidate_radius_px", 60.0))
+        step_px = float(getattr(self, "short_candidate_step_px", 20.0))
+        steps = int(round(radius_px / step_px))
+        if steps < 1 or not math.isclose(steps * step_px, radius_px, rel_tol=0.0, abs_tol=1e-6):
+            raise ValueError(
+                "short_candidate_radius_px must be a positive integer multiple of short_candidate_step_px, got "
+                f"{radius_px}/{step_px}."
+            )
+        offsets = [0.0]
+        for step in range(1, steps + 1):
+            offsets.extend((-step * step_px, step * step_px))
+        offsets = torch.as_tensor(offsets, device=device, dtype=dtype)
+        expected_count = int(getattr(self, "short_candidate_count", offsets.numel()))
+        if offsets.numel() != expected_count:
+            raise ValueError(
+                f"Candidate offset count mismatch: generated {offsets.numel()} offsets, expected {expected_count}."
+            )
+        return offsets
+
+    def _short_candidate_points_and_logits(self, xs, hs, base_points, image_width: int | float | None):
+        """Generate fixed-y lateral candidates and feature-conditioned relative score logits."""
+        if image_width is None:
+            raise ValueError("query_short_candidate_head requires orig_size=(H, W) to normalize candidate offsets.")
+        width = float(image_width)
+        if width <= 0.0:
+            raise ValueError(f"image_width must be positive for short candidate generation, got {image_width}.")
+        base_detached = base_points.detach()
+        offsets_px = self._short_candidate_offsets_px(base_points.device, base_points.dtype)
+        offsets_norm = offsets_px / base_points.new_tensor(width)
+        candidate_points = base_detached.unsqueeze(2).expand(-1, -1, offsets_norm.numel(), -1, -1).clone()
+        candidate_points[..., 0] = (
+            candidate_points[..., 0] + offsets_norm.view(1, 1, -1, 1)
+        ).clamp(0.0, 1.0)
+        candidate_points_for_sampling = candidate_points.permute(0, 1, 3, 2, 4)
+        candidate_tokens = self._short_local_refine_window_tokens(
+            xs,
+            hs.detach(),
+            candidate_points_for_sampling,
+        ).detach()
+        # Aggregate anchor evidence into one relative score per lateral hypothesis.
+        candidate_logits = self.query_short_candidate_mlp(candidate_tokens).squeeze(-1).mean(dim=2)
+        return candidate_points, candidate_logits
 
     def _short_local_refine_window_tokens(self, xs, hs, window_points):
         """Build point/offset tokens for feature-conditioned local x-search."""
@@ -919,6 +1014,8 @@ class GCSLaneHead(nn.Module):
         short_refine_delta = None
         short_refine_delta_norm = None
         short_refine_window_logits = None
+        pred_short_candidate_points = None
+        short_candidate_logits = None
         if point_mode == "fixed_y":
             if point_ref is None:
                 x_logits = point_delta.squeeze(-1)
@@ -939,6 +1036,14 @@ class GCSLaneHead(nn.Module):
                     self._short_local_refine_fixed_y_points(xs, hs, pred_points, image_width)
                 )
                 pred_coarse_points = pred_points
+            if getattr(self, "query_short_candidate_head", False):
+                image_width = None if orig_size is None else int(orig_size[1])
+                pred_short_candidate_points, short_candidate_logits = self._short_candidate_points_and_logits(
+                    xs,
+                    hs,
+                    pred_points,
+                    image_width,
+                )
         elif point_ref is None:
             # Backward compatibility for checkpoints created before query-specific references existed.
             pred_points = torch.sigmoid(point_delta)
@@ -967,6 +1072,9 @@ class GCSLaneHead(nn.Module):
             out["pred_short_refine_delta_norm"] = short_refine_delta_norm
             if short_refine_window_logits is not None:
                 out["pred_short_refine_window_logits"] = short_refine_window_logits
+        if pred_short_candidate_points is not None:
+            out["pred_short_candidate_points"] = pred_short_candidate_points
+            out["pred_short_candidate_logits"] = short_candidate_logits
         if getattr(self, "query_count_head", False):
             out["pred_count_logits"] = self.query_count_mlp(hs.mean(dim=1))
         if getattr(self, "query_quality_head", False):
