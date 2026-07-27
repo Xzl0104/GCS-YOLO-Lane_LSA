@@ -2568,6 +2568,9 @@ class GCSLoss(nn.Module):
                 f"{tuple(candidate_logits.shape)} vs {(bsz, num_queries, candidate_count)}."
             )
 
+        # Freeze-base candidate probes still need a differentiable zero on
+        # batches without an eligible short GT4/GT5 lane.
+        candidate_zero = candidate_logits.sum() * 0.0
         device, dtype = pred_points.device, pred_points.dtype
         width = self._pixel_scale_for(pred_points).reshape(-1)[0].to(device=device, dtype=dtype)
         width_float = max(float(width.detach().item()), 1.0)
@@ -2639,8 +2642,15 @@ class GCSLoss(nn.Module):
             best_hits.append((predicted_ape <= 20.0).to(dtype=dtype).reshape(-1))
 
         if not selected_score_losses:
-            zero = self._zero_like(pred_points)
-            return zero, zero, zero, zero, zero, zero, zero
+            return (
+                candidate_zero,
+                candidate_zero,
+                candidate_zero,
+                candidate_zero,
+                candidate_zero,
+                candidate_zero,
+                candidate_zero,
+            )
 
         score_cat = torch.cat([value.reshape(-1) for value in selected_score_losses])
         geometry_cat = torch.cat([value.reshape(-1) for value in selected_geometry_losses])
