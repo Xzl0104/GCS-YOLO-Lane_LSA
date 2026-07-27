@@ -685,6 +685,11 @@ class GCSLaneValidator:
         extent_decode = self._eval_extent_decode()
         extent_decode_mode = self._eval_extent_decode_mode()
         candidate_decode = bool(self._arg(self.args, "gcs_candidate_decode", False))
+        candidate_short_gate = bool(self._arg(self.args, "gcs_candidate_short_gate", True))
+        candidate_gate_valid_thr = float(self._arg(self.args, "gcs_candidate_gate_valid_thr", 0.5))
+        candidate_gate_min_visible = int(self._arg(self.args, "gcs_candidate_gate_min_visible", 2))
+        candidate_gate_max_visible = int(self._arg(self.args, "gcs_candidate_gate_max_visible", 10))
+        candidate_preserve_base_score = bool(self._arg(self.args, "gcs_candidate_preserve_base_score", True))
         ordered_slot = self._gcs_mode() == "ordered_slot"
         ordered_slot_runtime_cfg = ordered_slot_decode_runtime_config(context="training_val") if ordered_slot else None
         ordered_slot_params = ordered_slot_decode_params(self.args) if ordered_slot else None
@@ -728,6 +733,11 @@ class GCSLaneValidator:
                     extent_decode=extent_decode,
                     extent_decode_mode=extent_decode_mode,
                     candidate_decode=candidate_decode,
+                    candidate_short_gate=candidate_short_gate,
+                    candidate_gate_valid_thr=candidate_gate_valid_thr,
+                    candidate_gate_min_visible=candidate_gate_min_visible,
+                    candidate_gate_max_visible=candidate_gate_max_visible,
+                    candidate_preserve_base_score=candidate_preserve_base_score,
                 )
             gt_lanes, gt_valid = self._valid_gt_lanes(gt_lanes_t, gt_valid_t)
             tp, fp, fn, apes_tp, apes_all, apes_fp = self._match_lanes(

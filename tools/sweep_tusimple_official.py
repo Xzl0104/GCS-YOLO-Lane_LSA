@@ -76,6 +76,11 @@ QUERY_ONLY_ROW_KEYS = (
     "min_points",
     "query_points_source",
     "candidate_decode",
+    "candidate_short_gate",
+    "candidate_gate_valid_thr",
+    "candidate_gate_min_visible",
+    "candidate_gate_max_visible",
+    "candidate_preserve_base_score",
     "extent_decode",
     "extent_decode_mode",
     "extent_decode_priority",
@@ -170,7 +175,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--candidate-decode",
         action="store_true",
-        help="Flatten fixed lateral candidate hypotheses into the query decode pool.",
+        help="Use lateral candidate hypotheses only for prediction-gated short-lane queries.",
+    )
+    parser.add_argument(
+        "--candidate-short-gate",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Apply candidate selection only when predicted visible-anchor count is in the configured short-lane range.",
+    )
+    parser.add_argument("--candidate-gate-valid-thr", type=float, default=0.5)
+    parser.add_argument("--candidate-gate-min-visible", type=int, default=2)
+    parser.add_argument("--candidate-gate-max-visible", type=int, default=10)
+    parser.add_argument(
+        "--candidate-preserve-base-score",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Keep the original query score after candidate selection.",
     )
     parser.add_argument("--count-aware-topk", action="store_true", help="Use count_score to keep only the quality-best dynamic lane count.")
     parser.add_argument("--count-aware-min-k", type=int, default=3, help="Minimum k_hat for --count-aware-topk.")
@@ -271,6 +291,11 @@ def _combo_key(combo: dict) -> tuple:
         int(combo["max_det"]),
         int(combo["min_points"]),
         bool(combo.get("candidate_decode", False)),
+        bool(combo.get("candidate_short_gate", True)),
+        round(float(combo.get("candidate_gate_valid_thr", 0.5)), 12),
+        int(combo.get("candidate_gate_min_visible", 2)),
+        int(combo.get("candidate_gate_max_visible", 10)),
+        bool(combo.get("candidate_preserve_base_score", True)),
         str(combo.get("extent_decode_mode", "none")),
         str(combo.get("count_mode", "score_sum")),
         int(combo.get("count_aware_extra_margin", 0)),
@@ -306,6 +331,11 @@ def build_combos(args: argparse.Namespace, decode_yaml_cfg: dict | None = None) 
         ]
     count_aware_topk = bool(getattr(args, "count_aware_topk", False))
     candidate_decode = bool(getattr(args, "candidate_decode", False))
+    candidate_short_gate = bool(getattr(args, "candidate_short_gate", True))
+    candidate_gate_valid_thr = float(getattr(args, "candidate_gate_valid_thr", 0.5))
+    candidate_gate_min_visible = int(getattr(args, "candidate_gate_min_visible", 2))
+    candidate_gate_max_visible = int(getattr(args, "candidate_gate_max_visible", 10))
+    candidate_preserve_base_score = bool(getattr(args, "candidate_preserve_base_score", True))
     count_aware_min_k = int(getattr(args, "count_aware_min_k", 3))
     count_aware_max_k = int(getattr(args, "count_aware_max_k", 5))
     count_aware_length_norm = float(getattr(args, "count_aware_length_norm", 12.0))
@@ -335,6 +365,22 @@ def build_combos(args: argparse.Namespace, decode_yaml_cfg: dict | None = None) 
             raise ValueError("candidate_decode cannot be combined with count-aware top-k.")
         if any(str(mode) != "none" for mode in extent_decode_modes):
             raise ValueError("candidate_decode cannot be combined with extent decode.")
+        if not 0.0 <= candidate_gate_valid_thr <= 1.0:
+            raise ValueError(f"candidate_gate_valid_thr must be in [0, 1], got {candidate_gate_valid_thr}.")
+        if (
+            candidate_gate_min_visible < 0
+            or candidate_gate_max_visible < 0
+            or candidate_gate_min_visible > candidate_gate_max_visible
+        ):
+            raise ValueError(
+                "candidate gate visible bounds must satisfy 0 <= min_visible <= max_visible, "
+                f"got {candidate_gate_min_visible}/{candidate_gate_max_visible}."
+            )
+        if not candidate_preserve_base_score:
+            raise ValueError(
+                "The gated candidate probe must preserve the base query score; "
+                "use --no-candidate-preserve-base-score only for legacy diagnostics."
+            )
     for conf, point_valid_thr, nms_dist_px, max_det, min_points, extent_mode, count_mode, count_aware_extra_margin in product(
         sorted({float(x) for x in args.confs}),
         sorted({float(x) for x in args.point_valid_thrs}),
@@ -362,6 +408,11 @@ def build_combos(args: argparse.Namespace, decode_yaml_cfg: dict | None = None) 
                 "min_points": min_points,
                 "query_points_source": "main",
                 "candidate_decode": candidate_decode,
+                "candidate_short_gate": candidate_short_gate,
+                "candidate_gate_valid_thr": candidate_gate_valid_thr,
+                "candidate_gate_min_visible": candidate_gate_min_visible,
+                "candidate_gate_max_visible": candidate_gate_max_visible,
+                "candidate_preserve_base_score": candidate_preserve_base_score,
                 "valid_before_maxdet": valid_before_maxdet,
                 "extent_decode": str(extent_mode) != "none",
                 "extent_decode_mode": str(extent_mode),
@@ -394,6 +445,11 @@ def _row_sort_key(row: dict) -> tuple:
         int(row["max_det"]),
         int(row["min_points"]),
         bool(row.get("candidate_decode", False)),
+        bool(row.get("candidate_short_gate", True)),
+        round(float(row.get("candidate_gate_valid_thr", 0.5)), 12),
+        int(row.get("candidate_gate_min_visible", 2)),
+        int(row.get("candidate_gate_max_visible", 10)),
+        bool(row.get("candidate_preserve_base_score", True)),
         str(row.get("extent_decode_mode", "none")),
         str(row.get("count_mode", "score_sum")),
         int(row.get("count_aware_extra_margin", 0)),
@@ -413,6 +469,11 @@ def write_csv(path: Path, rows: list[dict]) -> None:
         "min_points",
         "query_points_source",
         "candidate_decode",
+        "candidate_short_gate",
+        "candidate_gate_valid_thr",
+        "candidate_gate_min_visible",
+        "candidate_gate_max_visible",
+        "candidate_preserve_base_score",
         "valid_before_maxdet",
         "extent_decode",
         "extent_decode_mode",
@@ -489,6 +550,12 @@ def sweep(args: argparse.Namespace) -> dict:
             args.max_dets = [int(decode_yaml_cfg["max_det"])]
             args.min_points = [int(decode_yaml_cfg["min_points"])]
             args.valid_before_maxdet = bool(decode_yaml_cfg.get("valid_before_maxdet", False))
+            args.candidate_decode = bool(decode_yaml_cfg.get("candidate_decode", False))
+            args.candidate_short_gate = bool(decode_yaml_cfg.get("candidate_short_gate", True))
+            args.candidate_gate_valid_thr = float(decode_yaml_cfg.get("candidate_gate_valid_thr", 0.5))
+            args.candidate_gate_min_visible = int(decode_yaml_cfg.get("candidate_gate_min_visible", 2))
+            args.candidate_gate_max_visible = int(decode_yaml_cfg.get("candidate_gate_max_visible", 10))
+            args.candidate_preserve_base_score = bool(decode_yaml_cfg.get("candidate_preserve_base_score", True))
             extent_mode = str(decode_yaml_cfg.get("extent_decode_mode", "none") or "none")
             args.extent_decode_modes = [extent_mode if bool(decode_yaml_cfg.get("extent_decode", False)) else "none"]
             args.count_aware_topk = bool(decode_yaml_cfg["count_aware_topk"])
@@ -589,6 +656,11 @@ def sweep(args: argparse.Namespace) -> dict:
                     extent_decode=combo["extent_decode"],
                     extent_decode_mode=combo["extent_decode_mode"],
                     candidate_decode=bool(combo.get("candidate_decode", False)),
+                    candidate_short_gate=bool(combo.get("candidate_short_gate", True)),
+                    candidate_gate_valid_thr=float(combo.get("candidate_gate_valid_thr", 0.5)),
+                    candidate_gate_min_visible=int(combo.get("candidate_gate_min_visible", 2)),
+                    candidate_gate_max_visible=int(combo.get("candidate_gate_max_visible", 10)),
+                    candidate_preserve_base_score=bool(combo.get("candidate_preserve_base_score", True)),
                     count_aware_topk=combo["count_aware_topk"],
                     count_aware_min_k=combo["count_aware_min_k"],
                     count_aware_max_k=combo["count_aware_max_k"],

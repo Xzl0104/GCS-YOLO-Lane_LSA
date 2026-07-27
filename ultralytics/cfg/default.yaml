@@ -293,6 +293,11 @@ gcs_eval_max_det: 8 # (int) maximum decoded lane queries kept for GCS validation
 gcs_extent_decode: False # (bool) use query start/end extent logits for query-mode decode visibility
 gcs_extent_decode_mode: interval # (str) query extent decode mode when enabled: interval or intersect
 gcs_candidate_decode: False # (bool) use query lateral candidate-generation outputs for decode
+gcs_candidate_short_gate: True # (bool) apply candidate selection only to prediction-only short-lane queries
+gcs_candidate_gate_valid_thr: 0.5 # (float) predicted point-valid threshold used by the short-lane candidate gate
+gcs_candidate_gate_min_visible: 2 # (int) minimum predicted visible anchors for candidate applicability
+gcs_candidate_gate_max_visible: 10 # (int) maximum predicted visible anchors for candidate applicability
+gcs_candidate_preserve_base_score: True # (bool) keep the original query/quality score after candidate selection
 gcs_official_best: False # (bool) run periodic TuSimple official-val sweeps and preserve weights/official_best.pt
 gcs_allow_internal_best: False # (bool) allow ordered_slot debug training without official_best checkpoint selection
 gcs_official_interval: 5 # (int) epoch interval for periodic official-val checkpoint selection

@@ -211,6 +211,11 @@ def decode_gcs_predictions(
     extent_decode: bool = False,
     extent_decode_mode: str = "interval",
     candidate_decode: bool = False,
+    candidate_short_gate: bool = True,
+    candidate_gate_valid_thr: float = 0.5,
+    candidate_gate_min_visible: int = 2,
+    candidate_gate_max_visible: int = 10,
+    candidate_preserve_base_score: bool = True,
     count_aware_topk: bool = False,
     count_aware_min_k: int = 3,
     count_aware_max_k: int = 5,
@@ -242,8 +247,16 @@ def decode_gcs_predictions(
         extent_decode: If true, use query start/end logits to build the visible anchor interval.
         extent_decode_mode: ``interval`` uses the predicted interval directly; ``intersect`` intersects it
             with the point-valid continuous segment; ``none`` disables extent decode.
-        candidate_decode: If true, choose one highest-scoring lateral hypothesis per base query before
-            ordinary confidence filtering, NMS, and max-det truncation.
+        candidate_decode: If true, choose one lateral hypothesis per base query before ordinary confidence
+            filtering, NMS, and max-det truncation. The default short-lane gate limits this to queries with a
+            predicted visible-anchor count in ``[candidate_gate_min_visible, candidate_gate_max_visible]``.
+        candidate_short_gate: If true, apply lateral candidate selection only to prediction-only short-lane
+            queries; false preserves the legacy all-query candidate selection for diagnostics.
+        candidate_gate_valid_thr: Visibility probability threshold used to count predicted visible anchors.
+        candidate_gate_min_visible: Minimum predicted visible anchors required by the short-lane gate.
+        candidate_gate_max_visible: Maximum predicted visible anchors allowed by the short-lane gate.
+        candidate_preserve_base_score: Keep the original query/quality score after candidate selection. This
+            must remain true for the isolated candidate experiment so candidate logits cannot change ranking.
         count_aware_topk: If true, keep only the quality-best ``k_hat`` lanes after conf/NMS.
         count_aware_min_k: Minimum dynamic lane count when count-aware top-k is enabled.
         count_aware_max_k: Maximum dynamic lane count when count-aware top-k is enabled.
@@ -285,6 +298,7 @@ def decode_gcs_predictions(
     candidate_decode_enabled = bool(candidate_decode)
     candidate_indices = None
     candidate_offsets_px = None
+    candidate_applied = None
     if candidate_decode_enabled:
         if count_aware_topk:
             raise ValueError(
@@ -315,6 +329,18 @@ def decode_gcs_predictions(
                 "pred_short_candidate_logits must have shape Q x H matching candidate points, got "
                 f"{tuple(pred_short_candidate_logits.shape)} vs {(pred_points.shape[0], candidate_count)}."
             )
+        gate_valid_thr = float(candidate_gate_valid_thr)
+        gate_min_visible = int(candidate_gate_min_visible)
+        gate_max_visible = int(candidate_gate_max_visible)
+        if not 0.0 <= gate_valid_thr <= 1.0:
+            raise ValueError(f"candidate_gate_valid_thr must be in [0, 1], got {gate_valid_thr}.")
+        if gate_min_visible < 0 or gate_max_visible < 0 or gate_min_visible > gate_max_visible:
+            raise ValueError(
+                "candidate gate visible bounds must satisfy 0 <= min_visible <= max_visible, "
+                f"got min_visible={gate_min_visible}, max_visible={gate_max_visible}."
+            )
+        if bool(candidate_short_gate) and pred_valid_logits is None:
+            raise ValueError("candidate_short_gate requires pred_valid_logits for prediction-only applicability gating.")
     extent_mode = str(extent_decode_mode or "interval").strip().lower()
     if extent_mode in {"none", "off", "false", "0"}:
         if bool(extent_decode):
@@ -341,15 +367,29 @@ def decode_gcs_predictions(
     points = pred_points.detach().float().cpu().clamp(0.0, 1.0)
     base_points = points
     score_logits = pred_quality_logits if pred_quality_logits is not None else pred_logits
+    point_valid_scores = pred_valid_logits.detach().float().cpu().sigmoid() if pred_valid_logits is not None else None
     if candidate_decode_enabled:
         candidate_points = pred_short_candidate_points.detach().float().cpu().clamp(0.0, 1.0)
         candidate_delta = pred_short_candidate_logits.detach().float().cpu()
         base_score_logits = score_logits.detach().float().cpu()
-        candidate_count = int(candidate_points.shape[1])
         base_query_indices = torch.arange(pred_points.shape[0], dtype=torch.long)
-        candidate_indices = candidate_delta.argmax(dim=1).to(dtype=torch.long)
+        if bool(candidate_short_gate):
+            predicted_visible = (point_valid_scores >= float(candidate_gate_valid_thr)).sum(dim=1)
+            candidate_applied = (
+                (predicted_visible >= int(candidate_gate_min_visible))
+                & (predicted_visible <= int(candidate_gate_max_visible))
+            )
+        else:
+            candidate_applied = torch.ones(pred_points.shape[0], dtype=torch.bool)
+        best_candidate_indices = candidate_delta.argmax(dim=1).to(dtype=torch.long)
+        center_candidate_indices = torch.zeros_like(best_candidate_indices)
+        candidate_indices = torch.where(candidate_applied, best_candidate_indices, center_candidate_indices)
         points = candidate_points[base_query_indices, candidate_indices]
-        score_logits = base_score_logits + candidate_delta[base_query_indices, candidate_indices]
+        score_logits = (
+            base_score_logits
+            if bool(candidate_preserve_base_score)
+            else base_score_logits + candidate_delta[base_query_indices, candidate_indices]
+        )
         query_indices = base_query_indices
         if image_shape is not None:
             candidate_offsets_px = (
@@ -400,7 +440,6 @@ def decode_gcs_predictions(
     else:
         length_norm = float(count_aware_length_norm)
         extra_margin = int(count_aware_extra_margin)
-    point_valid_scores = pred_valid_logits.detach().float().cpu().sigmoid() if pred_valid_logits is not None else None
     extent_masks_raw = None
     extent_start_idx = None
     extent_end_idx = None
@@ -572,6 +611,12 @@ def decode_gcs_predictions(
             item["candidate_query_idx"] = int(query_idx)
             item["candidate_idx"] = int(candidate_indices[lane_i])
             item["candidate_offset_px"] = float(candidate_offsets_px[lane_i])
+            item["candidate_applied"] = bool(candidate_applied[query_idx])
+            item["candidate_score_source"] = (
+                "base_score"
+                if bool(candidate_preserve_base_score)
+                else "base_score_plus_candidate_logit"
+            )
         visible_mask = None
         if final_visible_masks is not None:
             visible_mask_t = final_visible_masks[lane_i].detach().bool().cpu()

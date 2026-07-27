@@ -192,12 +192,13 @@ candidate offsets: [0, -20, +20, -40, +40, -60, +60] px
 
 The candidate score head is the only trainable head in the first probe,
 initialized at zero so the base checkpoint is unchanged before training.
-Candidate decode selects one highest-scoring lateral hypothesis per base
-query, then combines the base query logit with that candidate-relative logit
-before ordinary confidence filtering, NMS, and max-det truncation. Candidate
-decode is mutually exclusive with query extent decode and count-aware top-k.
-Count Head, Quality Head, query extent loss/decode, and TEST remain disabled
-for the first probe.
+The first probe selected one highest-scoring lateral hypothesis per base
+query and added its candidate-relative logit to the base query logit before
+ordinary confidence filtering, NMS, and max-det truncation. That score-coupled
+decode is rejected and retained only as historical failure evidence below.
+Candidate decode is mutually exclusive with query extent decode and
+count-aware top-k. Count Head, Quality Head, query extent loss/decode, and
+TEST remain disabled for the first probe.
 Official-val selection must first verify raw candidate `has_match20` gains
 without increasing GT3/GT4 false-extra behavior.
 
@@ -227,6 +228,24 @@ Any future candidate-generation follow-up must keep the normal decode path
 unchanged by default, add an explicit prediction-only short-lane applicability
 gate, and use visibility-aware anchor aggregation. Do not tune learning rate,
 candidate loss gain, or epoch count before those contract changes.
+
+The current candidate-generation follow-up is the default-off gated protocol
+enabled by
+`ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-short-candidate.yaml`
+and
+`scripts/run_query_short_candidate_env30_gated_probe20_v2.sh`. It keeps the
+env30 `pred_points`, query existence/quality score, visibility mask, NMS, and
+max-det path unchanged for non-applicable queries. Candidate selection is
+applied only when the prediction-only count of
+`sigmoid(pred_valid_logits) >= gcs_candidate_gate_valid_thr` lies in
+`[gcs_candidate_gate_min_visible, gcs_candidate_gate_max_visible]`, using
+the default range `[2, 10]`. Candidate logits are aggregated with those
+predicted visibility probabilities over fixed-y anchors, and
+`gcs_candidate_preserve_base_score=true` keeps the original query/quality
+score after selection. The candidate branch is therefore a geometry
+hypothesis selector, not a new existence/ranking score. The first gated
+probe must be judged by raw candidate `has_match20` coverage and
+GT3/GT4 false-extra risk before any formal promotion or TEST.
 
 The completed 40-epoch dual-head probe
 `query_dualhead_quality_count_env30_probe40_v1` is not promoted to full

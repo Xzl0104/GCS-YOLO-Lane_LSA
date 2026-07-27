@@ -198,6 +198,15 @@ class GCSLanePredictor(BasePredictor):
         extent_decode = bool(self._arg_value(self.args, "gcs_extent_decode") or False)
         extent_decode_mode = str(self._arg_value(self.args, "gcs_extent_decode_mode") or "interval")
         candidate_decode = bool(self._arg_value(self.args, "gcs_candidate_decode") or False)
+        candidate_short_gate = bool(self._arg_value(self.args, "gcs_candidate_short_gate") if hasattr(self.args, "gcs_candidate_short_gate") else True)
+        candidate_gate_valid_thr = float(self._arg_value(self.args, "gcs_candidate_gate_valid_thr") or 0.5)
+        candidate_gate_min_visible = int(self._arg_value(self.args, "gcs_candidate_gate_min_visible") or 2)
+        candidate_gate_max_visible = int(self._arg_value(self.args, "gcs_candidate_gate_max_visible") or 10)
+        candidate_preserve_base_score = bool(
+            self._arg_value(self.args, "gcs_candidate_preserve_base_score")
+            if hasattr(self.args, "gcs_candidate_preserve_base_score")
+            else True
+        )
 
         results = []
         if valid_logits is None:
@@ -284,6 +293,11 @@ class GCSLanePredictor(BasePredictor):
                     extent_decode=extent_decode,
                     extent_decode_mode=extent_decode_mode,
                     candidate_decode=candidate_decode,
+                    candidate_short_gate=candidate_short_gate,
+                    candidate_gate_valid_thr=candidate_gate_valid_thr,
+                    candidate_gate_min_visible=candidate_gate_min_visible,
+                    candidate_gate_max_visible=candidate_gate_max_visible,
+                    candidate_preserve_base_score=candidate_preserve_base_score,
                 )
             result = GCSLaneResults(orig_img, path=img_path, names=self.model.names, lanes=lanes)
             if not lanes:

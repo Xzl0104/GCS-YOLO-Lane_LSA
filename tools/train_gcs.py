@@ -257,6 +257,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Use the optional query lateral candidate pool during GCS validation and official-val selection.",
     )
     parser.add_argument(
+        "--gcs-candidate-short-gate",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Apply lateral candidates only to queries with a predicted short-lane visible-anchor count.",
+    )
+    parser.add_argument("--gcs-candidate-gate-valid-thr", type=float, default=0.5)
+    parser.add_argument("--gcs-candidate-gate-min-visible", type=int, default=2)
+    parser.add_argument("--gcs-candidate-gate-max-visible", type=int, default=10)
+    parser.add_argument(
+        "--gcs-candidate-preserve-base-score",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Keep the original query existence/quality score after candidate selection.",
+    )
+    parser.add_argument(
         "--gcs-short-local-refine",
         type=float,
         default=0.0,
@@ -1111,6 +1126,18 @@ def validate_short_candidate_args(args: argparse.Namespace) -> None:
         raise SystemExit("short-candidate probe requires --gcs-short-candidate-freeze-base.")
     if bool(args.gcs_query_count_ce) or bool(args.gcs_query_quality) or bool(args.gcs_query_extent):
         raise SystemExit("short-candidate probe must keep Count Head, Quality Head, and extent loss disabled.")
+    if not 0.0 <= float(args.gcs_candidate_gate_valid_thr) <= 1.0:
+        raise SystemExit("gcs_candidate_gate_valid_thr must be in [0, 1].")
+    if (
+        int(args.gcs_candidate_gate_min_visible) < 0
+        or int(args.gcs_candidate_gate_max_visible) < 0
+        or int(args.gcs_candidate_gate_min_visible) > int(args.gcs_candidate_gate_max_visible)
+    ):
+        raise SystemExit("gcs_candidate_gate_min_visible/max_visible must satisfy 0 <= min <= max.")
+    if not bool(args.gcs_candidate_short_gate):
+        raise SystemExit("short-candidate probe requires --gcs-candidate-short-gate.")
+    if not bool(args.gcs_candidate_preserve_base_score):
+        raise SystemExit("short-candidate probe requires --gcs-candidate-preserve-base-score.")
 
 
 def resolve_project(value: str) -> str:
@@ -1194,6 +1221,11 @@ def main() -> None:
         "gcs_query_extent_short_weight": args.gcs_query_extent_short_weight,
         "gcs_query_extent_gt_min_lanes": args.gcs_query_extent_gt_min_lanes,
         "gcs_candidate_decode": args.gcs_candidate_decode,
+        "gcs_candidate_short_gate": args.gcs_candidate_short_gate,
+        "gcs_candidate_gate_valid_thr": args.gcs_candidate_gate_valid_thr,
+        "gcs_candidate_gate_min_visible": args.gcs_candidate_gate_min_visible,
+        "gcs_candidate_gate_max_visible": args.gcs_candidate_gate_max_visible,
+        "gcs_candidate_preserve_base_score": args.gcs_candidate_preserve_base_score,
         "gcs_short_local_refine": args.gcs_short_local_refine,
         "gcs_short_local_refine_visible_thr": args.gcs_short_local_refine_visible_thr,
         "gcs_short_local_refine_gt_min_lanes": args.gcs_short_local_refine_gt_min_lanes,

@@ -1330,6 +1330,11 @@ class GCSLaneTrainer(BaseTrainer):
             "gcs_official_count_aware_max_k": 5,
             "gcs_official_count_aware_length_norm": 12.0,
             "gcs_official_count_aware_extra_margins": [0],
+            "gcs_candidate_short_gate": True,
+            "gcs_candidate_gate_valid_thr": 0.5,
+            "gcs_candidate_gate_min_visible": 2,
+            "gcs_candidate_gate_max_visible": 10,
+            "gcs_candidate_preserve_base_score": True,
         }
         if ordered_slot:
             sweep_arg_values = {}
@@ -1441,6 +1446,25 @@ class GCSLaneTrainer(BaseTrainer):
             count_modes=count_modes,
             extent_decode_modes=extent_decode_modes,
             candidate_decode=bool(getattr(self.args, "gcs_candidate_decode", False)),
+            candidate_short_gate=bool(
+                getattr(self.args, "gcs_candidate_short_gate", official_query_defaults["gcs_candidate_short_gate"])
+            ),
+            candidate_gate_valid_thr=float(
+                getattr(self.args, "gcs_candidate_gate_valid_thr", official_query_defaults["gcs_candidate_gate_valid_thr"])
+            ),
+            candidate_gate_min_visible=int(
+                getattr(self.args, "gcs_candidate_gate_min_visible", official_query_defaults["gcs_candidate_gate_min_visible"])
+            ),
+            candidate_gate_max_visible=int(
+                getattr(self.args, "gcs_candidate_gate_max_visible", official_query_defaults["gcs_candidate_gate_max_visible"])
+            ),
+            candidate_preserve_base_score=bool(
+                getattr(
+                    self.args,
+                    "gcs_candidate_preserve_base_score",
+                    official_query_defaults["gcs_candidate_preserve_base_score"],
+                )
+            ),
             gcs_min_lanes=int(getattr(self.args, "gcs_min_lanes", 2)),
             gcs_max_lanes=int(getattr(self.args, "gcs_max_lanes", 5)),
             gcs_num_slots=int(getattr(self.args, "gcs_num_slots", 5)),

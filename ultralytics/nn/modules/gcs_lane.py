@@ -815,7 +815,14 @@ class GCSLaneHead(nn.Module):
             )
         return offsets
 
-    def _short_candidate_points_and_logits(self, xs, hs, base_points, image_width: int | float | None):
+    def _short_candidate_points_and_logits(
+        self,
+        xs,
+        hs,
+        base_points,
+        image_width: int | float | None,
+        point_valid_logits: torch.Tensor | None = None,
+    ):
         """Generate fixed-y lateral candidates and feature-conditioned relative score logits."""
         if image_width is None:
             raise ValueError("query_short_candidate_head requires orig_size=(H, W) to normalize candidate offsets.")
@@ -835,8 +842,27 @@ class GCSLaneHead(nn.Module):
             hs.detach(),
             candidate_points_for_sampling,
         ).detach()
-        # Aggregate anchor evidence into one relative score per lateral hypothesis.
-        candidate_logits = self.query_short_candidate_mlp(candidate_tokens).squeeze(-1).mean(dim=2)
+        # Weight anchor evidence by the model's own predicted visibility. This
+        # keeps short-lane scoring focused on visible anchors without using GT.
+        candidate_anchor_logits = self.query_short_candidate_mlp(candidate_tokens).squeeze(-1)
+        if candidate_anchor_logits.ndim != 4:
+            raise ValueError(
+                "Candidate anchor logits must have shape B x Q x K x H, got "
+                f"{tuple(candidate_anchor_logits.shape)}."
+            )
+        if point_valid_logits is None:
+            anchor_weights = candidate_anchor_logits.new_ones(candidate_anchor_logits.shape[:3])
+        else:
+            if point_valid_logits.shape != base_points.shape[:3]:
+                raise ValueError(
+                    "point_valid_logits must have shape B x Q x K for candidate scoring, got "
+                    f"{tuple(point_valid_logits.shape)} vs {tuple(base_points.shape[:3])}."
+                )
+            anchor_weights = torch.sigmoid(point_valid_logits.detach()).to(dtype=candidate_anchor_logits.dtype)
+        weight_sum = anchor_weights.sum(dim=2).clamp_min(1e-6).unsqueeze(-1)
+        candidate_logits = (
+            candidate_anchor_logits * anchor_weights.unsqueeze(-1)
+        ).sum(dim=2) / weight_sum
         return candidate_points, candidate_logits
 
     def _short_local_refine_window_tokens(self, xs, hs, window_points):
@@ -1030,34 +1056,41 @@ class GCSLaneHead(nn.Module):
             y = fixed_y.to(device=pred_x.device, dtype=pred_x.dtype).view(1, 1, self.num_points)
             pred_y = y.expand(b, self.num_queries, -1)
             pred_points = torch.stack((pred_x, pred_y), dim=-1)
+            pred_logits = self.exist_mlp(hs).squeeze(-1)
+            if hasattr(self, "point_valid_mlp"):
+                if point_mode == "fixed_y" and hasattr(self, "point_valid_refine_mlp"):
+                    pred_valid_logits = self._refine_fixed_y_valid_logits(xs, hs, pred_points)
+                else:
+                    pred_valid_logits = self.point_valid_mlp(hs).view(b, self.num_queries, self.num_points)
+            else:
+                pred_valid_logits = pred_logits.new_full((b, self.num_queries, self.num_points), 20.0)
             if getattr(self, "query_short_local_refine_head", False):
                 image_width = None if orig_size is None else int(orig_size[1])
                 pred_short_refined_points, short_refine_delta, short_refine_delta_norm, short_refine_window_logits = (
                     self._short_local_refine_fixed_y_points(xs, hs, pred_points, image_width)
                 )
                 pred_coarse_points = pred_points
-            if getattr(self, "query_short_candidate_head", False):
-                image_width = None if orig_size is None else int(orig_size[1])
-                pred_short_candidate_points, short_candidate_logits = self._short_candidate_points_and_logits(
-                    xs,
-                    hs,
-                    pred_points,
-                    image_width,
-                )
-        elif point_ref is None:
-            # Backward compatibility for checkpoints created before query-specific references existed.
-            pred_points = torch.sigmoid(point_delta)
         else:
-            point_ref = point_ref.to(device=point_delta.device, dtype=point_delta.dtype).unsqueeze(0)
-            pred_points = torch.sigmoid(point_delta + point_ref)
-        pred_logits = self.exist_mlp(hs).squeeze(-1)
-        if hasattr(self, "point_valid_mlp"):
-            if point_mode == "fixed_y" and hasattr(self, "point_valid_refine_mlp"):
-                pred_valid_logits = self._refine_fixed_y_valid_logits(xs, hs, pred_points)
+            if point_ref is None:
+                # Backward compatibility for checkpoints created before query-specific references existed.
+                pred_points = torch.sigmoid(point_delta)
             else:
+                point_ref = point_ref.to(device=point_delta.device, dtype=point_delta.dtype).unsqueeze(0)
+                pred_points = torch.sigmoid(point_delta + point_ref)
+            pred_logits = self.exist_mlp(hs).squeeze(-1)
+            if hasattr(self, "point_valid_mlp"):
                 pred_valid_logits = self.point_valid_mlp(hs).view(b, self.num_queries, self.num_points)
-        else:
-            pred_valid_logits = pred_logits.new_full((b, self.num_queries, self.num_points), 20.0)
+            else:
+                pred_valid_logits = pred_logits.new_full((b, self.num_queries, self.num_points), 20.0)
+        if getattr(self, "query_short_candidate_head", False) and point_mode == "fixed_y":
+            image_width = None if orig_size is None else int(orig_size[1])
+            pred_short_candidate_points, short_candidate_logits = self._short_candidate_points_and_logits(
+                xs,
+                hs,
+                pred_points,
+                image_width,
+                point_valid_logits=pred_valid_logits,
+            )
 
         out = {
             "pred_points": pred_points,

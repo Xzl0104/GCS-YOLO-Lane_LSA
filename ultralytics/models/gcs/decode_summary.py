@@ -20,6 +20,11 @@ QUERY_DECODE_KEYS = frozenset(
         "min_points",
         "valid_before_maxdet",
         "candidate_decode",
+        "candidate_short_gate",
+        "candidate_gate_valid_thr",
+        "candidate_gate_min_visible",
+        "candidate_gate_max_visible",
+        "candidate_preserve_base_score",
         "extent_decode",
         "extent_decode_mode",
         "count_aware_topk",
@@ -50,6 +55,11 @@ ORDERED_SLOT_QUERY_DECODE_DEFAULTS = {
     "max_det": 8,
     "valid_before_maxdet": False,
     "candidate_decode": False,
+    "candidate_short_gate": True,
+    "candidate_gate_valid_thr": 0.5,
+    "candidate_gate_min_visible": 2,
+    "candidate_gate_max_visible": 10,
+    "candidate_preserve_base_score": True,
     "extent_decode": False,
     "extent_decode_mode": "none",
     "count_aware_topk": False,
@@ -315,6 +325,11 @@ def query_decode_cfg(
         "min_points": int(best_row["min_points"]),
         "valid_before_maxdet": _bool_value(valid_before_maxdet),
         "candidate_decode": _bool_value(best_row.get("candidate_decode", False)),
+        "candidate_short_gate": _bool_value(best_row.get("candidate_short_gate", True)),
+        "candidate_gate_valid_thr": float(best_row.get("candidate_gate_valid_thr", 0.5) or 0.5),
+        "candidate_gate_min_visible": int(best_row.get("candidate_gate_min_visible", 2) or 2),
+        "candidate_gate_max_visible": int(best_row.get("candidate_gate_max_visible", 10) or 10),
+        "candidate_preserve_base_score": _bool_value(best_row.get("candidate_preserve_base_score", True)),
         "extent_decode": _bool_value(extent_decode),
         "extent_decode_mode": str(extent_decode_mode or "none"),
         "count_aware_topk": _bool_value(best_row.get("count_aware_topk", False)),
@@ -398,6 +413,11 @@ def validate_decode_yaml_for_model(decode_cfg: Mapping[str, Any], model_mode: st
         required = QUERY_DECODE_KEYS - {
             "valid_before_maxdet",
             "candidate_decode",
+            "candidate_short_gate",
+            "candidate_gate_valid_thr",
+            "candidate_gate_min_visible",
+            "candidate_gate_max_visible",
+            "candidate_preserve_base_score",
             "extent_decode",
             "extent_decode_mode",
             "count_mode",
@@ -424,6 +444,19 @@ def validate_decode_yaml_for_model(decode_cfg: Mapping[str, Any], model_mode: st
             if _bool_value(decode_cfg.get("count_aware_topk", False)):
                 raise RuntimeError(
                     "Invalid query decode yaml: candidate_decode cannot be combined with count_aware_topk."
+                )
+            candidate_thr = float(decode_cfg.get("candidate_gate_valid_thr", 0.5))
+            candidate_min = int(decode_cfg.get("candidate_gate_min_visible", 2))
+            candidate_max = int(decode_cfg.get("candidate_gate_max_visible", 10))
+            if not 0.0 <= candidate_thr <= 1.0:
+                raise RuntimeError(
+                    "Invalid query decode yaml: candidate_gate_valid_thr must be in [0, 1], "
+                    f"got {candidate_thr}."
+                )
+            if candidate_min < 0 or candidate_max < 0 or candidate_min > candidate_max:
+                raise RuntimeError(
+                    "Invalid query decode yaml: candidate gate visible bounds must satisfy "
+                    f"0 <= min <= max, got {candidate_min}/{candidate_max}."
                 )
         count_mode = str(decode_cfg.get("count_mode", "score_sum") or "score_sum")
         if count_mode not in {"score_sum", "count_logits"}:

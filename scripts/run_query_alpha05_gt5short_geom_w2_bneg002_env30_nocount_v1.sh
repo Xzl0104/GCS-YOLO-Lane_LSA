@@ -30,6 +30,11 @@ OVERWRITE_TESTS="${OVERWRITE_TESTS:-0}"
 RUN_TESTS="${RUN_TESTS:-0}"
 VALID_BEFORE_MAXDET="${VALID_BEFORE_MAXDET:-1}"
 CANDIDATE_DECODE="${CANDIDATE_DECODE:-0}"
+CANDIDATE_SHORT_GATE="${CANDIDATE_SHORT_GATE:-1}"
+CANDIDATE_GATE_VALID_THR="${CANDIDATE_GATE_VALID_THR:-0.5}"
+CANDIDATE_GATE_MIN_VISIBLE="${CANDIDATE_GATE_MIN_VISIBLE:-2}"
+CANDIDATE_GATE_MAX_VISIBLE="${CANDIDATE_GATE_MAX_VISIBLE:-10}"
+CANDIDATE_PRESERVE_BASE_SCORE="${CANDIDATE_PRESERVE_BASE_SCORE:-1}"
 
 OFFICIAL_CONFS="${OFFICIAL_CONFS:-0.001 0.003 0.005 0.008 0.01 0.02}"
 OFFICIAL_POINT_VALID_THRS="${OFFICIAL_POINT_VALID_THRS:-0.45 0.50 0.55 0.60}"
@@ -139,8 +144,38 @@ fi
 OFFICIAL_CANDIDATE_ARGS=()
 SWEEP_CANDIDATE_ARGS=()
 if is_true "${CANDIDATE_DECODE}"; then
-  OFFICIAL_CANDIDATE_ARGS=(--gcs-candidate-decode)
-  SWEEP_CANDIDATE_ARGS=(--candidate-decode)
+  OFFICIAL_CANDIDATE_ARGS=(
+    --gcs-candidate-decode
+    --gcs-candidate-gate-valid-thr "${CANDIDATE_GATE_VALID_THR}"
+    --gcs-candidate-gate-min-visible "${CANDIDATE_GATE_MIN_VISIBLE}"
+    --gcs-candidate-gate-max-visible "${CANDIDATE_GATE_MAX_VISIBLE}"
+  )
+  if is_true "${CANDIDATE_SHORT_GATE}"; then
+    OFFICIAL_CANDIDATE_ARGS+=(--gcs-candidate-short-gate)
+  else
+    OFFICIAL_CANDIDATE_ARGS+=(--no-gcs-candidate-short-gate)
+  fi
+  if is_true "${CANDIDATE_PRESERVE_BASE_SCORE}"; then
+    OFFICIAL_CANDIDATE_ARGS+=(--gcs-candidate-preserve-base-score)
+  else
+    OFFICIAL_CANDIDATE_ARGS+=(--no-gcs-candidate-preserve-base-score)
+  fi
+  SWEEP_CANDIDATE_ARGS=(
+    --candidate-decode
+    --candidate-gate-valid-thr "${CANDIDATE_GATE_VALID_THR}"
+    --candidate-gate-min-visible "${CANDIDATE_GATE_MIN_VISIBLE}"
+    --candidate-gate-max-visible "${CANDIDATE_GATE_MAX_VISIBLE}"
+  )
+  if is_true "${CANDIDATE_SHORT_GATE}"; then
+    SWEEP_CANDIDATE_ARGS+=(--candidate-short-gate)
+  else
+    SWEEP_CANDIDATE_ARGS+=(--no-candidate-short-gate)
+  fi
+  if is_true "${CANDIDATE_PRESERVE_BASE_SCORE}"; then
+    SWEEP_CANDIDATE_ARGS+=(--candidate-preserve-base-score)
+  else
+    SWEEP_CANDIDATE_ARGS+=(--no-candidate-preserve-base-score)
+  fi
 fi
 
 OFFICIAL_BEST_SWEEP_DIR="${OFFICIAL_BEST_SWEEP_DIR:-${PROJECT}/${RUN_NAME}_official_best_val_sweep_${DECODE_TAG}}"
@@ -322,6 +357,17 @@ if bool(best.get("extent_decode", False)):
     cmd.extend(["--extent-decode-mode", str(best.get("extent_decode_mode", "interval"))])
 if bool(best.get("candidate_decode", False)):
     cmd.append("--candidate-decode")
+    if bool(best.get("candidate_short_gate", True)):
+        cmd.append("--candidate-short-gate")
+    else:
+        cmd.append("--no-candidate-short-gate")
+    cmd.extend(["--candidate-gate-valid-thr", str(float(best.get("candidate_gate_valid_thr", 0.5)))])
+    cmd.extend(["--candidate-gate-min-visible", str(int(best.get("candidate_gate_min_visible", 2)))])
+    cmd.extend(["--candidate-gate-max-visible", str(int(best.get("candidate_gate_max_visible", 10)))])
+    if bool(best.get("candidate_preserve_base_score", True)):
+        cmd.append("--candidate-preserve-base-score")
+    else:
+        cmd.append("--no-candidate-preserve-base-score")
 if bool(best.get("count_aware_topk", False)):
     cmd.append("--count-aware-topk")
     cmd.extend(["--count-aware-min-k", str(int(best.get("count_aware_min_k", 3)))])

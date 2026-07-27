@@ -97,7 +97,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--candidate-decode",
         action="store_true",
-        help="Flatten fixed lateral candidate hypotheses into the query decode pool.",
+        help="Use lateral candidate hypotheses only for prediction-gated short-lane queries.",
+    )
+    parser.add_argument(
+        "--candidate-short-gate",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Apply candidate selection only when predicted visible-anchor count is in the configured short-lane range.",
+    )
+    parser.add_argument("--candidate-gate-valid-thr", type=float, default=0.5)
+    parser.add_argument("--candidate-gate-min-visible", type=int, default=2)
+    parser.add_argument("--candidate-gate-max-visible", type=int, default=10)
+    parser.add_argument(
+        "--candidate-preserve-base-score",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Keep the original query score after candidate selection.",
     )
     parser.add_argument("--count-aware-topk", action="store_true", help="Use count_score to keep only the quality-best dynamic lane count.")
     parser.add_argument("--count-aware-min-k", type=int, default=3, help="Minimum k_hat for --count-aware-topk.")
@@ -496,6 +511,11 @@ def build_eval_config(
     extent_decode: bool,
     extent_decode_mode: str,
     candidate_decode: bool,
+    candidate_short_gate: bool,
+    candidate_gate_valid_thr: float,
+    candidate_gate_min_visible: int,
+    candidate_gate_max_visible: int,
+    candidate_preserve_base_score: bool,
     count_aware_topk: bool,
     count_aware_min_k: int,
     count_aware_max_k: int,
@@ -558,6 +578,11 @@ def build_eval_config(
             "extent_decode": bool(extent_decode),
             "extent_decode_mode": str(extent_decode_mode),
             "candidate_decode": bool(candidate_decode),
+            "candidate_short_gate": bool(candidate_short_gate),
+            "candidate_gate_valid_thr": float(candidate_gate_valid_thr),
+            "candidate_gate_min_visible": int(candidate_gate_min_visible),
+            "candidate_gate_max_visible": int(candidate_gate_max_visible),
+            "candidate_preserve_base_score": bool(candidate_preserve_base_score),
             "count_aware_topk": bool(count_aware_topk),
             "count_aware_min_k": int(count_aware_min_k),
             "count_aware_max_k": int(count_aware_max_k),
@@ -584,6 +609,11 @@ def evaluate(
     extent_decode: bool = False,
     extent_decode_mode: str = "interval",
     candidate_decode: bool = False,
+    candidate_short_gate: bool = True,
+    candidate_gate_valid_thr: float = 0.5,
+    candidate_gate_min_visible: int = 2,
+    candidate_gate_max_visible: int = 10,
+    candidate_preserve_base_score: bool = True,
     count_aware_topk: bool = False,
     count_aware_min_k: int = 3,
     count_aware_max_k: int = 5,
@@ -718,6 +748,11 @@ def evaluate(
                 extent_decode=extent_decode,
                 extent_decode_mode=extent_decode_mode,
                 candidate_decode=candidate_decode,
+                candidate_short_gate=candidate_short_gate,
+                candidate_gate_valid_thr=candidate_gate_valid_thr,
+                candidate_gate_min_visible=candidate_gate_min_visible,
+                candidate_gate_max_visible=candidate_gate_max_visible,
+                candidate_preserve_base_score=candidate_preserve_base_score,
                 count_aware_topk=count_aware_topk,
                 count_aware_min_k=count_aware_min_k,
                 count_aware_max_k=count_aware_max_k,
@@ -827,6 +862,11 @@ def main() -> None:
         extent_decode=args.extent_decode,
         extent_decode_mode=args.extent_decode_mode,
         candidate_decode=args.candidate_decode,
+        candidate_short_gate=args.candidate_short_gate,
+        candidate_gate_valid_thr=args.candidate_gate_valid_thr,
+        candidate_gate_min_visible=args.candidate_gate_min_visible,
+        candidate_gate_max_visible=args.candidate_gate_max_visible,
+        candidate_preserve_base_score=args.candidate_preserve_base_score,
         count_aware_topk=args.count_aware_topk,
         count_aware_min_k=args.count_aware_min_k,
         count_aware_max_k=args.count_aware_max_k,
