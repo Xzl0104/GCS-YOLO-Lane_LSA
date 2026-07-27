@@ -70,6 +70,7 @@ QUERY_ROW_KEYS = (
     "nms_dist_px",
     "max_det",
     "min_points",
+    "query_points_source",
     "extent_decode",
     "extent_decode_mode",
     "extent_decode_priority",
@@ -111,6 +112,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--weights", default=str(DEFAULT_WEIGHTS), help="GCS checkpoint .pt.")
     parser.add_argument("--decode-mode", choices=("auto", "query", "ordered_slot"), default="auto", help="Decode path for official sweep.")
+    parser.add_argument(
+        "--query-points-source",
+        choices=("main", "short_refined"),
+        default="main",
+        help="Query geometry source. 'main' is the default official path; 'short_refined' is a prediction-only v3 ablation.",
+    )
     parser.add_argument("--decode-yaml", default=None, help="Schema-validated official_best_decode.yaml to reproduce a decode.")
     parser.add_argument("--gcs-min-lanes", type=int, default=2, help="ordered_slot minimum supported lane count.")
     parser.add_argument("--gcs-max-lanes", type=int, default=5, help="ordered_slot maximum supported lane count.")
@@ -229,6 +236,7 @@ def resolve_cached_save_dir(
     effective_margins: list[int],
     effective_extent_decode_modes: list[str],
     decode_mode: str,
+    query_points_source: str = "main",
 ) -> Path:
     if args.save_dir is not None and str(args.save_dir).strip():
         return Path(args.save_dir)
@@ -242,7 +250,10 @@ def resolve_cached_save_dir(
         extent_decode_modes=effective_extent_decode_modes,
         decode_mode=decode_mode,
     )
-    return base.with_name(f"{base.name}_cached")
+    suffix = "_cached"
+    if str(query_points_source) == "short_refined":
+        suffix += "_points_short_refined"
+    return base.with_name(f"{base.name}{suffix}")
 
 
 def _normalize_decode_mode_name(decode_mode: str | None) -> str:
@@ -346,6 +357,7 @@ def _cache_mismatch_reasons(
     imgsz: tuple[int, int],
     decode_mode: str | None,
     require_query_extent_logits: bool = False,
+    require_query_short_refined_points: bool = False,
 ) -> list[str]:
     if manifest is None:
         return ["missing manifest"]
@@ -379,6 +391,10 @@ def _cache_mismatch_reasons(
         missing_extent = sorted({"pred_start_logits", "pred_end_logits"} - prediction_keys)
         if missing_extent:
             reasons.append(f"prediction cache missing query extent logits: {missing_extent}")
+    if bool(require_query_short_refined_points):
+        prediction_keys = set(manifest.get("prediction_keys") or [])
+        if "pred_short_refined_points" not in prediction_keys:
+            reasons.append("prediction cache missing pred_short_refined_points")
     recorded_weights = manifest.get("weights", {})
     current_weights = _weights_fingerprint(args.weights)
     if not bool(getattr(args, "allow_cache_weight_mismatch", False)):
@@ -397,6 +413,17 @@ def _requires_query_extent_logits(args: argparse.Namespace, decode_yaml_cfg: dic
         ).strip().lower() != "none"
     modes = {str(x or "none").strip().lower() for x in getattr(args, "extent_decode_modes", ["none"])}
     return bool(modes - {"none", "off", "false", "0"})
+
+
+def _normalize_query_points_source(points_source: str | None) -> str:
+    source = str(points_source or "main").strip().lower()
+    if source not in {"main", "short_refined"}:
+        raise ValueError(f"Unsupported query_points_source={points_source!r}; use 'main' or 'short_refined'.")
+    return source
+
+
+def _requires_query_short_refined_points(args: argparse.Namespace) -> bool:
+    return _normalize_query_points_source(getattr(args, "query_points_source", "main")) == "short_refined"
 
 
 def _tensor_for_cache(tensor: torch.Tensor) -> torch.Tensor:
@@ -631,6 +658,25 @@ class CachedQueryPrediction:
         points = np.clip(points, 0.0, 1.0)
         order = np.argsort(-points[:, :, 1], axis=1, kind="stable")
         self.points = np.take_along_axis(points, order[:, :, None], axis=1).astype(np.float32)
+        self.short_refined_points: np.ndarray | None = None
+        pred_short_refined_points = preds.get("pred_short_refined_points")
+        if isinstance(pred_short_refined_points, torch.Tensor):
+            short_refined_points = pred_short_refined_points.float().cpu().numpy().astype(np.float32)
+            if tuple(short_refined_points.shape) != tuple(points.shape):
+                raise ValueError(
+                    f"pred_short_refined_points shape mismatch for {self.raw_file}: "
+                    f"{short_refined_points.shape} vs {points.shape}."
+                )
+            short_refined_points = np.clip(short_refined_points, 0.0, 1.0)
+            if not np.allclose(short_refined_points[:, :, 1], points[:, :, 1], atol=1e-4, rtol=0.0):
+                raise ValueError(
+                    f"pred_short_refined_points must preserve fixed-y coordinates for {self.raw_file}."
+                )
+            self.short_refined_points = np.take_along_axis(
+                short_refined_points,
+                order[:, :, None],
+                axis=1,
+            ).astype(np.float32)
         self.score_source = "quality_logits" if quality_logits is not None else "pred_logits"
         self.scores = _sigmoid_np(quality_logits if quality_logits is not None else logits)
         self.query_indices = np.arange(self.points.shape[0], dtype=np.int64)
@@ -671,7 +717,18 @@ class CachedQueryPrediction:
         self.pred_count_logits: np.ndarray | None = None
         if isinstance(pred_count_logits, torch.Tensor):
             self.pred_count_logits = pred_count_logits.float().cpu().numpy().astype(np.float32).reshape(-1)
-        self._valid_cache: dict[tuple[float, int, float, str], dict[str, Any]] = {}
+        self._valid_cache: dict[tuple[float, int, float, str, str], dict[str, Any]] = {}
+
+    def _points_for_source(self, points_source: str | None) -> np.ndarray:
+        source = _normalize_query_points_source(points_source)
+        if source == "main":
+            return self.points
+        if self.short_refined_points is None:
+            raise ValueError(
+                f"query_points_source='short_refined' requires pred_short_refined_points in the cache "
+                f"for {self.raw_file}."
+            )
+        return self.short_refined_points
 
     @staticmethod
     def _normalize_extent_mode(extent_mode: str | None) -> str:
@@ -688,9 +745,12 @@ class CachedQueryPrediction:
         min_points: int,
         length_norm: float,
         extent_mode: str | None = "none",
+        points_source: str = "main",
     ) -> dict[str, Any]:
         extent_mode = self._normalize_extent_mode(extent_mode)
-        key = (round(float(point_valid_thr), 12), int(min_points), float(length_norm), extent_mode)
+        points_source = _normalize_query_points_source(points_source)
+        points = self._points_for_source(points_source)
+        key = (round(float(point_valid_thr), 12), int(min_points), float(length_norm), extent_mode, points_source)
         if key in self._valid_cache:
             return self._valid_cache[key]
 
@@ -728,7 +788,7 @@ class CachedQueryPrediction:
         valid_counts = masks.sum(axis=1).astype(np.int32)
         tusimple_lanes = [
             _query_lane_to_tusimple(
-                self.points[i],
+                points[i],
                 masks[i] if uses_visibility_mask else None,
                 self.h_samples,
                 self.image_shape,
@@ -786,7 +846,14 @@ class CachedQueryPrediction:
             k_hat = min(k_hat, max_det)
         return k_hat
 
-    def _lane_nms(self, query_ids: np.ndarray, scores: np.ndarray, masks: np.ndarray | None, dist_thr_px: float) -> np.ndarray:
+    def _lane_nms(
+        self,
+        query_ids: np.ndarray,
+        scores: np.ndarray,
+        masks: np.ndarray | None,
+        dist_thr_px: float,
+        points: np.ndarray,
+    ) -> np.ndarray:
         if float(dist_thr_px) <= 0.0 or query_ids.size <= 1:
             return np.arange(query_ids.size, dtype=np.int64)
         order = np.argsort(-scores, kind="stable")
@@ -807,7 +874,7 @@ class CachedQueryPrediction:
                 if overlap_count < 2:
                     dist = float("inf")
                 else:
-                    dist = float(np.mean(np.abs(self.points[query_id, overlap, 0] - self.points[kept_query, overlap, 0]) * w))
+                    dist = float(np.mean(np.abs(points[query_id, overlap, 0] - points[kept_query, overlap, 0]) * w))
                 if dist <= float(dist_thr_px):
                     duplicate = True
                     break
@@ -819,11 +886,14 @@ class CachedQueryPrediction:
         min_points = int(combo["min_points"])
         if min_points > self.k:
             return []
+        points_source = _normalize_query_points_source(combo.get("query_points_source", "main"))
+        points = self._points_for_source(points_source)
         context = self._valid_context(
             point_valid_thr=float(combo["point_valid_thr"]),
             min_points=min_points,
             length_norm=float(combo.get("count_aware_length_norm", 12.0)),
             extent_mode=str(combo.get("extent_decode_mode", "none")),
+            points_source=points_source,
         )
         masks = context["masks"]
         valid_counts = context["valid_counts"]
@@ -845,6 +915,7 @@ class CachedQueryPrediction:
                 sorted_scores,
                 masks if uses_visibility_mask else None,
                 dist_thr_px=float(combo["nms_dist_px"]),
+                points=points,
             )
             query_ids = sorted_query_ids[keep_sorted]
             scores = sorted_scores[keep_sorted]
@@ -956,6 +1027,7 @@ def _combo_key(combo: dict[str, Any]) -> tuple[Any, ...]:
         float(combo["nms_dist_px"]),
         int(combo["max_det"]),
         int(combo["min_points"]),
+        str(combo.get("query_points_source", "main")),
         str(combo.get("extent_decode_mode", "none")),
         str(combo.get("count_mode", "score_sum")),
         int(combo.get("count_aware_extra_margin", 0)),
@@ -971,6 +1043,7 @@ def _row_sort_key(row: dict[str, Any]) -> tuple[Any, ...]:
         float(row["nms_dist_px"]),
         int(row["max_det"]),
         int(row["min_points"]),
+        str(row.get("query_points_source", "main")),
         str(row.get("extent_decode_mode", "none")),
         str(row.get("count_mode", "score_sum")),
         int(row.get("count_aware_extra_margin", 0)),
@@ -1069,6 +1142,7 @@ def _config_for_summary(
     effective_margins: list[int],
     effective_extent_decode_modes: list[str],
     decode_yaml_cfg: dict[str, Any] | None,
+    query_points_source: str,
 ) -> dict[str, Any]:
     config = {
         "weights": str(Path(args.weights).resolve()),
@@ -1083,6 +1157,7 @@ def _config_for_summary(
         "cache_created_unix_time": manifest.get("created_unix_time"),
         "imgsz": [int(imgsz[0]), int(imgsz[1])],
         "decode_mode": str(decode_mode),
+        "query_points_source": str(query_points_source),
         "runtime_ms": float(args.runtime_ms),
         "max_images": int(args.max_images),
         "device": "cache",
@@ -1171,6 +1246,8 @@ def sweep(args: argparse.Namespace) -> dict[str, Any]:
     imgsz = normalize_imgsz(args.imgsz, dataset=args.dataset)
     cache_dir = resolve_cache_dir(getattr(args, "cache_dir", None), args.weights, args.split)
     require_query_extent_logits = _requires_query_extent_logits(args, decode_yaml_cfg)
+    query_points_source = _normalize_query_points_source(getattr(args, "query_points_source", "main"))
+    require_query_short_refined_points = _requires_query_short_refined_points(args)
 
     requested_mode = _normalize_decode_mode_name(getattr(args, "decode_mode", "auto"))
     manifest = None if rebuild_cache else _read_manifest(cache_dir)
@@ -1184,6 +1261,7 @@ def sweep(args: argparse.Namespace) -> dict[str, Any]:
         imgsz=imgsz,
         decode_mode=None if requested_mode == "auto" else requested_mode,
         require_query_extent_logits=require_query_extent_logits,
+        require_query_short_refined_points=require_query_short_refined_points,
     )
     cache_rebuilt = False
     if mismatch_reasons:
@@ -1210,12 +1288,15 @@ def sweep(args: argparse.Namespace) -> dict[str, Any]:
             imgsz=imgsz,
             decode_mode=None if requested_mode == "auto" else requested_mode,
             require_query_extent_logits=require_query_extent_logits,
+            require_query_short_refined_points=require_query_short_refined_points,
         )
         if mismatch_reasons:
             raise RuntimeError(f"Prediction cache rebuilt but is still not usable for this sweep: {mismatch_reasons}")
         mismatch_reasons = []
     assert manifest is not None
     args.decode_mode = str(manifest["decode_mode"]) if requested_mode == "auto" else requested_mode
+    if str(args.decode_mode) == "ordered_slot" and query_points_source != "main":
+        raise ValueError("query_points_source='short_refined' is supported only for query decode.")
 
     if cache_only:
         print(json.dumps({"cache_dir": str(cache_dir.resolve()), "rebuilt": cache_rebuilt, "manifest": manifest}, indent=2))
@@ -1224,6 +1305,9 @@ def sweep(args: argparse.Namespace) -> dict[str, Any]:
     if str(args.decode_mode) == "ordered_slot":
         raise_for_ordered_slot_query_args(args, ORDERED_SLOT_QUERY_ONLY_DEFAULTS, context="cached TuSimple official sweep")
     combos = build_combos(args, decode_yaml_cfg=decode_yaml_cfg)
+    for combo in combos:
+        if combo.get("decode_mode") == "query":
+            combo["query_points_source"] = query_points_source
     if str(args.decode_mode) != "ordered_slot":
         for max_det in sorted({int(c["max_det"]) for c in combos}):
             warn_max_det_mismatch(args.weights, max_det=max_det, context="cached TuSimple official sweep")
@@ -1252,7 +1336,13 @@ def sweep(args: argparse.Namespace) -> dict[str, Any]:
     effective_extent_decode_modes = sorted(
         {str(combo.get("extent_decode_mode", "none")) for combo in combos if combo.get("decode_mode") == "query"}
     )
-    save_dir = resolve_cached_save_dir(args, effective_margins, effective_extent_decode_modes, str(args.decode_mode))
+    save_dir = resolve_cached_save_dir(
+        args,
+        effective_margins,
+        effective_extent_decode_modes,
+        str(args.decode_mode),
+        query_points_source=query_points_source,
+    )
     save_dir.mkdir(parents=True, exist_ok=True)
     write_csv(save_dir / "tusimple_official_sweep.csv", rows)
 
@@ -1269,6 +1359,7 @@ def sweep(args: argparse.Namespace) -> dict[str, Any]:
         effective_margins=effective_margins,
         effective_extent_decode_modes=effective_extent_decode_modes,
         decode_yaml_cfg=decode_yaml_cfg,
+        query_points_source=query_points_source,
     )
     config.update(
         {
