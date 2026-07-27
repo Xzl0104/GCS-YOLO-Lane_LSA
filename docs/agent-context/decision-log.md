@@ -2,6 +2,67 @@
 
 This file records decisions for branch `codex/5-25-3-k56`.
 
+## 2026-07-27: Add Q12/env30 short local x-refine v3
+
+Decision:
+
+Do not continue the auxiliary v2 implementation shape. Implement v3 as the
+next default-off probe: freeze the env30/base path, train only the
+`query_short_local_refine_*` head, replace single-point residual prediction
+with feature-conditioned horizontal window search, and add identity guard so
+coarse-hit lanes are preserved while 20-80px near-misses are pulled toward GT.
+TEST remains closed.
+
+Implementation:
+
+```text
+model:
+  ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-short-local-refine-v3.yaml
+window:
+  offsets_px = [-60, -40, -20, 0, 20, 40, 60]
+new output:
+  pred_short_refine_window_logits: B x 12 x 56 x 7
+new args:
+  gcs_short_local_refine_window_search
+  gcs_short_local_refine_window_radius_px
+  gcs_short_local_refine_window_step_px
+  gcs_short_local_refine_freeze_base
+  gcs_short_local_refine_identity_guard
+  gcs_short_local_refine_identity_thr_px
+  gcs_short_local_refine_nearmiss_thr_px
+  gcs_short_local_refine_identity_weight
+  gcs_short_local_refine_nearmiss_weight
+new logs:
+  short_local_refine_loss20
+  short_local_refine_identity_count
+  short_local_refine_pull_count
+scripts:
+  scripts/run_query_short_local_refine_env30_window_v3_probe10.sh
+  scripts/run_query_short_local_refine_env30_window_v3_gate.sh
+```
+
+Recommended first probe:
+
+```text
+PRETRAINED = runs/gcs_lane/query_alpha05_gt5short_geom_w2_bneg002_env30_nocount_v1/weights/official_best.pt
+EPOCHS = 10
+RUN_TESTS = 0
+gcs_short_local_refine = 0.05
+gcs_short_local_refine_beta_px = 3.0
+gcs_short_local_refine_max_delta_px = 60.0
+```
+
+Promotion gate:
+
+```text
+official-val and train-side only
+official-val ACC must not regress from env30
+short GT5 refined hit20 must improve strongly
+train0601 short GT4 must stay at least v2 level
+coarse_hit20_refined_miss20 must stay clearly lower than gain20
+GT3/GT4 false-extra must not increase
+```
+
 ## 2026-07-27: Revise Q12/env30 short local x-refine to auxiliary v2
 
 Decision:

@@ -118,8 +118,9 @@ The optional Q12 short local x-refine probe adds only:
 ```text
 pred_coarse_points: B x 12 x 56 x 2
 pred_short_refined_points: B x 12 x 56 x 2
-pred_short_refine_delta_logits: B x 12 x 56
+pred_short_refine_delta_logits: B x 12 x 56  # v2 raw residual logits; v3 expected-offset proxy
 pred_short_refine_delta_norm: B x 12 x 56
+pred_short_refine_window_logits: B x 12 x 56 x 7  # v3 window-search YAML only
 ```
 
 for query models built from
@@ -130,6 +131,14 @@ bounded local x-refine output for loss/diagnostics only, and
 `pred_coarse_points` is kept as a diagnostic alias of the main path for gate
 compatibility. The default query YAML still emits no short-local-refine
 diagnostic tensors.
+
+The v3 window-search variant is built from
+`ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-short-local-refine-v3.yaml`.
+It freezes the env30/base path through
+`gcs_short_local_refine_freeze_base=True`, keeps non-refine BatchNorm
+statistics fixed, trains only `query_short_local_refine_*`, and uses
+identity-guarded supervision through
+`gcs_short_local_refine_identity_guard=True`.
 
 The optional Q12 dual-head probe adds:
 

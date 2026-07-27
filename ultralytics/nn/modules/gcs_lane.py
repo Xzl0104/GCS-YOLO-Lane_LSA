@@ -2,6 +2,7 @@
 """GCS-YOLO-Lane neural network modules."""
 
 import json
+import math
 from pathlib import Path
 
 import torch
@@ -224,6 +225,9 @@ class GCSLaneHead(nn.Module):
         query_extent_head: bool = False,
         query_short_local_refine_head: bool = False,
         short_local_refine_max_delta_px: float = 40.0,
+        short_local_refine_window_search: bool = False,
+        short_local_refine_window_radius_px: float = 40.0,
+        short_local_refine_window_step_px: float = 20.0,
     ):
         """Initialize the GCS lane query decoder and training-only auxiliary heads."""
         super().__init__()
@@ -387,11 +391,38 @@ class GCSLaneHead(nn.Module):
             raise ValueError("query_short_local_refine_head requires query mode with point_mode='fixed_y'.")
         self.query_short_local_refine_head = requested_short_local_refine
         self.short_local_refine_max_delta_px = float(short_local_refine_max_delta_px)
+        self.short_local_refine_window_search = bool(short_local_refine_window_search)
+        self.short_local_refine_window_radius_px = float(short_local_refine_window_radius_px)
+        self.short_local_refine_window_step_px = float(short_local_refine_window_step_px)
         if self.query_short_local_refine_head and self.short_local_refine_max_delta_px <= 0.0:
             raise ValueError(
                 "short_local_refine_max_delta_px must be > 0 when query_short_local_refine_head is enabled, "
                 f"got {self.short_local_refine_max_delta_px}."
             )
+        if self.query_short_local_refine_head and self.short_local_refine_window_search:
+            if self.short_local_refine_window_radius_px <= 0.0:
+                raise ValueError(
+                    "short_local_refine_window_radius_px must be > 0 when window search is enabled, "
+                    f"got {self.short_local_refine_window_radius_px}."
+                )
+            if self.short_local_refine_window_step_px <= 0.0:
+                raise ValueError(
+                    "short_local_refine_window_step_px must be > 0 when window search is enabled, "
+                    f"got {self.short_local_refine_window_step_px}."
+                )
+            if self.short_local_refine_window_radius_px > self.short_local_refine_max_delta_px + 1e-9:
+                raise ValueError(
+                    "short_local_refine_window_radius_px must be <= short_local_refine_max_delta_px so the "
+                    "expected window offset respects the max-delta contract, got "
+                    f"{self.short_local_refine_window_radius_px} > {self.short_local_refine_max_delta_px}."
+                )
+            ratio = self.short_local_refine_window_radius_px / self.short_local_refine_window_step_px
+            if not math.isclose(ratio, round(ratio), rel_tol=0.0, abs_tol=1e-6):
+                raise ValueError(
+                    "short_local_refine_window_radius_px must be an integer multiple of "
+                    "short_local_refine_window_step_px for symmetric identity initialization, got "
+                    f"{self.short_local_refine_window_radius_px}/{self.short_local_refine_window_step_px}."
+                )
         if self.query_short_local_refine_head:
             self.query_short_local_refine_mlp = nn.Sequential(
                 nn.Linear(c1 * 2, c1),
@@ -690,6 +721,47 @@ class GCSLaneHead(nn.Module):
         image_tokens = self.point_image_norm(image_tokens)
         return torch.cat((prior_tokens, image_tokens), dim=-1)
 
+    def _short_local_refine_offsets_px(self, device, dtype):
+        """Return symmetric local-search offsets in pixels for the auxiliary short-lane head."""
+        radius_px = float(getattr(self, "short_local_refine_window_radius_px", 40.0))
+        step_px = float(getattr(self, "short_local_refine_window_step_px", 20.0))
+        steps = int(round(radius_px / step_px))
+        if steps < 1:
+            raise ValueError(
+                "short_local_refine_window_radius_px must be at least one "
+                f"short_local_refine_window_step_px, got radius={radius_px}, step={step_px}."
+            )
+        if not math.isclose(steps * step_px, radius_px, rel_tol=0.0, abs_tol=1e-6):
+            raise ValueError(
+                "short_local_refine_window_radius_px must be an integer multiple of "
+                f"short_local_refine_window_step_px, got radius={radius_px}, step={step_px}."
+            )
+        max_delta_px = float(getattr(self, "short_local_refine_max_delta_px", 40.0))
+        if radius_px > max_delta_px + 1e-9:
+            raise ValueError(
+                "short_local_refine_window_radius_px must be <= short_local_refine_max_delta_px, "
+                f"got {radius_px} > {max_delta_px}."
+            )
+        return torch.arange(-steps, steps + 1, device=device, dtype=dtype) * step_px
+
+    def _short_local_refine_window_tokens(self, xs, hs, window_points):
+        """Build point/offset tokens for feature-conditioned local x-search."""
+        if window_points.ndim != 5 or window_points.shape[-1] != 2:
+            raise ValueError(
+                f"Expected window_points with shape B x Q x K x O x 2, got {tuple(window_points.shape)}."
+            )
+        b, q, k, o, _ = window_points.shape
+        flat_points = window_points.reshape(b, q, k * o, 2)
+        image_tokens = self._sample_point_features(xs, flat_points).reshape(b, q, k, o, self.c1)
+        query_tokens = hs.reshape(b, q, 1, 1, self.c1).expand(-1, -1, k, o, -1)
+        point_tokens = self.point_embed.weight.to(device=hs.device, dtype=hs.dtype).view(1, 1, k, 1, self.c1)
+        point_tokens = point_tokens.expand(b, q, -1, o, -1)
+        coord_tokens = self.point_coord_mlp(window_points.to(device=hs.device, dtype=hs.dtype))
+
+        prior_tokens = self.point_refine_norm(query_tokens + point_tokens + coord_tokens)
+        image_tokens = self.point_image_norm(image_tokens)
+        return torch.cat((prior_tokens, image_tokens), dim=-1)
+
     def _refine_fixed_y_logits(self, xs, hs, coarse_logits, fixed_y):
         """Refine fixed-y x logits with point-level sampled image features."""
         b, q, k = coarse_logits.shape
@@ -712,14 +784,27 @@ class GCSLaneHead(nn.Module):
             raise ValueError(f"image_width must be positive for short local x-refine, got {image_width}.")
 
         base_detached = base_points.detach()
-        refine_tokens = self._point_refine_tokens(xs, hs.detach(), base_detached).detach()
-        delta_logits = self.query_short_local_refine_mlp(refine_tokens).squeeze(-1)
         max_delta_px = float(getattr(self, "short_local_refine_max_delta_px", 40.0))
         max_delta_norm = base_points.new_tensor(max_delta_px / width)
-        delta_norm = torch.tanh(delta_logits) * max_delta_norm
+        if bool(getattr(self, "short_local_refine_window_search", False)):
+            offsets_px = self._short_local_refine_offsets_px(base_points.device, base_points.dtype)
+            offsets_norm = offsets_px / base_points.new_tensor(width)
+            window_points = base_detached.unsqueeze(3).expand(-1, -1, -1, int(offsets_norm.numel()), -1).clone()
+            window_points[..., 0] = (window_points[..., 0] + offsets_norm.view(1, 1, 1, -1)).clamp(0.0, 1.0)
+            refine_tokens = self._short_local_refine_window_tokens(xs, hs.detach(), window_points).detach()
+            window_logits = self.query_short_local_refine_mlp(refine_tokens).squeeze(-1)
+            window_probs = F.softmax(window_logits, dim=-1)
+            delta_norm = (window_probs * offsets_norm.view(1, 1, 1, -1)).sum(dim=-1)
+            delta_norm = delta_norm.clamp(-max_delta_norm, max_delta_norm)
+            delta_logits = delta_norm / max_delta_norm.clamp_min(base_points.new_tensor(1e-12))
+        else:
+            refine_tokens = self._point_refine_tokens(xs, hs.detach(), base_detached).detach()
+            delta_logits = self.query_short_local_refine_mlp(refine_tokens).squeeze(-1)
+            window_logits = None
+            delta_norm = torch.tanh(delta_logits) * max_delta_norm
         refined_x = (base_detached[..., 0] + delta_norm).clamp(0.0, 1.0)
         refined_points = torch.stack((refined_x, base_detached[..., 1]), dim=-1)
-        return refined_points, delta_logits, delta_norm
+        return refined_points, delta_logits, delta_norm, window_logits
 
     def _refine_fixed_y_valid_logits(self, xs, hs, pred_points):
         """Refine fixed-y point visibility logits with point-level sampled image features."""
@@ -833,6 +918,7 @@ class GCSLaneHead(nn.Module):
         pred_short_refined_points = None
         short_refine_delta = None
         short_refine_delta_norm = None
+        short_refine_window_logits = None
         if point_mode == "fixed_y":
             if point_ref is None:
                 x_logits = point_delta.squeeze(-1)
@@ -849,7 +935,7 @@ class GCSLaneHead(nn.Module):
             pred_points = torch.stack((pred_x, pred_y), dim=-1)
             if getattr(self, "query_short_local_refine_head", False):
                 image_width = None if orig_size is None else int(orig_size[1])
-                pred_short_refined_points, short_refine_delta, short_refine_delta_norm = (
+                pred_short_refined_points, short_refine_delta, short_refine_delta_norm, short_refine_window_logits = (
                     self._short_local_refine_fixed_y_points(xs, hs, pred_points, image_width)
                 )
                 pred_coarse_points = pred_points
@@ -879,6 +965,8 @@ class GCSLaneHead(nn.Module):
             out["pred_short_refined_points"] = pred_short_refined_points
             out["pred_short_refine_delta_logits"] = short_refine_delta
             out["pred_short_refine_delta_norm"] = short_refine_delta_norm
+            if short_refine_window_logits is not None:
+                out["pred_short_refine_window_logits"] = short_refine_window_logits
         if getattr(self, "query_count_head", False):
             out["pred_count_logits"] = self.query_count_mlp(hs.mean(dim=1))
         if getattr(self, "query_quality_head", False):

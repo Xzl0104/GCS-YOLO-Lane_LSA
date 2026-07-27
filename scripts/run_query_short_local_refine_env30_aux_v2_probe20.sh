@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Default-off Q12/env30 auxiliary short-lane local x-refine v2 probe.
+# Superseded Q12/env30 auxiliary short-lane local x-refine v2 probe.
+# Do not use as the current next experiment; use window v3 instead.
 # Main pred_points/decode stay on the env30 path; pred_short_refined_points is
 # auxiliary-only and is judged by raw/refined geometry diagnostics.
 

@@ -37,7 +37,7 @@ from ultralytics.nn.modules import GCSLaneHead, LaneBiFPN, LSEM
 from ultralytics.nn.tasks import GCSLaneModel, load_checkpoint, torch_safe_load
 from ultralytics.utils import DEFAULT_CFG, LOCAL_RANK, LOGGER, RANK, ROOT, YAML
 from ultralytics.utils.gcs_shape import assert_gcs_image_tensor, assert_gcs_shape, normalize_imgsz
-from ultralytics.utils.torch_utils import strip_optimizer, torch_distributed_zero_first
+from ultralytics.utils.torch_utils import strip_optimizer, torch_distributed_zero_first, unwrap_model
 
 
 class GCSLaneTrainer(BaseTrainer):
@@ -93,6 +93,9 @@ class GCSLaneTrainer(BaseTrainer):
         "short_local_refine_coarse_ape",
         "short_local_refine_refined_ape",
         "short_local_refine_gain20",
+        "short_local_refine_loss20",
+        "short_local_refine_identity_count",
+        "short_local_refine_pull_count",
         "role_contain_loss",
         "role_contain_exist_loss",
         "role_contain_valid_loss",
@@ -799,16 +802,103 @@ class GCSLaneTrainer(BaseTrainer):
     def _sync_short_local_refine_head_args(self, model: nn.Module) -> None:
         """Apply CLI-controlled short-local-refine head parameters after YAML construction."""
         max_delta_px = float(getattr(self.args, "gcs_short_local_refine_max_delta_px", 40.0))
+        window_radius_px = float(getattr(self.args, "gcs_short_local_refine_window_radius_px", 40.0))
+        window_step_px = float(getattr(self.args, "gcs_short_local_refine_window_step_px", 20.0))
+        window_search = bool(getattr(self.args, "gcs_short_local_refine_window_search", False))
         if max_delta_px <= 0.0:
             raise ValueError(f"gcs_short_local_refine_max_delta_px must be > 0, got {max_delta_px}.")
 
+        refine_heads = [
+            module
+            for module in model.modules()
+            if isinstance(module, GCSLaneHead) and bool(getattr(module, "query_short_local_refine_head", False))
+        ]
+        needs_window_validation = window_search or any(
+            bool(getattr(module, "short_local_refine_window_search", False)) for module in refine_heads
+        )
+        if needs_window_validation:
+            if window_radius_px <= 0.0:
+                raise ValueError(f"gcs_short_local_refine_window_radius_px must be > 0, got {window_radius_px}.")
+            if window_step_px <= 0.0:
+                raise ValueError(f"gcs_short_local_refine_window_step_px must be > 0, got {window_step_px}.")
+            if window_radius_px > max_delta_px + 1e-9:
+                raise ValueError(
+                    "gcs_short_local_refine_window_radius_px must be <= gcs_short_local_refine_max_delta_px, "
+                    f"got {window_radius_px} > {max_delta_px}."
+                )
+            ratio = window_radius_px / window_step_px
+            if abs(round(ratio) - ratio) > 1e-6:
+                raise ValueError(
+                    "gcs_short_local_refine_window_radius_px must be an integer multiple of "
+                    f"gcs_short_local_refine_window_step_px, got {window_radius_px}/{window_step_px}."
+                )
         updated = 0
-        for module in model.modules():
-            if isinstance(module, GCSLaneHead) and bool(getattr(module, "query_short_local_refine_head", False)):
-                module.short_local_refine_max_delta_px = max_delta_px
-                updated += 1
+        for module in refine_heads:
+            module.short_local_refine_max_delta_px = max_delta_px
+            if window_search:
+                module.short_local_refine_window_search = True
+            if bool(getattr(module, "short_local_refine_window_search", False)):
+                module.short_local_refine_window_radius_px = window_radius_px
+                module.short_local_refine_window_step_px = window_step_px
+            updated += 1
         if updated:
-            LOGGER.info(f"short-local-refine head contract: max_delta_px={max_delta_px:g}, updated_heads={updated}.")
+            LOGGER.info(
+                "short-local-refine head contract: "
+                f"max_delta_px={max_delta_px:g}, window_search={window_search}, "
+                f"window_radius_px={window_radius_px:g}, window_step_px={window_step_px:g}, updated_heads={updated}."
+            )
+
+    @staticmethod
+    def _bool_arg(value) -> bool:
+        """Parse bool-like config values without treating the string 'False' as true."""
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+        return bool(value)
+
+    @staticmethod
+    def _is_short_local_refine_name(name: str) -> bool:
+        """Return true for parameters/modules owned by the optional short-local-refine head."""
+        return "query_short_local_refine" in str(name)
+
+    def _apply_task_specific_freezing(self):
+        """Freeze env30 base parameters when training the auxiliary short-local-refine head only."""
+        if not self._bool_arg(getattr(self.args, "gcs_short_local_refine_freeze_base", False)):
+            return None
+        model = unwrap_model(self.model)
+        has_head = any(
+            isinstance(module, GCSLaneHead) and bool(getattr(module, "query_short_local_refine_head", False))
+            for module in model.modules()
+        )
+        if not has_head:
+            raise ValueError(
+                "gcs_short_local_refine_freeze_base requires a model YAML with query_short_local_refine_head enabled."
+            )
+        trainable = 0
+        frozen = 0
+        for name, param in model.named_parameters():
+            keep_trainable = self._is_short_local_refine_name(name)
+            param.requires_grad = keep_trainable
+            if keep_trainable:
+                trainable += int(param.numel())
+            else:
+                frozen += int(param.numel())
+        if trainable <= 0:
+            raise ValueError("gcs_short_local_refine_freeze_base found no query_short_local_refine parameters to train.")
+        LOGGER.info(
+            "short-local-refine freeze-base contract: "
+            f"trainable_params={trainable}, frozen_base_params={frozen}."
+        )
+        return None
+
+    def _model_train(self):
+        """Set train mode while keeping the frozen env30 base BatchNorm statistics fixed."""
+        super()._model_train()
+        if not self._bool_arg(getattr(self.args, "gcs_short_local_refine_freeze_base", False)):
+            return
+        model = unwrap_model(self.model)
+        for name, module in model.named_modules():
+            if not self._is_short_local_refine_name(name) and isinstance(module, nn.modules.batchnorm._BatchNorm):
+                module.eval()
 
     def set_class_weights(self):
         """GCS lane training uses existence loss, not class-frequency weights."""

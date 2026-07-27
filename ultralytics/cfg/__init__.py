@@ -205,6 +205,12 @@ CFG_FLOAT_KEYS = frozenset(
         "gcs_short_local_refine",
         "gcs_short_local_refine_beta_px",
         "gcs_short_local_refine_max_delta_px",
+        "gcs_short_local_refine_window_radius_px",
+        "gcs_short_local_refine_window_step_px",
+        "gcs_short_local_refine_identity_thr_px",
+        "gcs_short_local_refine_nearmiss_thr_px",
+        "gcs_short_local_refine_identity_weight",
+        "gcs_short_local_refine_nearmiss_weight",
         "gcs_count_ce",
         "gcs_interval",
         "gcs_order",
@@ -436,6 +442,9 @@ CFG_BOOL_KEYS = frozenset(
         "gcs_q24_event_gt5_risk_protect",
         "gcs_q24_event_dynamic",
         "gcs_q24_event_dynamic_protect",
+        "gcs_short_local_refine_window_search",
+        "gcs_short_local_refine_freeze_base",
+        "gcs_short_local_refine_identity_guard",
     }
 )
 

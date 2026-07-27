@@ -324,6 +324,7 @@ class BaseTrainer:
                     "See ultralytics.engine.trainer for customization of frozen layers."
                 )
                 v.requires_grad = True
+        self._apply_task_specific_freezing()
 
         # Check AMP
         self.amp = torch.tensor(self.args.amp).to(self.device)  # True or False
@@ -620,6 +621,10 @@ class BaseTrainer:
             return pl.read_csv(self.csv, infer_schema_length=None).to_dict(as_series=False)
         except Exception:
             return {}
+
+    def _apply_task_specific_freezing(self):
+        """Allow task trainers to apply custom parameter freezing before optimizer construction."""
+        return None
 
     def _model_train(self):
         """Set model in training mode."""
@@ -923,6 +928,15 @@ class BaseTrainer:
                     "gcs_short_local_refine_gt_min_lanes",
                     "gcs_short_local_refine_beta_px",
                     "gcs_short_local_refine_max_delta_px",
+                    "gcs_short_local_refine_window_search",
+                    "gcs_short_local_refine_window_radius_px",
+                    "gcs_short_local_refine_window_step_px",
+                    "gcs_short_local_refine_freeze_base",
+                    "gcs_short_local_refine_identity_guard",
+                    "gcs_short_local_refine_identity_thr_px",
+                    "gcs_short_local_refine_nearmiss_thr_px",
+                    "gcs_short_local_refine_identity_weight",
+                    "gcs_short_local_refine_nearmiss_weight",
                     "gcs_official_best",
                     "gcs_official_interval",
                     "gcs_official_archive_root",

@@ -60,20 +60,69 @@ classification failures. Do not extend this exact setup, enable extent decode,
 run TEST for it, or build local-refine v2 on top of it. The next route must
 target coarse geometry/reference coverage first.
 
-The 2026-07-27 user-requested Q12/env30 short-lane coarse-to-fine local
+The 2026-07-27 user-requested Q12/env30 short-lane local x-refine v3 probe is
+default-off and enabled only by
+`ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-short-local-refine-v3.yaml`
+plus explicit `gcs_short_local_refine > 0`. It supersedes the rejected v2
+implementation shape for new experiments. v3 keeps Q=12/K=56 query mode,
+does not enable Count Head, Quality Head, query extent decode, Q24, or
+count-aware top-k, starts from the env30 `weights/official_best.pt`, freezes
+the env30/base parameters, and trains only the `query_short_local_refine_*`
+head. Non-refine BatchNorm statistics stay fixed during training.
+
+When enabled, the v3 head performs feature-conditioned horizontal local
+window search around detached main `pred_points`. The default v3 window is:
+
+```text
+offsets_px = [-60, -40, -20, 0, 20, 40, 60]
+gcs_short_local_refine_max_delta_px = 60.0
+gcs_short_local_refine_window_radius_px = 60.0
+gcs_short_local_refine_window_step_px = 20.0
+```
+
+The v3 head emits the v2 auxiliary tensors plus:
+
+```text
+pred_short_refine_window_logits: B x 12 x 56 x 7
+```
+
+`pred_points` remains the env30 main geometry for Hungarian matching, normal
+losses, point-valid refinement, and official decode. The optional
+`short_local_refine_loss` supervises only `pred_short_refined_points`.
+With `gcs_short_local_refine_identity_guard=True`, matched short GT4/GT5 lanes
+with coarse APE `<= gcs_short_local_refine_identity_thr_px` are supervised to
+stay near the coarse x position, lanes in
+`(identity_thr_px, gcs_short_local_refine_nearmiss_thr_px]` are pulled toward
+GT, and farther misses are skipped by this auxiliary loss. Logs add:
+
+```text
+short_local_refine_loss20
+short_local_refine_identity_count
+short_local_refine_pull_count
+```
+
+The recommended first v3 probe uses `EPOCHS=10`,
+`gcs_short_local_refine=0.05`, `gcs_short_local_refine_beta_px=3.0`,
+`gcs_short_local_refine_freeze_base=True`, and
+`gcs_short_local_refine_identity_guard=True`. TEST remains closed until
+official-val and train-side raw/refined geometry gates pass.
+
+The superseded 2026-07-27 Q12/env30 short-lane coarse-to-fine local
 x-refine v2 probe is default-off and enabled only by
 `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-short-local-refine.yaml`
 plus explicit `gcs_short_local_refine > 0`. It keeps Q=12/K=56 query mode,
 does not enable Count Head, Quality Head, query extent decode, Q24, or
 count-aware top-k, and runs on top of the env30 parent protocol
-(`gcs_short_geom=1.0` in the parent launch script). When enabled, the head
+(`gcs_short_geom=1.0` in the parent launch script). It is retained only for
+old-run interpretation and must not be used as the current next experiment.
+When enabled, the head
 emits:
 
 ```text
 pred_points: B x 12 x 56 x 2                   # env30 main path for matcher/loss/decode
 pred_coarse_points: B x 12 x 56 x 2            # diagnostic alias of the main path for gate compatibility
 pred_short_refined_points: B x 12 x 56 x 2     # auxiliary bounded local x-refine output
-pred_short_refine_delta_logits: B x 12 x 56    # auxiliary raw residual logits
+pred_short_refine_delta_logits: B x 12 x 56    # v2 raw residual logits; v3 expected-offset proxy for compatibility
 pred_short_refine_delta_norm: B x 12 x 56      # bounded normalized x residual
 ```
 
@@ -86,11 +135,10 @@ exist/valid losses plus official decode also use the main `pred_points`. The opt
 `short_local_refine_loss` supervises only `pred_short_refined_points` with
 normalized-x SmoothL1, selected by short GT4/GT5 criteria
 `gcs_short_local_refine_visible_thr` and
-`gcs_short_local_refine_gt_min_lanes`. The recommended v2 probe starts from
-the env30 `weights/official_best.pt`, uses `gcs_short_local_refine=0.02`,
-`gcs_short_local_refine_beta_px=5.0`, and
-`gcs_short_local_refine_max_delta_px=40.0`, and keeps TEST closed until
-official-val and raw/refined geometry gates pass.
+`gcs_short_local_refine_gt_min_lanes`. Historical v2 probes used
+`gcs_short_local_refine=0.02`, `gcs_short_local_refine_beta_px=5.0`, and
+`gcs_short_local_refine_max_delta_px=40.0`. Do not launch v2 for the current
+next step; use the v3 window/freeze/identity probe instead.
 
 The completed 40-epoch dual-head probe
 `query_dualhead_quality_count_env30_probe40_v1` is not promoted to full

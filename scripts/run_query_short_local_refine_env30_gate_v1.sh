@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Official-val/train-side geometry gate for the Q12/env30 short local x-refine probe.
+# Superseded official-val/train-side geometry gate for old Q12/env30 short local x-refine probes.
+# Do not use as the current next experiment; use window v3 gate instead.
 # Uses GT only for diagnostics. TEST stays closed.
 
 export RUN_NAME="${RUN_NAME:-query_short_local_refine_env30_probe40_v1}"

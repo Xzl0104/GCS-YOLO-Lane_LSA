@@ -272,6 +272,37 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Maximum auxiliary short local x-refine residual in pixels.",
     )
     parser.add_argument(
+        "--gcs-short-local-refine-window-search",
+        action="store_true",
+        help="Use feature-conditioned horizontal window search instead of a single residual MLP for short local x-refine.",
+    )
+    parser.add_argument(
+        "--gcs-short-local-refine-window-radius-px",
+        type=float,
+        default=40.0,
+        help="Symmetric local x-search radius in pixels for the short-local-refine window head.",
+    )
+    parser.add_argument(
+        "--gcs-short-local-refine-window-step-px",
+        type=float,
+        default=20.0,
+        help="Pixel step between candidate offsets in the short-local-refine window head.",
+    )
+    parser.add_argument(
+        "--gcs-short-local-refine-freeze-base",
+        action="store_true",
+        help="Freeze all env30/base parameters and train only the query_short_local_refine head.",
+    )
+    parser.add_argument(
+        "--gcs-short-local-refine-identity-guard",
+        action="store_true",
+        help="Train coarse-hit lanes to stay near the coarse geometry and pull only near-miss lanes toward GT.",
+    )
+    parser.add_argument("--gcs-short-local-refine-identity-thr-px", type=float, default=20.0)
+    parser.add_argument("--gcs-short-local-refine-nearmiss-thr-px", type=float, default=80.0)
+    parser.add_argument("--gcs-short-local-refine-identity-weight", type=float, default=1.0)
+    parser.add_argument("--gcs-short-local-refine-nearmiss-weight", type=float, default=1.0)
+    parser.add_argument(
         "--gcs-count-ce",
         nargs="?",
         const=1.0,
@@ -972,6 +1003,52 @@ def parse_pretrained(value: str) -> str | bool:
     return value
 
 
+def validate_short_local_refine_v3_args(args: argparse.Namespace) -> None:
+    """Fail fast when the v3 YAML is launched without the required v3 probe parameters."""
+    model = str(getattr(args, "model", ""))
+    if not model.endswith("gcs-yolo-lane-s-q12-k56-short-local-refine-v3.yaml"):
+        return
+    expected_floats = {
+        "gcs_short_local_refine": 0.05,
+        "gcs_short_local_refine_beta_px": 3.0,
+        "gcs_short_local_refine_max_delta_px": 60.0,
+        "gcs_short_local_refine_window_radius_px": 60.0,
+        "gcs_short_local_refine_window_step_px": 20.0,
+        "gcs_short_local_refine_identity_thr_px": 20.0,
+        "gcs_short_local_refine_nearmiss_thr_px": 80.0,
+        "gcs_short_local_refine_identity_weight": 1.0,
+        "gcs_short_local_refine_nearmiss_weight": 1.0,
+    }
+    expected_ints = {
+        "gcs_short_local_refine_visible_thr": 10,
+        "gcs_short_local_refine_gt_min_lanes": 4,
+    }
+    expected_bools = {
+        "gcs_short_local_refine_window_search": True,
+        "gcs_short_local_refine_freeze_base": True,
+        "gcs_short_local_refine_identity_guard": True,
+    }
+    bad = []
+    for key, expected in expected_floats.items():
+        value = float(getattr(args, key))
+        if abs(value - expected) > 1e-12:
+            bad.append(f"--{key.replace('_', '-')}={value:g}, expected {expected:g}")
+    for key, expected in expected_ints.items():
+        value = int(getattr(args, key))
+        if value != expected:
+            bad.append(f"--{key.replace('_', '-')}={value}, expected {expected}")
+    for key, expected in expected_bools.items():
+        value = bool(getattr(args, key))
+        if value is not expected:
+            bad.append(f"--{key.replace('_', '-')}={value}, expected {expected}")
+    if bad:
+        raise SystemExit(
+            "short-local-refine v3 YAML requires the v3 window/freeze/identity parameters; "
+            "use scripts/run_query_short_local_refine_env30_window_v3_probe10.sh or pass them explicitly. "
+            + "; ".join(bad)
+        )
+
+
 def resolve_project(value: str) -> str:
     """Keep run outputs under the project root when a relative project path is passed."""
     path = Path(value)
@@ -980,6 +1057,7 @@ def resolve_project(value: str) -> str:
 
 def main() -> None:
     args = maybe_switch_ordered_slot_model(parse_args())
+    validate_short_local_refine_v3_args(args)
     defaults = dataset_defaults(args.dataset)
     gcs_imgsz = normalize_imgsz(args.imgsz, dataset=args.dataset)
     model_path = args.model
@@ -1055,6 +1133,15 @@ def main() -> None:
         "gcs_short_local_refine_gt_min_lanes": args.gcs_short_local_refine_gt_min_lanes,
         "gcs_short_local_refine_beta_px": args.gcs_short_local_refine_beta_px,
         "gcs_short_local_refine_max_delta_px": args.gcs_short_local_refine_max_delta_px,
+        "gcs_short_local_refine_window_search": args.gcs_short_local_refine_window_search,
+        "gcs_short_local_refine_window_radius_px": args.gcs_short_local_refine_window_radius_px,
+        "gcs_short_local_refine_window_step_px": args.gcs_short_local_refine_window_step_px,
+        "gcs_short_local_refine_freeze_base": args.gcs_short_local_refine_freeze_base,
+        "gcs_short_local_refine_identity_guard": args.gcs_short_local_refine_identity_guard,
+        "gcs_short_local_refine_identity_thr_px": args.gcs_short_local_refine_identity_thr_px,
+        "gcs_short_local_refine_nearmiss_thr_px": args.gcs_short_local_refine_nearmiss_thr_px,
+        "gcs_short_local_refine_identity_weight": args.gcs_short_local_refine_identity_weight,
+        "gcs_short_local_refine_nearmiss_weight": args.gcs_short_local_refine_nearmiss_weight,
         "gcs_count_ce": args.gcs_count_ce,
         "gcs_interval": args.gcs_interval,
         "gcs_order": args.gcs_order,

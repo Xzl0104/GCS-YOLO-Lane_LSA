@@ -35,6 +35,57 @@ configs, Count Head, count-guided decode, side-aux, or GT4-hard diagnostics
 are legacy experiment records only. They are not commands for the current code
 state unless a future task explicitly restores those commits.
 
+## Q12 Env30 Windowed Short Local X-Refine v3 Probe
+
+The v3 probe is the next default-off replacement for the rejected auxiliary
+v2 shape. It freezes the env30/base path, trains only the new
+`query_short_local_refine_*` head, uses a horizontal window search
+`[-60, -40, -20, 0, 20, 40, 60]` px, and uses identity guard so coarse-hit
+lanes stay near the env30 geometry while 20-80px near-misses are pulled toward
+GT. TEST stays closed.
+
+```bash
+RUN_TESTS=0 bash scripts/run_query_short_local_refine_env30_window_v3_probe10.sh
+```
+
+After training, run the official-val/train-side raw/refined geometry gate:
+
+```bash
+RUN_NAME=query_short_local_refine_env30_window_v3_probe10 \
+RUN_TESTS=0 \
+OVERWRITE_DIAGS=0 \
+bash scripts/run_query_short_local_refine_env30_window_v3_gate.sh
+```
+
+Default v3 parameters:
+
+```text
+PRETRAINED = runs/gcs_lane/query_alpha05_gt5short_geom_w2_bneg002_env30_nocount_v1/weights/official_best.pt
+EPOCHS = 10
+gcs_short_local_refine = 0.05
+gcs_short_local_refine_beta_px = 3.0
+gcs_short_local_refine_max_delta_px = 60.0
+gcs_short_local_refine_window_search = true
+gcs_short_local_refine_window_radius_px = 60.0
+gcs_short_local_refine_window_step_px = 20.0
+gcs_short_local_refine_freeze_base = true
+gcs_short_local_refine_identity_guard = true
+gcs_short_local_refine_identity_thr_px = 20.0
+gcs_short_local_refine_nearmiss_thr_px = 80.0
+```
+
+Gate before any longer run:
+
+```text
+TEST used = false
+official-val ACC must not regress from env30
+official-val short GT5 refined hit20 should move toward >=48/53
+train0601 short GT5 refined hit20 should move toward >=160/183
+train0601 short GT4 refined hit20 should stay >=14/19
+coarse_hit20_refined_miss20 must stay clearly below coarse_miss20_refined_hit20
+GT3/GT4 false-extra must not increase
+```
+
 ## Rejected Env30 Follow-Up Commands
 
 The following recent env30-family commands are historical rejected records, not
@@ -68,13 +119,16 @@ q7-only full training, v3 staticref full training, or near20 full training from
 these records. Any future reopen must start with official-val plus
 train0601/train0531 raw-Q12 gates and must not use TEST for selection.
 
-## Q12 Env30 Auxiliary Short Local X-Refine v2 Probe
+## Superseded Q12 Env30 Auxiliary Short Local X-Refine v2 Probe
 
 The default-off Q12/env30 auxiliary short-lane local x-refine v2 probe keeps
 the default Q12 carrier bank and main `pred_points` decode path, disables
 Count/Quality/extent/count-aware paths, and only adds a bounded auxiliary local
 x residual for matched short GT4/GT5 lanes. Run only a 20-epoch probe first;
 TEST stays closed.
+
+This v2 path is superseded by the window/freeze/identity v3 probe above and
+should not be used for the current next experiment.
 
 ```bash
 RUN_TESTS=0 bash scripts/run_query_short_local_refine_env30_aux_v2_probe20.sh

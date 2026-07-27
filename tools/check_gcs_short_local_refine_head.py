@@ -21,7 +21,7 @@ from ultralytics.utils.gcs_loss import GCSLoss  # noqa: E402
 
 
 DEFAULT_CFG = ROOT / "ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56.yaml"
-REFINE_CFG = ROOT / "ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-short-local-refine.yaml"
+REFINE_CFG = ROOT / "ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-short-local-refine-v3.yaml"
 
 
 def _head_from_yaml(cfg: Path) -> GCSLaneHead:
@@ -59,6 +59,12 @@ def check_yaml_forward() -> None:
     refine_head = _head_from_yaml(REFINE_CFG)
     if not getattr(refine_head, "query_short_local_refine_head", False):
         raise AssertionError("short local refine YAML did not enable query_short_local_refine_head.")
+    if not getattr(refine_head, "short_local_refine_window_search", False):
+        raise AssertionError("short local refine v3 YAML did not enable window search.")
+    offsets = refine_head._short_local_refine_offsets_px(torch.device("cpu"), torch.float32)
+    expected_offsets = torch.tensor([-60.0, -40.0, -20.0, 0.0, 20.0, 40.0, 60.0])
+    if not torch.equal(offsets.cpu(), expected_offsets):
+        raise AssertionError(f"v3 window offsets mismatch: {offsets.cpu().tolist()} vs {expected_offsets.tolist()}.")
     out = refine_head(_head_features(refine_head), orig_size=(544, 960))
     if tuple(out["pred_points"].shape) != (2, 12, 56, 2):
         raise AssertionError(f"pred_points shape mismatch: {tuple(out['pred_points'].shape)}.")
@@ -79,6 +85,11 @@ def check_yaml_forward() -> None:
             "pred_short_refine_delta_norm shape mismatch: "
             f"{tuple(out.get('pred_short_refine_delta_norm', torch.empty(0)).shape)}."
         )
+    if tuple(out.get("pred_short_refine_window_logits", torch.empty(0)).shape) != (2, 12, 56, 7):
+        raise AssertionError(
+            "pred_short_refine_window_logits shape mismatch: "
+            f"{tuple(out.get('pred_short_refine_window_logits', torch.empty(0)).shape)}."
+        )
     y_err = (out["pred_points"][..., 1] - out["pred_coarse_points"][..., 1]).abs().max()
     if float(y_err) > 1e-6:
         raise AssertionError(f"short local x-refine must not change fixed-y anchors, max y error={float(y_err):.6g}.")
@@ -89,18 +100,16 @@ def check_yaml_forward() -> None:
     if float(init_delta) > 1e-8:
         raise AssertionError(f"zero-initialized short local x-refine must start as identity, max delta={float(init_delta):.6g}.")
     max_delta_norm = float(out["pred_short_refine_delta_norm"].abs().max())
-    max_allowed_norm = float(getattr(refine_head, "short_local_refine_max_delta_px", 40.0)) / 960.0
+    max_allowed_norm = float(getattr(refine_head, "short_local_refine_max_delta_px", 60.0)) / 960.0
     if max_delta_norm > max_allowed_norm + 1e-6:
         raise AssertionError(
             f"pred_short_refine_delta_norm exceeds max_delta_px contract: {max_delta_norm:.6g} > {max_allowed_norm:.6g}."
         )
-    refine_head.query_short_local_refine_mlp[-1].bias.fill_(100.0)
-    saturated = refine_head(_head_features(refine_head), orig_size=(544, 960))
-    saturated_delta = float(saturated["pred_short_refine_delta_norm"].abs().max())
-    if saturated_delta > max_allowed_norm + 1e-6:
+    window_logits = out["pred_short_refine_window_logits"]
+    if float(window_logits.abs().max()) > 1e-8:
         raise AssertionError(
-            f"saturated pred_short_refine_delta_norm exceeds max_delta_px contract: "
-            f"{saturated_delta:.6g} > {max_allowed_norm:.6g}."
+            "zero-initialized v3 window head should start with equal zero logits, "
+            f"max_abs={float(window_logits.abs().max()):.6g}."
         )
 
 
@@ -180,12 +189,77 @@ def _make_coarse_match_preds() -> dict[str, torch.Tensor]:
     }
 
 
+def _make_identity_guard_batch() -> dict:
+    k = 56
+    y = torch.linspace(710.0 / 720.0, 160.0 / 720.0, k)
+    x = torch.full((1, k), 0.35)
+    pts = torch.stack((x, y.view(1, k)), dim=-1).float()
+    valid = torch.zeros(1, k, dtype=torch.float32)
+    valid[:, 4:11] = 1.0
+    return {
+        "lanes": [pts],
+        "lane_valid": [valid],
+        "num_lanes": torch.tensor([5], dtype=torch.long),
+    }
+
+
+def _make_identity_guard_preds() -> dict[str, torch.Tensor]:
+    b, q, k = 1, 12, 56
+    y = torch.linspace(710.0 / 720.0, 160.0 / 720.0, k).view(1, 1, k).expand(b, q, k)
+    x = torch.full((b, q, k), 0.80)
+    refined_x = x.clone()
+    x[:, 0, :] = 0.35
+    refined_x[:, 0, :] = 0.40
+    return {
+        "pred_points": torch.stack((x, y), dim=-1).contiguous(),
+        "pred_coarse_points": torch.stack((x, y), dim=-1).contiguous(),
+        "pred_short_refined_points": torch.stack((refined_x, y), dim=-1).contiguous(),
+        "pred_logits": torch.zeros(b, q),
+        "pred_valid_logits": torch.full((b, q, k), 4.0),
+        "pred_short_refine_delta_logits": torch.zeros(b, q, k),
+        "pred_short_refine_delta_norm": torch.zeros(b, q, k),
+    }
+
+
+def _make_empty_refine_batch() -> dict:
+    k = 56
+    y = torch.linspace(710.0 / 720.0, 160.0 / 720.0, k)
+    x = torch.linspace(0.25, 0.75, 3).view(3, 1).expand(3, k)
+    pts = torch.stack((x, y.view(1, k).expand(3, k)), dim=-1).float()
+    valid = torch.ones(3, k, dtype=torch.float32)
+    return {
+        "lanes": [pts],
+        "lane_valid": [valid],
+        "num_lanes": torch.tensor([3], dtype=torch.long),
+    }
+
+
+def _make_empty_refine_preds() -> dict[str, torch.Tensor]:
+    b, q, k = 1, 12, 56
+    y = torch.linspace(710.0 / 720.0, 160.0 / 720.0, k).view(1, 1, k).expand(b, q, k)
+    x = torch.linspace(0.05, 0.95, q).view(1, q, 1).expand(b, q, k)
+    main = torch.stack((x, y), dim=-1).contiguous()
+    refined = main.clone().detach().requires_grad_(True)
+    return {
+        "pred_points": main.detach(),
+        "pred_coarse_points": main.detach(),
+        "pred_short_refined_points": refined,
+        "pred_logits": torch.zeros(b, q),
+        "pred_valid_logits": torch.full((b, q, k), 4.0),
+        "pred_short_refine_delta_logits": torch.zeros(b, q, k),
+        "pred_short_refine_delta_norm": torch.zeros(b, q, k),
+    }
+
+
 def check_loss() -> None:
     names = list(GCSLoss.loss_names)
     refine_idx = names.index("short_local_refine_loss")
     count_idx = names.index("short_local_refine_count")
     coarse_idx = names.index("short_local_refine_coarse_ape")
     refined_idx = names.index("short_local_refine_refined_ape")
+    loss20_idx = names.index("short_local_refine_loss20")
+    identity_count_idx = names.index("short_local_refine_identity_count")
+    pull_count_idx = names.index("short_local_refine_pull_count")
 
     criterion = GCSLoss(
         {
@@ -193,8 +267,8 @@ def check_loss() -> None:
             "gcs_short_local_refine": 0.5,
             "gcs_short_local_refine_visible_thr": 10,
             "gcs_short_local_refine_gt_min_lanes": 4,
-            "gcs_short_local_refine_beta_px": 5.0,
-            "gcs_short_local_refine_max_delta_px": 40.0,
+            "gcs_short_local_refine_beta_px": 3.0,
+            "gcs_short_local_refine_max_delta_px": 60.0,
         }
     )
     _, items = criterion(_make_preds(include_coarse=True), _make_batch())
@@ -220,6 +294,39 @@ def check_loss() -> None:
             "short-local-refine matching must use main pred_points, not pred_coarse_points; "
             f"got refine loss {float(coarse_match_items[refine_idx]):.6g}."
         )
+
+    guard_criterion = GCSLoss(
+        {
+            "gcs_imgsz": [544, 960],
+            "gcs_short_local_refine": 0.5,
+            "gcs_short_local_refine_visible_thr": 10,
+            "gcs_short_local_refine_gt_min_lanes": 4,
+            "gcs_short_local_refine_beta_px": 3.0,
+            "gcs_short_local_refine_max_delta_px": 60.0,
+            "gcs_short_local_refine_identity_guard": True,
+            "gcs_short_local_refine_identity_thr_px": 20.0,
+            "gcs_short_local_refine_nearmiss_thr_px": 80.0,
+            "gcs_short_local_refine_identity_weight": 1.0,
+            "gcs_short_local_refine_nearmiss_weight": 1.0,
+        }
+    )
+    _, guard_items = guard_criterion(_make_identity_guard_preds(), _make_identity_guard_batch())
+    if float(guard_items[identity_count_idx]) <= 0.0:
+        raise AssertionError("identity guard should count coarse-hit short lanes.")
+    if float(guard_items[pull_count_idx]) != 0.0:
+        raise AssertionError("identity guard synthetic case should not count near-miss pull lanes.")
+    if float(guard_items[loss20_idx]) <= 0.0:
+        raise AssertionError("identity guard should report coarse-hit/refined-miss loss20 in the synthetic case.")
+
+    empty_preds = _make_empty_refine_preds()
+    empty_loss, empty_items = guard_criterion(empty_preds, _make_empty_refine_batch())
+    if not empty_loss.requires_grad:
+        raise AssertionError("empty short-local-refine batches must keep a gradient path through pred_short_refined_points.")
+    empty_loss.backward()
+    if empty_preds["pred_short_refined_points"].grad is None:
+        raise AssertionError("empty short-local-refine batches should allow backward() on the auxiliary refined tensor.")
+    if float(empty_items[count_idx]) != 0.0:
+        raise AssertionError("empty short-local-refine synthetic case should log zero supervised lane count.")
 
     try:
         criterion(_make_preds(include_coarse=False), _make_batch())
