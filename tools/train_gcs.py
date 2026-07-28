@@ -467,6 +467,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--gcs-short-candidate-gt5-weight", type=float, default=1.5)
     parser.add_argument("--gcs-short-candidate-neg-score-thr", type=float, default=0.6)
     parser.add_argument(
+        "--gcs-short-candidate-freeze-base",
+        action="store_true",
+        help="Freeze all non-short-candidate parameters for env30 selector-only probing.",
+    )
+    parser.add_argument(
         "--gcs-candidate-decode",
         action="store_true",
         help="Enable prediction-only gated lateral candidate decode for query models. Off by default.",
@@ -831,6 +836,7 @@ def main() -> None:
         "gcs_short_candidate_gt4_weight": args.gcs_short_candidate_gt4_weight,
         "gcs_short_candidate_gt5_weight": args.gcs_short_candidate_gt5_weight,
         "gcs_short_candidate_neg_score_thr": args.gcs_short_candidate_neg_score_thr,
+        "gcs_short_candidate_freeze_base": args.gcs_short_candidate_freeze_base,
         "gcs_candidate_decode": args.gcs_candidate_decode,
         "gcs_candidate_score_thr": args.gcs_candidate_score_thr,
         "gcs_candidate_short_min_points": args.gcs_candidate_short_min_points,

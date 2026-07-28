@@ -193,6 +193,7 @@ gcs_short_candidate_pull_weight: 0.05 # (float) geometry pull fraction inside sh
 gcs_short_candidate_gt4_weight: 1.0 # (float) per-lane score/pull multiplier for short GT4 targets
 gcs_short_candidate_gt5_weight: 1.5 # (float) per-lane score/pull multiplier for short GT5 targets
 gcs_short_candidate_neg_score_thr: 0.6 # (float) only far candidates above this score become negatives
+gcs_short_candidate_freeze_base: False # (bool) freeze env30/base path and train only short_candidate_* parameters
 gcs_candidate_decode: False # (bool) default-off prediction-only gated lateral candidate decode
 gcs_candidate_score_thr: 0.05 # (float) minimum candidate selector score to replace query geometry at decode
 gcs_candidate_short_min_points: 2 # (int) minimum predicted visible anchors for candidate-decode applicability

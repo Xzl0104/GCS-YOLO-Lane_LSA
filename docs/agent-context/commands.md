@@ -3062,6 +3062,30 @@ RUN_TESTS=0 \
 bash scripts/run_query_gated_candidate_env30_probe20_v2.sh
 ```
 
+Frozen-env30 selector-only follow-up. This starts from the env30
+`official_best.pt`, freezes the env30/base path, trains only
+`short_candidate_*` parameters, runs a base `candidate_decode=false`
+official-val sweep, runs raw candidate coverage, and keeps TEST closed:
+
+```bash
+RUN_NAME=query_gated_candidate_env30_frozen_probe20_v2 \
+EPOCHS=20 \
+RUN_TESTS=0 \
+bash scripts/run_query_gated_candidate_env30_frozen_probe20_v2.sh
+```
+
+First-pass gates:
+
+```text
+base official-val candidate_decode=false must return env30 ACC/FP/FN
+raw candidate coverage is a fixed env30+offsets pool and must be inspected before selector claims
+train0601 short GT5 raw candidate hit20 target remains near >=160/183 before decode promotion
+official-val short GT5 raw candidate hit20 must be clearly above the env30 raw 40/53 bottleneck
+short GT4 must not regress
+candidate decode remains disabled unless raw coverage passes
+TEST closed
+```
+
 The dedicated v2 YAML is:
 
 ```text

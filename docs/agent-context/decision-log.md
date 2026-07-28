@@ -92,6 +92,34 @@ oracle-rank gain should remain small
 TEST closed
 ```
 
+## 2026-07-28: Add frozen-env30 gated candidate v2 probe script
+
+Decision:
+
+Add a selector-only frozen-env30 follow-up for the reopened v2 candidate path.
+The goal is to isolate whether the candidate selector can be trained without
+changing the env30 main `pred_points`, `pred_logits`, and `pred_valid_logits`
+path.
+
+Implementation:
+
+- add `--gcs-short-candidate-freeze-base`, default off;
+- when enabled, freeze all non-`short_candidate_*` parameters before optimizer
+  construction;
+- keep frozen base modules in eval mode during training so BatchNorm running
+  statistics do not drift;
+- keep zero-candidate batches backprop-safe by returning a zero loss connected
+  to `pred_short_candidate_logits`;
+- add `scripts/run_query_gated_candidate_env30_frozen_probe20_v2.sh`;
+- keep TEST closed.
+
+Required first check:
+
+```text
+candidate_decode=false official-val sweep must match env30 before any
+candidate_decode sweep or TEST consideration.
+```
+
 ## 2026-07-27: Reject Q12/env30 lateral candidate-generation probe
 
 Decision:

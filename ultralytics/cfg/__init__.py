@@ -390,6 +390,7 @@ CFG_BOOL_KEYS = frozenset(
         "gcs_spurious_disable_gt5",
         "gcs_spurious_gt_protect",
         "gcs_candidate_decode",
+        "gcs_short_candidate_freeze_base",
     }
 )
 

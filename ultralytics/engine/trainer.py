@@ -325,6 +325,10 @@ class BaseTrainer:
                 )
                 v.requires_grad = True
 
+        custom_freeze = getattr(self, "_apply_custom_freeze", None)
+        if callable(custom_freeze):
+            custom_freeze()
+
         # Check AMP
         self.amp = torch.tensor(self.args.amp).to(self.device)  # True or False
         if self.amp and RANK in {-1, 0}:  # Single-GPU and DDP
@@ -940,6 +944,7 @@ class BaseTrainer:
                     "gcs_short_candidate_gt4_weight",
                     "gcs_short_candidate_gt5_weight",
                     "gcs_short_candidate_neg_score_thr",
+                    "gcs_short_candidate_freeze_base",
                     "gcs_candidate_decode",
                     "gcs_candidate_score_thr",
                     "gcs_candidate_short_min_points",
@@ -1082,6 +1087,8 @@ class BaseTrainer:
         use_muon = name == "MuSGD"
         for module_name, module in unwrap_model(model).named_modules():
             for param_name, param in module.named_parameters(recurse=False):
+                if not param.requires_grad:
+                    continue
                 fullname = f"{module_name}.{param_name}" if module_name else param_name
                 if param.ndim >= 2 and use_muon:
                     g[3][fullname] = param  # muon params

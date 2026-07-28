@@ -1101,6 +1101,7 @@ class GCSLoss(nn.Module):
                 "pred_short_candidate_points K must match pred_points, "
                 f"got {candidate_points.shape[3]} vs {pred_points.shape[2]}."
             )
+        zero = candidate_logits.sum() * 0.0
 
         device = pred_points.device
         dtype = pred_points.dtype

@@ -85,6 +85,18 @@ It replaces geometry only for gated short queries and is mutually exclusive
 with count-aware top-k. TEST remains closed until raw candidate coverage and
 official-val gates pass.
 
+The 2026-07-28 frozen-env30 probe is enabled only by
+`--gcs-short-candidate-freeze-base` with the gated-candidate-v2 YAML. It loads
+the env30 `weights/official_best.pt`, freezes all non-`short_candidate_*`
+parameters, keeps frozen base modules in eval mode so BatchNorm statistics do
+not drift, and trains only the candidate selector parameters. Its normal
+`candidate_decode=false` official-val sweep must match env30 before candidate
+decode is considered. The launch script is:
+
+```text
+scripts/run_query_gated_candidate_env30_frozen_probe20_v2.sh
+```
+
 Legacy post-env30 record: the 2026-07-25 user-requested Q12/env30 dual-head
 probe was rejected and its YAML/script are not active after the 2026-07-28
 env30 rollback. It added `pred_count_logits: B x 4` for image-level lane count

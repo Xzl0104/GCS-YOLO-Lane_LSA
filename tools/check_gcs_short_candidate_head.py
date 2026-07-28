@@ -6,6 +6,7 @@ import math
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import torch
 
@@ -16,6 +17,7 @@ os.chdir(ROOT)
 
 from ultralytics.nn.modules import GCSLaneHead  # noqa: E402
 from ultralytics.nn.tasks import GCSLaneModel  # noqa: E402
+from ultralytics.models.yolo.gcs_lane.train import GCSLaneTrainer  # noqa: E402
 from ultralytics.utils.gcs_loss import GCSLoss  # noqa: E402
 from ultralytics.utils.gcs_postprocess import decode_gcs_predictions  # noqa: E402
 
@@ -172,6 +174,78 @@ def check_backward() -> None:
         raise AssertionError("short candidate points received zero pull gradient.")
 
 
+def check_empty_candidate_batch_has_grad() -> None:
+    preds = _make_short_candidate_preds()
+    candidate_logits = preds["pred_short_candidate_logits"].detach().clone().requires_grad_(True)
+    preds["pred_short_candidate_logits"] = candidate_logits
+    batch = _make_short_candidate_batch()
+    batch["num_lanes"] = torch.tensor([3], dtype=torch.long)
+    criterion = GCSLoss(
+        {
+            "gcs_imgsz": [544, 960],
+            "gcs_short_candidate": 0.1,
+            "gcs_short_candidate_topk": 3,
+            "gcs_short_candidate_visible_thr": 10,
+            "gcs_short_candidate_neg_score_thr": 0.6,
+        }
+    )
+    total, items = criterion(preds, batch)
+    if not total.requires_grad:
+        raise AssertionError("empty short-candidate batch should keep a zero-gradient path to candidate logits.")
+    total.backward()
+    if candidate_logits.grad is None or not torch.isfinite(candidate_logits.grad).all():
+        raise AssertionError("empty short-candidate batch did not produce finite zero gradients.")
+    if float(candidate_logits.grad.abs().sum()) != 0.0:
+        raise AssertionError("empty short-candidate batch should not update candidate logits.")
+    if not torch.isfinite(items).all():
+        raise AssertionError("empty short-candidate batch produced non-finite loss items.")
+
+
+def check_freeze_contract() -> None:
+    model = GCSLaneModel(str(CANDIDATE_CFG), nc=1, verbose=False)
+    trainer = object.__new__(GCSLaneTrainer)
+    trainer.model = model
+    trainer.args = SimpleNamespace(gcs_short_candidate_freeze_base=True, gcs_short_candidate=0.1)
+    trainer.freeze_layer_names = []
+    trainer._apply_custom_freeze()
+
+    trainable = [name for name, param in model.named_parameters() if param.requires_grad]
+    if not trainable:
+        raise AssertionError("short-candidate freeze contract left no trainable parameters.")
+    bad = [name for name in trainable if "short_candidate_" not in name]
+    if bad:
+        raise AssertionError(f"short-candidate freeze contract left base parameters trainable: {bad[:5]}.")
+    if not any("short_candidate_score_mlp" in name for name in trainable):
+        raise AssertionError("short-candidate score MLP is not trainable under freeze contract.")
+
+    optimizer = trainer.build_optimizer(model, name="AdamW", lr=0.001, momentum=0.9, decay=0.0, iterations=1)
+    optimizer_param_ids = {
+        id(param)
+        for group in optimizer.param_groups
+        for param in group["params"]
+    }
+    frozen_in_optimizer = [
+        name for name, param in model.named_parameters() if not param.requires_grad and id(param) in optimizer_param_ids
+    ]
+    if frozen_in_optimizer:
+        raise AssertionError(f"frozen parameters entered optimizer groups: {frozen_in_optimizer[:5]}.")
+    missing_trainable = [
+        name for name, param in model.named_parameters() if param.requires_grad and id(param) not in optimizer_param_ids
+    ]
+    if missing_trainable:
+        raise AssertionError(f"trainable short-candidate parameters missing from optimizer: {missing_trainable[:5]}.")
+
+    trainer._model_train()
+    head = model.model[-1]
+    if head.training:
+        raise AssertionError("frozen base GCSLaneHead parent should stay eval to suppress base-path stat drift.")
+    if not head.short_candidate_score_mlp.training:
+        raise AssertionError("short-candidate score MLP should stay in train mode.")
+    bn_training = [name for name, module in model.named_modules() if isinstance(module, torch.nn.BatchNorm2d) and module.training]
+    if bn_training:
+        raise AssertionError(f"frozen base BatchNorm modules stayed in train mode: {bn_training[:5]}.")
+
+
 def check_decode() -> None:
     q, m, k = 2, 3, 6
     y = torch.linspace(0.9, 0.4, k)
@@ -243,6 +317,8 @@ def main() -> None:
     check_yaml_forward()
     check_loss()
     check_backward()
+    check_empty_candidate_batch_has_grad()
+    check_freeze_contract()
     check_decode()
     print("GCS short candidate head checks passed.")
 

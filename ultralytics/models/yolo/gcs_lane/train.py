@@ -37,7 +37,7 @@ from ultralytics.nn.modules import GCSLaneHead, LaneBiFPN, LSEM
 from ultralytics.nn.tasks import GCSLaneModel, load_checkpoint, torch_safe_load
 from ultralytics.utils import DEFAULT_CFG, LOCAL_RANK, LOGGER, RANK, ROOT, YAML
 from ultralytics.utils.gcs_shape import assert_gcs_image_tensor, assert_gcs_shape, normalize_imgsz
-from ultralytics.utils.torch_utils import strip_optimizer, torch_distributed_zero_first
+from ultralytics.utils.torch_utils import strip_optimizer, torch_distributed_zero_first, unwrap_model
 
 
 class GCSLaneTrainer(BaseTrainer):
@@ -153,6 +153,61 @@ class GCSLaneTrainer(BaseTrainer):
         if mode not in {"query", "ordered_slot"}:
             raise ValueError(f"gcs_mode must be 'query' or 'ordered_slot', got {mode!r}.")
         return mode
+
+    @staticmethod
+    def _is_short_candidate_trainable_name(name: str) -> bool:
+        """Return true for parameters or modules owned by the short-candidate branch."""
+        return "short_candidate_" in str(name)
+
+    def _short_candidate_freeze_base_enabled(self) -> bool:
+        """Return whether this run trains only the short-candidate branch."""
+        return bool(self._get_arg_value("gcs_short_candidate_freeze_base", False))
+
+    def _apply_custom_freeze(self) -> None:
+        """Freeze env30/base parameters for selector-only short-candidate probing."""
+        if not self._short_candidate_freeze_base_enabled():
+            return
+        if float(self._get_arg_value("gcs_short_candidate", 0.0)) <= 0.0:
+            raise ValueError("gcs_short_candidate_freeze_base=True requires --gcs-short-candidate > 0.")
+
+        model = unwrap_model(self.model)
+        total_params = 0
+        trainable_params = 0
+        trainable_tensors: list[str] = []
+        for name, param in model.named_parameters():
+            total_params += int(param.numel())
+            trainable = self._is_short_candidate_trainable_name(name)
+            param.requires_grad = trainable
+            if trainable:
+                trainable_params += int(param.numel())
+                trainable_tensors.append(name)
+
+        if not trainable_tensors:
+            raise ValueError(
+                "gcs_short_candidate_freeze_base=True found no short_candidate_* parameters. "
+                "Use the gated-candidate-v2 YAML."
+            )
+
+        LOGGER.info(
+            "GCS short-candidate frozen-base mode: training %d/%d parameters in %d tensors: %s",
+            trainable_params,
+            total_params,
+            len(trainable_tensors),
+            ", ".join(trainable_tensors),
+        )
+
+    def _model_train(self):
+        """Set training mode while keeping frozen env30/base BatchNorm statistics fixed."""
+        super()._model_train()
+        if not self._short_candidate_freeze_base_enabled():
+            return
+
+        model = unwrap_model(self.model)
+        for name, module in model.named_modules():
+            if self._is_short_candidate_trainable_name(name):
+                module.train()
+            else:
+                module.eval()
 
     def __init__(self, cfg=DEFAULT_CFG, overrides: dict[str, Any] | None = None, _callbacks: dict | None = None):
         """Initialize the GCS lane trainer."""
