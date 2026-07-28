@@ -76,13 +76,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-det", type=int, default=5, help="Current decode max_det.")
     parser.add_argument("--min-points", type=int, default=2, help="Minimum visible anchors required to keep a lane.")
     parser.add_argument("--valid-before-maxdet", action="store_true", help="Apply point-valid/min_points before max_det.")
-    parser.add_argument("--extent-decode", action="store_true", help="Use query start/end extent logits for current and pool decode.")
-    parser.add_argument(
-        "--extent-decode-mode",
-        choices=("none", "interval", "intersect"),
-        default="interval",
-        help="Query extent decode mode when --extent-decode is enabled.",
-    )
     parser.add_argument(
         "--pool-max-det",
         type=int,
@@ -165,8 +158,6 @@ def _apply_query_decode_yaml(args: argparse.Namespace, decode_yaml_cfg: dict) ->
     args.max_det = int(decode_yaml_cfg["max_det"])
     args.min_points = int(decode_yaml_cfg["min_points"])
     args.valid_before_maxdet = bool(decode_yaml_cfg.get("valid_before_maxdet", False))
-    args.extent_decode = bool(decode_yaml_cfg.get("extent_decode", False))
-    args.extent_decode_mode = str(decode_yaml_cfg.get("extent_decode_mode", "none") or "none")
     args.current_count_aware_topk = bool(decode_yaml_cfg.get("count_aware_topk", False))
     args.current_count_aware_min_k = int(decode_yaml_cfg.get("count_aware_min_k", 3))
     args.current_count_aware_max_k = int(decode_yaml_cfg.get("count_aware_max_k", 5))
@@ -402,23 +393,14 @@ def main() -> None:
         pred_valid = preds.get("pred_valid_logits")
         pred_count_logits = preds.get("pred_count_logits")
         pred_count_logits_0 = pred_count_logits[0] if pred_count_logits is not None else None
-        pred_quality_logits = preds.get("pred_quality_logits")
-        pred_quality_logits_0 = pred_quality_logits[0] if pred_quality_logits is not None else None
-        pred_start_logits = preds.get("pred_start_logits")
-        pred_start_logits_0 = pred_start_logits[0] if pred_start_logits is not None else None
-        pred_end_logits = preds.get("pred_end_logits")
-        pred_end_logits_0 = pred_end_logits[0] if pred_end_logits is not None else None
         count_logits_k = _count_logits_k(pred_count_logits_0)
         gt_count = len(valid_tusimple_lanes(record.get("lanes", [])))
 
         current_lanes = decode_gcs_predictions(
             preds["pred_points"][0],
             preds["pred_logits"][0],
-            pred_quality_logits=pred_quality_logits_0,
             pred_valid_logits=pred_valid[0] if pred_valid is not None else None,
             pred_count_logits=pred_count_logits_0,
-            pred_start_logits=pred_start_logits_0,
-            pred_end_logits=pred_end_logits_0,
             image_shape=original_shape,
             score_thr=args.conf,
             point_valid_thr=args.point_valid_thr,
@@ -426,8 +408,6 @@ def main() -> None:
             max_det=args.max_det,
             nms_dist_px=args.nms_dist_px,
             valid_before_maxdet=args.valid_before_maxdet,
-            extent_decode=args.extent_decode,
-            extent_decode_mode=args.extent_decode_mode,
             count_aware_topk=args.current_count_aware_topk,
             count_aware_min_k=args.current_count_aware_min_k,
             count_aware_max_k=args.current_count_aware_max_k,
@@ -437,11 +417,8 @@ def main() -> None:
         pool_lanes = decode_gcs_predictions(
             preds["pred_points"][0],
             preds["pred_logits"][0],
-            pred_quality_logits=pred_quality_logits_0,
             pred_valid_logits=pred_valid[0] if pred_valid is not None else None,
             pred_count_logits=pred_count_logits_0,
-            pred_start_logits=pred_start_logits_0,
-            pred_end_logits=pred_end_logits_0,
             image_shape=original_shape,
             score_thr=args.conf,
             point_valid_thr=args.point_valid_thr,
@@ -449,8 +426,6 @@ def main() -> None:
             max_det=None if int(args.pool_max_det) <= 0 else int(args.pool_max_det),
             nms_dist_px=args.nms_dist_px,
             valid_before_maxdet=True,
-            extent_decode=args.extent_decode,
-            extent_decode_mode=args.extent_decode_mode,
             count_aware_topk=False,
         )
         current_tusimple = gcs_lanes_to_tusimple_lanes(current_lanes, record["h_samples"], image_shape=original_shape)
@@ -612,8 +587,6 @@ def main() -> None:
         "max_det": int(args.max_det),
         "min_points": int(args.min_points),
         "valid_before_maxdet": bool(args.valid_before_maxdet),
-        "extent_decode": bool(args.extent_decode),
-        "extent_decode_mode": str(args.extent_decode_mode),
         "pool_max_det": None if int(args.pool_max_det) <= 0 else int(args.pool_max_det),
         "candidate_pool": "query decode after conf, Lane-NMS, point-valid/min_points filtering, before count/rank choice",
         "current_count_aware_topk": bool(args.current_count_aware_topk),

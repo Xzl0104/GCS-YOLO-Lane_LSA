@@ -70,16 +70,6 @@ QUERY_ROW_KEYS = (
     "nms_dist_px",
     "max_det",
     "min_points",
-    "query_points_source",
-    "candidate_decode",
-    "candidate_short_gate",
-    "candidate_gate_valid_thr",
-    "candidate_gate_min_visible",
-    "candidate_gate_max_visible",
-    "candidate_preserve_base_score",
-    "extent_decode",
-    "extent_decode_mode",
-    "extent_decode_priority",
     "count_aware_topk",
     "count_aware_min_k",
     "count_aware_max_k",
@@ -90,17 +80,10 @@ QUERY_ROW_KEYS = (
 PREDICTION_KEYS = (
     "pred_points",
     "pred_logits",
-    "pred_coarse_points",
-    "pred_short_refined_points",
-    "pred_short_refine_delta_logits",
-    "pred_short_refine_delta_norm",
-    "pred_quality_logits",
     "pred_valid_logits",
     "pred_count_logits",
     "pred_start_logits",
     "pred_end_logits",
-    "pred_short_candidate_points",
-    "pred_short_candidate_logits",
     "pred_exist_logits",
 )
 
@@ -120,32 +103,6 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--weights", default=str(DEFAULT_WEIGHTS), help="GCS checkpoint .pt.")
     parser.add_argument("--decode-mode", choices=("auto", "query", "ordered_slot"), default="auto", help="Decode path for official sweep.")
-    parser.add_argument(
-        "--query-points-source",
-        choices=("main", "short_refined"),
-        default="main",
-        help="Query geometry source. 'main' is the default official path; 'short_refined' is a prediction-only v3 ablation.",
-    )
-    parser.add_argument(
-        "--candidate-decode",
-        action="store_true",
-        help="Use lateral candidate hypotheses only for prediction-gated short-lane queries.",
-    )
-    parser.add_argument(
-        "--candidate-short-gate",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Apply candidate selection only when predicted visible-anchor count is in the configured short-lane range.",
-    )
-    parser.add_argument("--candidate-gate-valid-thr", type=float, default=0.5)
-    parser.add_argument("--candidate-gate-min-visible", type=int, default=2)
-    parser.add_argument("--candidate-gate-max-visible", type=int, default=10)
-    parser.add_argument(
-        "--candidate-preserve-base-score",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Keep the original query score after candidate selection; required for the isolated candidate probe.",
-    )
     parser.add_argument("--decode-yaml", default=None, help="Schema-validated official_best_decode.yaml to reproduce a decode.")
     parser.add_argument("--gcs-min-lanes", type=int, default=2, help="ordered_slot minimum supported lane count.")
     parser.add_argument("--gcs-max-lanes", type=int, default=5, help="ordered_slot maximum supported lane count.")
@@ -177,13 +134,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-dets", nargs="+", type=int, default=[8], help="max_det values to sweep.")
     parser.add_argument("--min-points", nargs="+", type=int, default=[6], help="Minimum visible-anchor floors to sweep.")
     parser.add_argument("--valid-before-maxdet", action="store_true", help="Filter point-valid/min_points failures before max_det truncation.")
-    parser.add_argument(
-        "--extent-decode-modes",
-        nargs="+",
-        choices=("none", "interval", "intersect"),
-        default=["none"],
-        help="Query extent visibility modes to sweep. 'none' preserves point-valid decode.",
-    )
     parser.add_argument("--count-aware-topk", action="store_true", help="Use count_score to keep only the quality-best dynamic lane count.")
     parser.add_argument("--count-aware-min-k", type=int, default=3, help="Minimum k_hat for --count-aware-topk.")
     parser.add_argument("--count-aware-max-k", type=int, default=5, help="Maximum k_hat for --count-aware-topk.")
@@ -259,14 +209,7 @@ def resolve_cache_dir(cache_dir: str | Path | None, weights: str | Path, split: 
     return ROOT / "runs" / "gcs_lane" / "tusimple_official_prediction_cache" / Path(weights).stem / str(split)
 
 
-def resolve_cached_save_dir(
-    args: argparse.Namespace,
-    effective_margins: list[int],
-    effective_extent_decode_modes: list[str],
-    decode_mode: str,
-    query_points_source: str = "main",
-    candidate_decode: bool = False,
-) -> Path:
+def resolve_cached_save_dir(args: argparse.Namespace, effective_margins: list[int], decode_mode: str) -> Path:
     if args.save_dir is not None and str(args.save_dir).strip():
         return Path(args.save_dir)
     base = resolve_base_save_dir(
@@ -276,15 +219,9 @@ def resolve_cached_save_dir(
         count_aware_topk=bool(getattr(args, "count_aware_topk", False)),
         count_aware_extra_margins=effective_margins,
         valid_before_maxdet=bool(getattr(args, "valid_before_maxdet", False)),
-        extent_decode_modes=effective_extent_decode_modes,
         decode_mode=decode_mode,
     )
-    suffix = "_cached"
-    if str(query_points_source) == "short_refined":
-        suffix += "_points_short_refined"
-    if bool(candidate_decode):
-        suffix += "_candidate_gated" if bool(getattr(args, "candidate_short_gate", True)) else "_candidate"
-    return base.with_name(f"{base.name}{suffix}")
+    return base.with_name(f"{base.name}_cached")
 
 
 def _normalize_decode_mode_name(decode_mode: str | None) -> str:
@@ -332,14 +269,6 @@ def _apply_query_decode_yaml(args: argparse.Namespace, decode_yaml_cfg: dict[str
     args.max_dets = [int(decode_yaml_cfg["max_det"])]
     args.min_points = [int(decode_yaml_cfg["min_points"])]
     args.valid_before_maxdet = bool(decode_yaml_cfg.get("valid_before_maxdet", False))
-    args.candidate_decode = bool(decode_yaml_cfg.get("candidate_decode", False))
-    extent_mode = str(decode_yaml_cfg.get("extent_decode_mode", "none") or "none")
-    args.extent_decode_modes = [extent_mode if bool(decode_yaml_cfg.get("extent_decode", False)) else "none"]
-    args.candidate_short_gate = bool(decode_yaml_cfg.get("candidate_short_gate", True))
-    args.candidate_gate_valid_thr = float(decode_yaml_cfg.get("candidate_gate_valid_thr", 0.5))
-    args.candidate_gate_min_visible = int(decode_yaml_cfg.get("candidate_gate_min_visible", 2))
-    args.candidate_gate_max_visible = int(decode_yaml_cfg.get("candidate_gate_max_visible", 10))
-    args.candidate_preserve_base_score = bool(decode_yaml_cfg.get("candidate_preserve_base_score", True))
     args.count_aware_topk = bool(decode_yaml_cfg["count_aware_topk"])
     args.count_aware_min_k = int(decode_yaml_cfg["count_aware_min_k"])
     args.count_aware_max_k = int(decode_yaml_cfg["count_aware_max_k"])
@@ -393,9 +322,6 @@ def _cache_mismatch_reasons(
     gt_path: Path,
     imgsz: tuple[int, int],
     decode_mode: str | None,
-    require_query_extent_logits: bool = False,
-    require_query_short_refined_points: bool = False,
-    require_query_short_candidate_outputs: bool = False,
 ) -> list[str]:
     if manifest is None:
         return ["missing manifest"]
@@ -424,22 +350,6 @@ def _cache_mismatch_reasons(
         reasons.append(f"half {manifest.get('half')} != {bool(args.half)}")
     if decode_mode and decode_mode != "auto" and manifest.get("decode_mode") != decode_mode:
         reasons.append(f"decode_mode {manifest.get('decode_mode')!r} != {decode_mode!r}")
-    if bool(require_query_extent_logits):
-        prediction_keys = set(manifest.get("prediction_keys") or [])
-        missing_extent = sorted({"pred_start_logits", "pred_end_logits"} - prediction_keys)
-        if missing_extent:
-            reasons.append(f"prediction cache missing query extent logits: {missing_extent}")
-    if bool(require_query_short_refined_points):
-        prediction_keys = set(manifest.get("prediction_keys") or [])
-        if "pred_short_refined_points" not in prediction_keys:
-            reasons.append("prediction cache missing pred_short_refined_points")
-    if bool(require_query_short_candidate_outputs):
-        prediction_keys = set(manifest.get("prediction_keys") or [])
-        missing_candidates = sorted(
-            {"pred_short_candidate_points", "pred_short_candidate_logits"} - prediction_keys
-        )
-        if missing_candidates:
-            reasons.append(f"prediction cache missing short candidate outputs: {missing_candidates}")
     recorded_weights = manifest.get("weights", {})
     current_weights = _weights_fingerprint(args.weights)
     if not bool(getattr(args, "allow_cache_weight_mismatch", False)):
@@ -448,31 +358,6 @@ def _cache_mismatch_reasons(
                 reasons.append(f"weights {key} differs")
                 break
     return reasons
-
-
-def _requires_query_extent_logits(args: argparse.Namespace, decode_yaml_cfg: dict[str, Any] | None) -> bool:
-    """Return whether the requested query sweep needs cached start/end extent logits."""
-    if decode_yaml_cfg is not None:
-        return bool(decode_yaml_cfg.get("extent_decode", False)) and str(
-            decode_yaml_cfg.get("extent_decode_mode", "none") or "none"
-        ).strip().lower() != "none"
-    modes = {str(x or "none").strip().lower() for x in getattr(args, "extent_decode_modes", ["none"])}
-    return bool(modes - {"none", "off", "false", "0"})
-
-
-def _normalize_query_points_source(points_source: str | None) -> str:
-    source = str(points_source or "main").strip().lower()
-    if source not in {"main", "short_refined"}:
-        raise ValueError(f"Unsupported query_points_source={points_source!r}; use 'main' or 'short_refined'.")
-    return source
-
-
-def _requires_query_short_refined_points(args: argparse.Namespace) -> bool:
-    return _normalize_query_points_source(getattr(args, "query_points_source", "main")) == "short_refined"
-
-
-def _requires_query_short_candidate_outputs(args: argparse.Namespace) -> bool:
-    return bool(getattr(args, "candidate_decode", False))
 
 
 def _tensor_for_cache(tensor: torch.Tensor) -> torch.Tensor:
@@ -693,79 +578,12 @@ class CachedQueryPrediction:
         if logits.ndim != 1 or logits.shape[0] != points.shape[0]:
             raise ValueError(f"pred_logits must have Q for {self.raw_file}, got {logits.shape} vs {points.shape}.")
 
-        quality_logits = None
-        pred_quality_logits = preds.get("pred_quality_logits")
-        if isinstance(pred_quality_logits, torch.Tensor):
-            quality_logits = pred_quality_logits.float().cpu().numpy().astype(np.float32)
-            if quality_logits.ndim == 2 and quality_logits.shape[-1] == 1:
-                quality_logits = np.squeeze(quality_logits, axis=-1)
-            if quality_logits.ndim != 1 or quality_logits.shape[0] != points.shape[0]:
-                raise ValueError(
-                    f"pred_quality_logits must have Q for {self.raw_file}, got {quality_logits.shape} vs {points.shape}."
-                )
-
         points = np.clip(points, 0.0, 1.0)
         order = np.argsort(-points[:, :, 1], axis=1, kind="stable")
         self.points = np.take_along_axis(points, order[:, :, None], axis=1).astype(np.float32)
-        self.candidate_points: np.ndarray | None = None
-        self.candidate_logits: np.ndarray | None = None
-        self.candidate_scores: np.ndarray | None = None
-        self.candidate_best_indices: np.ndarray | None = None
-        pred_short_candidate_points = preds.get("pred_short_candidate_points")
-        pred_short_candidate_logits = preds.get("pred_short_candidate_logits")
-        if isinstance(pred_short_candidate_points, torch.Tensor) or isinstance(pred_short_candidate_logits, torch.Tensor):
-            if not isinstance(pred_short_candidate_points, torch.Tensor) or not isinstance(pred_short_candidate_logits, torch.Tensor):
-                raise ValueError(
-                    f"Short candidate cache for {self.raw_file} requires both candidate point and score tensors."
-                )
-            candidate_points = pred_short_candidate_points.float().cpu().numpy().astype(np.float32)
-            candidate_logits = pred_short_candidate_logits.float().cpu().numpy().astype(np.float32)
-            if candidate_points.ndim != 4 or candidate_points.shape[:1] != points.shape[:1] or candidate_points.shape[2:] != points.shape[1:]:
-                raise ValueError(
-                    f"pred_short_candidate_points must have Q x H x K x 2 for {self.raw_file}, "
-                    f"got {candidate_points.shape} vs Q={points.shape[0]}, K={points.shape[1]}."
-                )
-            if candidate_logits.shape != candidate_points.shape[:2]:
-                raise ValueError(
-                    f"pred_short_candidate_logits must have Q x H for {self.raw_file}, "
-                    f"got {candidate_logits.shape} vs {candidate_points.shape[:2]}."
-                )
-            candidate_points = np.clip(candidate_points, 0.0, 1.0)
-            candidate_order = np.broadcast_to(
-                order[:, None, :, None],
-                (candidate_points.shape[0], candidate_points.shape[1], candidate_points.shape[2], 2),
-            )
-            self.candidate_points = np.take_along_axis(candidate_points, candidate_order, axis=2).astype(np.float32)
-            self.candidate_logits = candidate_logits
-        self.short_refined_points: np.ndarray | None = None
-        pred_short_refined_points = preds.get("pred_short_refined_points")
-        if isinstance(pred_short_refined_points, torch.Tensor):
-            short_refined_points = pred_short_refined_points.float().cpu().numpy().astype(np.float32)
-            if tuple(short_refined_points.shape) != tuple(points.shape):
-                raise ValueError(
-                    f"pred_short_refined_points shape mismatch for {self.raw_file}: "
-                    f"{short_refined_points.shape} vs {points.shape}."
-                )
-            short_refined_points = np.clip(short_refined_points, 0.0, 1.0)
-            if not np.allclose(short_refined_points[:, :, 1], points[:, :, 1], atol=1e-4, rtol=0.0):
-                raise ValueError(
-                    f"pred_short_refined_points must preserve fixed-y coordinates for {self.raw_file}."
-                )
-            self.short_refined_points = np.take_along_axis(
-                short_refined_points,
-                order[:, :, None],
-                axis=1,
-            ).astype(np.float32)
-        self.score_source = "quality_logits" if quality_logits is not None else "pred_logits"
-        base_score_logits = quality_logits if quality_logits is not None else logits
-        self.scores = _sigmoid_np(base_score_logits)
+        self.scores = _sigmoid_np(logits)
         self.query_indices = np.arange(self.points.shape[0], dtype=np.int64)
         self.k = int(self.points.shape[1])
-        if self.candidate_points is not None and self.candidate_logits is not None:
-            self.candidate_scores = _sigmoid_np(
-                np.asarray(base_score_logits[:, None] + self.candidate_logits, dtype=np.float32)
-            )
-            self.candidate_best_indices = np.argmax(self.candidate_logits, axis=1).astype(np.int64)
 
         pred_valid = preds.get("pred_valid_logits")
         self.valid_scores: np.ndarray | None = None
@@ -778,220 +596,49 @@ class CachedQueryPrediction:
             valid_scores = _sigmoid_np(valid_logits)
             self.valid_scores = np.take_along_axis(valid_scores, order, axis=1).astype(np.float32)
 
-        pred_start_logits = preds.get("pred_start_logits")
-        pred_end_logits = preds.get("pred_end_logits")
-        self.extent_masks: np.ndarray | None = None
-        if isinstance(pred_start_logits, torch.Tensor) or isinstance(pred_end_logits, torch.Tensor):
-            if not isinstance(pred_start_logits, torch.Tensor) or not isinstance(pred_end_logits, torch.Tensor):
-                raise ValueError(f"Query extent cache for {self.raw_file} requires both pred_start_logits and pred_end_logits.")
-            start_logits = pred_start_logits.float().cpu().numpy().astype(np.float32)
-            end_logits = pred_end_logits.float().cpu().numpy().astype(np.float32)
-            if tuple(start_logits.shape) != tuple(points.shape[:2]):
-                raise ValueError(f"pred_start_logits shape mismatch for {self.raw_file}: {start_logits.shape} vs {points.shape[:2]}.")
-            if tuple(end_logits.shape) != tuple(points.shape[:2]):
-                raise ValueError(f"pred_end_logits shape mismatch for {self.raw_file}: {end_logits.shape} vs {points.shape[:2]}.")
-            start_idx = np.argmax(start_logits, axis=1).astype(np.int64)
-            end_idx = np.argmax(end_logits, axis=1).astype(np.int64)
-            lo = np.minimum(start_idx, end_idx)
-            hi = np.maximum(start_idx, end_idx)
-            anchor_idx = np.arange(points.shape[1], dtype=np.int64).reshape(1, -1)
-            extent_masks = (anchor_idx >= lo.reshape(-1, 1)) & (anchor_idx <= hi.reshape(-1, 1))
-            self.extent_masks = np.take_along_axis(extent_masks, order, axis=1).astype(bool)
-
         pred_count_logits = preds.get("pred_count_logits")
         self.pred_count_logits: np.ndarray | None = None
         if isinstance(pred_count_logits, torch.Tensor):
             self.pred_count_logits = pred_count_logits.float().cpu().numpy().astype(np.float32).reshape(-1)
-        self._valid_cache: dict[tuple[float, int, float, str, str, bool], dict[str, Any]] = {}
+        self._valid_cache: dict[tuple[float, int, float], dict[str, Any]] = {}
 
-    def _candidate_state(
-        self,
-        candidate_short_gate: bool = True,
-        candidate_gate_valid_thr: float = 0.5,
-        candidate_gate_min_visible: int = 2,
-        candidate_gate_max_visible: int = 10,
-    ) -> tuple[np.ndarray, np.ndarray]:
-        if self.candidate_points is None or self.candidate_best_indices is None:
-            raise ValueError(f"candidate_decode requires candidate outputs in the cache for {self.raw_file}.")
-        valid_thr = float(candidate_gate_valid_thr)
-        min_visible = int(candidate_gate_min_visible)
-        max_visible = int(candidate_gate_max_visible)
-        if not 0.0 <= valid_thr <= 1.0:
-            raise ValueError(f"candidate_gate_valid_thr must be in [0, 1], got {valid_thr}.")
-        if min_visible < 0 or max_visible < 0 or min_visible > max_visible:
-            raise ValueError(
-                "candidate gate visible bounds must satisfy 0 <= min_visible <= max_visible, "
-                f"got min_visible={min_visible}, max_visible={max_visible}."
-            )
-        if bool(candidate_short_gate):
-            if self.valid_scores is None:
-                raise ValueError(
-                    f"candidate_short_gate requires pred_valid_logits in the cache for {self.raw_file}."
-                )
-            predicted_visible = (self.valid_scores >= valid_thr).sum(axis=1)
-            applied = (predicted_visible >= min_visible) & (predicted_visible <= max_visible)
-        else:
-            applied = np.ones((self.candidate_best_indices.shape[0],), dtype=bool)
-        selected = np.where(applied, self.candidate_best_indices, 0).astype(np.int64)
-        return selected, applied
-
-    def _points_for_source(
-        self,
-        points_source: str | None,
-        candidate_decode: bool = False,
-        candidate_short_gate: bool = True,
-        candidate_gate_valid_thr: float = 0.5,
-        candidate_gate_min_visible: int = 2,
-        candidate_gate_max_visible: int = 10,
-    ) -> np.ndarray:
-        if bool(candidate_decode):
-            if _normalize_query_points_source(points_source) != "main":
-                raise ValueError("candidate_decode supports only query_points_source='main'.")
-            if self.candidate_points is None:
-                raise ValueError(
-                    f"candidate_decode requires pred_short_candidate_points in the cache for {self.raw_file}."
-                )
-            selected, _ = self._candidate_state(
-                candidate_short_gate=candidate_short_gate,
-                candidate_gate_valid_thr=candidate_gate_valid_thr,
-                candidate_gate_min_visible=candidate_gate_min_visible,
-                candidate_gate_max_visible=candidate_gate_max_visible,
-            )
-            return self.candidate_points[
-                np.arange(self.candidate_points.shape[0], dtype=np.int64),
-                selected,
-            ]
-        source = _normalize_query_points_source(points_source)
-        if source == "main":
-            return self.points
-        if self.short_refined_points is None:
-            raise ValueError(
-                f"query_points_source='short_refined' requires pred_short_refined_points in the cache "
-                f"for {self.raw_file}."
-            )
-        return self.short_refined_points
-
-    @staticmethod
-    def _normalize_extent_mode(extent_mode: str | None) -> str:
-        mode = str(extent_mode or "none").strip().lower()
-        if mode in {"none", "off", "false", "0"}:
-            return "none"
-        if mode not in {"interval", "intersect"}:
-            raise ValueError(f"Unsupported extent_decode_mode={extent_mode!r}; use 'none', 'interval', or 'intersect'.")
-        return mode
-
-    def _valid_context(
-        self,
-        point_valid_thr: float,
-        min_points: int,
-        length_norm: float,
-        extent_mode: str | None = "none",
-        points_source: str = "main",
-        candidate_decode: bool = False,
-        candidate_short_gate: bool = True,
-        candidate_gate_valid_thr: float = 0.5,
-        candidate_gate_min_visible: int = 2,
-        candidate_gate_max_visible: int = 10,
-        candidate_preserve_base_score: bool = True,
-    ) -> dict[str, Any]:
-        extent_mode = self._normalize_extent_mode(extent_mode)
-        points_source = _normalize_query_points_source(points_source)
-        if bool(candidate_decode) and extent_mode != "none":
-            raise ValueError("candidate_decode cannot be combined with extent_decode.")
-        points = self._points_for_source(
-            points_source,
-            candidate_decode=candidate_decode,
-            candidate_short_gate=candidate_short_gate,
-            candidate_gate_valid_thr=candidate_gate_valid_thr,
-            candidate_gate_min_visible=candidate_gate_min_visible,
-            candidate_gate_max_visible=candidate_gate_max_visible,
-        )
-        valid_scores = self.valid_scores
-        scores = self.scores
-        if bool(candidate_decode):
-            selected, _ = self._candidate_state(
-                candidate_short_gate=candidate_short_gate,
-                candidate_gate_valid_thr=candidate_gate_valid_thr,
-                candidate_gate_min_visible=candidate_gate_min_visible,
-                candidate_gate_max_visible=candidate_gate_max_visible,
-            )
-            if not bool(candidate_preserve_base_score):
-                if self.candidate_scores is None:
-                    raise ValueError(f"candidate_decode requires candidate logits in the cache for {self.raw_file}.")
-                scores = self.candidate_scores[np.arange(self.candidate_scores.shape[0], dtype=np.int64), selected]
-        key = (
-            round(float(point_valid_thr), 12),
-            int(min_points),
-            float(length_norm),
-            extent_mode,
-            points_source,
-            bool(candidate_decode),
-            bool(candidate_short_gate),
-            round(float(candidate_gate_valid_thr), 12),
-            int(candidate_gate_min_visible),
-            int(candidate_gate_max_visible),
-            bool(candidate_preserve_base_score),
-        )
+    def _valid_context(self, point_valid_thr: float, min_points: int, length_norm: float) -> dict[str, Any]:
+        key = (round(float(point_valid_thr), 12), int(min_points), float(length_norm))
         if key in self._valid_cache:
             return self._valid_cache[key]
 
-        uses_visibility_mask = False
         if int(min_points) > self.k:
-            masks = np.zeros((points.shape[0], self.k), dtype=bool)
-            uses_visibility_mask = True
-        elif extent_mode != "none":
-            if self.extent_masks is None:
-                raise ValueError("extent decode requires pred_start_logits and pred_end_logits in the prediction cache.")
-            masks = self.extent_masks.copy()
-            uses_visibility_mask = True
-            if extent_mode == "intersect":
-                if self.valid_scores is None:
-                    raise ValueError("extent_decode_mode='intersect' requires pred_valid_logits in the prediction cache.")
-                valid_runs = np.stack(
-                    [
-                        _longest_contiguous_valid_mask_np(row >= float(point_valid_thr), min_points=int(min_points))
-                        for row in self.valid_scores
-                    ],
-                    axis=0,
-                )
-                masks = masks & valid_runs
-        elif valid_scores is None:
-            masks = np.ones((points.shape[0], self.k), dtype=bool)
+            masks = np.zeros((self.points.shape[0], self.k), dtype=bool)
+        elif self.valid_scores is None:
+            masks = np.ones((self.points.shape[0], self.k), dtype=bool)
         else:
             masks = np.stack(
                 [
                     _longest_contiguous_valid_mask_np(row >= float(point_valid_thr), min_points=int(min_points))
-                    for row in valid_scores
+                    for row in self.valid_scores
                 ],
                 axis=0,
             )
-            uses_visibility_mask = True
         valid_counts = masks.sum(axis=1).astype(np.int32)
         tusimple_lanes = [
-            _query_lane_to_tusimple(
-                points[i],
-                masks[i] if uses_visibility_mask else None,
-                self.h_samples,
-                self.image_shape,
-            )
-            for i in range(points.shape[0])
+            _query_lane_to_tusimple(self.points[i], masks[i] if self.valid_scores is not None else None, self.h_samples, self.image_shape)
+            for i in range(self.points.shape[0])
         ]
 
-        qualities = np.zeros((points.shape[0],), dtype=np.float32)
-        for i in range(points.shape[0]):
-            visible_count = int(valid_counts[i]) if uses_visibility_mask else int(self.k)
+        qualities = np.zeros((self.points.shape[0],), dtype=np.float32)
+        for i in range(self.points.shape[0]):
+            visible_count = int(valid_counts[i]) if self.valid_scores is not None else int(self.k)
             mean_valid = 1.0
-            if valid_scores is not None and uses_visibility_mask:
-                mean_valid = float(valid_scores[i][masks[i]].mean()) if visible_count > 0 else 0.0
+            if self.valid_scores is not None:
+                mean_valid = float(self.valid_scores[i][masks[i]].mean()) if visible_count > 0 else 0.0
             length_factor = min(float(visible_count) / float(length_norm), 1.0)
-            qualities[i] = float(scores[i] * mean_valid * length_factor)
+            qualities[i] = float(self.scores[i] * mean_valid * length_factor)
 
         context = {
             "masks": masks,
             "valid_counts": valid_counts,
             "tusimple_lanes": tusimple_lanes,
             "qualities": qualities,
-            "uses_visibility_mask": uses_visibility_mask,
         }
         self._valid_cache[key] = context
         return context
@@ -999,8 +646,6 @@ class CachedQueryPrediction:
     def count_aware_k(self, combo: dict[str, Any]) -> int | None:
         if not bool(combo.get("count_aware_topk", False)):
             return None
-        if bool(combo.get("candidate_decode", False)):
-            raise ValueError("candidate_decode cannot be combined with count_aware_topk.")
         min_k = int(combo.get("count_aware_min_k", 3))
         max_k = int(combo.get("count_aware_max_k", 5))
         length_norm = float(combo.get("count_aware_length_norm", 12.0))
@@ -1029,14 +674,7 @@ class CachedQueryPrediction:
             k_hat = min(k_hat, max_det)
         return k_hat
 
-    def _lane_nms(
-        self,
-        query_ids: np.ndarray,
-        scores: np.ndarray,
-        masks: np.ndarray | None,
-        dist_thr_px: float,
-        points: np.ndarray,
-    ) -> np.ndarray:
+    def _lane_nms(self, query_ids: np.ndarray, scores: np.ndarray, masks: np.ndarray | None, dist_thr_px: float) -> np.ndarray:
         if float(dist_thr_px) <= 0.0 or query_ids.size <= 1:
             return np.arange(query_ids.size, dtype=np.int64)
         order = np.argsort(-scores, kind="stable")
@@ -1057,7 +695,7 @@ class CachedQueryPrediction:
                 if overlap_count < 2:
                     dist = float("inf")
                 else:
-                    dist = float(np.mean(np.abs(points[query_id, overlap, 0] - points[kept_query, overlap, 0]) * w))
+                    dist = float(np.mean(np.abs(self.points[query_id, overlap, 0] - self.points[kept_query, overlap, 0]) * w))
                 if dist <= float(dist_thr_px):
                     duplicate = True
                     break
@@ -1069,64 +707,20 @@ class CachedQueryPrediction:
         min_points = int(combo["min_points"])
         if min_points > self.k:
             return []
-        points_source = _normalize_query_points_source(combo.get("query_points_source", "main"))
-        candidate_decode = bool(combo.get("candidate_decode", False))
-        if candidate_decode and points_source != "main":
-            raise ValueError("candidate_decode supports only query_points_source='main'.")
-        if candidate_decode and str(combo.get("extent_decode_mode", "none")) != "none":
-            raise ValueError("candidate_decode cannot be combined with extent_decode.")
-        candidate_short_gate = bool(combo.get("candidate_short_gate", True))
-        candidate_gate_valid_thr = float(combo.get("candidate_gate_valid_thr", 0.5))
-        candidate_gate_min_visible = int(combo.get("candidate_gate_min_visible", 2))
-        candidate_gate_max_visible = int(combo.get("candidate_gate_max_visible", 10))
-        candidate_preserve_base_score = bool(combo.get("candidate_preserve_base_score", True))
-        points = self._points_for_source(
-            points_source,
-            candidate_decode=candidate_decode,
-            candidate_short_gate=candidate_short_gate,
-            candidate_gate_valid_thr=candidate_gate_valid_thr,
-            candidate_gate_min_visible=candidate_gate_min_visible,
-            candidate_gate_max_visible=candidate_gate_max_visible,
-        )
         context = self._valid_context(
             point_valid_thr=float(combo["point_valid_thr"]),
             min_points=min_points,
             length_norm=float(combo.get("count_aware_length_norm", 12.0)),
-            extent_mode=str(combo.get("extent_decode_mode", "none")),
-            points_source=points_source,
-            candidate_decode=candidate_decode,
-            candidate_short_gate=candidate_short_gate,
-            candidate_gate_valid_thr=candidate_gate_valid_thr,
-            candidate_gate_min_visible=candidate_gate_min_visible,
-            candidate_gate_max_visible=candidate_gate_max_visible,
-            candidate_preserve_base_score=candidate_preserve_base_score,
         )
         masks = context["masks"]
         valid_counts = context["valid_counts"]
         lanes_by_query = context["tusimple_lanes"]
         qualities = context["qualities"]
-        uses_visibility_mask = bool(context["uses_visibility_mask"])
 
-        score_source = self.scores
-        if candidate_decode and not candidate_preserve_base_score:
-            selected, _ = self._candidate_state(
-                candidate_short_gate=candidate_short_gate,
-                candidate_gate_valid_thr=candidate_gate_valid_thr,
-                candidate_gate_min_visible=candidate_gate_min_visible,
-                candidate_gate_max_visible=candidate_gate_max_visible,
-            )
-            if self.candidate_scores is None:
-                raise ValueError(f"candidate_decode requires candidate scores in the cache for {self.raw_file}.")
-            score_source = self.candidate_scores[
-                np.arange(self.candidate_scores.shape[0], dtype=np.int64),
-                selected,
-            ]
-        if score_source is None:
-            raise ValueError(f"candidate_decode requires candidate scores in the cache for {self.raw_file}.")
-        query_ids = np.flatnonzero(score_source >= float(combo["conf"])).astype(np.int64)
+        query_ids = np.flatnonzero(self.scores >= float(combo["conf"])).astype(np.int64)
         if query_ids.size == 0:
             return []
-        scores = score_source[query_ids]
+        scores = self.scores[query_ids]
         order = np.argsort(-scores, kind="stable")
 
         if float(combo["nms_dist_px"]) > 0.0:
@@ -1135,15 +729,14 @@ class CachedQueryPrediction:
             keep_sorted = self._lane_nms(
                 sorted_query_ids,
                 sorted_scores,
-                masks if uses_visibility_mask else None,
+                masks if self.valid_scores is not None else None,
                 dist_thr_px=float(combo["nms_dist_px"]),
-                points=points,
             )
             query_ids = sorted_query_ids[keep_sorted]
             scores = sorted_scores[keep_sorted]
             order = np.arange(query_ids.size, dtype=np.int64)
 
-        if bool(combo.get("valid_before_maxdet", False)) and uses_visibility_mask:
+        if bool(combo.get("valid_before_maxdet", False)) and self.valid_scores is not None:
             keep_valid = valid_counts[query_ids] >= min_points
             query_ids = query_ids[keep_valid]
             scores = scores[keep_valid]
@@ -1157,7 +750,7 @@ class CachedQueryPrediction:
         final_queries: list[int] = []
         final_lanes: list[list[int]] = []
         for query_id in query_ids.tolist():
-            if uses_visibility_mask and int(valid_counts[query_id]) < min_points:
+            if self.valid_scores is not None and int(valid_counts[query_id]) < min_points:
                 continue
             lane = lanes_by_query[query_id]
             if lane is None:
@@ -1249,14 +842,6 @@ def _combo_key(combo: dict[str, Any]) -> tuple[Any, ...]:
         float(combo["nms_dist_px"]),
         int(combo["max_det"]),
         int(combo["min_points"]),
-        str(combo.get("query_points_source", "main")),
-        bool(combo.get("candidate_decode", False)),
-        bool(combo.get("candidate_short_gate", True)),
-        round(float(combo.get("candidate_gate_valid_thr", 0.5)), 12),
-        int(combo.get("candidate_gate_min_visible", 2)),
-        int(combo.get("candidate_gate_max_visible", 10)),
-        bool(combo.get("candidate_preserve_base_score", True)),
-        str(combo.get("extent_decode_mode", "none")),
         str(combo.get("count_mode", "score_sum")),
         int(combo.get("count_aware_extra_margin", 0)),
     )
@@ -1271,14 +856,6 @@ def _row_sort_key(row: dict[str, Any]) -> tuple[Any, ...]:
         float(row["nms_dist_px"]),
         int(row["max_det"]),
         int(row["min_points"]),
-        str(row.get("query_points_source", "main")),
-        bool(row.get("candidate_decode", False)),
-        bool(row.get("candidate_short_gate", True)),
-        round(float(row.get("candidate_gate_valid_thr", 0.5)), 12),
-        int(row.get("candidate_gate_min_visible", 2)),
-        int(row.get("candidate_gate_max_visible", 10)),
-        bool(row.get("candidate_preserve_base_score", True)),
-        str(row.get("extent_decode_mode", "none")),
         str(row.get("count_mode", "score_sum")),
         int(row.get("count_aware_extra_margin", 0)),
     )
@@ -1374,9 +951,7 @@ def _config_for_summary(
     imgsz: tuple[int, int],
     decode_mode: str,
     effective_margins: list[int],
-    effective_extent_decode_modes: list[str],
     decode_yaml_cfg: dict[str, Any] | None,
-    query_points_source: str,
 ) -> dict[str, Any]:
     config = {
         "weights": str(Path(args.weights).resolve()),
@@ -1391,13 +966,6 @@ def _config_for_summary(
         "cache_created_unix_time": manifest.get("created_unix_time"),
         "imgsz": [int(imgsz[0]), int(imgsz[1])],
         "decode_mode": str(decode_mode),
-        "query_points_source": str(query_points_source),
-        "candidate_decode": bool(getattr(args, "candidate_decode", False)),
-        "candidate_short_gate": bool(getattr(args, "candidate_short_gate", True)),
-        "candidate_gate_valid_thr": float(getattr(args, "candidate_gate_valid_thr", 0.5)),
-        "candidate_gate_min_visible": int(getattr(args, "candidate_gate_min_visible", 2)),
-        "candidate_gate_max_visible": int(getattr(args, "candidate_gate_max_visible", 10)),
-        "candidate_preserve_base_score": bool(getattr(args, "candidate_preserve_base_score", True)),
         "runtime_ms": float(args.runtime_ms),
         "max_images": int(args.max_images),
         "device": "cache",
@@ -1449,7 +1017,6 @@ def _config_for_summary(
                 "max_dets": [int(x) for x in sorted({int(x) for x in args.max_dets})],
                 "min_points": [int(x) for x in sorted({int(x) for x in args.min_points})],
                 "valid_before_maxdet": bool(getattr(args, "valid_before_maxdet", False)),
-                "extent_decode_modes": [str(x) for x in effective_extent_decode_modes],
                 "count_aware_topk": bool(getattr(args, "count_aware_topk", False)),
                 "count_aware_min_k": int(getattr(args, "count_aware_min_k", 3)),
                 "count_aware_max_k": int(getattr(args, "count_aware_max_k", 5)),
@@ -1485,40 +1052,6 @@ def sweep(args: argparse.Namespace) -> dict[str, Any]:
     )
     imgsz = normalize_imgsz(args.imgsz, dataset=args.dataset)
     cache_dir = resolve_cache_dir(getattr(args, "cache_dir", None), args.weights, args.split)
-    require_query_extent_logits = _requires_query_extent_logits(args, decode_yaml_cfg)
-    query_points_source = _normalize_query_points_source(getattr(args, "query_points_source", "main"))
-    require_query_short_refined_points = _requires_query_short_refined_points(args)
-    candidate_decode = bool(getattr(args, "candidate_decode", False))
-    require_query_short_candidate_outputs = _requires_query_short_candidate_outputs(args)
-    if candidate_decode:
-        if query_points_source != "main":
-            raise ValueError("candidate_decode supports only query_points_source='main'.")
-        if bool(getattr(args, "count_aware_topk", False)):
-            raise ValueError("candidate_decode cannot be combined with count-aware top-k.")
-        extent_modes = {
-            str(x or "none").strip().lower() for x in getattr(args, "extent_decode_modes", ["none"])
-        }
-        if extent_modes - {"none", "off", "false", "0"}:
-            raise ValueError("candidate_decode cannot be combined with extent decode.")
-        candidate_gate_valid_thr = float(getattr(args, "candidate_gate_valid_thr", 0.5))
-        candidate_gate_min_visible = int(getattr(args, "candidate_gate_min_visible", 2))
-        candidate_gate_max_visible = int(getattr(args, "candidate_gate_max_visible", 10))
-        candidate_preserve_base_score = bool(getattr(args, "candidate_preserve_base_score", True))
-        if not 0.0 <= candidate_gate_valid_thr <= 1.0:
-            raise ValueError(f"candidate_gate_valid_thr must be in [0, 1], got {candidate_gate_valid_thr}.")
-        if (
-            candidate_gate_min_visible < 0
-            or candidate_gate_max_visible < 0
-            or candidate_gate_min_visible > candidate_gate_max_visible
-        ):
-            raise ValueError(
-                "candidate gate visible bounds must satisfy 0 <= min_visible <= max_visible, "
-                f"got {candidate_gate_min_visible}/{candidate_gate_max_visible}."
-            )
-        if not bool(getattr(args, "candidate_short_gate", True)):
-            raise ValueError("The gated candidate probe requires --candidate-short-gate.")
-        if not candidate_preserve_base_score:
-            raise ValueError("The gated candidate probe requires --candidate-preserve-base-score.")
 
     requested_mode = _normalize_decode_mode_name(getattr(args, "decode_mode", "auto"))
     manifest = None if rebuild_cache else _read_manifest(cache_dir)
@@ -1531,9 +1064,6 @@ def sweep(args: argparse.Namespace) -> dict[str, Any]:
         gt_path=gt_path,
         imgsz=imgsz,
         decode_mode=None if requested_mode == "auto" else requested_mode,
-        require_query_extent_logits=require_query_extent_logits,
-        require_query_short_refined_points=require_query_short_refined_points,
-        require_query_short_candidate_outputs=require_query_short_candidate_outputs,
     )
     cache_rebuilt = False
     if mismatch_reasons:
@@ -1550,26 +1080,9 @@ def sweep(args: argparse.Namespace) -> dict[str, Any]:
             decode_yaml_cfg=decode_yaml_cfg,
         )
         cache_rebuilt = True
-        mismatch_reasons = _cache_mismatch_reasons(
-            manifest,
-            args=args,
-            cache_dir=cache_dir,
-            archive_root=archive_root,
-            gt_records=gt_records,
-            gt_path=gt_path,
-            imgsz=imgsz,
-            decode_mode=None if requested_mode == "auto" else requested_mode,
-            require_query_extent_logits=require_query_extent_logits,
-            require_query_short_refined_points=require_query_short_refined_points,
-            require_query_short_candidate_outputs=require_query_short_candidate_outputs,
-        )
-        if mismatch_reasons:
-            raise RuntimeError(f"Prediction cache rebuilt but is still not usable for this sweep: {mismatch_reasons}")
         mismatch_reasons = []
     assert manifest is not None
     args.decode_mode = str(manifest["decode_mode"]) if requested_mode == "auto" else requested_mode
-    if str(args.decode_mode) == "ordered_slot" and query_points_source != "main":
-        raise ValueError("query_points_source='short_refined' is supported only for query decode.")
 
     if cache_only:
         print(json.dumps({"cache_dir": str(cache_dir.resolve()), "rebuilt": cache_rebuilt, "manifest": manifest}, indent=2))
@@ -1578,10 +1091,6 @@ def sweep(args: argparse.Namespace) -> dict[str, Any]:
     if str(args.decode_mode) == "ordered_slot":
         raise_for_ordered_slot_query_args(args, ORDERED_SLOT_QUERY_ONLY_DEFAULTS, context="cached TuSimple official sweep")
     combos = build_combos(args, decode_yaml_cfg=decode_yaml_cfg)
-    for combo in combos:
-        if combo.get("decode_mode") == "query":
-            combo["query_points_source"] = query_points_source
-            combo["candidate_decode"] = candidate_decode
     if str(args.decode_mode) != "ordered_slot":
         for max_det in sorted({int(c["max_det"]) for c in combos}):
             warn_max_det_mismatch(args.weights, max_det=max_det, context="cached TuSimple official sweep")
@@ -1607,17 +1116,7 @@ def sweep(args: argparse.Namespace) -> dict[str, Any]:
     effective_margins = sorted(
         {int(combo.get("count_aware_extra_margin", 0)) for combo in combos if combo.get("decode_mode") == "query"}
     )
-    effective_extent_decode_modes = sorted(
-        {str(combo.get("extent_decode_mode", "none")) for combo in combos if combo.get("decode_mode") == "query"}
-    )
-    save_dir = resolve_cached_save_dir(
-        args,
-        effective_margins,
-        effective_extent_decode_modes,
-        str(args.decode_mode),
-        query_points_source=query_points_source,
-        candidate_decode=candidate_decode,
-    )
+    save_dir = resolve_cached_save_dir(args, effective_margins, str(args.decode_mode))
     save_dir.mkdir(parents=True, exist_ok=True)
     write_csv(save_dir / "tusimple_official_sweep.csv", rows)
 
@@ -1632,9 +1131,7 @@ def sweep(args: argparse.Namespace) -> dict[str, Any]:
         imgsz=imgsz,
         decode_mode=str(args.decode_mode),
         effective_margins=effective_margins,
-        effective_extent_decode_modes=effective_extent_decode_modes,
         decode_yaml_cfg=decode_yaml_cfg,
-        query_points_source=query_points_source,
     )
     config.update(
         {

@@ -71,27 +71,6 @@ def main():
     if not isinstance(y, dict) or not expected.issubset(y):
         raise RuntimeError("Unexpected GCSLaneHead output keys.")
     gcs_mode = str(getattr(head, "gcs_mode", "query"))
-    expected_q = int(getattr(head, "num_queries", 0))
-    expected_k = int(getattr(head, "num_points", 0))
-    expected_points_shape = (args.batch, expected_q, expected_k, 2)
-    if tuple(y["pred_points"].shape) != expected_points_shape:
-        raise RuntimeError(f"pred_points must have shape {expected_points_shape}, got {tuple(y['pred_points'].shape)}.")
-    if tuple(y["pred_logits"].shape) != (args.batch, expected_q):
-        raise RuntimeError(f"pred_logits must have shape {(args.batch, expected_q)}, got {tuple(y['pred_logits'].shape)}.")
-    if tuple(y["pred_valid_logits"].shape) != (args.batch, expected_q, expected_k):
-        raise RuntimeError(
-            f"pred_valid_logits must have shape {(args.batch, expected_q, expected_k)}, "
-            f"got {tuple(y['pred_valid_logits'].shape)}."
-        )
-    if getattr(head, "aux", False):
-        if tuple(y["aux_mask_logits"].shape) != (args.batch, 2, img_h, img_w):
-            raise RuntimeError(
-                f"aux_mask_logits must have shape {(args.batch, 2, img_h, img_w)}, got {tuple(y['aux_mask_logits'].shape)}."
-            )
-        if tuple(y["aux_edge_logits"].shape) != (args.batch, 1, img_h, img_w):
-            raise RuntimeError(
-                f"aux_edge_logits must have shape {(args.batch, 1, img_h, img_w)}, got {tuple(y['aux_edge_logits'].shape)}."
-            )
     if gcs_mode == "ordered_slot":
         ordered_expected = {"pred_exist_logits", "pred_start_logits", "pred_end_logits", "pred_count_logits"}
         if not ordered_expected.issubset(y):
@@ -113,77 +92,6 @@ def main():
                 f"ordered_slot pred_count_logits must have shape B x {expected_count_classes}, "
                 f"got {tuple(y['pred_count_logits'].shape)}."
             )
-    elif getattr(head, "query_count_head", False):
-        expected_count_classes = int(getattr(head, "count_classes", 4))
-        if tuple(y.get("pred_count_logits", torch.empty(0)).shape) != (args.batch, expected_count_classes):
-            raise RuntimeError(
-                f"query Count Head pred_count_logits must have shape B x {expected_count_classes}, "
-                f"got {tuple(y.get('pred_count_logits', torch.empty(0)).shape)}."
-            )
-    elif "pred_count_logits" in y:
-        raise RuntimeError("default query GCSLaneHead must not emit pred_count_logits.")
-    if getattr(head, "query_quality_head", False):
-        if tuple(y.get("pred_quality_logits", torch.empty(0)).shape) != (args.batch, expected_q):
-            raise RuntimeError(
-                f"query Quality Head pred_quality_logits must have shape B x {expected_q}, "
-                f"got {tuple(y.get('pred_quality_logits', torch.empty(0)).shape)}."
-            )
-    elif "pred_quality_logits" in y:
-        raise RuntimeError("default query GCSLaneHead must not emit pred_quality_logits.")
-    if gcs_mode != "ordered_slot" and getattr(head, "query_extent_head", False):
-        expected_extent_shape = (args.batch, expected_q, expected_k)
-        if tuple(y.get("pred_start_logits", torch.empty(0)).shape) != expected_extent_shape:
-            raise RuntimeError(
-                f"query Extent Head pred_start_logits must have shape B x {expected_q} x {expected_k}, "
-                f"got {tuple(y.get('pred_start_logits', torch.empty(0)).shape)}."
-            )
-        if tuple(y.get("pred_end_logits", torch.empty(0)).shape) != expected_extent_shape:
-            raise RuntimeError(
-                f"query Extent Head pred_end_logits must have shape B x {expected_q} x {expected_k}, "
-                f"got {tuple(y.get('pred_end_logits', torch.empty(0)).shape)}."
-            )
-    elif gcs_mode != "ordered_slot":
-        if "pred_start_logits" in y or "pred_end_logits" in y:
-            raise RuntimeError("default query GCSLaneHead must not emit pred_start_logits/pred_end_logits.")
-    if gcs_mode != "ordered_slot" and getattr(head, "query_short_local_refine_head", False):
-        if tuple(y.get("pred_coarse_points", torch.empty(0)).shape) != expected_points_shape:
-            raise RuntimeError(
-                f"query short local refine pred_coarse_points must have shape {expected_points_shape}, "
-                f"got {tuple(y.get('pred_coarse_points', torch.empty(0)).shape)}."
-            )
-        if tuple(y.get("pred_short_refined_points", torch.empty(0)).shape) != expected_points_shape:
-            raise RuntimeError(
-                f"query short local refine pred_short_refined_points must have shape {expected_points_shape}, "
-                f"got {tuple(y.get('pred_short_refined_points', torch.empty(0)).shape)}."
-            )
-        expected_delta_shape = (args.batch, expected_q, expected_k)
-        if tuple(y.get("pred_short_refine_delta_logits", torch.empty(0)).shape) != expected_delta_shape:
-            raise RuntimeError(
-                f"query short local refine pred_short_refine_delta_logits must have shape {expected_delta_shape}, "
-                f"got {tuple(y.get('pred_short_refine_delta_logits', torch.empty(0)).shape)}."
-            )
-        if tuple(y.get("pred_short_refine_delta_norm", torch.empty(0)).shape) != expected_delta_shape:
-            raise RuntimeError(
-                f"query short local refine pred_short_refine_delta_norm must have shape {expected_delta_shape}, "
-                f"got {tuple(y.get('pred_short_refine_delta_norm', torch.empty(0)).shape)}."
-            )
-        aux_y_err = float((y["pred_short_refined_points"][..., 1] - y["pred_points"][..., 1]).abs().max().cpu().item())
-        if aux_y_err > 1e-6:
-            raise RuntimeError(f"short local x-refine must not change fixed-y anchors, max y error={aux_y_err:.6g}.")
-        max_delta_norm = float(y["pred_short_refine_delta_norm"].abs().max().detach().cpu().item())
-        max_allowed_norm = float(getattr(head, "short_local_refine_max_delta_px", 40.0)) / float(img_w)
-        if max_delta_norm > max_allowed_norm + 1e-6:
-            raise RuntimeError(
-                f"short local x-refine delta exceeds max_delta_px contract: {max_delta_norm:.6g} > {max_allowed_norm:.6g}."
-            )
-    elif gcs_mode != "ordered_slot":
-        if (
-            "pred_coarse_points" in y
-            or "pred_short_refined_points" in y
-            or "pred_short_refine_delta_logits" in y
-            or "pred_short_refine_delta_norm" in y
-        ):
-            raise RuntimeError("default query GCSLaneHead must not emit short local refine diagnostic outputs.")
     if y["pred_valid_logits"].shape != y["pred_points"].shape[:3]:
         raise RuntimeError(
             "pred_valid_logits must have shape B x Q x K matching pred_points, "
@@ -203,23 +111,6 @@ def main():
             raise RuntimeError(
                 f"fixed_y GCSLaneHead point MLP must output K x values, got out_features={final.out_features}."
             )
-    if getattr(head, "reference_mode", "linear") == "dualbank":
-        if expected_q not in {20, 24}:
-            raise RuntimeError("dualbank GCSLaneHead must use num_queries=20 or 24.")
-        if getattr(head, "point_mode", None) != "fixed_y":
-            raise RuntimeError("dualbank GCSLaneHead must use point_mode='fixed_y'.")
-        refs = torch.sigmoid(head.point_reference_logits.detach().float().cpu())
-        if tuple(refs.shape) != (expected_q, expected_k):
-            raise RuntimeError(
-                f"dualbank point references must have shape {expected_q} x {expected_k}, got {tuple(refs.shape)}."
-            )
-        t = torch.linspace(0.0, 1.0, expected_k)
-        bottom_x = torch.linspace(0.05, 0.95, 12)
-        top_x = 0.5 + (bottom_x - 0.5) * 0.25
-        q12_refs = bottom_x[:, None] * (1.0 - t[None, :]) + top_x[:, None] * t[None, :]
-        max_ref_err = float((refs[:12] - q12_refs).abs().max().item())
-        if max_ref_err > 1e-6:
-            raise RuntimeError(f"dualbank must preserve Q12 references in q0..q11, max error={max_ref_err:.6g}.")
 
     if args.detailed:
         print(f"task: {yolo.task}")
@@ -231,8 +122,6 @@ def main():
         print(f"GCSLaneHead point_mode: {getattr(head, 'point_mode', None)}")
         print(f"GCSLaneHead gcs_mode: {getattr(head, 'gcs_mode', None)}")
         print(f"GCSLaneHead point_dims: {getattr(head, 'point_dims', None)}")
-        print(f"GCSLaneHead reference_mode: {getattr(head, 'reference_mode', None)}")
-        print(f"GCSLaneHead query_short_local_refine_head: {getattr(head, 'query_short_local_refine_head', None)}")
 
     print(type(y))
     for k, v in y.items():

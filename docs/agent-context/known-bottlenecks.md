@@ -2,6 +2,25 @@
 
 This file applies to branch `codex/5-25-3-k56`.
 
+## 2026-07-28 Q12/env30 Gated Candidate v2 Reopen
+
+The user reopened candidate generation with a default-off v2 implementation.
+The bottleneck remains the same: short GT4/GT5 lanes often have hypotheses in
+the 20-40px band but not inside the official 20px gate.
+
+The v2 implementation addresses the rejected probe's structural mismatches:
+
+1. Candidate decode is prediction-only gated to short visible-anchor counts
+   instead of applying candidate selection to every Q12 query.
+2. Candidate scoring pools image features with predicted visibility weights
+   instead of averaging all K=56 anchors.
+3. Candidate selector scores do not alter the base query existence score.
+4. Count-aware top-k and candidate decode are mutually exclusive.
+
+This is not enough to claim accuracy improvement. The next evidence must come
+from raw candidate coverage and official-val-only sweeps. TEST remains closed
+until a candidate is selected by official-val.
+
 ## 2026-07-27 Q12/env30 Lateral Candidate Probe Rejection
 
 The run `query_short_candidate_env30_probe20_fix1` is rejected. It trained
@@ -102,23 +121,33 @@ step is an official-val-only prediction-only refined decode/sweep. If that
 does not improve formal ACC and short hit20, replace residual refinement with
 a candidate-generation mechanism that can produce a new lateral hypothesis.
 
+## 2026-07-28 Env30 Baseline Reset
+
+The active source/config is restored to env30 commit
+`86c8fb31cb4b48a53086be183478a95b0807753d` (`Add GT4 GT5 weak geometry rescue
+run`). The worktree code, configs, scripts, tools, and tracked reference banks
+must match that baseline outside documentation.
+
+All commits after `86c8fb31c` are rejected experiment records unless a future
+task explicitly reopens one with new official-val/train-side gates. This
+closes env30 staticref/valid-neg/near20 follow-ups, Q20/Q24 protected-static
+or dual-head routes, Q12 dual-head, query extent, short local-refine, lateral
+candidate, gated candidate, Q24 role/event containment, and candidate gate
+fixes as active paths. Their evidence remains below only to explain why they
+must not be relaunched or used for TEST/threshold tuning.
+
 ## Branch Scope
 
-The current mainline imports the historical `5-25-3.zip` algorithm and changes the TuSimple fixed-y contract to Q=12/K=56 with official h-sample anchors. It also includes the 2026-06-27 user-requested default-off `count_boundary_loss` for GT3/GT4/GT5 adjacent count-score boundaries, default-off train-only `gcs_hard_sampling` for 0601 and short-visible GT3/GT4/GT5 samples, default-off E3-lite `gcs_spurious_neg` loss for short unmatched duplicate-like queries, training-time `official_best`, and the default-off `valid_before_maxdet` query decode option present at `424ab1c86`. Follow-up code before that boundary keeps the old default behavior while adding default-preserving GT-count spurious weights, default-off GT spurious candidate protection, and default-effectively-off GT5 short point-valid rescue controls.
+The current mainline imports the historical `5-25-3.zip` algorithm and changes the TuSimple fixed-y contract to Q=12/K=56 with official h-sample anchors. It also includes the env30-baseline default-off `count_boundary_loss`, train-only `gcs_hard_sampling`, E3-lite `gcs_spurious_neg` family, training-time `official_best`, `valid_before_maxdet`, and default-off query Count Head ablation present at `86c8fb31c`.
 
 Do not read mainline Count Head, Quality Head, Survival Head, near-miss, or old mainline official-best bottlenecks as active branch behavior. Those algorithm mechanisms are not part of this 5-25-3 branch. The only active Count Boundary behavior is the branch-local default-off `count_boundary_loss`, the only active hard sampler is the branch-local default-off train-only `gcs_hard_sampling`, the only active E3-lite spurious negative behavior is the branch-local default-off `gcs_spurious_neg` family described in `current-contracts.md`, and the only active official-best behavior is the explicit 2026-06-27 training-time official-val selection hook.
 
-Active source/config is rolled back to commit `424ab1c86` (`Add
-valid-before-maxdet decode option`). Bottleneck notes below that depend on
-post-`424ab1c86` mechanisms such as short-side hardset diagnostics,
-`gcs_short_side_geom`, `gcs_far_spurious_neg`, `gcs_farspur_*`,
-`gcs_shortside_*`, `gcs_rank_*`, count-contract diagnostics,
-Q18/Q20/dataref configs, Count Head, count-guided decode, side-aux,
-GT4-hard diagnostics, `tools/diagnose_tusimple_count_confusion.py`,
-`tools/diagnose_gcs_count_contract.py`, `--gcs-gt4-short-*`,
-`extra_exist_loss`, or `--gcs-short-exist-*` are legacy experiment conclusions
-only. They do not describe currently available code, CLI flags, loss terms,
-diagnostic scripts, configs, model outputs, or active selected candidates.
+Active source/config is restored to commit `86c8fb31c` (`Add GT4 GT5 weak
+geometry rescue run`). Bottleneck notes below that depend on post-`86c8fb31c`
+mechanisms are rejected legacy experiment conclusions only. They do not
+describe currently available code, CLI flags, loss terms, diagnostic scripts,
+configs, model outputs, or active selected candidates unless a future task
+explicitly reopens them.
 
 ## Data And Geometry
 
@@ -135,7 +164,7 @@ diagnostic scripts, configs, model outputs, or active selected candidates.
 - This branch includes `tools/eval_tusimple_official.py`, `tools/sweep_tusimple_official_cached.py`, and `tools/sweep_tusimple_official.py` for official-val and final TuSimple test evaluation. Current threshold sweeps should use the cached helper.
 - The active rollback code does not include `tools/diagnose_tusimple_count_confusion.py`.
 - It includes explicit training-time `official_best` checkpoint preservation for official-val selection.
-- It does not include post-`424ab1c86` short-side hardset/count-contract diagnostics, later mainline `diagnose_gcs_gt5.py`, Count/Quality/Boundary diagnostics, Survival, or near-miss machinery.
+- It does not include post-`86c8fb31c` staticref, Q20/Q24, dual-head, query extent, short local-refine, lateral-candidate, gated-candidate, later mainline Count/Quality/Boundary diagnostics, Survival, or near-miss machinery as active code.
 
 ## 2026-07-23 Env30 Staticref / Valid-Neg / q7-Only Rejection Records
 
@@ -2906,7 +2935,7 @@ Integrated conclusion:
 
 The completed `gcs_yolo_lane_s_tusimple_fixed_y_dupmargin005_count03_under5_03`
 run enabled a post-`b6535f641` duplicate-margin experiment that is not present
-in the active `424ab1c86` rollback code:
+in the active env30 rollback code:
 
 ```text
 gcs_duplicate_margin = 0.05
@@ -2974,7 +3003,7 @@ Integrated conclusion:
 
 The completed `gcs_yolo_lane_s_tusimple_fixed_y_spurmargin003_count03_under5_03`
 run enabled a post-`b6535f641` spurious-margin experiment that is not present
-in the active `424ab1c86` rollback code:
+in the active env30 rollback code:
 
 ```text
 gcs_spurious_margin = 0.03
@@ -3041,7 +3070,7 @@ Integrated conclusion:
 
 The completed `gcs_yolo_lane_s_tusimple_fixed_y_shortpos_count03_under5_03`
 run enabled post-`b6535f641` positive short-lane losses that are not present in
-the active `424ab1c86` rollback code:
+the active env30 rollback code:
 
 ```text
 gcs_lane_balanced_point = 3.0

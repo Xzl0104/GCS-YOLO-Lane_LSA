@@ -55,55 +55,15 @@ LOSS_NAMES = (
     "boundary_pseudo_neg_loss",
     "boundary_pseudo_count",
     "boundary_pseudo_score_mean",
-    "boundary_pseudo_candidate_count",
-    "boundary_pseudo_protected_count",
+    "short_candidate_loss",
+    "short_candidate_score_loss",
+    "short_candidate_pull_loss",
+    "short_candidate_pos_count",
+    "short_candidate_soft_count",
+    "short_candidate_neg_count",
     "query_count_ce_loss",
     "query_count_acc",
     "query_count_pred_mean",
-    "query_quality_loss",
-    "query_quality_pos_mean",
-    "query_quality_pos_count",
-    "query_extent_loss",
-    "query_extent_start_acc",
-    "query_extent_end_acc",
-    "query_extent_iou",
-    "query_extent_short_count",
-    "short_local_refine_loss",
-    "short_local_refine_count",
-    "short_local_refine_coarse_ape",
-    "short_local_refine_refined_ape",
-    "short_local_refine_gain20",
-    "short_local_refine_loss20",
-    "short_local_refine_identity_count",
-    "short_local_refine_pull_count",
-    "short_candidate_loss",
-    "short_candidate_count",
-    "short_candidate_score_loss",
-    "short_candidate_geometry_loss",
-    "short_candidate_best_offset_px",
-    "short_candidate_raw_hit20",
-    "short_candidate_best_hit20",
-    "role_contain_loss",
-    "role_contain_exist_loss",
-    "role_contain_valid_loss",
-    "role_contain_count",
-    "role_contain_gt3_count",
-    "role_contain_gt4_gt5bank_count",
-    "role_contain_gt4_extra_count",
-    "role_contain_allowed_count",
-    "q24_event_contain_loss",
-    "q24_event_exist_loss",
-    "q24_event_valid_loss",
-    "q24_event_gt3_count",
-    "q24_event_gt4_count",
-    "q24_event_gt5_risk_count",
-    "q24_event_gt5_risk_protected_count",
-    "q24_event_clean_allowed_count",
-    "q24_event_dynamic_count",
-    "q24_event_dynamic_protected_count",
-    "q24_event_score_loss",
-    "q24_event_score_pos_count",
-    "q24_event_score_prob_mean",
 )
 LOSS_GAIN_ARGS = (
     "gcs_exist",
@@ -137,53 +97,13 @@ LOSS_GAIN_ARGS = (
     "gcs_boundary_pseudo_neg",
     None,
     None,
-    None,
-    None,
-    "gcs_query_count_ce",
-    None,
-    None,
-    "gcs_query_quality",
-    None,
-    None,
-    "gcs_query_extent",
-    None,
-    None,
-    None,
-    None,
-    "gcs_short_local_refine",
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
     "gcs_short_candidate",
     None,
     None,
     None,
     None,
     None,
-    None,
-    "gcs_role_contain",
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    "gcs_q24_event_contain",
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    "gcs_q24_event_score_calib",
+    "gcs_query_count_ce",
     None,
     None,
 )
@@ -198,7 +118,37 @@ DEFAULT_LOSS_GAINS = (
     0.0,
     0.0,
     0.0,
-) + (0.0,) * (len(LOSS_GAIN_ARGS) - 10)
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+)
 METRIC_NAMES = (
     "precision",
     "recall",
@@ -505,19 +455,6 @@ class GCSLaneValidator:
         """Return the maximum number of decoded lanes retained per image."""
         return int(self._arg(self.args, "gcs_eval_max_det", 8))
 
-    def _eval_extent_decode(self) -> bool:
-        """Return whether query validation decode should use start/end extent logits."""
-        return bool(self._arg(self.args, "gcs_extent_decode", False))
-
-    def _eval_extent_decode_mode(self) -> str:
-        """Return normalized query extent decode mode for validation metrics."""
-        mode = str(self._arg(self.args, "gcs_extent_decode_mode", "interval") or "interval").strip().lower()
-        if mode in {"off", "false", "0"}:
-            mode = "none"
-        if mode not in {"none", "interval", "intersect"}:
-            raise ValueError(f"Unsupported gcs_extent_decode_mode={mode!r}; use 'none', 'interval', or 'intersect'.")
-        return mode
-
     @staticmethod
     def _empty_metric_state() -> dict:
         """Create mutable validation metric accumulators."""
@@ -656,21 +593,6 @@ class GCSLaneValidator:
         pred_valid_logits = preds.get("pred_valid_logits")
         if pred_valid_logits is not None:
             pred_valid_logits = pred_valid_logits.detach()
-        pred_quality_logits = preds.get("pred_quality_logits")
-        if pred_quality_logits is not None:
-            pred_quality_logits = pred_quality_logits.detach()
-        pred_start_logits = preds.get("pred_start_logits")
-        if pred_start_logits is not None:
-            pred_start_logits = pred_start_logits.detach()
-        pred_end_logits = preds.get("pred_end_logits")
-        if pred_end_logits is not None:
-            pred_end_logits = pred_end_logits.detach()
-        pred_short_candidate_points = preds.get("pred_short_candidate_points")
-        if pred_short_candidate_points is not None:
-            pred_short_candidate_points = pred_short_candidate_points.detach()
-        pred_short_candidate_logits = preds.get("pred_short_candidate_logits")
-        if pred_short_candidate_logits is not None:
-            pred_short_candidate_logits = pred_short_candidate_logits.detach()
         if pred_logits.ndim == 3 and pred_logits.shape[-1] == 1:
             pred_logits = pred_logits.squeeze(-1)
         h, w = int(batch["img"].shape[-2]), int(batch["img"].shape[-1])
@@ -682,14 +604,6 @@ class GCSLaneValidator:
         nms_dist_px = self._eval_nms_dist_px()
         point_valid_thr = self._eval_point_valid_thr()
         max_det = self._eval_max_det()
-        extent_decode = self._eval_extent_decode()
-        extent_decode_mode = self._eval_extent_decode_mode()
-        candidate_decode = bool(self._arg(self.args, "gcs_candidate_decode", False))
-        candidate_short_gate = bool(self._arg(self.args, "gcs_candidate_short_gate", True))
-        candidate_gate_valid_thr = float(self._arg(self.args, "gcs_candidate_gate_valid_thr", 0.5))
-        candidate_gate_min_visible = int(self._arg(self.args, "gcs_candidate_gate_min_visible", 2))
-        candidate_gate_max_visible = int(self._arg(self.args, "gcs_candidate_gate_max_visible", 10))
-        candidate_preserve_base_score = bool(self._arg(self.args, "gcs_candidate_preserve_base_score", True))
         ordered_slot = self._gcs_mode() == "ordered_slot"
         ordered_slot_runtime_cfg = ordered_slot_decode_runtime_config(context="training_val") if ordered_slot else None
         ordered_slot_params = ordered_slot_decode_params(self.args) if ordered_slot else None
@@ -715,29 +629,22 @@ class GCSLaneValidator:
                 pred_lanes = decode_gcs_predictions(
                     pred_points[i],
                     pred_logits[i],
-                    pred_quality_logits=pred_quality_logits[i] if pred_quality_logits is not None else None,
                     pred_valid_logits=pred_valid_logits[i] if pred_valid_logits is not None else None,
-                    pred_start_logits=pred_start_logits[i] if pred_start_logits is not None else None,
-                    pred_end_logits=pred_end_logits[i] if pred_end_logits is not None else None,
-                    pred_short_candidate_points=(
-                        pred_short_candidate_points[i] if pred_short_candidate_points is not None else None
-                    ),
-                    pred_short_candidate_logits=(
-                        pred_short_candidate_logits[i] if pred_short_candidate_logits is not None else None
-                    ),
+                    pred_short_candidate_points=preds.get("pred_short_candidate_points", None)[i]
+                    if preds.get("pred_short_candidate_points", None) is not None
+                    else None,
+                    pred_short_candidate_logits=preds.get("pred_short_candidate_logits", None)[i]
+                    if preds.get("pred_short_candidate_logits", None) is not None
+                    else None,
                     image_shape=(h, w),
                     score_thr=conf,
                     point_valid_thr=point_valid_thr,
                     max_det=max_det,
                     nms_dist_px=nms_dist_px,
-                    extent_decode=extent_decode,
-                    extent_decode_mode=extent_decode_mode,
-                    candidate_decode=candidate_decode,
-                    candidate_short_gate=candidate_short_gate,
-                    candidate_gate_valid_thr=candidate_gate_valid_thr,
-                    candidate_gate_min_visible=candidate_gate_min_visible,
-                    candidate_gate_max_visible=candidate_gate_max_visible,
-                    candidate_preserve_base_score=candidate_preserve_base_score,
+                    candidate_decode=bool(self._arg(self.args, "gcs_candidate_decode", False)),
+                    candidate_score_thr=float(self._arg(self.args, "gcs_candidate_score_thr", 0.05)),
+                    candidate_short_min_points=int(self._arg(self.args, "gcs_candidate_short_min_points", 2)),
+                    candidate_short_max_points=int(self._arg(self.args, "gcs_candidate_short_max_points", 10)),
                 )
             gt_lanes, gt_valid = self._valid_gt_lanes(gt_lanes_t, gt_valid_t)
             tp, fp, fn, apes_tp, apes_all, apes_fp = self._match_lanes(

@@ -2,6 +2,96 @@
 
 This file records decisions for branch `codex/5-25-3-k56`.
 
+## 2026-07-28: Restore Active Code to Env30 Baseline
+
+Decision:
+
+Restore active code/config/script/tool/reference-bank payload to env30 commit
+`86c8fb31cb4b48a53086be183478a95b0807753d` (`Add GT4 GT5 weak geometry
+rescue run`). Keep later documentation as historical evidence, but reject all
+post-env30 experiment code paths as active branch behavior.
+
+Scope:
+
+```text
+active code anchor = 86c8fb31c Add GT4 GT5 weak geometry rescue run
+current policy = tracked non-documentation content must match env30
+documentation role = preserve later results only as rejected/legacy records
+TEST = closed for all post-env30 rejected experiments
+```
+
+Rejected post-env30 families include:
+
+```text
+env30 staticref / valid-neg / q7-only / near20 follow-ups
+Q20/Q24 protected static banks and training probes
+Q24 role, partition, GT5-safe boundary, event-containment, and dynamic-score routes
+Q12 dual-head and Q24 dual-head quality/count probes
+query extent and extent+count probes
+short local x-refine v1/v2/v3 and refined-decode follow-ups
+lateral candidate and gated candidate probes
+candidate gate/config follow-up fixes
+```
+
+Why:
+
+The later family did not produce a promotion-safe official-val/train-side path
+over env30. Several candidates also introduced extra active scripts, YAMLs,
+diagnostic tools, or decode/loss surfaces that made the branch contract harder
+to interpret. The smallest safe state is the env30 baseline plus explicit
+documentation that later experiments are rejected records only.
+
+Implementation note:
+
+The worktree rollback keeps `AGENTS.md` and `docs/agent-context/` as the
+documentation layer, while restoring non-documentation tracked content to
+`86c8fb31c`. Use this check to verify the active payload:
+
+```bash
+git diff --stat 86c8fb31c -- . ':!AGENTS.md' ':!docs/agent-context'
+```
+
+Expected result: no output.
+
+## 2026-07-28: Implement user-reopened Q12/env30 gated candidate v2
+
+Decision:
+
+Implement a new default-off lateral candidate-generation v2 path requested by
+the user on 2026-07-28. This reopens the candidate-generation idea with new
+official-val/train-side gates; it does not promote or relaunch the rejected
+`query_short_candidate_env30_probe20_fix1` implementation.
+
+Implementation:
+
+- add `gcs-yolo-lane-s-q12-k56-gated-candidate-v2.yaml`;
+- emit `pred_short_candidate_points: B x 12 x 7 x 56 x 2` and
+  `pred_short_candidate_logits: B x 12 x 7` only for that YAML;
+- generate fixed lateral offsets `[0, -20, +20, -40, +40, -60, +60]`;
+- score candidates with visibility-aware image-feature pooling;
+- train `gcs_short_candidate` only on short GT4/GT5 candidate assignment;
+- keep base query existence logits unchanged during candidate decode;
+- apply candidate decode only to prediction-short queries and reject it with
+  count-aware top-k;
+- add `diagnose_gcs_short_candidate_coverage.py` for raw hit20/hit40 gates;
+- keep TEST closed.
+
+The first launch script defaults to `PRETRAINED=yolo11s-seg.pt` and trains the
+dedicated v2 YAML under the env30 launch protocol. It is not a freeze-only
+selector-head fine-tune from env30 `official_best.pt` unless a future command
+explicitly adds that constraint.
+
+Gate:
+
+```text
+train0601 short GT5: 142/183 -> target near >=160/183
+official-val short GT5: 40/53 -> must rise
+short GT4 must not regress
+GT3/GT4 false-extra must not increase
+oracle-rank gain should remain small
+TEST closed
+```
+
 ## 2026-07-27: Reject Q12/env30 lateral candidate-generation probe
 
 Decision:

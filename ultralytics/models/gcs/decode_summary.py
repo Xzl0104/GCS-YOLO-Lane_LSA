@@ -19,14 +19,6 @@ QUERY_DECODE_KEYS = frozenset(
         "max_det",
         "min_points",
         "valid_before_maxdet",
-        "candidate_decode",
-        "candidate_short_gate",
-        "candidate_gate_valid_thr",
-        "candidate_gate_min_visible",
-        "candidate_gate_max_visible",
-        "candidate_preserve_base_score",
-        "extent_decode",
-        "extent_decode_mode",
         "count_aware_topk",
         "count_aware_min_k",
         "count_aware_max_k",
@@ -36,15 +28,7 @@ QUERY_DECODE_KEYS = frozenset(
     }
 )
 QUERY_SWEEP_DECODE_KEYS = frozenset(
-    {
-        "confs",
-        "point_valid_thrs",
-        "nms_dist_pxs",
-        "max_dets",
-        "count_aware_extra_margins",
-        "count_modes",
-        "extent_decode_modes",
-    }
+    {"confs", "point_valid_thrs", "nms_dist_pxs", "max_dets", "count_aware_extra_margins", "count_modes"}
 )
 ORDERED_SLOT_QUERY_ONLY_KEYS = QUERY_DECODE_KEYS | QUERY_SWEEP_DECODE_KEYS
 ORDERED_SLOT_QUERY_DECODE_DEFAULTS = {
@@ -54,14 +38,6 @@ ORDERED_SLOT_QUERY_DECODE_DEFAULTS = {
     "min_points": 6,
     "max_det": 8,
     "valid_before_maxdet": False,
-    "candidate_decode": False,
-    "candidate_short_gate": True,
-    "candidate_gate_valid_thr": 0.5,
-    "candidate_gate_min_visible": 2,
-    "candidate_gate_max_visible": 10,
-    "candidate_preserve_base_score": True,
-    "extent_decode": False,
-    "extent_decode_mode": "none",
     "count_aware_topk": False,
     "count_aware_min_k": 3,
     "count_aware_max_k": 5,
@@ -300,21 +276,10 @@ def _bool_value(value: Any) -> bool:
     return bool(value)
 
 
-def query_decode_cfg(
-    best_row: Mapping[str, Any],
-    valid_before_maxdet: Any = None,
-    extent_decode: Any = None,
-    extent_decode_mode: Any = None,
-) -> dict[str, Any]:
+def query_decode_cfg(best_row: Mapping[str, Any], valid_before_maxdet: Any = None) -> dict[str, Any]:
     """Build the official query decode-yaml schema from a selected sweep row."""
     if valid_before_maxdet is None:
         valid_before_maxdet = best_row.get("valid_before_maxdet", False)
-    if extent_decode is None:
-        extent_decode = best_row.get("extent_decode", False)
-    if extent_decode_mode is None:
-        extent_decode_mode = best_row.get("extent_decode_mode", "none")
-    if not _bool_value(extent_decode):
-        extent_decode_mode = "none"
     cfg = {
         "schema": QUERY_DECODE_SCHEMA,
         "decode_mode": "query",
@@ -324,14 +289,6 @@ def query_decode_cfg(
         "max_det": int(best_row["max_det"]),
         "min_points": int(best_row["min_points"]),
         "valid_before_maxdet": _bool_value(valid_before_maxdet),
-        "candidate_decode": _bool_value(best_row.get("candidate_decode", False)),
-        "candidate_short_gate": _bool_value(best_row.get("candidate_short_gate", True)),
-        "candidate_gate_valid_thr": float(best_row.get("candidate_gate_valid_thr", 0.5) or 0.5),
-        "candidate_gate_min_visible": int(best_row.get("candidate_gate_min_visible", 2) or 2),
-        "candidate_gate_max_visible": int(best_row.get("candidate_gate_max_visible", 10) or 10),
-        "candidate_preserve_base_score": _bool_value(best_row.get("candidate_preserve_base_score", True)),
-        "extent_decode": _bool_value(extent_decode),
-        "extent_decode_mode": str(extent_decode_mode or "none"),
         "count_aware_topk": _bool_value(best_row.get("count_aware_topk", False)),
         "count_aware_min_k": int(best_row.get("count_aware_min_k", 3) or 3),
         "count_aware_max_k": int(best_row.get("count_aware_max_k", 5) or 5),
@@ -355,14 +312,7 @@ def build_official_best_decode_cfg(best_row: Mapping[str, Any], model_mode: str,
             "valid_before_maxdet",
             _arg(args, "gcs_official_valid_before_maxdet", False),
         )
-        extent_decode = best_row.get("extent_decode", _arg(args, "gcs_extent_decode", False))
-        extent_decode_mode = best_row.get("extent_decode_mode", _arg(args, "gcs_extent_decode_mode", "interval"))
-        return query_decode_cfg(
-            best_row,
-            valid_before_maxdet=valid_before_maxdet,
-            extent_decode=extent_decode,
-            extent_decode_mode=extent_decode_mode,
-        )
+        return query_decode_cfg(best_row, valid_before_maxdet=valid_before_maxdet)
     raise ValueError(f"Unknown model_mode={model_mode!r}.")
 
 
@@ -410,54 +360,10 @@ def validate_decode_yaml_for_model(decode_cfg: Mapping[str, Any], model_mode: st
     if model_mode == "query":
         if schema != QUERY_DECODE_SCHEMA:
             raise RuntimeError(f"Invalid query schema={schema!r}. Expected {QUERY_DECODE_SCHEMA}.")
-        required = QUERY_DECODE_KEYS - {
-            "valid_before_maxdet",
-            "candidate_decode",
-            "candidate_short_gate",
-            "candidate_gate_valid_thr",
-            "candidate_gate_min_visible",
-            "candidate_gate_max_visible",
-            "candidate_preserve_base_score",
-            "extent_decode",
-            "extent_decode_mode",
-            "count_mode",
-            "count_aware_extra_margin",
-        }
+        required = QUERY_DECODE_KEYS - {"valid_before_maxdet", "count_mode", "count_aware_extra_margin"}
         missing = sorted(required.difference(decode_cfg))
         if missing:
             raise RuntimeError(f"Invalid query decode yaml: missing keys {missing}.")
-        extent_mode = str(decode_cfg.get("extent_decode_mode", "none") or "none").strip().lower()
-        if extent_mode not in {"none", "interval", "intersect"}:
-            raise RuntimeError(
-                "Invalid query decode yaml: extent_decode_mode must be one of "
-                f"'none', 'interval', or 'intersect', got {extent_mode!r}."
-            )
-        if not _bool_value(decode_cfg.get("extent_decode", False)) and extent_mode != "none":
-            raise RuntimeError(
-                "Invalid query decode yaml: extent_decode_mode must be 'none' when extent_decode is false."
-            )
-        if _bool_value(decode_cfg.get("candidate_decode", False)):
-            if _bool_value(decode_cfg.get("extent_decode", False)) or extent_mode != "none":
-                raise RuntimeError(
-                    "Invalid query decode yaml: candidate_decode cannot be combined with extent_decode."
-                )
-            if _bool_value(decode_cfg.get("count_aware_topk", False)):
-                raise RuntimeError(
-                    "Invalid query decode yaml: candidate_decode cannot be combined with count_aware_topk."
-                )
-            candidate_thr = float(decode_cfg.get("candidate_gate_valid_thr", 0.5))
-            candidate_min = int(decode_cfg.get("candidate_gate_min_visible", 2))
-            candidate_max = int(decode_cfg.get("candidate_gate_max_visible", 10))
-            if not 0.0 <= candidate_thr <= 1.0:
-                raise RuntimeError(
-                    "Invalid query decode yaml: candidate_gate_valid_thr must be in [0, 1], "
-                    f"got {candidate_thr}."
-                )
-            if candidate_min < 0 or candidate_max < 0 or candidate_min > candidate_max:
-                raise RuntimeError(
-                    "Invalid query decode yaml: candidate gate visible bounds must satisfy "
-                    f"0 <= min <= max, got {candidate_min}/{candidate_max}."
-                )
         count_mode = str(decode_cfg.get("count_mode", "score_sum") or "score_sum")
         if count_mode not in {"score_sum", "count_logits"}:
             raise RuntimeError(

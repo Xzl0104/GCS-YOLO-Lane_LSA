@@ -1522,8 +1522,6 @@ def test_eval_gcs_ordered_summary_has_no_query_decode_keys() -> None:
         min_overlap=2,
         nms_dist_px=99.0,
         max_det=9,
-        extent_decode=False,
-        extent_decode_mode="none",
         count_aware_topk=True,
         count_aware_min_k=2,
         count_aware_max_k=5,
@@ -1600,8 +1598,6 @@ def test_eval_gcs_query_summary_keeps_query_decode_keys() -> None:
         min_overlap=2,
         nms_dist_px=99.0,
         max_det=9,
-        extent_decode=True,
-        extent_decode_mode="interval",
         count_aware_topk=True,
         count_aware_min_k=2,
         count_aware_max_k=5,
@@ -1615,8 +1611,6 @@ def test_eval_gcs_query_summary_keeps_query_decode_keys() -> None:
     assert config["point_valid_thr"] == 0.45
     assert config["nms_dist_px"] == 99.0
     assert config["max_det"] == 9
-    assert config["extent_decode"] is True
-    assert config["extent_decode_mode"] == "interval"
     assert config["count_aware_topk"] is True
 
 

@@ -24,7 +24,6 @@ from ultralytics.utils.gcs_postprocess import decode_gcs_predictions  # noqa: E4
 
 DEFAULT_CFG = ROOT / "ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml"
 COUNT_CFG = ROOT / "ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-count.yaml"
-DUALHEAD_CFG = ROOT / "ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-dualhead.yaml"
 ORDERED_CFG = ROOT / "ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q5-slot-k56.yaml"
 
 
@@ -59,24 +58,11 @@ def check_yaml_forward() -> None:
         raise AssertionError("query-count YAML did not emit pred_count_logits.")
     if tuple(count_out["pred_count_logits"].shape) != (2, 4):
         raise AssertionError(f"query-count pred_count_logits shape mismatch: {tuple(count_out['pred_count_logits'].shape)}.")
-    if "pred_quality_logits" in count_out:
-        raise AssertionError("query-count-only YAML unexpectedly emitted pred_quality_logits.")
-
-    dual_head = _head_from_yaml(DUALHEAD_CFG)
-    dual_out = dual_head(_head_features(dual_head), orig_size=(544, 960))
-    if "pred_count_logits" not in dual_out or "pred_quality_logits" not in dual_out:
-        raise AssertionError("dual-head YAML must emit pred_count_logits and pred_quality_logits.")
-    if tuple(dual_out["pred_count_logits"].shape) != (2, 4):
-        raise AssertionError(f"dual-head pred_count_logits shape mismatch: {tuple(dual_out['pred_count_logits'].shape)}.")
-    if tuple(dual_out["pred_quality_logits"].shape) != (2, 12):
-        raise AssertionError(f"dual-head pred_quality_logits shape mismatch: {tuple(dual_out['pred_quality_logits'].shape)}.")
 
     default_head = _head_from_yaml(DEFAULT_CFG)
     default_out = default_head(_head_features(default_head), orig_size=(544, 960))
     if "pred_count_logits" in default_out:
         raise AssertionError("default query YAML unexpectedly emitted pred_count_logits.")
-    if "pred_quality_logits" in default_out:
-        raise AssertionError("default query YAML unexpectedly emitted pred_quality_logits.")
 
     ordered_head = _head_from_yaml(ORDERED_CFG)
     ordered_out = ordered_head(_head_features(ordered_head), orig_size=(544, 960))
@@ -84,8 +70,6 @@ def check_yaml_forward() -> None:
         raise AssertionError("ordered-slot YAML lost pred_count_logits.")
     if getattr(ordered_head, "query_count_head", False):
         raise AssertionError("ordered-slot head must not depend on query_count_head.")
-    if getattr(ordered_head, "query_quality_head", False):
-        raise AssertionError("ordered-slot head must not depend on query_quality_head.")
     if tuple(ordered_out["pred_count_logits"].shape) != (2, 4):
         raise AssertionError(f"ordered-slot pred_count_logits shape mismatch: {tuple(ordered_out['pred_count_logits'].shape)}.")
 
@@ -109,7 +93,7 @@ def _make_batch() -> dict:
     }
 
 
-def _make_preds(include_count: bool, include_quality: bool = False) -> dict[str, torch.Tensor]:
+def _make_preds(include_count: bool) -> dict[str, torch.Tensor]:
     b, q, k = 2, 12, 56
     y = torch.linspace(710.0 / 720.0, 160.0 / 720.0, k).view(1, 1, k).expand(b, q, k)
     x = torch.linspace(0.05, 0.95, q).view(1, q, 1).expand(b, q, k)
@@ -126,37 +110,26 @@ def _make_preds(include_count: bool, include_quality: bool = False) -> dict[str,
             ],
             dtype=torch.float32,
         )
-    if include_quality:
-        preds["pred_quality_logits"] = torch.zeros(b, q)
     return preds
 
 
 def check_loss() -> None:
-    criterion = GCSLoss({"gcs_imgsz": [544, 960], "gcs_query_count_ce": 0.5, "gcs_query_quality": 0.5})
+    criterion = GCSLoss({"gcs_imgsz": [544, 960], "gcs_query_count_ce": 0.5})
     batch = _make_batch()
-    names = list(GCSLoss.loss_names)
-    query_count_idx = names.index("query_count_ce_loss")
-    query_quality_idx = names.index("query_quality_loss")
 
-    _, with_items = criterion(_make_preds(include_count=True, include_quality=True), batch)
+    _, with_items = criterion(_make_preds(include_count=True), batch)
     if int(with_items.numel()) != len(GCSLoss.loss_names):
         raise AssertionError(f"GCSLoss item length mismatch: {with_items.numel()} vs {len(GCSLoss.loss_names)}.")
     if not torch.isfinite(with_items).all():
         raise AssertionError("GCSLoss produced non-finite items with pred_count_logits.")
-    if float(with_items[query_count_idx]) <= 0.0:
-        raise AssertionError(f"query_count_ce_loss should be positive with logits present, got {float(with_items[query_count_idx])}.")
-    if float(with_items[query_quality_idx]) <= 0.0:
-        raise AssertionError(f"query_quality_loss should be positive with logits present, got {float(with_items[query_quality_idx])}.")
+    if float(with_items[-3]) <= 0.0:
+        raise AssertionError(f"query_count_ce_loss should be positive with logits present, got {float(with_items[-3])}.")
 
-    without_count_quality = GCSLoss({"gcs_imgsz": [544, 960], "gcs_query_count_ce": 0.0, "gcs_query_quality": 0.0})
-    _, without_items = without_count_quality(_make_preds(include_count=False), batch)
+    _, without_items = criterion(_make_preds(include_count=False), batch)
     if int(without_items.numel()) != len(GCSLoss.loss_names):
         raise AssertionError(f"GCSLoss no-count item length mismatch: {without_items.numel()} vs {len(GCSLoss.loss_names)}.")
-    if float(without_items[query_count_idx]) != 0.0 or float(without_items[query_quality_idx]) != 0.0:
-        raise AssertionError(
-            "missing pred_count_logits/pred_quality_logits with zero gains should log zero "
-            f"for query losses, got count={float(without_items[query_count_idx])}, quality={float(without_items[query_quality_idx])}."
-        )
+    if not torch.allclose(without_items[-3:], torch.zeros_like(without_items[-3:])):
+        raise AssertionError(f"missing pred_count_logits should log zeros, got {without_items[-3:].tolist()}.")
 
 
 def check_decode_count_modes() -> None:
@@ -260,21 +233,6 @@ def check_decode_count_modes() -> None:
         raise AssertionError(
             "count_logits mode should use the fixed 2..5 class mapping even when score_sum defaults are 3..5."
         )
-
-    quality_logits = torch.tensor([_logit(0.10), _logit(0.20), _logit(0.99), _logit(0.30), _logit(0.40)])
-    quality_lanes = decode_gcs_predictions(
-        **common,
-        pred_quality_logits=quality_logits,
-        pred_count_logits=count_logits,
-        count_mode="count_logits",
-        count_aware_extra_margin=0,
-    )
-    if len(quality_lanes) != 3:
-        raise AssertionError(f"quality+count_logits should keep k_hat=3 lanes, got {len(quality_lanes)}.")
-    if int(quality_lanes[0]["query"]) != 2:
-        raise AssertionError(f"pred_quality_logits should rank q2 first, got lanes={quality_lanes!r}.")
-    if any(lane.get("score_source") != "quality_logits" for lane in quality_lanes):
-        raise AssertionError("decoded dual-head lanes must record score_source='quality_logits'.")
 
 
 def check_sweep_combos() -> None:

@@ -14,7 +14,6 @@ from ultralytics.engine.predictor import BasePredictor
 from ultralytics.engine.results import Results
 from ultralytics.models.gcs.decode_ordered_slot import decode_ordered_slot_predictions
 from ultralytics.models.gcs.decode_summary import ordered_slot_decode_params, ordered_slot_decode_runtime_config
-from ultralytics.nn.modules import GCSLaneHead
 from ultralytics.utils import ops
 from ultralytics.utils.gcs_shape import assert_gcs_image_tensor, assert_gcs_shape, normalize_imgsz
 from ultralytics.utils.gcs_postprocess import decode_gcs_predictions, draw_gcs_lanes, save_gcs_lanes_txt
@@ -80,34 +79,6 @@ class GCSLanePredictor(BasePredictor):
         return None
 
     @staticmethod
-    def _normalize_gcs_mode(mode) -> str:
-        """Normalize GCS mode spelling."""
-        mode = str(mode or "query").lower()
-        if mode in {"ordered-slot", "orderedslot"}:
-            mode = "ordered_slot"
-        if mode not in {"query", "ordered_slot"}:
-            raise ValueError(f"gcs_mode must be 'query' or 'ordered_slot', got {mode!r}.")
-        return mode
-
-    def _model_gcs_mode(self) -> str:
-        """Infer the loaded GCS head mode without relying on output-key collisions."""
-        model = getattr(self, "model", None)
-        for obj in (model, getattr(model, "model", None), getattr(getattr(model, "model", None), "model", None)):
-            if obj is None or not hasattr(obj, "modules"):
-                continue
-            modes = [
-                self._normalize_gcs_mode(getattr(module, "gcs_mode", "query"))
-                for module in obj.modules()
-                if isinstance(module, GCSLaneHead)
-            ]
-            unique = sorted(set(modes))
-            if len(unique) == 1:
-                return unique[0]
-            if len(unique) > 1:
-                raise RuntimeError(f"Multiple GCS modes found in model: {unique}.")
-        return self._normalize_gcs_mode(self._arg_value(self.args, "gcs_mode") or getattr(model, "gcs_mode", "query"))
-
-    @staticmethod
     def _normalize_explicit_gcs_imgsz(value, source: str) -> tuple[int, int]:
         """Normalize an explicit GCS H,W shape and reject square-only fallbacks."""
         shape = normalize_imgsz(value)
@@ -170,24 +141,9 @@ class GCSLanePredictor(BasePredictor):
 
         points = preds["pred_points"].detach()
         logits = preds["pred_logits"].detach()
-        quality_logits = preds.get("pred_quality_logits")
-        if quality_logits is not None:
-            quality_logits = quality_logits.detach()
         valid_logits = preds.get("pred_valid_logits")
         if valid_logits is not None:
             valid_logits = valid_logits.detach()
-        start_logits = preds.get("pred_start_logits")
-        if start_logits is not None:
-            start_logits = start_logits.detach()
-        end_logits = preds.get("pred_end_logits")
-        if end_logits is not None:
-            end_logits = end_logits.detach()
-        short_candidate_points = preds.get("pred_short_candidate_points")
-        if short_candidate_points is not None:
-            short_candidate_points = short_candidate_points.detach()
-        short_candidate_logits = preds.get("pred_short_candidate_logits")
-        if short_candidate_logits is not None:
-            short_candidate_logits = short_candidate_logits.detach()
         conf = 0.25 if self.args.conf is None else float(self.args.conf)
         max_det = int(self.args.max_det) if getattr(self.args, "max_det", None) else None
         nms_dist_px = float(getattr(self.args, "gcs_eval_nms_dist_px", 0.0) or 0.0)
@@ -195,72 +151,18 @@ class GCSLanePredictor(BasePredictor):
         if point_valid_thr is None:
             point_valid_thr = getattr(self.args, "point_valid_thr", 0.5)
         point_valid_thr = float(point_valid_thr)
-        extent_decode = bool(self._arg_value(self.args, "gcs_extent_decode") or False)
-        extent_decode_mode = str(self._arg_value(self.args, "gcs_extent_decode_mode") or "interval")
-        candidate_decode = bool(self._arg_value(self.args, "gcs_candidate_decode") or False)
-        candidate_short_gate = bool(self._arg_value(self.args, "gcs_candidate_short_gate") if hasattr(self.args, "gcs_candidate_short_gate") else True)
-        candidate_gate_valid_thr = float(self._arg_value(self.args, "gcs_candidate_gate_valid_thr") or 0.5)
-        candidate_gate_min_visible = int(self._arg_value(self.args, "gcs_candidate_gate_min_visible") or 2)
-        candidate_gate_max_visible = int(self._arg_value(self.args, "gcs_candidate_gate_max_visible") or 10)
-        candidate_preserve_base_score = bool(
-            self._arg_value(self.args, "gcs_candidate_preserve_base_score")
-            if hasattr(self.args, "gcs_candidate_preserve_base_score")
-            else True
-        )
 
         results = []
         if valid_logits is None:
             valid_iter = [None] * int(points.shape[0])
         else:
             valid_iter = list(valid_logits)
-        if quality_logits is None:
-            quality_iter = [None] * int(points.shape[0])
-        else:
-            quality_iter = list(quality_logits)
-        if start_logits is None:
-            start_iter = [None] * int(points.shape[0])
-        else:
-            start_iter = list(start_logits)
-        if end_logits is None:
-            end_iter = [None] * int(points.shape[0])
-        else:
-            end_iter = list(end_logits)
-        if short_candidate_points is None:
-            candidate_points_iter = [None] * int(points.shape[0])
-        else:
-            candidate_points_iter = list(short_candidate_points)
-        if short_candidate_logits is None:
-            candidate_logits_iter = [None] * int(points.shape[0])
-        else:
-            candidate_logits_iter = list(short_candidate_logits)
 
-        ordered_slot = self._model_gcs_mode() == "ordered_slot"
+        ordered_slot = "pred_count_logits" in preds and "pred_start_logits" in preds and "pred_end_logits" in preds
         ordered_slot_runtime_cfg = ordered_slot_decode_runtime_config(context="predict") if ordered_slot else None
         ordered_slot_params = ordered_slot_decode_params(self.args) if ordered_slot else None
-        for batch_i, (
-            lane_points,
-            lane_logits,
-            lane_quality_logits,
-            lane_valid_logits,
-            lane_start_logits,
-            lane_end_logits,
-            lane_candidate_points,
-            lane_candidate_logits,
-            orig_img,
-            img_path,
-        ) in enumerate(
-            zip(
-                points,
-                logits,
-                quality_iter,
-                valid_iter,
-                start_iter,
-                end_iter,
-                candidate_points_iter,
-                candidate_logits_iter,
-                orig_imgs,
-                self.batch[0],
-            )
+        for batch_i, (lane_points, lane_logits, lane_valid_logits, orig_img, img_path) in enumerate(
+            zip(points, logits, valid_iter, orig_imgs, self.batch[0])
         ):
             if ordered_slot:
                 lanes = decode_ordered_slot_predictions(
@@ -279,25 +181,12 @@ class GCSLanePredictor(BasePredictor):
                 lanes = decode_gcs_predictions(
                     lane_points,
                     lane_logits,
-                    pred_quality_logits=lane_quality_logits,
                     pred_valid_logits=lane_valid_logits,
-                    pred_start_logits=lane_start_logits,
-                    pred_end_logits=lane_end_logits,
-                    pred_short_candidate_points=lane_candidate_points,
-                    pred_short_candidate_logits=lane_candidate_logits,
                     image_shape=orig_img.shape[:2],
                     score_thr=conf,
                     point_valid_thr=point_valid_thr,
                     max_det=max_det,
                     nms_dist_px=nms_dist_px,
-                    extent_decode=extent_decode,
-                    extent_decode_mode=extent_decode_mode,
-                    candidate_decode=candidate_decode,
-                    candidate_short_gate=candidate_short_gate,
-                    candidate_gate_valid_thr=candidate_gate_valid_thr,
-                    candidate_gate_min_visible=candidate_gate_min_visible,
-                    candidate_gate_max_visible=candidate_gate_max_visible,
-                    candidate_preserve_base_score=candidate_preserve_base_score,
                 )
             result = GCSLaneResults(orig_img, path=img_path, names=self.model.names, lanes=lanes)
             if not lanes:

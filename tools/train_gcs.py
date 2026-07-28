@@ -237,120 +237,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--gcs-query-count-min-lanes", type=int, default=2)
     parser.add_argument("--gcs-query-count-max-lanes", type=int, default=5)
     parser.add_argument(
-        "--gcs-query-quality",
-        type=float,
-        default=0.0,
-        help="Query-mode independent lane quality/ranking head BCE gain. 0 disables.",
-    )
-    parser.add_argument(
-        "--gcs-query-extent",
-        type=float,
-        default=0.0,
-        help="Query-mode first/last visible anchor extent CE gain. 0 disables.",
-    )
-    parser.add_argument("--gcs-query-extent-short-visible-thr", type=int, default=10)
-    parser.add_argument("--gcs-query-extent-short-weight", type=float, default=2.0)
-    parser.add_argument("--gcs-query-extent-gt-min-lanes", type=int, default=4)
-    parser.add_argument(
-        "--gcs-candidate-decode",
-        action="store_true",
-        help="Use the optional query lateral candidate pool during GCS validation and official-val selection.",
-    )
-    parser.add_argument(
-        "--gcs-candidate-short-gate",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Apply lateral candidates only to queries with a predicted short-lane visible-anchor count.",
-    )
-    parser.add_argument("--gcs-candidate-gate-valid-thr", type=float, default=0.5)
-    parser.add_argument("--gcs-candidate-gate-min-visible", type=int, default=2)
-    parser.add_argument("--gcs-candidate-gate-max-visible", type=int, default=10)
-    parser.add_argument(
-        "--gcs-candidate-preserve-base-score",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Keep the original query existence/quality score after candidate selection.",
-    )
-    parser.add_argument(
-        "--gcs-short-local-refine",
-        type=float,
-        default=0.0,
-        help="Second-stage local x-refine loss gain for matched short GT4/GT5 lanes. 0 disables.",
-    )
-    parser.add_argument("--gcs-short-local-refine-visible-thr", type=int, default=10)
-    parser.add_argument("--gcs-short-local-refine-gt-min-lanes", type=int, default=4)
-    parser.add_argument(
-        "--gcs-short-local-refine-beta-px",
-        type=float,
-        default=5.0,
-        help="SmoothL1 beta source in pixels; converted to normalized x by image width.",
-    )
-    parser.add_argument(
-        "--gcs-short-local-refine-max-delta-px",
-        type=float,
-        default=40.0,
-        help="Maximum auxiliary short local x-refine residual in pixels.",
-    )
-    parser.add_argument(
-        "--gcs-short-local-refine-window-search",
-        action="store_true",
-        help="Use feature-conditioned horizontal window search instead of a single residual MLP for short local x-refine.",
-    )
-    parser.add_argument(
-        "--gcs-short-local-refine-window-radius-px",
-        type=float,
-        default=40.0,
-        help="Symmetric local x-search radius in pixels for the short-local-refine window head.",
-    )
-    parser.add_argument(
-        "--gcs-short-local-refine-window-step-px",
-        type=float,
-        default=20.0,
-        help="Pixel step between candidate offsets in the short-local-refine window head.",
-    )
-    parser.add_argument(
-        "--gcs-short-local-refine-freeze-base",
-        action="store_true",
-        help="Freeze all env30/base parameters and train only the query_short_local_refine head.",
-    )
-    parser.add_argument(
-        "--gcs-short-local-refine-identity-guard",
-        action="store_true",
-        help="Train coarse-hit lanes to stay near the coarse geometry and pull only near-miss lanes toward GT.",
-    )
-    parser.add_argument("--gcs-short-local-refine-identity-thr-px", type=float, default=20.0)
-    parser.add_argument("--gcs-short-local-refine-nearmiss-thr-px", type=float, default=80.0)
-    parser.add_argument("--gcs-short-local-refine-identity-weight", type=float, default=1.0)
-    parser.add_argument("--gcs-short-local-refine-nearmiss-weight", type=float, default=1.0)
-    parser.add_argument(
-        "--gcs-short-candidate",
-        type=float,
-        default=0.0,
-        help="Feature-conditioned lateral candidate score/coverage loss gain. 0 disables.",
-    )
-    parser.add_argument("--gcs-short-candidate-visible-thr", type=int, default=10)
-    parser.add_argument("--gcs-short-candidate-gt-min-lanes", type=int, default=4)
-    parser.add_argument(
-        "--gcs-short-candidate-beta-px",
-        type=float,
-        default=3.0,
-        help="Soft target temperature in pixels for candidate APE weighting.",
-    )
-    parser.add_argument(
-        "--gcs-short-candidate-score-temperature",
-        type=float,
-        default=1.0,
-        help="Temperature used for candidate score softmax supervision.",
-    )
-    parser.add_argument("--gcs-short-candidate-count", type=int, default=7)
-    parser.add_argument("--gcs-short-candidate-radius-px", type=float, default=60.0)
-    parser.add_argument("--gcs-short-candidate-step-px", type=float, default=20.0)
-    parser.add_argument(
-        "--gcs-short-candidate-freeze-base",
-        action="store_true",
-        help="Freeze env30/base parameters and train only the query_short_candidate head.",
-    )
-    parser.add_argument(
         "--gcs-count-ce",
         nargs="?",
         const=1.0,
@@ -569,6 +455,25 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--gcs-short-geom-gt5-weight", type=float, default=2.0)
     parser.add_argument("--gcs-short-geom-max-weight", type=float, default=3.0)
     parser.add_argument("--gcs-short-geom-curve", type=float, default=1.0)
+    parser.add_argument("--gcs-short-candidate", type=float, default=0.0)
+    parser.add_argument("--gcs-short-candidate-topk", type=int, default=4)
+    parser.add_argument("--gcs-short-candidate-visible-thr", type=int, default=10)
+    parser.add_argument("--gcs-short-candidate-min-visible", type=int, default=2)
+    parser.add_argument("--gcs-short-candidate-pos-px", type=float, default=20.0)
+    parser.add_argument("--gcs-short-candidate-soft-px", type=float, default=40.0)
+    parser.add_argument("--gcs-short-candidate-tau", type=float, default=25.0)
+    parser.add_argument("--gcs-short-candidate-pull-weight", type=float, default=0.05)
+    parser.add_argument("--gcs-short-candidate-gt4-weight", type=float, default=1.0)
+    parser.add_argument("--gcs-short-candidate-gt5-weight", type=float, default=1.5)
+    parser.add_argument("--gcs-short-candidate-neg-score-thr", type=float, default=0.6)
+    parser.add_argument(
+        "--gcs-candidate-decode",
+        action="store_true",
+        help="Enable prediction-only gated lateral candidate decode for query models. Off by default.",
+    )
+    parser.add_argument("--gcs-candidate-score-thr", type=float, default=0.05)
+    parser.add_argument("--gcs-candidate-short-min-points", type=int, default=2)
+    parser.add_argument("--gcs-candidate-short-max-points", type=int, default=10)
     parser.add_argument("--gcs-boundary-pseudo-neg", type=float, default=0.0)
     parser.add_argument("--gcs-boundary-pseudo-visible-thr", type=int, default=10)
     parser.add_argument("--gcs-boundary-pseudo-dist-thr", type=float, default=60.0)
@@ -578,243 +483,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--gcs-boundary-pseudo-score-thr", type=float, default=0.0)
     parser.add_argument("--gcs-boundary-pseudo-envelope-margin-px", type=float, default=-1.0)
     parser.add_argument("--gcs-boundary-pseudo-envelope-ratio-thr", type=float, default=0.75)
-    parser.add_argument(
-        "--gcs-boundary-pseudo-gt5-safe",
-        action="store_true",
-        help="Protect true GT5 short/near candidates while suppressing clear GT5 boundary-pseudo extras.",
-    )
-    parser.add_argument(
-        "--gcs-boundary-pseudo-protect-short-visible-thr",
-        type=int,
-        default=10,
-        help="GT5 lanes with visible anchors <= this threshold can protect nearby pseudo-negative candidates.",
-    )
-    parser.add_argument(
-        "--gcs-boundary-pseudo-protect-dist-px",
-        type=float,
-        default=40.0,
-        help="Maximum mean x distance in pixels for true GT5 short/near candidate protection.",
-    )
-    parser.add_argument(
-        "--gcs-boundary-pseudo-protect-min-overlap",
-        type=int,
-        default=3,
-        help="Minimum common visible anchors required for GT5-safe boundary-pseudo protection.",
-    )
-    parser.add_argument(
-        "--gcs-boundary-pseudo-protect-queries",
-        default="",
-        help="Optional query ids protected by GT5-safe boundary-pseudo logic, e.g. '13,21,23'. Empty means all queries.",
-    )
-    parser.add_argument(
-        "--gcs-role-contain",
-        type=float,
-        default=0.0,
-        help="Q24 extra-query role-containment BCE gain. 0 disables.",
-    )
-    parser.add_argument(
-        "--gcs-role-contain-valid-weight",
-        type=float,
-        default=0.25,
-        help="Point-valid zero-target multiplier inside role-containment loss.",
-    )
-    parser.add_argument(
-        "--gcs-role-contain-matcher",
-        action="store_true",
-        help="Forbid role-invalid Q24 extra-query matches during Hungarian assignment.",
-    )
-    parser.add_argument(
-        "--gcs-role-gt5-queries",
-        default="12-17",
-        help="Q24 GT5 short/weak-visible bank query ids, e.g. '12-17'.",
-    )
-    parser.add_argument(
-        "--gcs-role-gt4-queries",
-        default="18-23",
-        help="Q24 GT4 hard/short bank query ids, e.g. '18-23'.",
-    )
-    parser.add_argument(
-        "--gcs-role-gt4-visible-thr",
-        type=int,
-        default=20,
-        help="GT4 bank may match only GT4 lanes with visible anchors <= this threshold.",
-    )
-    parser.add_argument(
-        "--gcs-role-gt5-visible-thr",
-        type=int,
-        default=20,
-        help="GT5 bank may match only GT5 lanes with visible anchors <= this threshold when matcher containment is enabled.",
-    )
-    parser.add_argument(
-        "--gcs-q24-event-contain",
-        type=float,
-        default=0.0,
-        help="Q24 event-mined extra-query containment BCE gain. 0 disables.",
-    )
-    parser.add_argument(
-        "--gcs-q24-event-valid-weight",
-        type=float,
-        default=0.25,
-        help="Point-valid zero-target multiplier inside Q24 event containment loss.",
-    )
-    parser.add_argument(
-        "--gcs-q24-event-matcher",
-        action="store_true",
-        help="Use event-mined Q24 query roles to constrain Hungarian assignment.",
-    )
-    parser.add_argument(
-        "--gcs-q24-event-clean-gt5-queries",
-        default="",
-        help="Clean GT5 true-short carrier query ids, e.g. '12,15,20'.",
-    )
-    parser.add_argument(
-        "--gcs-q24-event-risk-queries",
-        default="",
-        help="High-risk event query ids to contain, e.g. '13,21,22,23'.",
-    )
-    parser.add_argument(
-        "--gcs-q24-event-gt4-queries",
-        default="",
-        help="GT4 hard/short event query ids, e.g. '14,17,18,19'.",
-    )
-    parser.add_argument(
-        "--gcs-q24-event-gt4-visible-thr",
-        type=int,
-        default=20,
-        help="Event GT4 queries may match only GT4 lanes with visible anchors <= this threshold.",
-    )
-    parser.add_argument(
-        "--gcs-q24-event-gt5-visible-thr",
-        type=int,
-        default=10,
-        help="Clean event GT5 queries may match only GT5 lanes with visible anchors <= this threshold.",
-    )
-    parser.add_argument(
-        "--gcs-q24-event-suppress-gt5-risk",
-        action="store_true",
-        help="Apply event containment to high-risk queries on GT5 images.",
-    )
-    parser.add_argument(
-        "--gcs-q24-event-gt5-risk-protect",
-        action="store_true",
-        help="Skip GT5 risk-query negative pressure when the query is near a true short GT5 lane.",
-    )
-    parser.add_argument(
-        "--gcs-q24-event-gt5-risk-protect-short-visible-thr",
-        type=int,
-        default=10,
-        help="GT5 visible-anchor threshold for optional risk-query protection.",
-    )
-    parser.add_argument(
-        "--gcs-q24-event-gt5-risk-protect-dist-px",
-        type=float,
-        default=30.0,
-        help="Maximum mean x distance in pixels for optional GT5 risk-query protection.",
-    )
-    parser.add_argument(
-        "--gcs-q24-event-gt5-risk-protect-min-overlap",
-        type=int,
-        default=3,
-        help="Minimum common anchors required for optional GT5 risk-query protection.",
-    )
-    parser.add_argument(
-        "--gcs-q24-event-dynamic",
-        action="store_true",
-        help="Dynamically suppress residual Q24 false-extra carrier queries with GT-close protection.",
-    )
-    parser.add_argument(
-        "--gcs-q24-event-dynamic-queries",
-        default="",
-        help="Residual false-extra carrier query ids for dynamic event containment, e.g. '0,1,11,20'.",
-    )
-    parser.add_argument(
-        "--gcs-q24-event-dynamic-valid-thr",
-        type=float,
-        default=0.5,
-        help="Point-valid probability threshold for dynamic event candidate visible length.",
-    )
-    parser.add_argument(
-        "--gcs-q24-event-dynamic-min-valid",
-        type=int,
-        default=3,
-        help="Minimum predicted-valid anchors for dynamic event containment candidates.",
-    )
-    parser.add_argument(
-        "--gcs-q24-event-dynamic-max-visible",
-        type=int,
-        default=20,
-        help="Maximum predicted-valid anchors for dynamic event containment candidates.",
-    )
-    parser.add_argument(
-        "--gcs-q24-event-dynamic-score-thr",
-        type=float,
-        default=0.0,
-        help="Optional minimum exist probability for dynamic event containment candidates.",
-    )
-    parser.add_argument(
-        "--gcs-q24-event-dynamic-protect",
-        action="store_true",
-        help="Skip dynamic event negatives that are close to a visible GT lane.",
-    )
-    parser.add_argument(
-        "--gcs-q24-event-dynamic-protect-visible-thr",
-        type=int,
-        default=10,
-        help="GT visible-anchor threshold for dynamic GT-close protection; 0 protects all GT lanes.",
-    )
-    parser.add_argument(
-        "--gcs-q24-event-dynamic-protect-dist-px",
-        type=float,
-        default=20.0,
-        help="Maximum mean x distance in pixels for dynamic GT-close protection.",
-    )
-    parser.add_argument(
-        "--gcs-q24-event-dynamic-protect-min-overlap",
-        type=int,
-        default=3,
-        help="Minimum common anchors for dynamic GT-close protection.",
-    )
-    parser.add_argument(
-        "--gcs-q24-event-score-calib",
-        type=float,
-        default=0.0,
-        help="Exist-score calibration loss gain for clean true GT5 short carriers.",
-    )
-    parser.add_argument(
-        "--gcs-q24-event-score-queries",
-        default="",
-        help="Query ids to score-calibrate when near true GT5 short lanes, e.g. '13,15'.",
-    )
-    parser.add_argument(
-        "--gcs-q24-event-score-visible-thr",
-        type=int,
-        default=10,
-        help="GT5 short-lane visible-anchor threshold for score calibration.",
-    )
-    parser.add_argument(
-        "--gcs-q24-event-score-valid-thr",
-        type=float,
-        default=0.5,
-        help="Point-valid probability threshold used for score-calibration GT overlap.",
-    )
-    parser.add_argument(
-        "--gcs-q24-event-score-dist-px",
-        type=float,
-        default=40.0,
-        help="Maximum mean x distance to true GT5 short lane for score calibration.",
-    )
-    parser.add_argument(
-        "--gcs-q24-event-score-min-overlap",
-        type=int,
-        default=3,
-        help="Minimum common anchors for true GT5 short score calibration.",
-    )
-    parser.add_argument(
-        "--gcs-q24-event-score-target",
-        type=float,
-        default=0.75,
-        help="Soft BCE target for true GT5 short score calibration.",
-    )
     parser.add_argument("--gcs-exist-pos-weight", type=float, default=1.0)
     parser.add_argument("--gcs-exist-focal-gamma", type=float, default=0.0, help="Optional focal gamma for existence BCE. 0 disables focal weighting.")
     parser.add_argument(
@@ -921,29 +589,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--gcs-official-max-dets", nargs="+", type=int, default=[5, 6, 8])
     parser.add_argument("--gcs-official-min-points", nargs="+", type=int, default=[4, 5, 6])
     parser.add_argument(
-        "--gcs-official-extent-decode-modes",
-        nargs="+",
-        choices=("none", "interval", "intersect"),
-        default=["none"],
-        help="Query extent visibility modes for training-time query official-val sweeps.",
-    )
-    parser.add_argument(
         "--gcs-official-count-modes",
         nargs="+",
         choices=("score_sum", "count_logits"),
         default=["score_sum"],
         help="Count source modes for training-time query official-val sweeps.",
     )
-    parser.add_argument(
-        "--gcs-official-count-aware-topk",
-        action="store_true",
-        default=False,
-        help="Enable count-aware top-k during training-time query official-val sweeps.",
-    )
-    parser.add_argument("--gcs-official-count-aware-min-k", type=int, default=3)
-    parser.add_argument("--gcs-official-count-aware-max-k", type=int, default=5)
-    parser.add_argument("--gcs-official-count-aware-length-norm", type=float, default=12.0)
-    parser.add_argument("--gcs-official-count-aware-extra-margins", nargs="+", type=int, default=[0])
     official_valid_group = parser.add_mutually_exclusive_group()
     official_valid_group.add_argument(
         "--gcs-official-valid-before-maxdet",
@@ -1051,95 +702,6 @@ def parse_pretrained(value: str) -> str | bool:
     return value
 
 
-def validate_short_local_refine_v3_args(args: argparse.Namespace) -> None:
-    """Fail fast when the v3 YAML is launched without the required v3 probe parameters."""
-    model = str(getattr(args, "model", ""))
-    if not model.endswith("gcs-yolo-lane-s-q12-k56-short-local-refine-v3.yaml"):
-        return
-    expected_floats = {
-        "gcs_short_local_refine": 0.05,
-        "gcs_short_local_refine_beta_px": 3.0,
-        "gcs_short_local_refine_max_delta_px": 60.0,
-        "gcs_short_local_refine_window_radius_px": 60.0,
-        "gcs_short_local_refine_window_step_px": 20.0,
-        "gcs_short_local_refine_identity_thr_px": 20.0,
-        "gcs_short_local_refine_nearmiss_thr_px": 80.0,
-        "gcs_short_local_refine_identity_weight": 1.0,
-        "gcs_short_local_refine_nearmiss_weight": 1.0,
-    }
-    expected_ints = {
-        "gcs_short_local_refine_visible_thr": 10,
-        "gcs_short_local_refine_gt_min_lanes": 4,
-    }
-    expected_bools = {
-        "gcs_short_local_refine_window_search": True,
-        "gcs_short_local_refine_freeze_base": True,
-        "gcs_short_local_refine_identity_guard": True,
-    }
-    bad = []
-    for key, expected in expected_floats.items():
-        value = float(getattr(args, key))
-        if abs(value - expected) > 1e-12:
-            bad.append(f"--{key.replace('_', '-')}={value:g}, expected {expected:g}")
-    for key, expected in expected_ints.items():
-        value = int(getattr(args, key))
-        if value != expected:
-            bad.append(f"--{key.replace('_', '-')}={value}, expected {expected}")
-    for key, expected in expected_bools.items():
-        value = bool(getattr(args, key))
-        if value is not expected:
-            bad.append(f"--{key.replace('_', '-')}={value}, expected {expected}")
-    if bad:
-        raise SystemExit(
-            "short-local-refine v3 YAML requires the v3 window/freeze/identity parameters; "
-            "use scripts/run_query_short_local_refine_env30_window_v3_probe10.sh or pass them explicitly. "
-            + "; ".join(bad)
-        )
-
-
-def validate_short_candidate_args(args: argparse.Namespace) -> None:
-    """Fail fast when the lateral-candidate probe is launched with an invalid contract."""
-    model = str(getattr(args, "model", ""))
-    if not model.endswith("gcs-yolo-lane-s-q12-k56-short-candidate.yaml"):
-        return
-    if str(getattr(args, "gcs_mode", "query")) != "query":
-        raise SystemExit("short-candidate YAML requires --gcs-mode query.")
-    if int(args.gcs_short_candidate_count) <= 0 or int(args.gcs_short_candidate_count) % 2 != 1:
-        raise SystemExit("gcs_short_candidate_count must be a positive odd integer.")
-    if float(args.gcs_short_candidate_radius_px) <= 0.0 or float(args.gcs_short_candidate_step_px) <= 0.0:
-        raise SystemExit("gcs_short_candidate_radius_px and gcs_short_candidate_step_px must be > 0.")
-    ratio = float(args.gcs_short_candidate_radius_px) / float(args.gcs_short_candidate_step_px)
-    expected_count = 2 * round(ratio) + 1
-    if abs(ratio - round(ratio)) > 1e-6 or int(args.gcs_short_candidate_count) != expected_count:
-        raise SystemExit(
-            "short-candidate YAML requires count=2*(radius/step)+1; "
-            f"got count={args.gcs_short_candidate_count}, radius={args.gcs_short_candidate_radius_px}, "
-            f"step={args.gcs_short_candidate_step_px}."
-        )
-    if float(args.gcs_short_candidate) <= 0.0:
-        raise SystemExit("short-candidate probe requires --gcs-short-candidate > 0.")
-    if int(args.gcs_short_candidate_visible_thr) < 0 or int(args.gcs_short_candidate_gt_min_lanes) < 0:
-        raise SystemExit("short-candidate visibility/lane thresholds must be >= 0.")
-    if float(args.gcs_short_candidate_beta_px) <= 0.0 or float(args.gcs_short_candidate_score_temperature) <= 0.0:
-        raise SystemExit("short-candidate beta_px and score_temperature must be > 0.")
-    if bool(args.gcs_short_candidate_freeze_base) is not True:
-        raise SystemExit("short-candidate probe requires --gcs-short-candidate-freeze-base.")
-    if bool(args.gcs_query_count_ce) or bool(args.gcs_query_quality) or bool(args.gcs_query_extent):
-        raise SystemExit("short-candidate probe must keep Count Head, Quality Head, and extent loss disabled.")
-    if not 0.0 <= float(args.gcs_candidate_gate_valid_thr) <= 1.0:
-        raise SystemExit("gcs_candidate_gate_valid_thr must be in [0, 1].")
-    if (
-        int(args.gcs_candidate_gate_min_visible) < 0
-        or int(args.gcs_candidate_gate_max_visible) < 0
-        or int(args.gcs_candidate_gate_min_visible) > int(args.gcs_candidate_gate_max_visible)
-    ):
-        raise SystemExit("gcs_candidate_gate_min_visible/max_visible must satisfy 0 <= min <= max.")
-    if not bool(args.gcs_candidate_short_gate):
-        raise SystemExit("short-candidate probe requires --gcs-candidate-short-gate.")
-    if not bool(args.gcs_candidate_preserve_base_score):
-        raise SystemExit("short-candidate probe requires --gcs-candidate-preserve-base-score.")
-
-
 def resolve_project(value: str) -> str:
     """Keep run outputs under the project root when a relative project path is passed."""
     path = Path(value)
@@ -1148,8 +710,6 @@ def resolve_project(value: str) -> str:
 
 def main() -> None:
     args = maybe_switch_ordered_slot_model(parse_args())
-    validate_short_local_refine_v3_args(args)
-    validate_short_candidate_args(args)
     defaults = dataset_defaults(args.dataset)
     gcs_imgsz = normalize_imgsz(args.imgsz, dataset=args.dataset)
     model_path = args.model
@@ -1215,40 +775,6 @@ def main() -> None:
         "gcs_query_count_ce": args.gcs_query_count_ce,
         "gcs_query_count_min_lanes": args.gcs_query_count_min_lanes,
         "gcs_query_count_max_lanes": args.gcs_query_count_max_lanes,
-        "gcs_query_quality": args.gcs_query_quality,
-        "gcs_query_extent": args.gcs_query_extent,
-        "gcs_query_extent_short_visible_thr": args.gcs_query_extent_short_visible_thr,
-        "gcs_query_extent_short_weight": args.gcs_query_extent_short_weight,
-        "gcs_query_extent_gt_min_lanes": args.gcs_query_extent_gt_min_lanes,
-        "gcs_candidate_decode": args.gcs_candidate_decode,
-        "gcs_candidate_short_gate": args.gcs_candidate_short_gate,
-        "gcs_candidate_gate_valid_thr": args.gcs_candidate_gate_valid_thr,
-        "gcs_candidate_gate_min_visible": args.gcs_candidate_gate_min_visible,
-        "gcs_candidate_gate_max_visible": args.gcs_candidate_gate_max_visible,
-        "gcs_candidate_preserve_base_score": args.gcs_candidate_preserve_base_score,
-        "gcs_short_local_refine": args.gcs_short_local_refine,
-        "gcs_short_local_refine_visible_thr": args.gcs_short_local_refine_visible_thr,
-        "gcs_short_local_refine_gt_min_lanes": args.gcs_short_local_refine_gt_min_lanes,
-        "gcs_short_local_refine_beta_px": args.gcs_short_local_refine_beta_px,
-        "gcs_short_local_refine_max_delta_px": args.gcs_short_local_refine_max_delta_px,
-        "gcs_short_local_refine_window_search": args.gcs_short_local_refine_window_search,
-        "gcs_short_local_refine_window_radius_px": args.gcs_short_local_refine_window_radius_px,
-        "gcs_short_local_refine_window_step_px": args.gcs_short_local_refine_window_step_px,
-        "gcs_short_local_refine_freeze_base": args.gcs_short_local_refine_freeze_base,
-        "gcs_short_local_refine_identity_guard": args.gcs_short_local_refine_identity_guard,
-        "gcs_short_local_refine_identity_thr_px": args.gcs_short_local_refine_identity_thr_px,
-        "gcs_short_local_refine_nearmiss_thr_px": args.gcs_short_local_refine_nearmiss_thr_px,
-        "gcs_short_local_refine_identity_weight": args.gcs_short_local_refine_identity_weight,
-        "gcs_short_local_refine_nearmiss_weight": args.gcs_short_local_refine_nearmiss_weight,
-        "gcs_short_candidate": args.gcs_short_candidate,
-        "gcs_short_candidate_visible_thr": args.gcs_short_candidate_visible_thr,
-        "gcs_short_candidate_gt_min_lanes": args.gcs_short_candidate_gt_min_lanes,
-        "gcs_short_candidate_beta_px": args.gcs_short_candidate_beta_px,
-        "gcs_short_candidate_score_temperature": args.gcs_short_candidate_score_temperature,
-        "gcs_short_candidate_count": args.gcs_short_candidate_count,
-        "gcs_short_candidate_radius_px": args.gcs_short_candidate_radius_px,
-        "gcs_short_candidate_step_px": args.gcs_short_candidate_step_px,
-        "gcs_short_candidate_freeze_base": args.gcs_short_candidate_freeze_base,
         "gcs_count_ce": args.gcs_count_ce,
         "gcs_interval": args.gcs_interval,
         "gcs_order": args.gcs_order,
@@ -1294,6 +820,21 @@ def main() -> None:
         "gcs_short_geom_gt5_weight": args.gcs_short_geom_gt5_weight,
         "gcs_short_geom_max_weight": args.gcs_short_geom_max_weight,
         "gcs_short_geom_curve": args.gcs_short_geom_curve,
+        "gcs_short_candidate": args.gcs_short_candidate,
+        "gcs_short_candidate_topk": args.gcs_short_candidate_topk,
+        "gcs_short_candidate_visible_thr": args.gcs_short_candidate_visible_thr,
+        "gcs_short_candidate_min_visible": args.gcs_short_candidate_min_visible,
+        "gcs_short_candidate_pos_px": args.gcs_short_candidate_pos_px,
+        "gcs_short_candidate_soft_px": args.gcs_short_candidate_soft_px,
+        "gcs_short_candidate_tau": args.gcs_short_candidate_tau,
+        "gcs_short_candidate_pull_weight": args.gcs_short_candidate_pull_weight,
+        "gcs_short_candidate_gt4_weight": args.gcs_short_candidate_gt4_weight,
+        "gcs_short_candidate_gt5_weight": args.gcs_short_candidate_gt5_weight,
+        "gcs_short_candidate_neg_score_thr": args.gcs_short_candidate_neg_score_thr,
+        "gcs_candidate_decode": args.gcs_candidate_decode,
+        "gcs_candidate_score_thr": args.gcs_candidate_score_thr,
+        "gcs_candidate_short_min_points": args.gcs_candidate_short_min_points,
+        "gcs_candidate_short_max_points": args.gcs_candidate_short_max_points,
         "gcs_boundary_pseudo_neg": args.gcs_boundary_pseudo_neg,
         "gcs_boundary_pseudo_visible_thr": args.gcs_boundary_pseudo_visible_thr,
         "gcs_boundary_pseudo_dist_thr": args.gcs_boundary_pseudo_dist_thr,
@@ -1303,48 +844,6 @@ def main() -> None:
         "gcs_boundary_pseudo_score_thr": args.gcs_boundary_pseudo_score_thr,
         "gcs_boundary_pseudo_envelope_margin_px": args.gcs_boundary_pseudo_envelope_margin_px,
         "gcs_boundary_pseudo_envelope_ratio_thr": args.gcs_boundary_pseudo_envelope_ratio_thr,
-        "gcs_boundary_pseudo_gt5_safe": args.gcs_boundary_pseudo_gt5_safe,
-        "gcs_boundary_pseudo_protect_short_visible_thr": args.gcs_boundary_pseudo_protect_short_visible_thr,
-        "gcs_boundary_pseudo_protect_dist_px": args.gcs_boundary_pseudo_protect_dist_px,
-        "gcs_boundary_pseudo_protect_min_overlap": args.gcs_boundary_pseudo_protect_min_overlap,
-        "gcs_boundary_pseudo_protect_queries": args.gcs_boundary_pseudo_protect_queries,
-        "gcs_role_contain": args.gcs_role_contain,
-        "gcs_role_contain_valid_weight": args.gcs_role_contain_valid_weight,
-        "gcs_role_contain_matcher": args.gcs_role_contain_matcher,
-        "gcs_role_gt5_queries": args.gcs_role_gt5_queries,
-        "gcs_role_gt4_queries": args.gcs_role_gt4_queries,
-        "gcs_role_gt4_visible_thr": args.gcs_role_gt4_visible_thr,
-        "gcs_role_gt5_visible_thr": args.gcs_role_gt5_visible_thr,
-        "gcs_q24_event_contain": args.gcs_q24_event_contain,
-        "gcs_q24_event_valid_weight": args.gcs_q24_event_valid_weight,
-        "gcs_q24_event_matcher": args.gcs_q24_event_matcher,
-        "gcs_q24_event_clean_gt5_queries": args.gcs_q24_event_clean_gt5_queries,
-        "gcs_q24_event_risk_queries": args.gcs_q24_event_risk_queries,
-        "gcs_q24_event_gt4_queries": args.gcs_q24_event_gt4_queries,
-        "gcs_q24_event_gt4_visible_thr": args.gcs_q24_event_gt4_visible_thr,
-        "gcs_q24_event_gt5_visible_thr": args.gcs_q24_event_gt5_visible_thr,
-        "gcs_q24_event_suppress_gt5_risk": args.gcs_q24_event_suppress_gt5_risk,
-        "gcs_q24_event_gt5_risk_protect": args.gcs_q24_event_gt5_risk_protect,
-        "gcs_q24_event_gt5_risk_protect_short_visible_thr": args.gcs_q24_event_gt5_risk_protect_short_visible_thr,
-        "gcs_q24_event_gt5_risk_protect_dist_px": args.gcs_q24_event_gt5_risk_protect_dist_px,
-        "gcs_q24_event_gt5_risk_protect_min_overlap": args.gcs_q24_event_gt5_risk_protect_min_overlap,
-        "gcs_q24_event_dynamic": args.gcs_q24_event_dynamic,
-        "gcs_q24_event_dynamic_queries": args.gcs_q24_event_dynamic_queries,
-        "gcs_q24_event_dynamic_valid_thr": args.gcs_q24_event_dynamic_valid_thr,
-        "gcs_q24_event_dynamic_min_valid": args.gcs_q24_event_dynamic_min_valid,
-        "gcs_q24_event_dynamic_max_visible": args.gcs_q24_event_dynamic_max_visible,
-        "gcs_q24_event_dynamic_score_thr": args.gcs_q24_event_dynamic_score_thr,
-        "gcs_q24_event_dynamic_protect": args.gcs_q24_event_dynamic_protect,
-        "gcs_q24_event_dynamic_protect_visible_thr": args.gcs_q24_event_dynamic_protect_visible_thr,
-        "gcs_q24_event_dynamic_protect_dist_px": args.gcs_q24_event_dynamic_protect_dist_px,
-        "gcs_q24_event_dynamic_protect_min_overlap": args.gcs_q24_event_dynamic_protect_min_overlap,
-        "gcs_q24_event_score_calib": args.gcs_q24_event_score_calib,
-        "gcs_q24_event_score_queries": args.gcs_q24_event_score_queries,
-        "gcs_q24_event_score_visible_thr": args.gcs_q24_event_score_visible_thr,
-        "gcs_q24_event_score_valid_thr": args.gcs_q24_event_score_valid_thr,
-        "gcs_q24_event_score_dist_px": args.gcs_q24_event_score_dist_px,
-        "gcs_q24_event_score_min_overlap": args.gcs_q24_event_score_min_overlap,
-        "gcs_q24_event_score_target": args.gcs_q24_event_score_target,
         "gcs_exist_pos_weight": args.gcs_exist_pos_weight,
         "gcs_exist_focal_gamma": args.gcs_exist_focal_gamma,
         "gcs_exist_focal_alpha": args.gcs_exist_focal_alpha,
@@ -1385,13 +884,7 @@ def main() -> None:
         "gcs_official_nms_dist_pxs": args.gcs_official_nms_dist_pxs,
         "gcs_official_max_dets": args.gcs_official_max_dets,
         "gcs_official_min_points": args.gcs_official_min_points,
-        "gcs_official_extent_decode_modes": args.gcs_official_extent_decode_modes,
         "gcs_official_count_modes": args.gcs_official_count_modes,
-        "gcs_official_count_aware_topk": args.gcs_official_count_aware_topk,
-        "gcs_official_count_aware_min_k": args.gcs_official_count_aware_min_k,
-        "gcs_official_count_aware_max_k": args.gcs_official_count_aware_max_k,
-        "gcs_official_count_aware_length_norm": args.gcs_official_count_aware_length_norm,
-        "gcs_official_count_aware_extra_margins": args.gcs_official_count_aware_extra_margins,
         "gcs_official_score_fp_weight": args.gcs_official_score_fp_weight,
         "gcs_official_score_fn_weight": args.gcs_official_score_fn_weight,
         "gcs_official_half": args.gcs_official_half,

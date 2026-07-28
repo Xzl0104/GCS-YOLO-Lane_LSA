@@ -13,33 +13,89 @@ this branch:    Q=12, K=56, fixed_y=[710/720, 160/720]
 
 Do not silently import later mainline mechanisms such as Count Head, Quality Head, Survival Head, or near-miss mining into this branch unless a future task explicitly asks for that algorithm change. The branch now includes the 2026-06-27 user-requested, default-off `count_boundary_loss` for adjacent GT3/GT4/GT5 count-score boundaries; this is not a Count Head or decode change.
 
+## 2026-07-28 Env30 Baseline Boundary
+
+Active source/config is restored to env30 commit
+`86c8fb31cb4b48a53086be183478a95b0807753d` (`Add GT4 GT5 weak geometry rescue
+run`). Outside documentation and explicitly reopened default-off v2 candidate
+files, tracked code/config/script/tool/reference-bank content must match that
+env30 baseline.
+
+All commits after `86c8fb31c` are rejected experiment records unless a future
+task explicitly reopens one with new official-val/train-side gates. This
+rejects post-env30 staticref/valid-neg/near20 follow-ups, Q20/Q24
+protected-static or dual-head routes, Q12 dual-head, query extent, short
+local-refine, lateral candidate, gated candidate, Q24 role/event containment,
+and candidate gate fixes as active code. Historical sections below are kept
+only to explain the rejection evidence; their scripts, YAMLs, tools, outputs,
+and launch commands are not active branch behavior.
+
 The 2026-07-06 user-requested query-mode explicit Count Head is active only as
 a default-off optional query ablation. It is enabled only by the dedicated
 query-count YAML and emits `pred_count_logits: B x 4` for the fixed 2/3/4/5
 lane-count classes. The default query YAML still emits no `pred_count_logits`,
 and ordered-slot keeps its existing count/slot logic unchanged.
 
-The 2026-07-25 user-requested Q12/env30 dual-head probe is also default-off
-and enabled only by
-`ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-dualhead.yaml` plus the
-dedicated launch script. It keeps the Q12/K56 query contract, adds
-`pred_count_logits: B x 4` for image-level lane count and
-`pred_quality_logits: B x 12` for query-level quality/ranking, and uses
-`count_logits` count-aware top-k with quality-logit ranking during
-official-val selection. The default Q12 YAML, the query-count-only YAML, Q24
-protected-static YAMLs, labels, official metrics, and TEST protocol remain
-unchanged.
+## 2026-07-28 User-Reopened Q12/env30 Gated Candidate v2
 
-The 2026-07-26 user-requested Q12/env30 query extent probe is default-off and
-enabled only by
-`ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-extent.yaml` plus the
-dedicated launch/gate scripts. It keeps Q=12/K=56 query mode, adds
-`pred_start_logits: B x 12 x 56` and `pred_end_logits: B x 12 x 56` for the
-first/last visible fixed-y anchor interval, and runs on top of the env30
-parent protocol (`gcs_short_geom=1.0` in the parent launch script). It does
-not enable Count Head, Quality Head, Q24, local-refine v2, or later mainline
-ranking/count-contract mechanisms. The default Q12 YAML still emits no query
-extent logits.
+The user explicitly reopened the lateral candidate-generation route on
+2026-07-28 with new gates. This is a new default-off v2 implementation, not a
+promotion or relaunch of the rejected 2026-07-27 candidate probe.
+
+The default query YAML and default decode remain unchanged. The v2 head is
+enabled only by:
+
+```text
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-gated-candidate-v2.yaml
+```
+
+When enabled, the query head adds:
+
+```text
+pred_short_candidate_points: B x 12 x 7 x 56 x 2
+pred_short_candidate_logits: B x 12 x 7
+pred_short_candidate_offsets_px: 7
+```
+
+The seven fixed lateral offsets are:
+
+```text
+[0, -20, +20, -40, +40, -60, +60]
+```
+
+Training is controlled by default-off `gcs_short_candidate`. Candidate
+assignment is limited to short GT4/GT5 lanes. APE `<=20px` candidates are
+strong positives, `20..40px` candidates are soft positives with
+`exp(-APE/tau) * visible_coverage`, and only far candidates with high current
+selector score are used as negatives. Logs add:
+
+```text
+short_candidate_loss
+short_candidate_score_loss
+short_candidate_pull_loss
+short_candidate_pos_count
+short_candidate_soft_count
+short_candidate_neg_count
+```
+
+Candidate decode is controlled separately by default-off `gcs_candidate_decode`
+or the eval/sweep `--candidate-decode` flag. It is prediction-only gated by
+predicted visible-anchor count and preserves the base query existence score.
+It replaces geometry only for gated short queries and is mutually exclusive
+with count-aware top-k. TEST remains closed until raw candidate coverage and
+official-val gates pass.
+
+Legacy post-env30 record: the 2026-07-25 user-requested Q12/env30 dual-head
+probe was rejected and its YAML/script are not active after the 2026-07-28
+env30 rollback. It added `pred_count_logits: B x 4` for image-level lane count
+and `pred_quality_logits: B x 12` for query-level quality/ranking during that
+experiment only.
+
+Legacy post-env30 record: the 2026-07-26 user-requested Q12/env30 query
+extent probe is rejected and its YAML/scripts are not active after the
+2026-07-28 env30 rollback. It added `pred_start_logits: B x 12 x 56` and
+`pred_end_logits: B x 12 x 56` for first/last visible fixed-y anchors during
+that experiment only.
 
 The completed 40-epoch extent probe `query_extent_env30_probe40_v1` is
 rejected. Its official-val selected decode keeps `extent_decode=false` and
@@ -60,15 +116,11 @@ classification failures. Do not extend this exact setup, enable extent decode,
 run TEST for it, or build local-refine v2 on top of it. The next route must
 target coarse geometry/reference coverage first.
 
-The 2026-07-27 user-requested Q12/env30 short-lane local x-refine v3 probe is
-default-off and enabled only by
-`ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-short-local-refine-v3.yaml`
-plus explicit `gcs_short_local_refine > 0`. It supersedes the rejected v2
-implementation shape for new experiments. v3 keeps Q=12/K=56 query mode,
-does not enable Count Head, Quality Head, query extent decode, Q24, or
-count-aware top-k, starts from the env30 `weights/official_best.pt`, freezes
-the env30/base parameters, and trains only the `query_short_local_refine_*`
-head. Non-refine BatchNorm statistics stay fixed during training.
+Legacy post-env30 record: the 2026-07-27 Q12/env30 short-lane local x-refine
+v3 probe is rejected and its YAML/scripts/tools are not active after the
+2026-07-28 env30 rollback. v3 started from the env30 `weights/official_best.pt`,
+froze the env30/base parameters, and trained only the
+`query_short_local_refine_*` head during that experiment only.
 
 When enabled, the v3 head performs feature-conditioned horizontal local
 window search around detached main `pred_points`. The default v3 window is:
@@ -144,14 +196,10 @@ test a prediction-only refined decode on official-val and, if that still
 does not cross the 20px gate, change candidate generation rather than only
 increase the local residual capacity.
 
-The superseded 2026-07-27 Q12/env30 short-lane coarse-to-fine local
-x-refine v2 probe is default-off and enabled only by
-`ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-short-local-refine.yaml`
-plus explicit `gcs_short_local_refine > 0`. It keeps Q=12/K=56 query mode,
-does not enable Count Head, Quality Head, query extent decode, Q24, or
-count-aware top-k, and runs on top of the env30 parent protocol
-(`gcs_short_geom=1.0` in the parent launch script). It is retained only for
-old-run interpretation and must not be used as the current next experiment.
+Legacy post-env30 record: the superseded 2026-07-27 Q12/env30 short-lane
+coarse-to-fine local x-refine v2 probe is rejected and its YAML/scripts/tools
+are not active after the 2026-07-28 env30 rollback. It is retained only for
+old-run interpretation and must not be used as a current next experiment.
 When enabled, the head
 emits:
 
@@ -177,12 +225,11 @@ normalized-x SmoothL1, selected by short GT4/GT5 criteria
 `gcs_short_local_refine_max_delta_px=40.0`. Do not launch v2 for the current
 next step; use the v3 window/freeze/identity probe instead.
 
-The 2026-07-27 Q12/env30 lateral candidate-generation probe is default-off
-and enabled only by
-`ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-short-candidate.yaml`
-plus positive `gcs_short_candidate`. It keeps the env30 main
-`pred_points` path unchanged and adds fixed-y lateral hypotheses around each
-query:
+Legacy post-env30 record: the 2026-07-27 Q12/env30 lateral
+candidate-generation probe is rejected and its YAML/scripts/tools are not
+active after the 2026-07-28 env30 rollback. It kept the env30 main
+`pred_points` path unchanged and added fixed-y lateral hypotheses around each
+query during that experiment:
 
 ```text
 pred_short_candidate_points: B x 12 x 7 x 56 x 2
@@ -229,13 +276,10 @@ unchanged by default, add an explicit prediction-only short-lane applicability
 gate, and use visibility-aware anchor aggregation. Do not tune learning rate,
 candidate loss gain, or epoch count before those contract changes.
 
-The current candidate-generation follow-up is the default-off gated protocol
-enabled by
-`ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-short-candidate.yaml`
-and
-`scripts/run_query_short_candidate_env30_gated_probe20_v2.sh`. It keeps the
-env30 `pred_points`, query existence/quality score, visibility mask, NMS, and
-max-det path unchanged for non-applicable queries. Candidate selection is
+Legacy post-env30 record: the gated candidate-generation follow-up is also
+rejected and is not the current candidate-generation path. It kept the env30
+`pred_points`, query existence/quality score, visibility mask, NMS, and
+max-det path unchanged for non-applicable queries. Candidate selection was
 applied only when the prediction-only count of
 `sigmoid(pred_valid_logits) >= gcs_candidate_gate_valid_thr` lies in
 `[gcs_candidate_gate_min_visible, gcs_candidate_gate_max_visible]`, using
@@ -303,32 +347,21 @@ head training/decode dependency or otherwise restore the env30 geometry and
 objectness path, then pass a fresh official-val/train-side gate. TEST remains
 closed for subsequent selection.
 
-The user-requested Q24 dual-head follow-up is also default-off and isolated
-from the rejected Q24 role/event mechanisms. It is enabled only by
-`ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q24-k56-dualhead.yaml` and
-`scripts/run_query_q24_dualhead_quality_count_probe40_v1.sh`. It emits
-`pred_count_logits: B x 4` and `pred_quality_logits: B x 24`, keeps the
-strict-passed Q24 protected static reference bank, uses `count_logits` for
-count-aware top-k, and uses quality logits for lane ranking. The probe uses
-`gcs_query_count_ce=0.25` and `gcs_query_quality=0.25`, keeps the parent
-AdamW protocol (`lr0=5e-4`, `lrf=0.05`, `weight_decay=1e-4`,
-`warmup_epochs=0`), and keeps TEST closed. The score-sum count losses,
-Q24 role containment, and Q24 event containment/calibration remain disabled.
+Legacy post-env30 record: the user-requested Q24 dual-head follow-up is
+rejected and its YAML/script are not active after the 2026-07-28 env30
+rollback. It emitted `pred_count_logits: B x 4` and
+`pred_quality_logits: B x 24` during that experiment only.
 
 The branch also includes the 2026-06-27 user-requested, default-off `gcs_hard_sampling` train-only sampler for short-visible GT3/GT4/GT5 and 0601 samples. It changes only the training dataloader sampling frequency through `WeightedRandomSampler`; it does not change labels, validation/test dataloaders, point/smooth/curve losses, decode, or official metrics.
 
 The branch also includes the 2026-06-27 user-requested, default-off `gcs_spurious_neg` loss for E3-lite. It uses the training Hungarian matcher indices only to select unmatched short duplicate-like queries near matched queries, then adds an extra target-zero BCE on their `pred_logits`. The GT-count weighting extension keeps the old default behavior with `gcs_spurious_gt3_weight=1.0`, `gcs_spurious_gt4_weight=1.0`, `gcs_spurious_gt5_weight=1.0`, and `gcs_spurious_disable_gt5=False`, while allowing GT3-or-sparser, GT4, and GT5-or-denser samples to carry different spurious-negative weights. The 2026-06-28 `gcs_spurious_gt_protect` extension is also default-off and only removes GT-close candidate queries from this extra negative BCE. It does not change data sampling, dataset labels, matcher logic, point/smooth/curve losses, decode, NMS, or official metrics.
 
-Active source/config is rolled back to commit
-`424ab1c869f0a02556d8b6b6a44c27e5585e47c0` (`Add valid-before-maxdet decode
-option`). The following commits are old state for this rollback and their
-mechanisms, tools, commands, logs, and experiment results are legacy records
-only unless a future task explicitly re-enables them:
-
-- `436fcb616` (`Add GCS short-side hardset diagnostics`)
-- `f4c200bbe` (`Add default-off short-side geometry loss`)
-- `f7f0bcc07` (`Add far spurious negative loss`)
-- `8357e1ad8` (`Add GCS count contract tooling`)
+Active source/config is restored to commit
+`86c8fb31cb4b48a53086be183478a95b0807753d` (`Add GT4 GT5 weak geometry rescue
+run`). All later commits are old state for this rollback and their mechanisms,
+tools, commands, logs, and experiment results are rejected legacy records only
+unless a future task explicitly re-enables them with fresh official-val/train
+gates.
 
 Therefore `tools/build_gcs_short_side_hardset.py`,
 `tools/diagnose_gcs_short_side_hardset.py`,
@@ -338,8 +371,8 @@ Therefore `tools/build_gcs_short_side_hardset.py`,
 the active code/config state. Historical sections below that mention those
 names are retained only to interpret old runs.
 
-Recent env30 follow-up experiments are also rejected records unless a future
-task explicitly reopens them with new official-val/train gates:
+Recent env30 follow-up experiments after `86c8fb31c` are rejected records
+unless a future task explicitly reopens them with new official-val/train gates:
 
 ```text
 query_alpha05_env30_gt45staticref_v2:
@@ -355,9 +388,10 @@ query_alpha05_env30_gt4_near20_geom_refine_v1:
 Do not relaunch these as the next path, run TEST for them, tune thresholds from
 them, or treat their default-off mechanisms as active improvement claims.
 
-The branch now also contains default-off Q20/Q24 protected dual-bank
-static-gate tooling paths for the 2026-07-23 env30 GT4/GT5 bottleneck
-diagnosis:
+Legacy post-env30 record: the branch previously contained default-off Q20/Q24
+protected dual-bank static-gate tooling paths for the 2026-07-23 env30 GT4/GT5
+bottleneck diagnosis. These files are not active after the 2026-07-28 env30
+rollback:
 
 ```text
 Q20 model: ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q20-k56-dualbank.yaml
@@ -368,8 +402,9 @@ Q20/Q24 tools:
 mode: reference_mode=dualbank
 ```
 
-These are not the default model and do not change the Q12 baseline. They are
-enabled only by dedicated Q20/Q24 YAMLs plus generated reference-bank JSONs.
+These are rejected records and do not change the active Q12 baseline. They
+were enabled only by dedicated Q20/Q24 YAMLs plus generated reference-bank
+JSONs.
 The first twelve references must preserve the default Q12 linear references;
 queries `q12..q19` are Q20 extras and `q12..q23` are Q24 extras. The static
 gate may use canonical official-val diagnostics and train0601/train0531 raw
@@ -384,8 +419,9 @@ whose normal-risk gate is missing/failed, whose fixed-y/protected-query
 metadata is malformed, or whose `q0..q11` references do not preserve the
 default Q12 linear references.
 
-The current Q24 bank passed the strict static gate on both local and remote
-validation and was published only as a default-off training candidate:
+Historical note: the Q24 bank passed the strict static gate on both local and
+remote validation and was published only as a default-off training candidate
+before the route was rejected:
 
 ```text
 bank: data/gcs_reference_banks/q24_protected_static_env30_best.json
@@ -877,22 +913,19 @@ ultralytics/cfg/models/gcs/gcs-yolo-lane-s-fixed-y.yaml
 ```
 
 Default and compatibility baseline configs keep `Q=12`, `K=56`, fixed-y
-anchors `710/720 -> 160/720`, and `--imgsz 544 960`. The only documented
-non-Q12 query configs in this branch are default-off Q20/Q24 protected
-dual-bank static-gate candidates, and they still keep `K=56`, fixed-y anchors
-`710/720 -> 160/720`, and `--imgsz 544 960`.
+anchors `710/720 -> 160/720`, and `--imgsz 544 960`. Post-env30 non-Q12 query
+configs such as Q20/Q24 protected dual-bank static-gate candidates are
+rejected legacy records, not active branch configs.
 
 Historical q12-k56 experiment docs are old records. Preserve them, but do not let them override the active 5-25-3 K56 mainline contract.
 
-Active source/config is rolled back to commit `424ab1c86` (`Add
-valid-before-maxdet decode option`). Its algorithm contract remains the
-5-25-3 K56 mainline through that commit: no later mainline Count Head,
-Q18/Q20/dataref, lane-balanced, valid-repair, side-aux, short-side hardset,
-`gcs_short_side_geom`, `gcs_far_spurious_neg`, ignore-first ranking/raw-rescue,
-or count-contract diagnostic tooling is active. The only Count Head exception is
-the 2026-07-06 user-requested, default-off query Count Head ablation documented
-above. Later commits and notes are preserved only as legacy experiment
-conclusions in the docs. They are not active CLI/config/loss/tool behavior.
+Active source/config is restored to commit `86c8fb31c` (`Add GT4 GT5 weak
+geometry rescue run`). Its algorithm contract is the env30 K56 baseline: no
+post-env30 Q20/Q24, dual-head, query extent, short local-refine, lateral
+candidate, gated candidate, role/event containment, or later candidate gate
+fixes are active. Later commits and notes are preserved only as rejected
+legacy experiment conclusions in the docs. They are not active
+CLI/config/loss/tool behavior.
 
 ## Label Contract
 

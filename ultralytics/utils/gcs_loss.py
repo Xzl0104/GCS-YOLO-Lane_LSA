@@ -47,55 +47,15 @@ class GCSLoss(nn.Module):
         "boundary_pseudo_neg_loss",
         "boundary_pseudo_count",
         "boundary_pseudo_score_mean",
-        "boundary_pseudo_candidate_count",
-        "boundary_pseudo_protected_count",
+        "short_candidate_loss",
+        "short_candidate_score_loss",
+        "short_candidate_pull_loss",
+        "short_candidate_pos_count",
+        "short_candidate_soft_count",
+        "short_candidate_neg_count",
         "query_count_ce_loss",
         "query_count_acc",
         "query_count_pred_mean",
-        "query_quality_loss",
-        "query_quality_pos_mean",
-        "query_quality_pos_count",
-        "query_extent_loss",
-        "query_extent_start_acc",
-        "query_extent_end_acc",
-        "query_extent_iou",
-        "query_extent_short_count",
-        "short_local_refine_loss",
-        "short_local_refine_count",
-        "short_local_refine_coarse_ape",
-        "short_local_refine_refined_ape",
-        "short_local_refine_gain20",
-        "short_local_refine_loss20",
-        "short_local_refine_identity_count",
-        "short_local_refine_pull_count",
-        "short_candidate_loss",
-        "short_candidate_count",
-        "short_candidate_score_loss",
-        "short_candidate_geometry_loss",
-        "short_candidate_best_offset_px",
-        "short_candidate_raw_hit20",
-        "short_candidate_best_hit20",
-        "role_contain_loss",
-        "role_contain_exist_loss",
-        "role_contain_valid_loss",
-        "role_contain_count",
-        "role_contain_gt3_count",
-        "role_contain_gt4_gt5bank_count",
-        "role_contain_gt4_extra_count",
-        "role_contain_allowed_count",
-        "q24_event_contain_loss",
-        "q24_event_exist_loss",
-        "q24_event_valid_loss",
-        "q24_event_gt3_count",
-        "q24_event_gt4_count",
-        "q24_event_gt5_risk_count",
-        "q24_event_gt5_risk_protected_count",
-        "q24_event_clean_allowed_count",
-        "q24_event_dynamic_count",
-        "q24_event_dynamic_protected_count",
-        "q24_event_score_loss",
-        "q24_event_score_pos_count",
-        "q24_event_score_prob_mean",
     )
 
     def __init__(
@@ -155,69 +115,6 @@ class GCSLoss(nn.Module):
         query_count_ce: float | None = None,
         query_count_min_lanes: int | None = None,
         query_count_max_lanes: int | None = None,
-        query_quality: float | None = None,
-        query_extent: float | None = None,
-        query_extent_short_visible_thr: int | None = None,
-        query_extent_short_weight: float | None = None,
-        query_extent_gt_min_lanes: int | None = None,
-        short_local_refine: float | None = None,
-        short_local_refine_visible_thr: int | None = None,
-        short_local_refine_gt_min_lanes: int | None = None,
-        short_local_refine_beta_px: float | None = None,
-        short_local_refine_max_delta_px: float | None = None,
-        short_local_refine_identity_guard: bool | None = None,
-        short_local_refine_identity_thr_px: float | None = None,
-        short_local_refine_nearmiss_thr_px: float | None = None,
-        short_local_refine_identity_weight: float | None = None,
-        short_local_refine_nearmiss_weight: float | None = None,
-        short_candidate: float | None = None,
-        short_candidate_visible_thr: int | None = None,
-        short_candidate_gt_min_lanes: int | None = None,
-        short_candidate_beta_px: float | None = None,
-        short_candidate_score_temperature: float | None = None,
-        short_candidate_step_px: float | None = None,
-        role_contain: float | None = None,
-        role_contain_valid_weight: float | None = None,
-        role_contain_matcher: bool | None = None,
-        role_gt5_queries=None,
-        role_gt4_queries=None,
-        role_gt4_visible_thr: int | None = None,
-        role_gt5_visible_thr: int | None = None,
-        q24_event_contain: float | None = None,
-        q24_event_valid_weight: float | None = None,
-        q24_event_matcher: bool | None = None,
-        q24_event_clean_gt5_queries=None,
-        q24_event_risk_queries=None,
-        q24_event_gt4_queries=None,
-        q24_event_gt4_visible_thr: int | None = None,
-        q24_event_gt5_visible_thr: int | None = None,
-        q24_event_suppress_gt5_risk: bool | None = None,
-        q24_event_gt5_risk_protect: bool | None = None,
-        q24_event_gt5_risk_protect_short_visible_thr: int | None = None,
-        q24_event_gt5_risk_protect_dist_px: float | None = None,
-        q24_event_gt5_risk_protect_min_overlap: int | None = None,
-        q24_event_dynamic: bool | None = None,
-        q24_event_dynamic_queries=None,
-        q24_event_dynamic_valid_thr: float | None = None,
-        q24_event_dynamic_min_valid: int | None = None,
-        q24_event_dynamic_max_visible: int | None = None,
-        q24_event_dynamic_score_thr: float | None = None,
-        q24_event_dynamic_protect: bool | None = None,
-        q24_event_dynamic_protect_visible_thr: int | None = None,
-        q24_event_dynamic_protect_dist_px: float | None = None,
-        q24_event_dynamic_protect_min_overlap: int | None = None,
-        q24_event_score_calib: float | None = None,
-        q24_event_score_queries=None,
-        q24_event_score_visible_thr: int | None = None,
-        q24_event_score_valid_thr: float | None = None,
-        q24_event_score_dist_px: float | None = None,
-        q24_event_score_min_overlap: int | None = None,
-        q24_event_score_target: float | None = None,
-        boundary_pseudo_gt5_safe: bool | None = None,
-        boundary_pseudo_protect_short_visible_thr: int | None = None,
-        boundary_pseudo_protect_dist_px: float | None = None,
-        boundary_pseudo_protect_min_overlap: int | None = None,
-        boundary_pseudo_protect_queries=None,
         image_size=None,
     ):
         """Initialize GCS-YOLO-Lane loss weights and Hungarian matcher."""
@@ -249,105 +146,6 @@ class GCSLoss(nn.Module):
         )
         self.query_count_ce_gain = float(
             query_count_ce if query_count_ce is not None else self._arg(args, "gcs_query_count_ce", 0.0)
-        )
-        self.query_quality_gain = float(
-            query_quality if query_quality is not None else self._arg(args, "gcs_query_quality", 0.0)
-        )
-        self.query_extent_gain = float(
-            query_extent if query_extent is not None else self._arg(args, "gcs_query_extent", 0.0)
-        )
-        self.query_extent_short_visible_thr = int(
-            query_extent_short_visible_thr
-            if query_extent_short_visible_thr is not None
-            else self._arg(args, "gcs_query_extent_short_visible_thr", 10)
-        )
-        self.query_extent_short_weight = float(
-            query_extent_short_weight
-            if query_extent_short_weight is not None
-            else self._arg(args, "gcs_query_extent_short_weight", 2.0)
-        )
-        self.query_extent_gt_min_lanes = int(
-            query_extent_gt_min_lanes
-            if query_extent_gt_min_lanes is not None
-            else self._arg(args, "gcs_query_extent_gt_min_lanes", 4)
-        )
-        self.short_local_refine_gain = float(
-            short_local_refine
-            if short_local_refine is not None
-            else self._arg(args, "gcs_short_local_refine", 0.0)
-        )
-        self.short_local_refine_visible_thr = int(
-            short_local_refine_visible_thr
-            if short_local_refine_visible_thr is not None
-            else self._arg(args, "gcs_short_local_refine_visible_thr", 10)
-        )
-        self.short_local_refine_gt_min_lanes = int(
-            short_local_refine_gt_min_lanes
-            if short_local_refine_gt_min_lanes is not None
-            else self._arg(args, "gcs_short_local_refine_gt_min_lanes", 4)
-        )
-        self.short_local_refine_beta_px = float(
-            short_local_refine_beta_px
-            if short_local_refine_beta_px is not None
-            else self._arg(args, "gcs_short_local_refine_beta_px", 5.0)
-        )
-        self.short_local_refine_max_delta_px = float(
-            short_local_refine_max_delta_px
-            if short_local_refine_max_delta_px is not None
-            else self._arg(args, "gcs_short_local_refine_max_delta_px", 40.0)
-        )
-        self.short_local_refine_identity_guard = self._bool_arg(
-            short_local_refine_identity_guard
-            if short_local_refine_identity_guard is not None
-            else self._arg(args, "gcs_short_local_refine_identity_guard", False)
-        )
-        self.short_local_refine_identity_thr_px = float(
-            short_local_refine_identity_thr_px
-            if short_local_refine_identity_thr_px is not None
-            else self._arg(args, "gcs_short_local_refine_identity_thr_px", 20.0)
-        )
-        self.short_local_refine_nearmiss_thr_px = float(
-            short_local_refine_nearmiss_thr_px
-            if short_local_refine_nearmiss_thr_px is not None
-            else self._arg(args, "gcs_short_local_refine_nearmiss_thr_px", 80.0)
-        )
-        self.short_local_refine_identity_weight = float(
-            short_local_refine_identity_weight
-            if short_local_refine_identity_weight is not None
-            else self._arg(args, "gcs_short_local_refine_identity_weight", 1.0)
-        )
-        self.short_local_refine_nearmiss_weight = float(
-            short_local_refine_nearmiss_weight
-            if short_local_refine_nearmiss_weight is not None
-            else self._arg(args, "gcs_short_local_refine_nearmiss_weight", 1.0)
-        )
-        self.short_candidate_gain = float(
-            short_candidate if short_candidate is not None else self._arg(args, "gcs_short_candidate", 0.0)
-        )
-        self.short_candidate_visible_thr = int(
-            short_candidate_visible_thr
-            if short_candidate_visible_thr is not None
-            else self._arg(args, "gcs_short_candidate_visible_thr", 10)
-        )
-        self.short_candidate_gt_min_lanes = int(
-            short_candidate_gt_min_lanes
-            if short_candidate_gt_min_lanes is not None
-            else self._arg(args, "gcs_short_candidate_gt_min_lanes", 4)
-        )
-        self.short_candidate_beta_px = float(
-            short_candidate_beta_px
-            if short_candidate_beta_px is not None
-            else self._arg(args, "gcs_short_candidate_beta_px", 3.0)
-        )
-        self.short_candidate_score_temperature = float(
-            short_candidate_score_temperature
-            if short_candidate_score_temperature is not None
-            else self._arg(args, "gcs_short_candidate_score_temperature", 1.0)
-        )
-        self.short_candidate_step_px = float(
-            short_candidate_step_px
-            if short_candidate_step_px is not None
-            else self._arg(args, "gcs_short_candidate_step_px", 20.0)
         )
         self.query_count_min_lanes = int(
             query_count_min_lanes
@@ -460,185 +258,6 @@ class GCSLoss(nn.Module):
             if gt5_short_point_valid_weight is not None
             else self._arg(args, "gcs_gt5_short_point_valid_weight", 1.0)
         )
-        self.role_contain_gain = float(
-            role_contain if role_contain is not None else self._arg(args, "gcs_role_contain", 0.0)
-        )
-        self.role_contain_valid_weight = float(
-            role_contain_valid_weight
-            if role_contain_valid_weight is not None
-            else self._arg(args, "gcs_role_contain_valid_weight", 0.25)
-        )
-        self.role_contain_matcher = self._bool_arg(
-            role_contain_matcher
-            if role_contain_matcher is not None
-            else self._arg(args, "gcs_role_contain_matcher", False)
-        )
-        self.role_gt5_queries = self._parse_query_spec(
-            role_gt5_queries if role_gt5_queries is not None else self._arg(args, "gcs_role_gt5_queries", "12-17")
-        )
-        self.role_gt4_queries = self._parse_query_spec(
-            role_gt4_queries if role_gt4_queries is not None else self._arg(args, "gcs_role_gt4_queries", "18-23")
-        )
-        self.role_gt4_visible_thr = int(
-            role_gt4_visible_thr
-            if role_gt4_visible_thr is not None
-            else self._arg(args, "gcs_role_gt4_visible_thr", 20)
-        )
-        self.role_gt5_visible_thr = int(
-            role_gt5_visible_thr
-            if role_gt5_visible_thr is not None
-            else self._arg(args, "gcs_role_gt5_visible_thr", 20)
-        )
-        self.q24_event_contain_gain = float(
-            q24_event_contain
-            if q24_event_contain is not None
-            else self._arg(args, "gcs_q24_event_contain", 0.0)
-        )
-        self.q24_event_valid_weight = float(
-            q24_event_valid_weight
-            if q24_event_valid_weight is not None
-            else self._arg(args, "gcs_q24_event_valid_weight", 0.25)
-        )
-        self.q24_event_matcher = self._bool_arg(
-            q24_event_matcher
-            if q24_event_matcher is not None
-            else self._arg(args, "gcs_q24_event_matcher", False)
-        )
-        self.q24_event_clean_gt5_queries = self._parse_query_spec(
-            q24_event_clean_gt5_queries
-            if q24_event_clean_gt5_queries is not None
-            else self._arg(args, "gcs_q24_event_clean_gt5_queries", "")
-        )
-        self.q24_event_risk_queries = self._parse_query_spec(
-            q24_event_risk_queries
-            if q24_event_risk_queries is not None
-            else self._arg(args, "gcs_q24_event_risk_queries", "")
-        )
-        self.q24_event_gt4_queries = self._parse_query_spec(
-            q24_event_gt4_queries
-            if q24_event_gt4_queries is not None
-            else self._arg(args, "gcs_q24_event_gt4_queries", "")
-        )
-        self.q24_event_gt4_visible_thr = int(
-            q24_event_gt4_visible_thr
-            if q24_event_gt4_visible_thr is not None
-            else self._arg(args, "gcs_q24_event_gt4_visible_thr", 20)
-        )
-        self.q24_event_gt5_visible_thr = int(
-            q24_event_gt5_visible_thr
-            if q24_event_gt5_visible_thr is not None
-            else self._arg(args, "gcs_q24_event_gt5_visible_thr", 10)
-        )
-        self.q24_event_suppress_gt5_risk = self._bool_arg(
-            q24_event_suppress_gt5_risk
-            if q24_event_suppress_gt5_risk is not None
-            else self._arg(args, "gcs_q24_event_suppress_gt5_risk", False)
-        )
-        self.q24_event_gt5_risk_protect = self._bool_arg(
-            q24_event_gt5_risk_protect
-            if q24_event_gt5_risk_protect is not None
-            else self._arg(args, "gcs_q24_event_gt5_risk_protect", False)
-        )
-        self.q24_event_gt5_risk_protect_short_visible_thr = int(
-            q24_event_gt5_risk_protect_short_visible_thr
-            if q24_event_gt5_risk_protect_short_visible_thr is not None
-            else self._arg(args, "gcs_q24_event_gt5_risk_protect_short_visible_thr", 10)
-        )
-        self.q24_event_gt5_risk_protect_dist_px = float(
-            q24_event_gt5_risk_protect_dist_px
-            if q24_event_gt5_risk_protect_dist_px is not None
-            else self._arg(args, "gcs_q24_event_gt5_risk_protect_dist_px", 30.0)
-        )
-        self.q24_event_gt5_risk_protect_min_overlap = int(
-            q24_event_gt5_risk_protect_min_overlap
-            if q24_event_gt5_risk_protect_min_overlap is not None
-            else self._arg(args, "gcs_q24_event_gt5_risk_protect_min_overlap", 3)
-        )
-        self.q24_event_dynamic = self._bool_arg(
-            q24_event_dynamic
-            if q24_event_dynamic is not None
-            else self._arg(args, "gcs_q24_event_dynamic", False)
-        )
-        self.q24_event_dynamic_queries = self._parse_query_spec(
-            q24_event_dynamic_queries
-            if q24_event_dynamic_queries is not None
-            else self._arg(args, "gcs_q24_event_dynamic_queries", "")
-        )
-        self.q24_event_dynamic_valid_thr = float(
-            q24_event_dynamic_valid_thr
-            if q24_event_dynamic_valid_thr is not None
-            else self._arg(args, "gcs_q24_event_dynamic_valid_thr", 0.5)
-        )
-        self.q24_event_dynamic_min_valid = int(
-            q24_event_dynamic_min_valid
-            if q24_event_dynamic_min_valid is not None
-            else self._arg(args, "gcs_q24_event_dynamic_min_valid", 3)
-        )
-        self.q24_event_dynamic_max_visible = int(
-            q24_event_dynamic_max_visible
-            if q24_event_dynamic_max_visible is not None
-            else self._arg(args, "gcs_q24_event_dynamic_max_visible", 20)
-        )
-        self.q24_event_dynamic_score_thr = float(
-            q24_event_dynamic_score_thr
-            if q24_event_dynamic_score_thr is not None
-            else self._arg(args, "gcs_q24_event_dynamic_score_thr", 0.0)
-        )
-        self.q24_event_dynamic_protect = self._bool_arg(
-            q24_event_dynamic_protect
-            if q24_event_dynamic_protect is not None
-            else self._arg(args, "gcs_q24_event_dynamic_protect", False)
-        )
-        self.q24_event_dynamic_protect_visible_thr = int(
-            q24_event_dynamic_protect_visible_thr
-            if q24_event_dynamic_protect_visible_thr is not None
-            else self._arg(args, "gcs_q24_event_dynamic_protect_visible_thr", 10)
-        )
-        self.q24_event_dynamic_protect_dist_px = float(
-            q24_event_dynamic_protect_dist_px
-            if q24_event_dynamic_protect_dist_px is not None
-            else self._arg(args, "gcs_q24_event_dynamic_protect_dist_px", 20.0)
-        )
-        self.q24_event_dynamic_protect_min_overlap = int(
-            q24_event_dynamic_protect_min_overlap
-            if q24_event_dynamic_protect_min_overlap is not None
-            else self._arg(args, "gcs_q24_event_dynamic_protect_min_overlap", 3)
-        )
-        self.q24_event_score_calib_gain = float(
-            q24_event_score_calib
-            if q24_event_score_calib is not None
-            else self._arg(args, "gcs_q24_event_score_calib", 0.0)
-        )
-        self.q24_event_score_queries = self._parse_query_spec(
-            q24_event_score_queries
-            if q24_event_score_queries is not None
-            else self._arg(args, "gcs_q24_event_score_queries", "")
-        )
-        self.q24_event_score_visible_thr = int(
-            q24_event_score_visible_thr
-            if q24_event_score_visible_thr is not None
-            else self._arg(args, "gcs_q24_event_score_visible_thr", 10)
-        )
-        self.q24_event_score_valid_thr = float(
-            q24_event_score_valid_thr
-            if q24_event_score_valid_thr is not None
-            else self._arg(args, "gcs_q24_event_score_valid_thr", 0.5)
-        )
-        self.q24_event_score_dist_px = float(
-            q24_event_score_dist_px
-            if q24_event_score_dist_px is not None
-            else self._arg(args, "gcs_q24_event_score_dist_px", 40.0)
-        )
-        self.q24_event_score_min_overlap = int(
-            q24_event_score_min_overlap
-            if q24_event_score_min_overlap is not None
-            else self._arg(args, "gcs_q24_event_score_min_overlap", 3)
-        )
-        self.q24_event_score_target = float(
-            q24_event_score_target
-            if q24_event_score_target is not None
-            else self._arg(args, "gcs_q24_event_score_target", 0.75)
-        )
         self.count_under5_min_lanes = int(
             count_under5_min_lanes
             if count_under5_min_lanes is not None
@@ -662,83 +281,6 @@ class GCSLoss(nn.Module):
             raise ValueError(f"gcs_query_count_classes must be 4 for 2..5 lanes, got {self.query_count_classes}.")
         if self.query_count_ce_gain < 0.0:
             raise ValueError(f"gcs_query_count_ce must be >= 0, got {self.query_count_ce_gain}.")
-        if self.query_quality_gain < 0.0:
-            raise ValueError(f"gcs_query_quality must be >= 0, got {self.query_quality_gain}.")
-        if self.query_extent_gain < 0.0:
-            raise ValueError(f"gcs_query_extent must be >= 0, got {self.query_extent_gain}.")
-        if self.query_extent_short_visible_thr < 0:
-            raise ValueError(
-                "gcs_query_extent_short_visible_thr must be >= 0, "
-                f"got {self.query_extent_short_visible_thr}."
-            )
-        if self.query_extent_short_weight < 0.0:
-            raise ValueError(
-                "gcs_query_extent_short_weight must be >= 0, "
-                f"got {self.query_extent_short_weight}."
-            )
-        if self.query_extent_gt_min_lanes < 0:
-            raise ValueError(
-                "gcs_query_extent_gt_min_lanes must be >= 0, "
-                f"got {self.query_extent_gt_min_lanes}."
-            )
-        if self.short_local_refine_gain < 0.0:
-            raise ValueError(f"gcs_short_local_refine must be >= 0, got {self.short_local_refine_gain}.")
-        if self.short_local_refine_visible_thr < 0:
-            raise ValueError(
-                "gcs_short_local_refine_visible_thr must be >= 0, "
-                f"got {self.short_local_refine_visible_thr}."
-            )
-        if self.short_local_refine_gt_min_lanes < 0:
-            raise ValueError(
-                "gcs_short_local_refine_gt_min_lanes must be >= 0, "
-                f"got {self.short_local_refine_gt_min_lanes}."
-            )
-        if self.short_local_refine_beta_px <= 0.0:
-            raise ValueError(f"gcs_short_local_refine_beta_px must be > 0, got {self.short_local_refine_beta_px}.")
-        if self.short_local_refine_max_delta_px <= 0.0:
-            raise ValueError(
-                f"gcs_short_local_refine_max_delta_px must be > 0, got {self.short_local_refine_max_delta_px}."
-            )
-        if self.short_local_refine_identity_thr_px < 0.0:
-            raise ValueError(
-                "gcs_short_local_refine_identity_thr_px must be >= 0, "
-                f"got {self.short_local_refine_identity_thr_px}."
-            )
-        if self.short_local_refine_nearmiss_thr_px < self.short_local_refine_identity_thr_px:
-            raise ValueError(
-                "gcs_short_local_refine_nearmiss_thr_px must be >= "
-                "gcs_short_local_refine_identity_thr_px, got "
-                f"{self.short_local_refine_nearmiss_thr_px} < {self.short_local_refine_identity_thr_px}."
-            )
-        if self.short_local_refine_identity_weight < 0.0:
-            raise ValueError(
-                "gcs_short_local_refine_identity_weight must be >= 0, "
-                f"got {self.short_local_refine_identity_weight}."
-            )
-        if self.short_local_refine_nearmiss_weight < 0.0:
-            raise ValueError(
-                "gcs_short_local_refine_nearmiss_weight must be >= 0, "
-                f"got {self.short_local_refine_nearmiss_weight}."
-            )
-        if self.short_candidate_gain < 0.0:
-            raise ValueError(f"gcs_short_candidate must be >= 0, got {self.short_candidate_gain}.")
-        if self.short_candidate_visible_thr < 0:
-            raise ValueError(
-                f"gcs_short_candidate_visible_thr must be >= 0, got {self.short_candidate_visible_thr}."
-            )
-        if self.short_candidate_gt_min_lanes < 0:
-            raise ValueError(
-                f"gcs_short_candidate_gt_min_lanes must be >= 0, got {self.short_candidate_gt_min_lanes}."
-            )
-        if self.short_candidate_beta_px <= 0.0:
-            raise ValueError(f"gcs_short_candidate_beta_px must be > 0, got {self.short_candidate_beta_px}.")
-        if self.short_candidate_score_temperature <= 0.0:
-            raise ValueError(
-                "gcs_short_candidate_score_temperature must be > 0, "
-                f"got {self.short_candidate_score_temperature}."
-            )
-        if self.short_candidate_step_px <= 0.0:
-            raise ValueError(f"gcs_short_candidate_step_px must be > 0, got {self.short_candidate_step_px}.")
         if self.count_boundary_margin34 < 0.0:
             raise ValueError(f"gcs_count_boundary_margin34 must be >= 0, got {self.count_boundary_margin34}.")
         if self.count_boundary_margin45 < 0.0:
@@ -787,94 +329,6 @@ class GCSLoss(nn.Module):
                 "gcs_gt5_short_point_valid_weight must be >= 0, "
                 f"got {self.gt5_short_point_valid_weight}."
             )
-        if self.role_contain_gain < 0.0:
-            raise ValueError(f"gcs_role_contain must be >= 0, got {self.role_contain_gain}.")
-        if self.role_contain_valid_weight < 0.0:
-            raise ValueError(
-                "gcs_role_contain_valid_weight must be >= 0, "
-                f"got {self.role_contain_valid_weight}."
-            )
-        if self.role_gt4_visible_thr < 0:
-            raise ValueError(f"gcs_role_gt4_visible_thr must be >= 0, got {self.role_gt4_visible_thr}.")
-        if self.role_gt5_visible_thr < 0:
-            raise ValueError(f"gcs_role_gt5_visible_thr must be >= 0, got {self.role_gt5_visible_thr}.")
-        role_overlap = set(self.role_gt5_queries) & set(self.role_gt4_queries)
-        if role_overlap:
-            raise ValueError(f"gcs_role_gt5_queries and gcs_role_gt4_queries must not overlap: {sorted(role_overlap)}.")
-        if self.q24_event_contain_gain < 0.0:
-            raise ValueError(f"gcs_q24_event_contain must be >= 0, got {self.q24_event_contain_gain}.")
-        if self.q24_event_valid_weight < 0.0:
-            raise ValueError(
-                "gcs_q24_event_valid_weight must be >= 0, "
-                f"got {self.q24_event_valid_weight}."
-            )
-        if self.q24_event_gt4_visible_thr < 0:
-            raise ValueError(f"gcs_q24_event_gt4_visible_thr must be >= 0, got {self.q24_event_gt4_visible_thr}.")
-        if self.q24_event_gt5_visible_thr < 0:
-            raise ValueError(f"gcs_q24_event_gt5_visible_thr must be >= 0, got {self.q24_event_gt5_visible_thr}.")
-        if self.q24_event_gt5_risk_protect_short_visible_thr < 0:
-            raise ValueError(
-                "gcs_q24_event_gt5_risk_protect_short_visible_thr must be >= 0, "
-                f"got {self.q24_event_gt5_risk_protect_short_visible_thr}."
-            )
-        if self.q24_event_gt5_risk_protect_dist_px < 0.0:
-            raise ValueError(
-                "gcs_q24_event_gt5_risk_protect_dist_px must be >= 0, "
-                f"got {self.q24_event_gt5_risk_protect_dist_px}."
-            )
-        if self.q24_event_gt5_risk_protect_min_overlap < 1:
-            raise ValueError(
-                "gcs_q24_event_gt5_risk_protect_min_overlap must be >= 1, "
-                f"got {self.q24_event_gt5_risk_protect_min_overlap}."
-            )
-        if not (0.0 <= self.q24_event_dynamic_valid_thr <= 1.0):
-            raise ValueError("gcs_q24_event_dynamic_valid_thr must be in [0, 1].")
-        if self.q24_event_dynamic_min_valid < 0:
-            raise ValueError("gcs_q24_event_dynamic_min_valid must be >= 0.")
-        if self.q24_event_dynamic_max_visible < self.q24_event_dynamic_min_valid:
-            raise ValueError(
-                "gcs_q24_event_dynamic_max_visible must be >= gcs_q24_event_dynamic_min_valid "
-                f"({self.q24_event_dynamic_max_visible} < {self.q24_event_dynamic_min_valid})."
-            )
-        if self.q24_event_dynamic_score_thr < 0.0:
-            raise ValueError("gcs_q24_event_dynamic_score_thr must be >= 0.")
-        if self.q24_event_dynamic_protect_visible_thr < 0:
-            raise ValueError("gcs_q24_event_dynamic_protect_visible_thr must be >= 0.")
-        if self.q24_event_dynamic_protect_dist_px < 0.0:
-            raise ValueError("gcs_q24_event_dynamic_protect_dist_px must be >= 0.")
-        if self.q24_event_dynamic_protect_min_overlap < 1:
-            raise ValueError("gcs_q24_event_dynamic_protect_min_overlap must be >= 1.")
-        if self.q24_event_dynamic and not self.q24_event_dynamic_queries:
-            raise ValueError("gcs_q24_event_dynamic requires non-empty gcs_q24_event_dynamic_queries.")
-        if self.q24_event_score_calib_gain < 0.0:
-            raise ValueError("gcs_q24_event_score_calib must be >= 0.")
-        if self.q24_event_score_visible_thr < 0:
-            raise ValueError("gcs_q24_event_score_visible_thr must be >= 0.")
-        if not (0.0 <= self.q24_event_score_valid_thr <= 1.0):
-            raise ValueError("gcs_q24_event_score_valid_thr must be in [0, 1].")
-        if self.q24_event_score_dist_px < 0.0:
-            raise ValueError("gcs_q24_event_score_dist_px must be >= 0.")
-        if self.q24_event_score_min_overlap < 1:
-            raise ValueError("gcs_q24_event_score_min_overlap must be >= 1.")
-        if not (0.0 <= self.q24_event_score_target <= 1.0):
-            raise ValueError("gcs_q24_event_score_target must be in [0, 1].")
-        if self.q24_event_score_calib_gain > 0.0 and not self.q24_event_score_queries:
-            raise ValueError("gcs_q24_event_score_calib requires non-empty gcs_q24_event_score_queries.")
-        event_sets = (
-            ("clean_gt5", set(self.q24_event_clean_gt5_queries)),
-            ("risk", set(self.q24_event_risk_queries)),
-            ("gt4", set(self.q24_event_gt4_queries)),
-        )
-        for i, (name_i, set_i) in enumerate(event_sets):
-            for name_j, set_j in event_sets[i + 1 :]:
-                overlap = set_i & set_j
-                if overlap:
-                    raise ValueError(
-                        f"gcs_q24_event_{name_i}_queries and gcs_q24_event_{name_j}_queries "
-                        f"must not overlap: {sorted(overlap)}."
-                    )
-        if self._q24_event_enabled() and not any(values for _, values in event_sets):
-            raise ValueError("Q24 event containment requires at least one clean, risk, or GT4 query set.")
         self.curve_alpha = float(curve_alpha if curve_alpha is not None else self._arg(args, "gcs_curve_alpha", 5.0))
         self.curve_weight_max = float(
             curve_weight_max if curve_weight_max is not None else self._arg(args, "gcs_curve_weight_max", 5.0)
@@ -912,31 +366,17 @@ class GCSLoss(nn.Module):
         self.boundary_pseudo_envelope_ratio_thr = float(
             self._arg(args, "gcs_boundary_pseudo_envelope_ratio_thr", 0.75)
         )
-        self.boundary_pseudo_gt5_safe = self._bool_arg(
-            boundary_pseudo_gt5_safe
-            if boundary_pseudo_gt5_safe is not None
-            else self._arg(args, "gcs_boundary_pseudo_gt5_safe", False)
-        )
-        self.boundary_pseudo_protect_short_visible_thr = int(
-            boundary_pseudo_protect_short_visible_thr
-            if boundary_pseudo_protect_short_visible_thr is not None
-            else self._arg(args, "gcs_boundary_pseudo_protect_short_visible_thr", 10)
-        )
-        self.boundary_pseudo_protect_dist_px = float(
-            boundary_pseudo_protect_dist_px
-            if boundary_pseudo_protect_dist_px is not None
-            else self._arg(args, "gcs_boundary_pseudo_protect_dist_px", 40.0)
-        )
-        self.boundary_pseudo_protect_min_overlap = int(
-            boundary_pseudo_protect_min_overlap
-            if boundary_pseudo_protect_min_overlap is not None
-            else self._arg(args, "gcs_boundary_pseudo_protect_min_overlap", 3)
-        )
-        self.boundary_pseudo_protect_queries = self._parse_query_spec(
-            boundary_pseudo_protect_queries
-            if boundary_pseudo_protect_queries is not None
-            else self._arg(args, "gcs_boundary_pseudo_protect_queries", "")
-        )
+        self.short_candidate_gain = float(self._arg(args, "gcs_short_candidate", 0.0))
+        self.short_candidate_topk = int(self._arg(args, "gcs_short_candidate_topk", 4))
+        self.short_candidate_visible_thr = int(self._arg(args, "gcs_short_candidate_visible_thr", 10))
+        self.short_candidate_min_visible = int(self._arg(args, "gcs_short_candidate_min_visible", 2))
+        self.short_candidate_pos_px = float(self._arg(args, "gcs_short_candidate_pos_px", 20.0))
+        self.short_candidate_soft_px = float(self._arg(args, "gcs_short_candidate_soft_px", 40.0))
+        self.short_candidate_tau = float(self._arg(args, "gcs_short_candidate_tau", 25.0))
+        self.short_candidate_pull_weight = float(self._arg(args, "gcs_short_candidate_pull_weight", 0.05))
+        self.short_candidate_gt4_weight = float(self._arg(args, "gcs_short_candidate_gt4_weight", 1.0))
+        self.short_candidate_gt5_weight = float(self._arg(args, "gcs_short_candidate_gt5_weight", 1.5))
+        self.short_candidate_neg_score_thr = float(self._arg(args, "gcs_short_candidate_neg_score_thr", 0.6))
 
         if self.short_geom_gain < 0.0:
             raise ValueError(f"gcs_short_geom must be >= 0, got {self.short_geom_gain}.")
@@ -968,19 +408,28 @@ class GCSLoss(nn.Module):
             raise ValueError("gcs_boundary_pseudo_envelope_margin_px must be >= -1.0.")
         if not (0.0 <= self.boundary_pseudo_envelope_ratio_thr <= 1.0):
             raise ValueError("gcs_boundary_pseudo_envelope_ratio_thr must be in [0, 1].")
-        if self.boundary_pseudo_gt5_safe and int(self.boundary_pseudo_gt_count) != 5:
-            raise ValueError("gcs_boundary_pseudo_gt5_safe requires gcs_boundary_pseudo_gt_count=5.")
-        if self.boundary_pseudo_gt5_safe and float(self.boundary_pseudo_envelope_margin_px) < 0.0:
-            raise ValueError(
-                "gcs_boundary_pseudo_gt5_safe requires gcs_boundary_pseudo_envelope_margin_px >= 0 "
-                "so selected negatives are clear boundary-pseudo lanes."
-            )
-        if self.boundary_pseudo_protect_short_visible_thr < 0:
-            raise ValueError("gcs_boundary_pseudo_protect_short_visible_thr must be >= 0.")
-        if self.boundary_pseudo_protect_dist_px < 0.0:
-            raise ValueError("gcs_boundary_pseudo_protect_dist_px must be >= 0.")
-        if self.boundary_pseudo_protect_min_overlap < 1:
-            raise ValueError("gcs_boundary_pseudo_protect_min_overlap must be >= 1.")
+        if self.short_candidate_gain < 0.0:
+            raise ValueError("gcs_short_candidate must be >= 0.")
+        if self.short_candidate_topk < 1:
+            raise ValueError("gcs_short_candidate_topk must be >= 1.")
+        if self.short_candidate_visible_thr < 1:
+            raise ValueError("gcs_short_candidate_visible_thr must be >= 1.")
+        if self.short_candidate_min_visible < 1:
+            raise ValueError("gcs_short_candidate_min_visible must be >= 1.")
+        if self.short_candidate_pos_px < 0.0:
+            raise ValueError("gcs_short_candidate_pos_px must be >= 0.")
+        if self.short_candidate_soft_px < self.short_candidate_pos_px:
+            raise ValueError("gcs_short_candidate_soft_px must be >= gcs_short_candidate_pos_px.")
+        if self.short_candidate_tau <= 0.0:
+            raise ValueError("gcs_short_candidate_tau must be > 0.")
+        if self.short_candidate_pull_weight < 0.0:
+            raise ValueError("gcs_short_candidate_pull_weight must be >= 0.")
+        if self.short_candidate_gt4_weight < 0.0:
+            raise ValueError("gcs_short_candidate_gt4_weight must be >= 0.")
+        if self.short_candidate_gt5_weight < 0.0:
+            raise ValueError("gcs_short_candidate_gt5_weight must be >= 0.")
+        if not 0.0 <= self.short_candidate_neg_score_thr <= 1.0:
+            raise ValueError("gcs_short_candidate_neg_score_thr must be in [0, 1].")
 
         self.exist_quality_alpha = float(
             exist_quality_alpha if exist_quality_alpha is not None else self._arg(args, "gcs_exist_quality_alpha", 1.0)
@@ -1067,34 +516,6 @@ class GCSLoss(nn.Module):
         if isinstance(value, str):
             return value.strip().lower() in {"1", "true", "yes", "y", "on"}
         return bool(value)
-
-    @staticmethod
-    def _parse_query_spec(value) -> tuple[int, ...]:
-        """Parse a query list like '12-17,21' into sorted unique indices."""
-        if value is None:
-            return ()
-        if isinstance(value, (list, tuple, set)):
-            values = [int(v) for v in value]
-        else:
-            text = str(value).strip()
-            if text.lower() in {"", "none", "false", "off"}:
-                return ()
-            values = []
-            for raw_part in text.split(","):
-                part = raw_part.strip()
-                if not part:
-                    continue
-                if "-" in part:
-                    start_s, end_s = part.split("-", 1)
-                    start = int(start_s.strip())
-                    end = int(end_s.strip())
-                    step = 1 if end >= start else -1
-                    values.extend(range(start, end + step, step))
-                else:
-                    values.append(int(part))
-        if any(v < 0 for v in values):
-            raise ValueError(f"Query indices must be non-negative, got {values}.")
-        return tuple(sorted(set(values)))
 
     @staticmethod
     def _point_scale(image_size) -> tuple[float, float]:
@@ -1580,578 +1001,6 @@ class GCSLoss(nn.Module):
             target = pred_logits.new_tensor(counts, dtype=pred_logits.dtype)
         return target
 
-    def _role_enabled(self) -> bool:
-        """Return whether Q24 role-containment behavior is active."""
-        return bool(float(self.role_contain_gain) > 0.0 or self.role_contain_matcher)
-
-    def _role_query_tensors(self, device: torch.device, num_queries: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Return GT5, GT4, and combined extra query tensors for role containment."""
-        gt5_queries = torch.as_tensor(self.role_gt5_queries, device=device, dtype=torch.long)
-        gt4_queries = torch.as_tensor(self.role_gt4_queries, device=device, dtype=torch.long)
-        if gt5_queries.numel() == 0 and gt4_queries.numel() == 0:
-            raise ValueError("Q24 role containment requires at least one configured extra query.")
-        max_query = -1
-        if gt5_queries.numel():
-            max_query = max(max_query, int(gt5_queries.max().item()))
-        if gt4_queries.numel():
-            max_query = max(max_query, int(gt4_queries.max().item()))
-        if max_query >= num_queries:
-            raise ValueError(
-                "Q24 role containment query range exceeds model query count: "
-                f"max configured q{max_query}, model has Q={num_queries}."
-            )
-        extra_queries = torch.cat([gt5_queries, gt4_queries]) if gt5_queries.numel() and gt4_queries.numel() else (
-            gt5_queries if gt5_queries.numel() else gt4_queries
-        )
-        return gt5_queries, gt4_queries, extra_queries.unique(sorted=True)
-
-    def _role_allowed_masks(
-        self,
-        pred_points: torch.Tensor,
-        gt_valid: list[torch.Tensor],
-        gt_lanes: torch.Tensor,
-    ) -> list[torch.Tensor] | None:
-        """Build per-image Q x N masks for role-aware Hungarian matching."""
-        if not self._role_enabled():
-            return None
-
-        device = pred_points.device
-        num_queries = int(pred_points.shape[1])
-        gt5_queries, gt4_queries, extra_queries = self._role_query_tensors(device, num_queries)
-        gt_lanes = torch.as_tensor(gt_lanes, device=device, dtype=pred_points.dtype).reshape(-1)
-        if gt_lanes.numel() != pred_points.shape[0]:
-            raise ValueError(f"gt_lanes must have one value per image, got {gt_lanes.numel()} vs B={pred_points.shape[0]}.")
-
-        masks: list[torch.Tensor] = []
-        for b, valid_b_raw in enumerate(gt_valid):
-            valid_b = valid_b_raw.to(device=device, dtype=pred_points.dtype)
-            if valid_b.ndim != 2:
-                raise ValueError(f"GT lane_valid must have shape N x K, got {tuple(valid_b.shape)}.")
-            mask = torch.ones((num_queries, valid_b.shape[0]), device=device, dtype=torch.bool)
-            if valid_b.shape[0] == 0:
-                masks.append(mask)
-                continue
-
-            gt_count = int(round(float(gt_lanes[b].detach().item())))
-            visible_counts = valid_b.float().sum(dim=1)
-            gt4_short = visible_counts <= float(self.role_gt4_visible_thr)
-            gt5_short = visible_counts <= float(self.role_gt5_visible_thr)
-
-            if gt_count <= 3:
-                mask[extra_queries, :] = False
-            elif gt_count == 4:
-                if gt5_queries.numel():
-                    mask[gt5_queries, :] = False
-                if gt4_queries.numel():
-                    mask[gt4_queries, :] = gt4_short[None, :]
-            else:
-                if gt5_queries.numel() and self.role_gt5_visible_thr > 0:
-                    mask[gt5_queries, :] = gt5_short[None, :]
-                if gt4_queries.numel():
-                    mask[gt4_queries, :] = False
-            masks.append(mask)
-        return masks
-
-    def role_containment_loss(
-        self,
-        pred_logits: torch.Tensor,
-        pred_valid_logits: torch.Tensor | None,
-        indices: list[tuple[torch.Tensor, torch.Tensor]],
-        gt_lanes: torch.Tensor,
-        role_allowed_masks: list[torch.Tensor] | None,
-    ) -> tuple[torch.Tensor, ...]:
-        """Suppress Q24 extra-bank queries when they violate their intended GT-count role."""
-        zero = pred_logits.new_zeros(())
-        if float(self.role_contain_gain) <= 0.0:
-            return zero, zero, zero, zero, zero, zero, zero, zero
-        if pred_valid_logits is None and float(self.role_contain_valid_weight) > 0.0:
-            raise ValueError(
-                "gcs_role_contain with gcs_role_contain_valid_weight > 0 requires pred_valid_logits."
-            )
-
-        device = pred_logits.device
-        num_queries = int(pred_logits.shape[1])
-        gt5_queries, gt4_queries, extra_queries = self._role_query_tensors(device, num_queries)
-        gt_lanes = torch.as_tensor(gt_lanes, device=device, dtype=pred_logits.dtype).reshape(-1)
-        if gt_lanes.numel() != pred_logits.shape[0]:
-            raise ValueError(f"gt_lanes must have one value per image, got {gt_lanes.numel()} vs B={pred_logits.shape[0]}.")
-        if role_allowed_masks is None:
-            raise ValueError("role_allowed_masks must be provided when gcs_role_contain is enabled.")
-
-        exist_losses = []
-        valid_losses = []
-        total_count = 0
-        gt3_count = 0
-        gt4_gt5bank_count = 0
-        gt4_extra_count = 0
-        allowed_count = 0
-
-        for b in range(pred_logits.shape[0]):
-            gt_count = int(round(float(gt_lanes[b].detach().item())))
-            selected = torch.zeros((num_queries,), device=device, dtype=torch.bool)
-
-            if gt_count <= 3:
-                selected[extra_queries] = True
-                gt3_count += int(extra_queries.numel())
-            elif gt_count == 4:
-                if gt5_queries.numel():
-                    selected[gt5_queries] = True
-                    gt4_gt5bank_count += int(gt5_queries.numel())
-                if gt4_queries.numel():
-                    allowed_positive = torch.zeros((num_queries,), device=device, dtype=torch.bool)
-                    src_idx, tgt_idx = indices[b]
-                    if src_idx.numel():
-                        src_idx = src_idx.to(device=device, dtype=torch.long)
-                        tgt_idx = tgt_idx.to(device=device, dtype=torch.long)
-                        allowed_mask_b = role_allowed_masks[b].to(device=device, dtype=torch.bool)
-                        for q, t in zip(src_idx.tolist(), tgt_idx.tolist()):
-                            if 0 <= q < num_queries and 0 <= t < allowed_mask_b.shape[1] and bool(allowed_mask_b[q, t]):
-                                allowed_positive[q] = True
-                    allowed_gt4 = allowed_positive[gt4_queries]
-                    if bool(allowed_gt4.any()):
-                        allowed_count += int(allowed_gt4.sum().item())
-                    suppressed_gt4 = gt4_queries[~allowed_gt4]
-                    if suppressed_gt4.numel():
-                        selected[suppressed_gt4] = True
-                        gt4_extra_count += int(suppressed_gt4.numel())
-            else:
-                continue
-
-            if not bool(selected.any()):
-                continue
-
-            selected_idx = torch.nonzero(selected, as_tuple=False).flatten()
-            total_count += int(selected_idx.numel())
-            exist_losses.append(
-                F.binary_cross_entropy_with_logits(
-                    pred_logits[b, selected_idx],
-                    torch.zeros_like(pred_logits[b, selected_idx]),
-                    reduction="mean",
-                )
-            )
-            if pred_valid_logits is not None and float(self.role_contain_valid_weight) > 0.0:
-                valid_losses.append(
-                    F.binary_cross_entropy_with_logits(
-                        pred_valid_logits[b, selected_idx],
-                        torch.zeros_like(pred_valid_logits[b, selected_idx]),
-                        reduction="mean",
-                    )
-                )
-
-        exist_loss = torch.stack(exist_losses).mean() if exist_losses else zero
-        valid_loss = torch.stack(valid_losses).mean() if valid_losses else zero
-        loss = exist_loss + float(self.role_contain_valid_weight) * valid_loss
-        return (
-            loss,
-            exist_loss,
-            valid_loss,
-            pred_logits.new_tensor(float(total_count)),
-            pred_logits.new_tensor(float(gt3_count)),
-            pred_logits.new_tensor(float(gt4_gt5bank_count)),
-            pred_logits.new_tensor(float(gt4_extra_count)),
-            pred_logits.new_tensor(float(allowed_count)),
-        )
-
-    def _q24_event_enabled(self) -> bool:
-        """Return whether Q24 event-aware containment behavior is active."""
-        return bool(float(self.q24_event_contain_gain) > 0.0 or self.q24_event_matcher)
-
-    def _q24_event_query_tensors(
-        self, device: torch.device, num_queries: int
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Return clean-GT5, high-risk, GT4, and combined Q24 event query tensors."""
-        clean_gt5 = torch.as_tensor(self.q24_event_clean_gt5_queries, device=device, dtype=torch.long)
-        risk = torch.as_tensor(self.q24_event_risk_queries, device=device, dtype=torch.long)
-        gt4 = torch.as_tensor(self.q24_event_gt4_queries, device=device, dtype=torch.long)
-        groups = [x for x in (clean_gt5, risk, gt4) if x.numel()]
-        if not groups:
-            raise ValueError("Q24 event containment requires at least one configured query.")
-        max_query = max(int(x.max().item()) for x in groups)
-        if max_query >= num_queries:
-            raise ValueError(
-                "Q24 event containment query range exceeds model query count: "
-                f"max configured q{max_query}, model has Q={num_queries}."
-            )
-        all_event = torch.cat(groups).unique(sorted=True)
-        return clean_gt5, risk, gt4, all_event
-
-    def _q24_event_allowed_masks(
-        self,
-        pred_points: torch.Tensor,
-        gt_valid: list[torch.Tensor],
-        gt_lanes: torch.Tensor,
-    ) -> list[torch.Tensor] | None:
-        """Build per-image Q x N masks for event-aware Q24 Hungarian matching."""
-        if not self._q24_event_enabled():
-            return None
-
-        device = pred_points.device
-        num_queries = int(pred_points.shape[1])
-        clean_gt5, risk, gt4_queries, all_event = self._q24_event_query_tensors(device, num_queries)
-        gt_lanes = torch.as_tensor(gt_lanes, device=device, dtype=pred_points.dtype).reshape(-1)
-        if gt_lanes.numel() != pred_points.shape[0]:
-            raise ValueError(f"gt_lanes must have one value per image, got {gt_lanes.numel()} vs B={pred_points.shape[0]}.")
-
-        masks: list[torch.Tensor] = []
-        for b, valid_b_raw in enumerate(gt_valid):
-            valid_b = valid_b_raw.to(device=device, dtype=pred_points.dtype)
-            if valid_b.ndim != 2:
-                raise ValueError(f"GT lane_valid must have shape N x K, got {tuple(valid_b.shape)}.")
-            mask = torch.ones((num_queries, valid_b.shape[0]), device=device, dtype=torch.bool)
-            if valid_b.shape[0] == 0:
-                masks.append(mask)
-                continue
-
-            gt_count = int(round(float(gt_lanes[b].detach().item())))
-            visible_counts = valid_b.float().sum(dim=1)
-            gt4_short = visible_counts <= float(self.q24_event_gt4_visible_thr)
-            gt5_short = visible_counts <= float(self.q24_event_gt5_visible_thr)
-
-            if gt_count <= 3:
-                mask[all_event, :] = False
-            elif gt_count == 4:
-                if clean_gt5.numel():
-                    mask[clean_gt5, :] = False
-                if risk.numel():
-                    mask[risk, :] = False
-                if gt4_queries.numel():
-                    mask[gt4_queries, :] = gt4_short[None, :]
-            else:
-                if clean_gt5.numel():
-                    mask[clean_gt5, :] = gt5_short[None, :] if self.q24_event_gt5_visible_thr > 0 else True
-                if risk.numel():
-                    mask[risk, :] = False
-                if gt4_queries.numel():
-                    mask[gt4_queries, :] = False
-            masks.append(mask)
-        return masks
-
-    @staticmethod
-    def _merge_allowed_masks(*mask_lists: list[torch.Tensor] | None) -> list[torch.Tensor] | None:
-        """Combine optional matcher allow masks with logical AND."""
-        active = [m for m in mask_lists if m is not None]
-        if not active:
-            return None
-        merged = [m.clone() for m in active[0]]
-        for masks in active[1:]:
-            if len(masks) != len(merged):
-                raise ValueError("Allowed-mask lists must have the same batch size.")
-            for i, mask in enumerate(masks):
-                if mask.shape != merged[i].shape:
-                    raise ValueError(f"Allowed-mask shape mismatch: {tuple(mask.shape)} vs {tuple(merged[i].shape)}.")
-                merged[i] = merged[i] & mask.to(device=merged[i].device, dtype=torch.bool)
-        return merged
-
-    def _q24_event_risk_protected_by_short_gt5(
-        self,
-        pred_points_q: torch.Tensor,
-        pred_visible_q: torch.Tensor,
-        gt_points_b: torch.Tensor,
-        gt_valid_b: torch.Tensor,
-        width: float,
-    ) -> bool:
-        """Return whether a high-risk query is close enough to a true short GT5 lane to skip extra negative pressure."""
-        if not self.q24_event_gt5_risk_protect:
-            return False
-        short_thr = int(self.q24_event_gt5_risk_protect_short_visible_thr)
-        if short_thr <= 0:
-            return False
-
-        q_visible = pred_visible_q if pred_visible_q.dtype == torch.bool else pred_visible_q > 0.5
-        pred_x = pred_points_q[:, 0] * float(width)
-        gt_x = gt_points_b[..., 0] * float(width)
-        min_overlap = int(self.q24_event_gt5_risk_protect_min_overlap)
-        protect_dist = float(self.q24_event_gt5_risk_protect_dist_px)
-
-        for gt_i in range(gt_points_b.shape[0]):
-            gt_visible = gt_valid_b[gt_i] > 0.5
-            if int(gt_visible.sum().item()) > short_thr:
-                continue
-            common = q_visible & gt_visible
-            if int(common.sum().item()) < min_overlap:
-                continue
-            mean_dx = (pred_x[common] - gt_x[gt_i, common]).abs().mean()
-            if float(mean_dx.detach().cpu().item()) <= protect_dist:
-                return True
-        return False
-
-    @staticmethod
-    def _q24_event_gt_close(
-        pred_points_q: torch.Tensor,
-        pred_visible_q: torch.Tensor,
-        gt_points_b: torch.Tensor,
-        gt_valid_b: torch.Tensor,
-        width: float,
-        visible_thr: int,
-        dist_px: float,
-        min_overlap: int,
-    ) -> bool:
-        """Return whether a query is close enough to a visible GT lane to protect or calibrate it."""
-        q_visible = pred_visible_q > 0.5
-        pred_x = pred_points_q[:, 0] * float(width)
-        gt_x = gt_points_b[..., 0] * float(width)
-
-        for gt_i in range(gt_points_b.shape[0]):
-            gt_visible = gt_valid_b[gt_i] > 0.5
-            if visible_thr > 0 and int(gt_visible.sum().item()) > int(visible_thr):
-                continue
-            common = q_visible & gt_visible
-            if int(common.sum().item()) < int(min_overlap):
-                continue
-            mean_dx = (pred_x[common] - gt_x[gt_i, common]).abs().mean()
-            if float(mean_dx.detach().cpu().item()) <= float(dist_px):
-                return True
-        return False
-
-    def q24_event_score_calibration_loss(
-        self,
-        pred_points: torch.Tensor,
-        pred_logits: torch.Tensor,
-        pred_valid_logits: torch.Tensor | None,
-        gt_points: list[torch.Tensor],
-        gt_valid: list[torch.Tensor],
-        gt_lanes: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Raise existence scores for clean queries that are near true GT5 short lanes."""
-        zero = self._zero_like(pred_points)
-        if float(self.q24_event_score_calib_gain) <= 0.0:
-            return zero, zero, zero
-        if pred_valid_logits is None:
-            raise ValueError("gcs_q24_event_score_calib requires pred_valid_logits.")
-
-        if pred_logits.ndim == 3 and pred_logits.shape[-1] == 1:
-            pred_logits_2d = pred_logits.squeeze(-1)
-        else:
-            pred_logits_2d = pred_logits
-        if pred_logits_2d.ndim != 2:
-            raise ValueError(f"pred_logits must be B x Q, got {tuple(pred_logits.shape)}.")
-
-        device = pred_logits_2d.device
-        dtype = pred_points.dtype
-        num_queries = int(pred_logits_2d.shape[1])
-        score_queries = torch.as_tensor(self.q24_event_score_queries, device=device, dtype=torch.long)
-        if score_queries.numel() and int(score_queries.max().item()) >= num_queries:
-            raise ValueError(
-                "Q24 event score-calibration query range exceeds model query count: "
-                f"max configured q{int(score_queries.max().item())}, model has Q={num_queries}."
-            )
-        gt_lanes = torch.as_tensor(gt_lanes, device=device, dtype=pred_logits_2d.dtype).reshape(-1)
-        if gt_lanes.numel() != pred_logits_2d.shape[0]:
-            raise ValueError(f"gt_lanes must have one value per image, got {gt_lanes.numel()} vs B={pred_logits_2d.shape[0]}.")
-
-        width = float(self._pixel_scale_for(pred_points).reshape(-1)[0].detach().cpu().item())
-        valid_prob = pred_valid_logits.detach().sigmoid()
-        points = pred_points.detach()
-        losses = []
-        prob_sum = pred_logits_2d.new_tensor(0.0)
-        pos_count = 0
-
-        for b in range(pred_logits_2d.shape[0]):
-            gt_count = int(round(float(gt_lanes[b].detach().item())))
-            if gt_count < 5:
-                continue
-            gt_points_b = gt_points[b].detach().to(device=device, dtype=dtype)
-            gt_valid_b = gt_valid[b].detach().to(device=device, dtype=dtype)
-            for q in score_queries.tolist():
-                if q < 0 or q >= num_queries:
-                    continue
-                close = self._q24_event_gt_close(
-                    points[b, q],
-                    valid_prob[b, q] > float(self.q24_event_score_valid_thr),
-                    gt_points_b,
-                    gt_valid_b,
-                    width,
-                    int(self.q24_event_score_visible_thr),
-                    float(self.q24_event_score_dist_px),
-                    int(self.q24_event_score_min_overlap),
-                )
-                if not close:
-                    continue
-                target = torch.full_like(pred_logits_2d[b, q], float(self.q24_event_score_target))
-                losses.append(F.binary_cross_entropy_with_logits(pred_logits_2d[b, q], target, reduction="mean"))
-                prob_sum = prob_sum + pred_logits_2d[b, q].detach().sigmoid()
-                pos_count += 1
-
-        score_loss = torch.stack(losses).mean() if losses else zero
-        count_tensor = pred_logits_2d.new_tensor(float(pos_count))
-        prob_mean = prob_sum / count_tensor.clamp_min(1.0)
-        return score_loss, count_tensor, prob_mean
-
-    def q24_event_containment_loss(
-        self,
-        pred_points: torch.Tensor,
-        pred_logits: torch.Tensor,
-        pred_valid_logits: torch.Tensor | None,
-        indices: list[tuple[torch.Tensor, torch.Tensor]],
-        gt_points: list[torch.Tensor],
-        gt_valid: list[torch.Tensor],
-        gt_lanes: torch.Tensor,
-        event_allowed_masks: list[torch.Tensor] | None,
-    ) -> tuple[torch.Tensor, ...]:
-        """Suppress event-mined Q24 high-risk queries while keeping clean GT5 carriers isolated."""
-        zero = self._zero_like(pred_points)
-        if float(self.q24_event_contain_gain) <= 0.0:
-            return zero, zero, zero, zero, zero, zero, zero, zero, zero, zero
-        if pred_valid_logits is None and float(self.q24_event_valid_weight) > 0.0:
-            raise ValueError(
-                "gcs_q24_event_contain with gcs_q24_event_valid_weight > 0 requires pred_valid_logits."
-            )
-        if self.q24_event_dynamic and pred_valid_logits is None:
-            raise ValueError("gcs_q24_event_dynamic requires pred_valid_logits.")
-        if event_allowed_masks is None:
-            raise ValueError("event_allowed_masks must be provided when gcs_q24_event_contain is enabled.")
-
-        device = pred_logits.device
-        dtype = pred_points.dtype
-        if pred_logits.ndim == 3 and pred_logits.shape[-1] == 1:
-            pred_logits_2d = pred_logits.squeeze(-1)
-        else:
-            pred_logits_2d = pred_logits
-        if pred_logits_2d.ndim != 2:
-            raise ValueError(f"pred_logits must be B x Q, got {tuple(pred_logits.shape)}.")
-
-        num_queries = int(pred_logits_2d.shape[1])
-        clean_gt5, risk, gt4_queries, all_event = self._q24_event_query_tensors(device, num_queries)
-        dynamic_queries = torch.as_tensor(self.q24_event_dynamic_queries, device=device, dtype=torch.long)
-        if dynamic_queries.numel() and int(dynamic_queries.max().item()) >= num_queries:
-            raise ValueError(
-                "Q24 event dynamic query range exceeds model query count: "
-                f"max configured q{int(dynamic_queries.max().item())}, model has Q={num_queries}."
-            )
-        gt_lanes = torch.as_tensor(gt_lanes, device=device, dtype=pred_logits_2d.dtype).reshape(-1)
-        if gt_lanes.numel() != pred_logits_2d.shape[0]:
-            raise ValueError(f"gt_lanes must have one value per image, got {gt_lanes.numel()} vs B={pred_logits_2d.shape[0]}.")
-
-        width = float(self._pixel_scale_for(pred_points).reshape(-1)[0].detach().cpu().item())
-        valid_prob = pred_valid_logits.detach().sigmoid() if pred_valid_logits is not None else None
-        points = pred_points.detach()
-
-        exist_losses = []
-        valid_losses = []
-        gt3_count = 0
-        gt4_count = 0
-        gt5_risk_count = 0
-        gt5_risk_protected_count = 0
-        clean_allowed_count = 0
-        dynamic_count = 0
-        dynamic_protected_count = 0
-
-        for b in range(pred_logits_2d.shape[0]):
-            gt_count = int(round(float(gt_lanes[b].detach().item())))
-            selected = torch.zeros((num_queries,), device=device, dtype=torch.bool)
-            allowed_positive = torch.zeros((num_queries,), device=device, dtype=torch.bool)
-            src_idx, tgt_idx = indices[b]
-            if src_idx.numel():
-                src_idx = src_idx.to(device=device, dtype=torch.long)
-                tgt_idx = tgt_idx.to(device=device, dtype=torch.long)
-                allowed_mask_b = event_allowed_masks[b].to(device=device, dtype=torch.bool)
-                for q, t in zip(src_idx.tolist(), tgt_idx.tolist()):
-                    if 0 <= q < num_queries and 0 <= t < allowed_mask_b.shape[1] and bool(allowed_mask_b[q, t]):
-                        allowed_positive[q] = True
-
-            if gt_count <= 3:
-                selected[all_event] = True
-                gt3_count += int(all_event.numel())
-            elif gt_count == 4:
-                if clean_gt5.numel():
-                    selected[clean_gt5] = True
-                if risk.numel():
-                    selected[risk] = True
-                if gt4_queries.numel():
-                    allowed_gt4 = allowed_positive[gt4_queries]
-                    suppressed_gt4 = gt4_queries[~allowed_gt4]
-                    if suppressed_gt4.numel():
-                        selected[suppressed_gt4] = True
-                gt4_count += int(selected.sum().item())
-            else:
-                if clean_gt5.numel():
-                    clean_allowed_count += int(allowed_positive[clean_gt5].sum().item())
-                if risk.numel() and self.q24_event_suppress_gt5_risk:
-                    selected[risk] = True
-                    if valid_prob is not None and self.q24_event_gt5_risk_protect:
-                        gt_points_b = gt_points[b].detach().to(device=device, dtype=dtype)
-                        gt_valid_b = gt_valid[b].detach().to(device=device, dtype=dtype)
-                        for q in risk.tolist():
-                            if self._q24_event_risk_protected_by_short_gt5(
-                                points[b, q],
-                                valid_prob[b, q],
-                                gt_points_b,
-                                gt_valid_b,
-                                width,
-                            ):
-                                selected[q] = False
-                                gt5_risk_protected_count += 1
-                    gt5_risk_count += int(selected[risk].sum().item())
-
-            if self.q24_event_dynamic and dynamic_queries.numel() and valid_prob is not None:
-                gt_points_b = gt_points[b].detach().to(device=device, dtype=dtype)
-                gt_valid_b = gt_valid[b].detach().to(device=device, dtype=dtype)
-                for q in dynamic_queries.tolist():
-                    if q < 0 or q >= num_queries or bool(allowed_positive[q]) or bool(selected[q]):
-                        continue
-                    q_valid = valid_prob[b, q] > float(self.q24_event_dynamic_valid_thr)
-                    visible_len = int(q_valid.sum().item())
-                    if visible_len < int(self.q24_event_dynamic_min_valid):
-                        continue
-                    if visible_len > int(self.q24_event_dynamic_max_visible):
-                        continue
-                    if float(self.q24_event_dynamic_score_thr) > 0.0:
-                        score = float(pred_logits_2d[b, q].detach().sigmoid().cpu().item())
-                        if score < float(self.q24_event_dynamic_score_thr):
-                            continue
-                    if self.q24_event_dynamic_protect:
-                        protected = self._q24_event_gt_close(
-                            points[b, q],
-                            q_valid,
-                            gt_points_b,
-                            gt_valid_b,
-                            width,
-                            int(self.q24_event_dynamic_protect_visible_thr),
-                            float(self.q24_event_dynamic_protect_dist_px),
-                            int(self.q24_event_dynamic_protect_min_overlap),
-                        )
-                        if protected:
-                            dynamic_protected_count += 1
-                            continue
-                    selected[q] = True
-                    dynamic_count += 1
-
-            if not bool(selected.any()):
-                continue
-
-            selected_idx = torch.nonzero(selected, as_tuple=False).flatten()
-            exist_losses.append(
-                F.binary_cross_entropy_with_logits(
-                    pred_logits_2d[b, selected_idx],
-                    torch.zeros_like(pred_logits_2d[b, selected_idx]),
-                    reduction="mean",
-                )
-            )
-            if pred_valid_logits is not None and float(self.q24_event_valid_weight) > 0.0:
-                valid_losses.append(
-                    F.binary_cross_entropy_with_logits(
-                        pred_valid_logits[b, selected_idx],
-                        torch.zeros_like(pred_valid_logits[b, selected_idx]),
-                        reduction="mean",
-                    )
-                )
-
-        exist_loss = torch.stack(exist_losses).mean() if exist_losses else zero
-        valid_loss = torch.stack(valid_losses).mean() if valid_losses else zero
-        loss = exist_loss + float(self.q24_event_valid_weight) * valid_loss
-        return (
-            loss,
-            exist_loss,
-            valid_loss,
-            pred_logits_2d.new_tensor(float(gt3_count)),
-            pred_logits_2d.new_tensor(float(gt4_count)),
-            pred_logits_2d.new_tensor(float(gt5_risk_count)),
-            pred_logits_2d.new_tensor(float(gt5_risk_protected_count)),
-            pred_logits_2d.new_tensor(float(clean_allowed_count)),
-            pred_logits_2d.new_tensor(float(dynamic_count)),
-            pred_logits_2d.new_tensor(float(dynamic_protected_count)),
-        )
-
     def count_losses(
         self, pred_logits: torch.Tensor, batch: dict, gt_valid: list[torch.Tensor], target: torch.Tensor | None = None
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -2212,462 +1061,156 @@ class GCSLoss(nn.Module):
 
         return loss, acc, pred_count_mean
 
-    def query_quality_loss(
+    def short_candidate_loss(
         self,
         preds: dict[str, torch.Tensor],
-        pred_points: torch.Tensor,
-        pred_valid_logits: torch.Tensor | None,
         gt_points: list[torch.Tensor],
         gt_valid: list[torch.Tensor],
-        indices: list[tuple[torch.Tensor, torch.Tensor]],
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Train an optional query-level quality/ranking head independently from count estimation."""
-        pred_quality_logits = preds.get("pred_quality_logits")
-        if pred_quality_logits is None:
-            if float(self.query_quality_gain) > 0.0:
-                raise ValueError(
-                    "gcs_query_quality requires preds['pred_quality_logits']; use a query_quality_head model YAML "
-                    "or set --gcs-query-quality 0.0."
-                )
-            zero = self._zero_like(pred_points)
-            return zero, zero, zero
-
-        if pred_quality_logits.ndim == 3 and pred_quality_logits.shape[-1] == 1:
-            pred_quality_logits = pred_quality_logits.squeeze(-1)
-        if pred_quality_logits.ndim != 2 or tuple(pred_quality_logits.shape) != tuple(pred_points.shape[:2]):
-            raise ValueError(
-                "pred_quality_logits must have shape B x Q matching pred_points, "
-                f"got {tuple(pred_quality_logits.shape)} vs {tuple(pred_points.shape[:2])}."
+        gt_lanes: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Train the default-off lateral candidate geometry selector on short GT4/GT5 lanes only."""
+        pred_points = preds["pred_points"]
+        zero = self._zero_like(pred_points)
+        zero_count = pred_points.new_zeros(())
+        candidate_points = preds.get("pred_short_candidate_points")
+        candidate_logits = preds.get("pred_short_candidate_logits")
+        if float(self.short_candidate_gain) == 0.0:
+            return zero, zero, zero, zero_count, zero_count, zero_count
+        if candidate_points is None or candidate_logits is None:
+            raise KeyError(
+                "gcs_short_candidate > 0 requires a GCS head that emits "
+                "pred_short_candidate_points and pred_short_candidate_logits."
             )
-
-        target = torch.zeros_like(pred_quality_logits)
-        device, dtype = pred_points.device, pred_points.dtype
-        scale = self._pixel_scale_for(pred_points)
-        pos_targets: list[torch.Tensor] = []
-        for b, (src_idx, tgt_idx) in enumerate(indices):
-            if src_idx.numel() == 0:
-                continue
-
-            pred = pred_points[b, src_idx].detach()
-            target_points = gt_points[b].to(device=device, dtype=dtype)[tgt_idx]
-            valid = gt_valid[b].to(device=device, dtype=dtype)[tgt_idx]
-            point_error = torch.norm((pred - target_points) * scale, dim=-1)
-            ape = (point_error * valid).sum(dim=1) / valid.sum(dim=1).clamp_min(1.0)
-            quality = self._exist_quality_from_ape(ape)
-            if pred_valid_logits is not None:
-                valid_prob = pred_valid_logits[b, src_idx].detach().sigmoid().to(dtype=dtype)
-                intersection = (valid_prob * valid).sum(dim=1)
-                union = valid_prob.sum(dim=1) + valid.sum(dim=1) - intersection
-                visible_quality = intersection / union.clamp_min(1e-6)
-                quality = quality * visible_quality.clamp(min=0.0, max=1.0)
-            quality = quality.to(dtype=target.dtype)
-            target[b, src_idx] = quality
-            pos_targets.append(quality.detach())
-
-        pos_weight = pred_quality_logits.new_tensor(self.exist_pos_weight)
-        loss = F.binary_cross_entropy_with_logits(pred_quality_logits, target, pos_weight=pos_weight, reduction="mean")
-        if pos_targets:
-            pos_cat = torch.cat([x.reshape(-1) for x in pos_targets])
-            pos_mean = pos_cat.mean().to(device=pred_points.device, dtype=pred_points.dtype)
-            pos_count = pred_points.new_tensor(float(pos_cat.numel()))
-        else:
-            pos_mean = self._zero_like(pred_points)
-            pos_count = self._zero_like(pred_points)
-        return loss, pos_mean, pos_count
-
-    def query_extent_loss(
-        self,
-        preds: dict[str, torch.Tensor],
-        pred_points: torch.Tensor,
-        gt_valid: list[torch.Tensor],
-        indices: list[tuple[torch.Tensor, torch.Tensor]],
-        gt_lanes: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Train optional query-mode first/last visible anchor classifiers."""
-        pred_start_logits = preds.get("pred_start_logits")
-        pred_end_logits = preds.get("pred_end_logits")
-        if pred_start_logits is None or pred_end_logits is None:
-            if float(self.query_extent_gain) > 0.0:
-                raise ValueError(
-                    "gcs_query_extent requires preds['pred_start_logits'] and preds['pred_end_logits']; "
-                    "use a query_extent_head model YAML or set --gcs-query-extent 0.0."
-                )
-            zero = self._zero_like(pred_points)
-            return zero, zero, zero, zero, zero
-
-        expected_shape = tuple(pred_points.shape[:3])
-        if tuple(pred_start_logits.shape) != expected_shape:
+        if candidate_points.ndim != 5 or candidate_points.shape[-1] != 2:
             raise ValueError(
-                "pred_start_logits must have shape B x Q x K matching pred_points, "
-                f"got {tuple(pred_start_logits.shape)} vs {expected_shape}."
+                "pred_short_candidate_points must have shape B x Q x M x K x 2, "
+                f"got {tuple(candidate_points.shape)}."
             )
-        if tuple(pred_end_logits.shape) != expected_shape:
+        if candidate_logits.shape != candidate_points.shape[:3]:
             raise ValueError(
-                "pred_end_logits must have shape B x Q x K matching pred_points, "
-                f"got {tuple(pred_end_logits.shape)} vs {expected_shape}."
+                "pred_short_candidate_logits must have shape B x Q x M matching candidate points, "
+                f"got {tuple(candidate_logits.shape)} vs {tuple(candidate_points.shape[:3])}."
+            )
+        if candidate_points.shape[0] != pred_points.shape[0] or candidate_points.shape[1] != pred_points.shape[1]:
+            raise ValueError(
+                "pred_short_candidate_points B,Q must match pred_points, "
+                f"got {tuple(candidate_points.shape[:2])} vs {tuple(pred_points.shape[:2])}."
+            )
+        if candidate_points.shape[3] != pred_points.shape[2]:
+            raise ValueError(
+                "pred_short_candidate_points K must match pred_points, "
+                f"got {candidate_points.shape[3]} vs {pred_points.shape[2]}."
             )
 
         device = pred_points.device
         dtype = pred_points.dtype
-        loss_sum = pred_points.new_zeros(())
-        weight_sum = pred_points.new_zeros(())
-        start_correct = pred_points.new_zeros(())
-        end_correct = pred_points.new_zeros(())
-        interval_iou_sum = pred_points.new_zeros(())
-        matched_count = 0
-        short_count = 0
+        scale = self._pixel_scale_for(pred_points).view(1, 1, 2)
+        bsz, num_queries, num_candidates, num_points, _ = candidate_points.shape
+        flat_count = int(num_queries * num_candidates)
+        topk = min(int(self.short_candidate_topk), flat_count)
+        pos_px = float(self.short_candidate_pos_px)
+        soft_px = float(self.short_candidate_soft_px)
+        tau = max(float(self.short_candidate_tau), 1e-6)
+        min_visible = int(self.short_candidate_min_visible)
+        visible_thr = int(self.short_candidate_visible_thr)
 
-        gt_lanes_t = None
-        if gt_lanes is not None:
-            gt_lanes_t = torch.as_tensor(gt_lanes, device=device, dtype=dtype).reshape(-1)
-            if gt_lanes_t.numel() != pred_points.shape[0]:
-                raise ValueError(f"gt_lanes must have one value per image, got {gt_lanes_t.numel()} vs B={pred_points.shape[0]}.")
+        score_losses: list[torch.Tensor] = []
+        pull_losses: list[torch.Tensor] = []
+        pos_count = 0
+        soft_count = 0
+        neg_count = 0
 
-        for b, (src_idx, tgt_idx) in enumerate(indices):
-            if src_idx.numel() == 0:
+        gt_lanes = torch.as_tensor(gt_lanes, device=device, dtype=dtype).reshape(-1)
+        if gt_lanes.numel() != bsz:
+            raise ValueError(f"gt_lanes must have one value per image, got {gt_lanes.numel()} vs B={bsz}.")
+
+        for b in range(bsz):
+            gt_count = int(round(float(gt_lanes[b].detach().cpu().item())))
+            if gt_count not in {4, 5}:
                 continue
-            src_idx = src_idx.to(device=device, dtype=torch.long)
-            tgt_idx = tgt_idx.to(device=device, dtype=torch.long)
-            target_valid = gt_valid[b].to(device=device, dtype=dtype)[tgt_idx]
-            visible = target_valid > 0.5
-            has_visible = visible.any(dim=1)
-            if not bool(has_visible.any()):
-                continue
-
-            src_idx = src_idx[has_visible]
-            visible = visible[has_visible]
-            visible_float = visible.to(dtype=dtype)
-            k = int(visible.shape[1])
-            start_targets = visible_float.argmax(dim=1).long()
-            end_targets = (k - 1 - torch.flip(visible_float, dims=[1]).argmax(dim=1)).long()
-
-            start_logits = pred_start_logits[b, src_idx]
-            end_logits = pred_end_logits[b, src_idx]
-            start_loss = F.cross_entropy(start_logits, start_targets, reduction="none")
-            end_loss = F.cross_entropy(end_logits, end_targets, reduction="none")
-
-            lane_weights = torch.ones_like(start_loss, dtype=dtype)
-            visible_counts = visible_float.sum(dim=1)
-            gt_count = int(round(float(gt_lanes_t[b].detach().item()))) if gt_lanes_t is not None else 0
-            short_mask = (visible_counts <= float(self.query_extent_short_visible_thr)) & (
-                gt_count >= int(self.query_extent_gt_min_lanes)
-            )
-            if bool(short_mask.any()):
-                lane_weights[short_mask] = lane_weights[short_mask] + float(self.query_extent_short_weight)
-                short_count += int(short_mask.sum().item())
-
-            loss_sum = loss_sum + ((start_loss + end_loss) * lane_weights).sum()
-            weight_sum = weight_sum + lane_weights.sum()
-
-            pred_start = start_logits.detach().argmax(dim=1)
-            pred_end = end_logits.detach().argmax(dim=1)
-            pred_lo = torch.minimum(pred_start, pred_end)
-            pred_hi = torch.maximum(pred_start, pred_end)
-            target_lo = torch.minimum(start_targets, end_targets)
-            target_hi = torch.maximum(start_targets, end_targets)
-            inter = (torch.minimum(pred_hi, target_hi) - torch.maximum(pred_lo, target_lo) + 1).clamp_min(0)
-            union = (torch.maximum(pred_hi, target_hi) - torch.minimum(pred_lo, target_lo) + 1).clamp_min(1)
-            interval_iou = inter.to(dtype=dtype) / union.to(dtype=dtype)
-
-            start_correct = start_correct + (pred_start == start_targets).to(dtype=dtype).sum()
-            end_correct = end_correct + (pred_end == end_targets).to(dtype=dtype).sum()
-            interval_iou_sum = interval_iou_sum + interval_iou.sum()
-            matched_count += int(start_targets.numel())
-
-        if matched_count == 0:
-            zero = self._zero_like(pred_points)
-            return zero, zero, zero, zero, zero
-
-        denom = weight_sum.clamp_min(1.0)
-        count_t = pred_points.new_tensor(float(matched_count))
-        return (
-            loss_sum / denom,
-            start_correct / count_t,
-            end_correct / count_t,
-            interval_iou_sum / count_t,
-            pred_points.new_tensor(float(short_count)),
-        )
-
-    def short_local_refine_loss(
-        self,
-        preds: dict[str, torch.Tensor],
-        pred_points: torch.Tensor,
-        gt_points: list[torch.Tensor],
-        gt_valid: list[torch.Tensor],
-        indices: list[tuple[torch.Tensor, torch.Tensor]],
-        gt_lanes: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Supervise optional auxiliary local x refinement on matched short GT4/GT5 lanes."""
-        pred_short_refined_points = preds.get("pred_short_refined_points")
-        if pred_short_refined_points is None:
-            if float(self.short_local_refine_gain) > 0.0:
-                raise ValueError(
-                    "gcs_short_local_refine requires preds['pred_short_refined_points']; "
-                    "use a query_short_local_refine_head model YAML or set --gcs-short-local-refine 0.0."
-                )
-            zero = self._zero_like(pred_points)
-            return zero, zero, zero, zero, zero, zero, zero, zero
-        if tuple(pred_short_refined_points.shape) != tuple(pred_points.shape):
-            raise ValueError(
-                "pred_short_refined_points must have shape B x Q x K x 2 matching pred_points, "
-                f"got {tuple(pred_short_refined_points.shape)} vs {tuple(pred_points.shape)}."
-            )
-        pred_coarse_points = preds.get("pred_coarse_points")
-        if isinstance(pred_coarse_points, torch.Tensor) and tuple(pred_coarse_points.shape) != tuple(pred_points.shape):
-            raise ValueError(
-                "pred_coarse_points must have shape B x Q x K x 2 matching pred_points when present, "
-                f"got {tuple(pred_coarse_points.shape)} vs {tuple(pred_points.shape)}."
-            )
-
-        device, dtype = pred_points.device, pred_points.dtype
-        gt_lanes_t = None
-        if gt_lanes is not None:
-            gt_lanes_t = torch.as_tensor(gt_lanes, device=device, dtype=dtype).reshape(-1)
-            if gt_lanes_t.numel() != pred_points.shape[0]:
-                raise ValueError(f"gt_lanes must have one value per image, got {gt_lanes_t.numel()} vs B={pred_points.shape[0]}.")
-
-        width = self._pixel_scale_for(pred_points).reshape(-1)[0].to(device=device, dtype=dtype)
-        width_float = max(float(width.detach().item()), 1.0)
-        beta_norm = max(float(self.short_local_refine_beta_px) / width_float, 1e-12)
-        selected_losses: list[torch.Tensor] = []
-        selected_weights: list[torch.Tensor] = []
-        coarse_apes: list[torch.Tensor] = []
-        refined_apes: list[torch.Tensor] = []
-        identity_counts: list[torch.Tensor] = []
-        pull_counts: list[torch.Tensor] = []
-        identity_guard = bool(getattr(self, "short_local_refine_identity_guard", False))
-        identity_thr = float(getattr(self, "short_local_refine_identity_thr_px", 20.0))
-        nearmiss_thr = float(getattr(self, "short_local_refine_nearmiss_thr_px", 80.0))
-        identity_weight = float(getattr(self, "short_local_refine_identity_weight", 1.0))
-        nearmiss_weight = float(getattr(self, "short_local_refine_nearmiss_weight", 1.0))
-
-        for b, (src_idx, tgt_idx) in enumerate(indices):
-            if src_idx.numel() == 0:
-                continue
-            src_idx = src_idx.to(device=device, dtype=torch.long)
-            tgt_idx = tgt_idx.to(device=device, dtype=torch.long)
-            target_all = gt_points[b].to(device=device, dtype=dtype)
-            valid_all = gt_valid[b].to(device=device, dtype=dtype)
-            target = target_all[tgt_idx]
-            valid = valid_all[tgt_idx] > 0.5
-            visible_counts = valid.to(dtype=dtype).sum(dim=1)
-            if gt_lanes_t is None:
-                gt_count = 0
-            else:
-                gt_count = int(round(float(gt_lanes_t[b].detach().item())))
-            short_mask = (visible_counts <= float(self.short_local_refine_visible_thr)) & (
-                gt_count >= int(self.short_local_refine_gt_min_lanes)
-            )
-            if not bool(short_mask.any()):
+            lane_weight = float(self.short_candidate_gt4_weight if gt_count == 4 else self.short_candidate_gt5_weight)
+            if lane_weight <= 0.0:
                 continue
 
-            src_short = src_idx[short_mask]
-            target_short = target[short_mask]
-            valid_short = valid[short_mask]
-            refined_short = pred_short_refined_points[b, src_short]
-            coarse_short = pred_coarse_points[b, src_short] if isinstance(pred_coarse_points, torch.Tensor) else pred_points[b, src_short]
-            mask = valid_short.to(dtype=dtype)
-            valid_den = mask.sum(dim=1).clamp_min(1.0)
-            coarse_ape = ((coarse_short.detach()[..., 0] - target_short[..., 0]).abs() * width * mask).sum(dim=1) / valid_den
+            target_points_b = gt_points[b].to(device=device, dtype=dtype)
+            target_valid_b = gt_valid[b].to(device=device, dtype=dtype)
+            if target_points_b.numel() == 0:
+                continue
+            visible_counts = target_valid_b.sum(dim=1)
+            short_lane_mask = (visible_counts >= float(min_visible)) & (visible_counts <= float(visible_thr))
+            short_lane_indices = torch.nonzero(short_lane_mask, as_tuple=False).flatten()
+            if short_lane_indices.numel() == 0:
+                continue
 
-            if identity_guard:
-                identity_mask = coarse_ape <= identity_thr
-                pull_mask = (coarse_ape > identity_thr) & (coarse_ape <= nearmiss_thr)
-                eligible_mask = identity_mask | pull_mask
-                if not bool(eligible_mask.any()):
+            candidates_b = candidate_points[b].reshape(flat_count, num_points, 2)
+            logits_b = candidate_logits[b].reshape(flat_count)
+            score_target = torch.zeros((flat_count,), device=device, dtype=dtype)
+            score_weight = torch.zeros((flat_count,), device=device, dtype=dtype)
+            min_ape = torch.full((flat_count,), float("inf"), device=device, dtype=dtype)
+
+            for lane_idx in short_lane_indices.tolist():
+                target = target_points_b[lane_idx]
+                valid = target_valid_b[lane_idx].clamp(0.0, 1.0)
+                valid_count = valid.sum().clamp_min(1.0)
+                point_error = torch.norm((candidates_b.detach() - target.view(1, num_points, 2)) * scale, dim=-1)
+                ape = (point_error * valid.view(1, num_points)).sum(dim=1) / valid_count
+                min_ape = torch.minimum(min_ape, ape)
+                top_vals, top_idx = torch.topk(ape, k=topk, largest=False)
+                active = top_vals <= soft_px
+                if not bool(active.any()):
                     continue
-                target_x = torch.where(identity_mask[:, None], coarse_short.detach()[..., 0], target_short[..., 0])
-                lane_weight = torch.where(
-                    identity_mask,
-                    coarse_ape.new_tensor(identity_weight),
-                    coarse_ape.new_tensor(nearmiss_weight),
+
+                selected = top_idx[active]
+                selected_ape = top_vals[active]
+                coverage = (valid_count / float(num_points)).clamp(0.0, 1.0)
+                soft_target = torch.exp(-selected_ape / tau) * coverage
+                target_score = torch.where(
+                    selected_ape <= pos_px,
+                    torch.ones_like(selected_ape),
+                    soft_target,
+                ).clamp(0.0, 1.0)
+                score_target[selected] = torch.maximum(score_target[selected], target_score.to(dtype=dtype))
+                score_weight[selected] = torch.maximum(
+                    score_weight[selected],
+                    score_weight.new_full((selected.numel(),), lane_weight),
                 )
-            else:
-                identity_mask = torch.zeros_like(coarse_ape, dtype=torch.bool)
-                pull_mask = torch.ones_like(coarse_ape, dtype=torch.bool)
-                eligible_mask = pull_mask
-                target_x = target_short[..., 0]
-                lane_weight = coarse_ape.new_ones(coarse_ape.shape)
+                pos_count += int((selected_ape <= pos_px).sum().detach().cpu().item())
+                soft_count += int(((selected_ape > pos_px) & (selected_ape <= soft_px)).sum().detach().cpu().item())
 
-            refined_short = refined_short[eligible_mask]
-            coarse_ape = coarse_ape[eligible_mask]
-            refined_target_x = target_short[..., 0][eligible_mask]
-            target_x = target_x[eligible_mask]
-            mask = mask[eligible_mask]
-            valid_den = valid_den[eligible_mask]
-            lane_weight = lane_weight[eligible_mask]
+                if float(self.short_candidate_pull_weight) > 0.0:
+                    selected_candidates = candidates_b[selected]
+                    target_px = target.view(1, num_points, 2) * scale
+                    candidate_px = selected_candidates * scale
+                    pull = F.smooth_l1_loss(
+                        candidate_px,
+                        target_px.expand_as(candidate_px),
+                        reduction="none",
+                    ).sum(dim=-1)
+                    pull = (pull * valid.view(1, num_points)).sum(dim=1) / valid_count
+                    pull_losses.append((pull * target_score.detach() * lane_weight).mean())
 
-            per_anchor = F.smooth_l1_loss(
-                refined_short[..., 0],
-                target_x,
-                beta=beta_norm,
-                reduction="none",
-            )
-            selected_losses.append((per_anchor * mask).sum(dim=1) / valid_den)
-            selected_weights.append(lane_weight)
+            neg_mask = (score_weight <= 0.0) & (min_ape > soft_px)
+            if float(self.short_candidate_neg_score_thr) > 0.0:
+                neg_mask = neg_mask & (logits_b.detach().sigmoid() >= float(self.short_candidate_neg_score_thr))
+            if bool(neg_mask.any()):
+                score_weight[neg_mask] = 1.0
+                neg_count += int(neg_mask.sum().detach().cpu().item())
 
-            refined_ape = ((refined_short.detach()[..., 0] - refined_target_x).abs() * width * mask).sum(dim=1) / valid_den
-            coarse_apes.append(coarse_ape)
-            refined_apes.append(refined_ape)
-            identity_counts.append(identity_mask[eligible_mask].to(dtype=dtype).sum().reshape(1))
-            pull_counts.append(pull_mask[eligible_mask].to(dtype=dtype).sum().reshape(1))
+            active_weight = score_weight > 0.0
+            if bool(active_weight.any()):
+                bce = F.binary_cross_entropy_with_logits(logits_b, score_target, reduction="none")
+                score_losses.append((bce * score_weight).sum() / score_weight.sum().clamp_min(1.0))
 
-        if not selected_losses:
-            zero = self._zero_like(pred_short_refined_points)
-            return zero, zero, zero, zero, zero, zero, zero, zero
-
-        loss_cat = torch.cat([x.reshape(-1) for x in selected_losses])
-        weight_cat = torch.cat([x.reshape(-1) for x in selected_weights])
-        loss = (loss_cat * weight_cat).sum() / weight_cat.sum().clamp_min(1.0)
-        coarse_cat = torch.cat([x.reshape(-1) for x in coarse_apes])
-        refined_cat = torch.cat([x.reshape(-1) for x in refined_apes])
-        count_t = pred_points.new_tensor(float(refined_cat.numel()))
-        gain20 = ((coarse_cat > 20.0) & (refined_cat <= 20.0)).to(dtype=dtype).sum() / count_t.clamp_min(1.0)
-        loss20 = ((coarse_cat <= 20.0) & (refined_cat > 20.0)).to(dtype=dtype).sum() / count_t.clamp_min(1.0)
-        identity_count_t = torch.cat(identity_counts).sum() if identity_counts else self._zero_like(pred_points)
-        pull_count_t = torch.cat(pull_counts).sum() if pull_counts else self._zero_like(pred_points)
-        return loss, count_t, coarse_cat.mean(), refined_cat.mean(), gain20, loss20, identity_count_t, pull_count_t
-
-    def short_candidate_loss(
-        self,
-        preds: dict[str, torch.Tensor],
-        pred_points: torch.Tensor,
-        gt_points: list[torch.Tensor],
-        gt_valid: list[torch.Tensor],
-        indices: list[tuple[torch.Tensor, torch.Tensor]],
-        gt_lanes: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Train feature-conditioned scores for fixed lateral candidates around matched short lanes."""
-        candidate_points = preds.get("pred_short_candidate_points")
-        candidate_logits = preds.get("pred_short_candidate_logits")
-        if candidate_points is None or candidate_logits is None:
-            if float(self.short_candidate_gain) > 0.0:
-                raise ValueError(
-                    "gcs_short_candidate requires preds['pred_short_candidate_points'] and "
-                    "preds['pred_short_candidate_logits']; use a query_short_candidate_head model YAML "
-                    "or set --gcs-short-candidate 0.0."
-                )
-            zero = self._zero_like(pred_points)
-            return zero, zero, zero, zero, zero, zero, zero
-
-        bsz, num_queries, num_points, _ = pred_points.shape
-        if candidate_points.ndim != 5 or candidate_points.shape[:2] != (bsz, num_queries) or candidate_points.shape[-1] != 2:
-            raise ValueError(
-                "pred_short_candidate_points must have shape B x Q x H x K x 2, got "
-                f"{tuple(candidate_points.shape)}."
-            )
-        candidate_count = int(candidate_points.shape[2])
-        if candidate_points.shape[3] != num_points:
-            raise ValueError(
-                "pred_short_candidate_points K dimension must match pred_points, got "
-                f"{candidate_points.shape[3]} vs {num_points}."
-            )
-        if candidate_logits.shape != (bsz, num_queries, candidate_count):
-            raise ValueError(
-                "pred_short_candidate_logits must have shape B x Q x H matching candidate points, got "
-                f"{tuple(candidate_logits.shape)} vs {(bsz, num_queries, candidate_count)}."
-            )
-
-        # Freeze-base candidate probes still need a differentiable zero on
-        # batches without an eligible short GT4/GT5 lane.
-        candidate_zero = candidate_logits.sum() * 0.0
-        device, dtype = pred_points.device, pred_points.dtype
-        width = self._pixel_scale_for(pred_points).reshape(-1)[0].to(device=device, dtype=dtype)
-        width_float = max(float(width.detach().item()), 1.0)
-        beta_px = float(self.short_candidate_beta_px)
-        temperature = float(self.short_candidate_score_temperature)
-        offsets_px = pred_points.new_tensor([0.0])
-        if candidate_count > 1:
-            step_px = float(self.short_candidate_step_px)
-            half = (candidate_count - 1) // 2
-            offsets = [0.0]
-            for i in range(1, half + 1):
-                offsets.extend((-i * step_px, i * step_px))
-            offsets_px = pred_points.new_tensor(offsets)
-        if offsets_px.numel() != candidate_count:
-            offsets_px = pred_points.new_zeros((candidate_count,))
-
-        selected_score_losses: list[torch.Tensor] = []
-        selected_geometry_losses: list[torch.Tensor] = []
-        best_offsets: list[torch.Tensor] = []
-        raw_hits: list[torch.Tensor] = []
-        best_hits: list[torch.Tensor] = []
-
-        gt_lanes_t = None
-        if gt_lanes is not None:
-            gt_lanes_t = torch.as_tensor(gt_lanes, device=device, dtype=dtype).reshape(-1)
-            if gt_lanes_t.numel() != bsz:
-                raise ValueError(f"gt_lanes must have one value per image, got {gt_lanes_t.numel()} vs B={bsz}.")
-
-        for b, (src_idx, tgt_idx) in enumerate(indices):
-            if src_idx.numel() == 0:
-                continue
-            src_idx = src_idx.to(device=device, dtype=torch.long)
-            tgt_idx = tgt_idx.to(device=device, dtype=torch.long)
-            target_all = gt_points[b].to(device=device, dtype=dtype)
-            valid_all = gt_valid[b].to(device=device, dtype=dtype)
-            target = target_all[tgt_idx]
-            valid = valid_all[tgt_idx] > 0.5
-            visible_counts = valid.to(dtype=dtype).sum(dim=1)
-            gt_count = int(round(float(gt_lanes_t[b].detach().item()))) if gt_lanes_t is not None else 0
-            short_mask = (visible_counts <= float(self.short_candidate_visible_thr)) & (
-                gt_count >= int(self.short_candidate_gt_min_lanes)
-            )
-            if not bool(short_mask.any()):
-                continue
-
-            src_short = src_idx[short_mask]
-            target_short = target[short_mask]
-            valid_short = valid[short_mask].to(dtype=dtype)
-            candidate_short = candidate_points[b, src_short]
-            candidate_x = candidate_short[..., 0]
-            target_x = target_short[..., 0].unsqueeze(1)
-            mask = valid_short.unsqueeze(1)
-            valid_den = valid_short.sum(dim=1, keepdim=True).clamp_min(1.0)
-            ape_px = ((candidate_x - target_x).abs() * width * mask).sum(dim=-1) / valid_den
-
-            target_prob = F.softmax(-ape_px / beta_px, dim=1)
-            logits = candidate_logits[b, src_short]
-            predicted_prob = F.softmax(logits / temperature, dim=1)
-            score_loss = -(target_prob * F.log_softmax(logits / temperature, dim=1)).sum(dim=1)
-            geometry_loss = (predicted_prob * ape_px).sum(dim=1) / width_float
-            selected_score_losses.append(score_loss)
-            selected_geometry_losses.append(geometry_loss)
-
-            raw_best_ape, raw_best_idx = ape_px.detach().min(dim=1)
-            predicted_idx = logits.detach().argmax(dim=1)
-            predicted_ape = ape_px.detach().gather(1, predicted_idx[:, None]).squeeze(1)
-            best_offsets.append(offsets_px[raw_best_idx].abs().reshape(-1))
-            raw_hits.append((raw_best_ape <= 20.0).to(dtype=dtype).reshape(-1))
-            best_hits.append((predicted_ape <= 20.0).to(dtype=dtype).reshape(-1))
-
-        if not selected_score_losses:
-            return (
-                candidate_zero,
-                candidate_zero,
-                candidate_zero,
-                candidate_zero,
-                candidate_zero,
-                candidate_zero,
-                candidate_zero,
-            )
-
-        score_cat = torch.cat([value.reshape(-1) for value in selected_score_losses])
-        geometry_cat = torch.cat([value.reshape(-1) for value in selected_geometry_losses])
-        offset_cat = torch.cat(best_offsets)
-        raw_hit_cat = torch.cat(raw_hits)
-        best_hit_cat = torch.cat(best_hits)
-        count_t = pred_points.new_tensor(float(score_cat.numel()))
-        score_loss = score_cat.mean()
-        geometry_loss = geometry_cat.mean()
+        score_loss = torch.stack(score_losses).mean() if score_losses else zero
+        pull_loss = torch.stack(pull_losses).mean() if pull_losses else zero
+        total = score_loss + float(self.short_candidate_pull_weight) * pull_loss
         return (
-            score_loss + geometry_loss,
-            count_t,
+            total,
             score_loss,
-            geometry_loss,
-            offset_cat.mean(),
-            raw_hit_cat.mean(),
-            best_hit_cat.mean(),
+            pull_loss,
+            pred_points.new_tensor(float(pos_count)),
+            pred_points.new_tensor(float(soft_count)),
+            pred_points.new_tensor(float(neg_count)),
         )
 
     def count_boundary_loss(
@@ -2784,43 +1327,6 @@ class GCSLoss(nn.Module):
 
         return torch.stack(dists) if dists else torch.empty((0,), device=device, dtype=dtype)
 
-    def _boundary_pseudo_protected_by_short_gt5(
-        self,
-        pred_points_q: torch.Tensor,
-        pred_visible_q: torch.Tensor,
-        gt_points_b: torch.Tensor,
-        gt_valid_b: torch.Tensor,
-        width: float,
-        *,
-        query_idx: int,
-    ) -> bool:
-        """Return whether a GT5 boundary-pseudo candidate is close to a true short GT5 lane."""
-        if not self.boundary_pseudo_gt5_safe:
-            return False
-        if self.boundary_pseudo_protect_queries and int(query_idx) not in set(self.boundary_pseudo_protect_queries):
-            return False
-        short_thr = int(self.boundary_pseudo_protect_short_visible_thr)
-        if short_thr <= 0:
-            return False
-
-        q_visible = pred_visible_q > 0.5
-        pred_x = pred_points_q[:, 0] * float(width)
-        gt_x = gt_points_b[..., 0] * float(width)
-        min_overlap = int(self.boundary_pseudo_protect_min_overlap)
-        protect_dist = float(self.boundary_pseudo_protect_dist_px)
-
-        for gt_i in range(gt_points_b.shape[0]):
-            gt_visible = gt_valid_b[gt_i] > 0.5
-            if int(gt_visible.sum().item()) > short_thr:
-                continue
-            common = q_visible & gt_visible
-            if int(common.sum().item()) < min_overlap:
-                continue
-            mean_dx = (pred_x[common] - gt_x[gt_i, common]).abs().mean()
-            if float(mean_dx.detach().cpu().item()) <= protect_dist:
-                return True
-        return False
-
     def boundary_pseudo_neg_loss(
         self,
         pred_points: torch.Tensor,
@@ -2830,11 +1336,11 @@ class GCSLoss(nn.Module):
         gt_valid: list[torch.Tensor],
         indices: list[tuple[torch.Tensor, torch.Tensor]],
         gt_lanes: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Extra negative BCE for short far-side pseudo lanes on unmatched queries."""
         if float(self.boundary_pseudo_neg_gain) <= 0.0:
             zero = self._zero_like(pred_points)
-            return zero, zero, zero, zero, zero
+            return zero, zero, zero
         if pred_valid_logits is None:
             raise ValueError(
                 "gcs_boundary_pseudo_neg requires preds['pred_valid_logits'] with shape B x Q x K; "
@@ -2863,8 +1369,6 @@ class GCSLoss(nn.Module):
         losses = []
         pseudo_counts = []
         pseudo_score_means = []
-        candidate_count = 0
-        protected_count = 0
 
         for b in range(bsz):
             gt_count_b = int(round(float(gt_lanes[b].detach().cpu().item())))
@@ -2905,18 +1409,6 @@ class GCSLoss(nn.Module):
                 if float(self.boundary_pseudo_score_thr) > 0.0:
                     if float(exist_prob[b, q].detach().cpu().item()) < float(self.boundary_pseudo_score_thr):
                         continue
-                candidate_count += 1
-
-                if self._boundary_pseudo_protected_by_short_gt5(
-                    points[b, q],
-                    q_valid,
-                    gt_points_b,
-                    gt_valid_b,
-                    width,
-                    query_idx=int(q),
-                ):
-                    protected_count += 1
-                    continue
 
                 dists = self._query_to_gt_lane_dist_px(
                     points[b, q],
@@ -2966,21 +1458,9 @@ class GCSLoss(nn.Module):
 
         if not losses:
             zero = self._zero_like(pred_points)
-            return (
-                zero,
-                zero,
-                zero,
-                pred_points.new_tensor(float(candidate_count)),
-                pred_points.new_tensor(float(protected_count)),
-            )
+            return zero, zero, zero
 
-        return (
-            torch.stack(losses).mean(),
-            torch.stack(pseudo_counts).sum(),
-            torch.stack(pseudo_score_means).mean(),
-            pred_points.new_tensor(float(candidate_count)),
-            pred_points.new_tensor(float(protected_count)),
-        )
+        return torch.stack(losses).mean(), torch.stack(pseudo_counts).sum(), torch.stack(pseudo_score_means).mean()
 
     def _spurious_candidate_gt_protected(
         self,
@@ -3244,30 +1724,9 @@ class GCSLoss(nn.Module):
             )
         gt_points, gt_valid = self._targets_from_batch(batch)
 
-        gt_lanes = self.target_lane_count(pred_logits, batch, gt_valid)
-        matcher_points = pred_points
-        if isinstance(preds.get("pred_coarse_points"), torch.Tensor):
-            pred_coarse_points = preds["pred_coarse_points"]
-            if tuple(pred_coarse_points.shape) != tuple(pred_points.shape):
-                raise ValueError(
-                    "pred_coarse_points must have shape B x Q x K x 2 matching pred_points, "
-                    f"got {tuple(pred_coarse_points.shape)} vs {tuple(pred_points.shape)}."
-                )
-
-        role_allowed_masks = self._role_allowed_masks(matcher_points, gt_valid, gt_lanes)
-        event_allowed_masks = self._q24_event_allowed_masks(matcher_points, gt_valid, gt_lanes)
-        matcher_allowed_masks = self._merge_allowed_masks(
-            role_allowed_masks if self.role_contain_matcher else None,
-            event_allowed_masks if self.q24_event_matcher else None,
-        )
-        indices = self.matcher(
-            matcher_points,
-            pred_logits,
-            gt_points,
-            gt_valid,
-            allowed_masks=matcher_allowed_masks,
-        )
+        indices = self.matcher(pred_points, pred_logits, gt_points, gt_valid)
         exist_loss = self.exist_loss(pred_logits, pred_points, pred_valid_logits, gt_points, gt_valid, indices)
+        gt_lanes = self.target_lane_count(pred_logits, batch, gt_valid)
         point_loss = self.point_loss(pred_points, gt_points, gt_valid, indices, gt_lanes=gt_lanes)
         (
             point_valid_loss,
@@ -3287,13 +1746,7 @@ class GCSLoss(nn.Module):
         ) = self.count_losses(
             pred_logits, batch, gt_valid, target=gt_lanes
         )
-        (
-            boundary_pseudo_neg_loss,
-            boundary_pseudo_count,
-            boundary_pseudo_score_mean,
-            boundary_pseudo_candidate_count,
-            boundary_pseudo_protected_count,
-        ) = self.boundary_pseudo_neg_loss(
+        boundary_pseudo_neg_loss, boundary_pseudo_count, boundary_pseudo_score_mean = self.boundary_pseudo_neg_loss(
             pred_points,
             pred_logits,
             pred_valid_logits,
@@ -3308,60 +1761,14 @@ class GCSLoss(nn.Module):
             gt_valid,
             target_count=gt_lanes,
         )
-        query_quality_loss, query_quality_pos_mean, query_quality_pos_count = self.query_quality_loss(
-            preds,
-            pred_points,
-            pred_valid_logits,
-            gt_points,
-            gt_valid,
-            indices,
-        )
-        (
-            query_extent_loss,
-            query_extent_start_acc,
-            query_extent_end_acc,
-            query_extent_iou,
-            query_extent_short_count,
-        ) = self.query_extent_loss(
-            preds,
-            pred_points,
-            gt_valid,
-            indices,
-            gt_lanes=gt_lanes,
-        )
-        (
-            short_local_refine_loss,
-            short_local_refine_count,
-            short_local_refine_coarse_ape,
-            short_local_refine_refined_ape,
-            short_local_refine_gain20,
-            short_local_refine_loss20,
-            short_local_refine_identity_count,
-            short_local_refine_pull_count,
-        ) = self.short_local_refine_loss(
-            preds,
-            pred_points,
-            gt_points,
-            gt_valid,
-            indices,
-            gt_lanes=gt_lanes,
-        )
         (
             short_candidate_loss,
-            short_candidate_count,
             short_candidate_score_loss,
-            short_candidate_geometry_loss,
-            short_candidate_best_offset_px,
-            short_candidate_raw_hit20,
-            short_candidate_best_hit20,
-        ) = self.short_candidate_loss(
-            preds,
-            pred_points,
-            gt_points,
-            gt_valid,
-            indices,
-            gt_lanes=gt_lanes,
-        )
+            short_candidate_pull_loss,
+            short_candidate_pos_count,
+            short_candidate_soft_count,
+            short_candidate_neg_count,
+        ) = self.short_candidate_loss(preds, gt_points, gt_valid, gt_lanes)
         (
             spurious_neg_loss,
             spurious_negative_count,
@@ -3377,55 +1784,6 @@ class GCSLoss(nn.Module):
             spur_neg_gt5,
         ) = self.spurious_negative_loss(
             pred_points, pred_logits, pred_valid_logits, indices, gt_lanes, gt_points, gt_valid
-        )
-        (
-            role_contain_loss,
-            role_contain_exist_loss,
-            role_contain_valid_loss,
-            role_contain_count,
-            role_contain_gt3_count,
-            role_contain_gt4_gt5bank_count,
-            role_contain_gt4_extra_count,
-            role_contain_allowed_count,
-        ) = self.role_containment_loss(
-            pred_logits,
-            pred_valid_logits,
-            indices,
-            gt_lanes,
-            role_allowed_masks,
-        )
-        (
-            q24_event_contain_loss,
-            q24_event_exist_loss,
-            q24_event_valid_loss,
-            q24_event_gt3_count,
-            q24_event_gt4_count,
-            q24_event_gt5_risk_count,
-            q24_event_gt5_risk_protected_count,
-            q24_event_clean_allowed_count,
-            q24_event_dynamic_count,
-            q24_event_dynamic_protected_count,
-        ) = self.q24_event_containment_loss(
-            pred_points,
-            pred_logits,
-            pred_valid_logits,
-            indices,
-            gt_points,
-            gt_valid,
-            gt_lanes,
-            event_allowed_masks,
-        )
-        (
-            q24_event_score_loss,
-            q24_event_score_pos_count,
-            q24_event_score_prob_mean,
-        ) = self.q24_event_score_calibration_loss(
-            pred_points,
-            pred_logits,
-            pred_valid_logits,
-            gt_points,
-            gt_valid,
-            gt_lanes,
         )
 
         mask_loss = self._zero_like(pred_points)
@@ -3455,22 +1813,10 @@ class GCSLoss(nn.Module):
             total = total + self.boundary_pseudo_neg_gain * boundary_pseudo_neg_loss
         if self.query_count_ce_gain != 0.0:
             total = total + self.query_count_ce_gain * query_count_ce_loss
-        if self.query_quality_gain != 0.0:
-            total = total + self.query_quality_gain * query_quality_loss
-        if self.query_extent_gain != 0.0:
-            total = total + self.query_extent_gain * query_extent_loss
-        if self.short_local_refine_gain != 0.0:
-            total = total + self.short_local_refine_gain * short_local_refine_loss
         if self.short_candidate_gain != 0.0:
             total = total + self.short_candidate_gain * short_candidate_loss
         if self.spurious_neg_gain != 0.0:
             total = total + self.spurious_neg_gain * self.spurious_neg_weight * spurious_neg_loss
-        if self.role_contain_gain != 0.0:
-            total = total + self.role_contain_gain * role_contain_loss
-        if self.q24_event_contain_gain != 0.0:
-            total = total + self.q24_event_contain_gain * q24_event_contain_loss
-        if self.q24_event_score_calib_gain != 0.0:
-            total = total + self.q24_event_score_calib_gain * q24_event_score_loss
         loss_items = torch.stack(
             (
                 exist_loss.detach(),
@@ -3504,55 +1850,15 @@ class GCSLoss(nn.Module):
                 boundary_pseudo_neg_loss.detach(),
                 boundary_pseudo_count.detach(),
                 boundary_pseudo_score_mean.detach(),
-                boundary_pseudo_candidate_count.detach(),
-                boundary_pseudo_protected_count.detach(),
+                short_candidate_loss.detach(),
+                short_candidate_score_loss.detach(),
+                short_candidate_pull_loss.detach(),
+                short_candidate_pos_count.detach(),
+                short_candidate_soft_count.detach(),
+                short_candidate_neg_count.detach(),
                 query_count_ce_loss.detach(),
                 query_count_acc.detach(),
                 query_count_pred_mean.detach(),
-                query_quality_loss.detach(),
-                query_quality_pos_mean.detach(),
-                query_quality_pos_count.detach(),
-                query_extent_loss.detach(),
-                query_extent_start_acc.detach(),
-                query_extent_end_acc.detach(),
-                query_extent_iou.detach(),
-                query_extent_short_count.detach(),
-                short_local_refine_loss.detach(),
-                short_local_refine_count.detach(),
-                short_local_refine_coarse_ape.detach(),
-                short_local_refine_refined_ape.detach(),
-                short_local_refine_gain20.detach(),
-                short_local_refine_loss20.detach(),
-                short_local_refine_identity_count.detach(),
-                short_local_refine_pull_count.detach(),
-                short_candidate_loss.detach(),
-                short_candidate_count.detach(),
-                short_candidate_score_loss.detach(),
-                short_candidate_geometry_loss.detach(),
-                short_candidate_best_offset_px.detach(),
-                short_candidate_raw_hit20.detach(),
-                short_candidate_best_hit20.detach(),
-                role_contain_loss.detach(),
-                role_contain_exist_loss.detach(),
-                role_contain_valid_loss.detach(),
-                role_contain_count.detach(),
-                role_contain_gt3_count.detach(),
-                role_contain_gt4_gt5bank_count.detach(),
-                role_contain_gt4_extra_count.detach(),
-                role_contain_allowed_count.detach(),
-                q24_event_contain_loss.detach(),
-                q24_event_exist_loss.detach(),
-                q24_event_valid_loss.detach(),
-                q24_event_gt3_count.detach(),
-                q24_event_gt4_count.detach(),
-                q24_event_gt5_risk_count.detach(),
-                q24_event_gt5_risk_protected_count.detach(),
-                q24_event_clean_allowed_count.detach(),
-                q24_event_dynamic_count.detach(),
-                q24_event_dynamic_protected_count.detach(),
-                q24_event_score_loss.detach(),
-                q24_event_score_pos_count.detach(),
-                q24_event_score_prob_mean.detach(),
             )
         )
         return total, loss_items

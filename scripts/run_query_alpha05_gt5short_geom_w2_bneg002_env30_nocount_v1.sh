@@ -29,12 +29,6 @@ OVERWRITE_SWEEPS="${OVERWRITE_SWEEPS:-0}"
 OVERWRITE_TESTS="${OVERWRITE_TESTS:-0}"
 RUN_TESTS="${RUN_TESTS:-0}"
 VALID_BEFORE_MAXDET="${VALID_BEFORE_MAXDET:-1}"
-CANDIDATE_DECODE="${CANDIDATE_DECODE:-0}"
-CANDIDATE_SHORT_GATE="${CANDIDATE_SHORT_GATE:-1}"
-CANDIDATE_GATE_VALID_THR="${CANDIDATE_GATE_VALID_THR:-0.5}"
-CANDIDATE_GATE_MIN_VISIBLE="${CANDIDATE_GATE_MIN_VISIBLE:-2}"
-CANDIDATE_GATE_MAX_VISIBLE="${CANDIDATE_GATE_MAX_VISIBLE:-10}"
-CANDIDATE_PRESERVE_BASE_SCORE="${CANDIDATE_PRESERVE_BASE_SCORE:-1}"
 
 OFFICIAL_CONFS="${OFFICIAL_CONFS:-0.001 0.003 0.005 0.008 0.01 0.02}"
 OFFICIAL_POINT_VALID_THRS="${OFFICIAL_POINT_VALID_THRS:-0.45 0.50 0.55 0.60}"
@@ -42,14 +36,6 @@ OFFICIAL_NMS_DIST_PXS="${OFFICIAL_NMS_DIST_PXS:-0 18 30}"
 OFFICIAL_MAX_DETS="${OFFICIAL_MAX_DETS:-5 6 8}"
 OFFICIAL_MIN_POINTS="${OFFICIAL_MIN_POINTS:-2 3 4 5}"
 OFFICIAL_COUNT_MODES="${OFFICIAL_COUNT_MODES:-score_sum}"
-OFFICIAL_EXTENT_DECODE_MODES="${OFFICIAL_EXTENT_DECODE_MODES:-none}"
-COUNT_AWARE_TOPK="${COUNT_AWARE_TOPK:-0}"
-COUNT_AWARE_MIN_K="${COUNT_AWARE_MIN_K:-3}"
-COUNT_AWARE_MAX_K="${COUNT_AWARE_MAX_K:-5}"
-COUNT_AWARE_LENGTH_NORM="${COUNT_AWARE_LENGTH_NORM:-12.0}"
-COUNT_AWARE_EXTRA_MARGINS="${COUNT_AWARE_EXTRA_MARGINS:-0}"
-EXTRA_TRAIN_ARGS="${EXTRA_TRAIN_ARGS:-}"
-export GCS_BOUNDARY_PSEUDO_NEG="${GCS_BOUNDARY_PSEUDO_NEG:-0.02}"
 
 SWEEP_CONFS="${SWEEP_CONFS:-${OFFICIAL_CONFS}}"
 SWEEP_POINT_VALID_THRS="${SWEEP_POINT_VALID_THRS:-${OFFICIAL_POINT_VALID_THRS}}"
@@ -57,9 +43,6 @@ SWEEP_NMS_DIST_PXS="${SWEEP_NMS_DIST_PXS:-${OFFICIAL_NMS_DIST_PXS}}"
 SWEEP_MAX_DETS="${SWEEP_MAX_DETS:-${OFFICIAL_MAX_DETS}}"
 SWEEP_MIN_POINTS="${SWEEP_MIN_POINTS:-${OFFICIAL_MIN_POINTS}}"
 SWEEP_COUNT_MODES="${SWEEP_COUNT_MODES:-${OFFICIAL_COUNT_MODES}}"
-SWEEP_EXTENT_DECODE_MODES="${SWEEP_EXTENT_DECODE_MODES:-${OFFICIAL_EXTENT_DECODE_MODES}}"
-SWEEP_COUNT_AWARE_TOPK="${SWEEP_COUNT_AWARE_TOPK:-${COUNT_AWARE_TOPK}}"
-SWEEP_COUNT_AWARE_EXTRA_MARGINS="${SWEEP_COUNT_AWARE_EXTRA_MARGINS:-${COUNT_AWARE_EXTRA_MARGINS}}"
 
 read -r -a OFFICIAL_CONFS_ARR <<< "${OFFICIAL_CONFS}"
 read -r -a OFFICIAL_POINT_VALID_THRS_ARR <<< "${OFFICIAL_POINT_VALID_THRS}"
@@ -67,17 +50,12 @@ read -r -a OFFICIAL_NMS_DIST_PXS_ARR <<< "${OFFICIAL_NMS_DIST_PXS}"
 read -r -a OFFICIAL_MAX_DETS_ARR <<< "${OFFICIAL_MAX_DETS}"
 read -r -a OFFICIAL_MIN_POINTS_ARR <<< "${OFFICIAL_MIN_POINTS}"
 read -r -a OFFICIAL_COUNT_MODES_ARR <<< "${OFFICIAL_COUNT_MODES}"
-read -r -a OFFICIAL_EXTENT_DECODE_MODES_ARR <<< "${OFFICIAL_EXTENT_DECODE_MODES}"
-read -r -a COUNT_AWARE_EXTRA_MARGINS_ARR <<< "${COUNT_AWARE_EXTRA_MARGINS}"
-read -r -a EXTRA_TRAIN_ARGS_ARR <<< "${EXTRA_TRAIN_ARGS}"
 read -r -a SWEEP_CONFS_ARR <<< "${SWEEP_CONFS}"
 read -r -a SWEEP_POINT_VALID_THRS_ARR <<< "${SWEEP_POINT_VALID_THRS}"
 read -r -a SWEEP_NMS_DIST_PXS_ARR <<< "${SWEEP_NMS_DIST_PXS}"
 read -r -a SWEEP_MAX_DETS_ARR <<< "${SWEEP_MAX_DETS}"
 read -r -a SWEEP_MIN_POINTS_ARR <<< "${SWEEP_MIN_POINTS}"
 read -r -a SWEEP_COUNT_MODES_ARR <<< "${SWEEP_COUNT_MODES}"
-read -r -a SWEEP_EXTENT_DECODE_MODES_ARR <<< "${SWEEP_EXTENT_DECODE_MODES}"
-read -r -a SWEEP_COUNT_AWARE_EXTRA_MARGINS_ARR <<< "${SWEEP_COUNT_AWARE_EXTRA_MARGINS}"
 
 is_true() {
   case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
@@ -120,64 +98,6 @@ if is_true "${HALF}"; then
   SWEEP_HALF_ARGS=(--half)
 fi
 
-OFFICIAL_COUNT_AWARE_ARGS=()
-SWEEP_COUNT_AWARE_ARGS=()
-if is_true "${COUNT_AWARE_TOPK}"; then
-  OFFICIAL_COUNT_AWARE_ARGS=(
-    --gcs-official-count-aware-topk
-    --gcs-official-count-aware-min-k "${COUNT_AWARE_MIN_K}"
-    --gcs-official-count-aware-max-k "${COUNT_AWARE_MAX_K}"
-    --gcs-official-count-aware-length-norm "${COUNT_AWARE_LENGTH_NORM}"
-    --gcs-official-count-aware-extra-margins "${COUNT_AWARE_EXTRA_MARGINS_ARR[@]}"
-  )
-fi
-if is_true "${SWEEP_COUNT_AWARE_TOPK}"; then
-  SWEEP_COUNT_AWARE_ARGS=(
-    --count-aware-topk
-    --count-aware-min-k "${COUNT_AWARE_MIN_K}"
-    --count-aware-max-k "${COUNT_AWARE_MAX_K}"
-    --count-aware-length-norm "${COUNT_AWARE_LENGTH_NORM}"
-    --count-aware-extra-margins "${SWEEP_COUNT_AWARE_EXTRA_MARGINS_ARR[@]}"
-  )
-fi
-
-OFFICIAL_CANDIDATE_ARGS=()
-SWEEP_CANDIDATE_ARGS=()
-if is_true "${CANDIDATE_DECODE}"; then
-  OFFICIAL_CANDIDATE_ARGS=(
-    --gcs-candidate-decode
-    --gcs-candidate-gate-valid-thr "${CANDIDATE_GATE_VALID_THR}"
-    --gcs-candidate-gate-min-visible "${CANDIDATE_GATE_MIN_VISIBLE}"
-    --gcs-candidate-gate-max-visible "${CANDIDATE_GATE_MAX_VISIBLE}"
-  )
-  if is_true "${CANDIDATE_SHORT_GATE}"; then
-    OFFICIAL_CANDIDATE_ARGS+=(--gcs-candidate-short-gate)
-  else
-    OFFICIAL_CANDIDATE_ARGS+=(--no-gcs-candidate-short-gate)
-  fi
-  if is_true "${CANDIDATE_PRESERVE_BASE_SCORE}"; then
-    OFFICIAL_CANDIDATE_ARGS+=(--gcs-candidate-preserve-base-score)
-  else
-    OFFICIAL_CANDIDATE_ARGS+=(--no-gcs-candidate-preserve-base-score)
-  fi
-  SWEEP_CANDIDATE_ARGS=(
-    --candidate-decode
-    --candidate-gate-valid-thr "${CANDIDATE_GATE_VALID_THR}"
-    --candidate-gate-min-visible "${CANDIDATE_GATE_MIN_VISIBLE}"
-    --candidate-gate-max-visible "${CANDIDATE_GATE_MAX_VISIBLE}"
-  )
-  if is_true "${CANDIDATE_SHORT_GATE}"; then
-    SWEEP_CANDIDATE_ARGS+=(--candidate-short-gate)
-  else
-    SWEEP_CANDIDATE_ARGS+=(--no-candidate-short-gate)
-  fi
-  if is_true "${CANDIDATE_PRESERVE_BASE_SCORE}"; then
-    SWEEP_CANDIDATE_ARGS+=(--candidate-preserve-base-score)
-  else
-    SWEEP_CANDIDATE_ARGS+=(--no-candidate-preserve-base-score)
-  fi
-fi
-
 OFFICIAL_BEST_SWEEP_DIR="${OFFICIAL_BEST_SWEEP_DIR:-${PROJECT}/${RUN_NAME}_official_best_val_sweep_${DECODE_TAG}}"
 BEST_SWEEP_DIR="${BEST_SWEEP_DIR:-${PROJECT}/${RUN_NAME}_best_val_sweep_${DECODE_TAG}}"
 OFFICIAL_BEST_TEST_DIR="${OFFICIAL_BEST_TEST_DIR:-${PROJECT}/${RUN_NAME}_official_best_test_from_val_sweep_${DECODE_TAG}}"
@@ -215,7 +135,7 @@ run_train() {
     --gcs-short-geom-max-weight 3.0 \
     --gcs-short-geom-curve 1.0 \
     --gcs-gt5-short-visible-thr 0 \
-    --gcs-boundary-pseudo-neg "${GCS_BOUNDARY_PSEUDO_NEG}" \
+    --gcs-boundary-pseudo-neg 0.02 \
     --gcs-boundary-pseudo-visible-thr 10 \
     --gcs-boundary-pseudo-dist-thr 80 \
     --gcs-boundary-pseudo-valid-thr 0.5 \
@@ -224,7 +144,6 @@ run_train() {
     --gcs-boundary-pseudo-score-thr 0.2 \
     --gcs-boundary-pseudo-envelope-margin-px 30 \
     --gcs-boundary-pseudo-envelope-ratio-thr 0.75 \
-    "${EXTRA_TRAIN_ARGS_ARR[@]}" \
     --gcs-official-best \
     --gcs-official-interval "${OFFICIAL_INTERVAL}" \
     --gcs-official-archive-root "${ARCHIVE_ROOT}" \
@@ -237,9 +156,6 @@ run_train() {
     --gcs-official-max-dets "${OFFICIAL_MAX_DETS_ARR[@]}" \
     --gcs-official-min-points "${OFFICIAL_MIN_POINTS_ARR[@]}" \
     --gcs-official-count-modes "${OFFICIAL_COUNT_MODES_ARR[@]}" \
-    --gcs-official-extent-decode-modes "${OFFICIAL_EXTENT_DECODE_MODES_ARR[@]}" \
-    "${OFFICIAL_COUNT_AWARE_ARGS[@]}" \
-    "${OFFICIAL_CANDIDATE_ARGS[@]}" \
     "${TRAIN_VALID_ARGS[@]}" \
     "${OFFICIAL_HALF_ARGS[@]}" \
     --project "${PROJECT}" \
@@ -277,9 +193,6 @@ run_val_sweep() {
     --max-dets "${SWEEP_MAX_DETS_ARR[@]}" \
     --min-points "${SWEEP_MIN_POINTS_ARR[@]}" \
     --count-modes "${SWEEP_COUNT_MODES_ARR[@]}" \
-    --extent-decode-modes "${SWEEP_EXTENT_DECODE_MODES_ARR[@]}" \
-    "${SWEEP_COUNT_AWARE_ARGS[@]}" \
-    "${SWEEP_CANDIDATE_ARGS[@]}" \
     "${SWEEP_VALID_ARGS[@]}" \
     --save-dir "${save_dir}"
 }
@@ -352,28 +265,11 @@ if int(max_images) > 0:
     cmd.extend(["--max-images", str(int(max_images))])
 if bool(best.get("valid_before_maxdet", False)):
     cmd.append("--valid-before-maxdet")
-if bool(best.get("extent_decode", False)):
-    cmd.append("--extent-decode")
-    cmd.extend(["--extent-decode-mode", str(best.get("extent_decode_mode", "interval"))])
-if bool(best.get("candidate_decode", False)):
-    cmd.append("--candidate-decode")
-    if bool(best.get("candidate_short_gate", True)):
-        cmd.append("--candidate-short-gate")
-    else:
-        cmd.append("--no-candidate-short-gate")
-    cmd.extend(["--candidate-gate-valid-thr", str(float(best.get("candidate_gate_valid_thr", 0.5)))])
-    cmd.extend(["--candidate-gate-min-visible", str(int(best.get("candidate_gate_min_visible", 2)))])
-    cmd.extend(["--candidate-gate-max-visible", str(int(best.get("candidate_gate_max_visible", 10)))])
-    if bool(best.get("candidate_preserve_base_score", True)):
-        cmd.append("--candidate-preserve-base-score")
-    else:
-        cmd.append("--no-candidate-preserve-base-score")
 if bool(best.get("count_aware_topk", False)):
     cmd.append("--count-aware-topk")
     cmd.extend(["--count-aware-min-k", str(int(best.get("count_aware_min_k", 3)))])
     cmd.extend(["--count-aware-max-k", str(int(best.get("count_aware_max_k", 5)))])
     cmd.extend(["--count-aware-length-norm", str(float(best.get("count_aware_length_norm", 12.0)))])
-    cmd.extend(["--count-aware-extra-margin", str(int(best.get("count_aware_extra_margin", 0)))])
 
 print("[test] " + " ".join(shlex.quote(part) for part in cmd), flush=True)
 subprocess.run(cmd, check=True)
@@ -387,7 +283,6 @@ write_protocol_summary() {
     "${BEST_WEIGHTS}" "${BEST_SWEEP_DIR}" "${BEST_TEST_DIR}" \
     "${PROTOCOL_SUMMARY}" <<'PY'
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -429,7 +324,7 @@ output = {
     "do_not_select_from_test": True,
     "best_pt_test_role": "reporting_only_not_selection",
     "mask_v2_params": {
-        "gcs_boundary_pseudo_neg": float(os.environ.get("GCS_BOUNDARY_PSEUDO_NEG", "0.02")),
+        "gcs_boundary_pseudo_neg": 0.02,
         "gcs_boundary_pseudo_dist_thr": 80,
         "gcs_boundary_pseudo_min_valid": 4,
         "gcs_boundary_pseudo_score_thr": 0.2,
@@ -453,8 +348,7 @@ PY
 }
 
 echo "Run name: ${RUN_NAME}"
-echo "Mask-v2 boundary pseudo params: neg=${GCS_BOUNDARY_PSEUDO_NEG} dist_thr=80 min_valid=4 score_thr=0.2 envelope_margin_px=30 envelope_ratio_thr=0.75"
-echo "Extra train args: ${EXTRA_TRAIN_ARGS:-<none>}"
+echo "Mask-v2 boundary pseudo params: neg=0.02 dist_thr=80 min_valid=4 score_thr=0.2 envelope_margin_px=30 envelope_ratio_thr=0.75"
 echo "Selection GT: ${GT_JSON}"
 echo "Training-time official_best and post-train sweeps use tools/sweep_tusimple_official_cached.py."
 echo "RUN_TESTS=${RUN_TESTS}: official test is reporting-only and must stay off until official-val and diagnostics pass."

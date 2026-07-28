@@ -26,19 +26,23 @@ The q12-k56-named model/data files are compatibility paths for old experiment re
 
 The 5-25-3 branch now includes explicit branch-local `--gcs-official-best` training-time checkpoint selection. It does not include later mainline Count/Quality/Survival, near-miss, or K56 candidate machinery. The only Count Head available on this branch is the 2026-07-06 user-requested, default-off query Count Head ablation enabled by `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-count.yaml`. It also includes branch-local TuSimple official eval/sweep helpers: `tools/eval_tusimple_official.py`, `tools/sweep_tusimple_official_cached.py`, and `tools/sweep_tusimple_official.py`. New threshold scans should use the cached helper.
 
-Active source/config is rolled back to commit `424ab1c86` (`Add
-valid-before-maxdet decode option`). Sections below that mention
-post-`424ab1c86` mechanisms such as short-side hardset diagnostics,
-`gcs_short_side_geom`, `gcs_far_spurious_neg`, `gcs_farspur_*`,
-`gcs_shortside_*`, `gcs_rank_*`, count-contract diagnostics, Q18/Q20/dataref
-configs, Count Head, count-guided decode, side-aux, or GT4-hard diagnostics
-are legacy experiment records only. They are not commands for the current code
-state unless a future task explicitly restores those commits.
+Active source/config is restored to commit `86c8fb31c` (`Add GT4 GT5 weak
+geometry rescue run`), the env30 baseline. Sections below that mention
+post-`86c8fb31c` mechanisms, scripts, YAMLs, tools, reference banks, or launch
+commands are rejected legacy experiment records only. They are not commands
+for the current code state unless a future task explicitly reopens one with
+new official-val/train-side gates.
 
-## Q12 Env30 Windowed Short Local X-Refine v3 Probe
+Rejected post-env30 families include env30 staticref/valid-neg/near20
+follow-ups, Q20/Q24 protected-static or dual-head routes, Q12 dual-head, query
+extent, short local-refine, lateral candidate, gated candidate, Q24 role/event
+containment, and candidate gate fixes. Do not relaunch them, run TEST for
+them, tune thresholds from them, or treat their code paths as active.
 
-The v3 probe is the next default-off replacement for the rejected auxiliary
-v2 shape. It freezes the env30/base path, trains only the new
+## Rejected Q12 Env30 Windowed Short Local X-Refine v3 Probe
+
+The v3 probe is a rejected post-env30 record, not an active command. It froze
+the env30/base path, trained only the new
 `query_short_local_refine_*` head, uses a horizontal window search
 `[-60, -40, -20, 0, 20, 40, 60]` px, and uses identity guard so coarse-hit
 lanes stay near the env30 geometry while 20-80px near-misses are pulled toward
@@ -302,9 +306,10 @@ aux_mask_logits: B x 2 x 544 x 960
 aux_edge_logits: B x 1 x 544 x 960
 ```
 
-Decision: Q24 passes the static gate and can enter a 20-40 epoch remote probe
-selected only on official-val. Do not run TEST and do not call it a final
-candidate until the probe has training-time official-val evidence.
+Historical decision at the time: Q24 passed the static gate and entered a
+20-40 epoch remote probe selected only on official-val. Current 2026-07-28
+policy rejects this post-env30 route as active code; keep the result below only
+as rejection evidence.
 
 Completed probe result:
 
@@ -354,15 +359,14 @@ Q24 cont100 count_confusion includes:
 ```
 
 This run improves over the 40-epoch probe but still fails every full-training
-gate. Do not extend Q24 as-is to 160/220 epochs. The next Q24 command should be
-a new default-off role-containment probe, not another longer unconstrained Q24
-training run.
+gate. Do not extend Q24 as-is to 160/220 epochs. The later role-containment
+probe is also a rejected post-env30 record, not a current next command.
 
 ## Q24 Role-Containment Probe
 
-The role-containment probe is the next default-off Q24 diagnostic after the
-`cont100` rejection. It keeps TEST closed and runs only training-time
-official-val plus post-train official-val sweeps:
+The role-containment probe was a post-env30 Q24 diagnostic after the `cont100`
+rejection. It is now a rejected legacy command. It kept TEST closed and ran
+only training-time official-val plus post-train official-val sweeps:
 
 ```bash
 bash scripts/run_q24_role_containment_probe_v1.sh
@@ -684,9 +688,9 @@ TEST.
 
 ## Q12 Env30 Dual-Head Count/Quality Probe
 
-The next default-off path after rejecting the Q24 event/role line is a
-Q12/env30 dual-head probe. It separates image-level count estimation from
-query-level lane quality/ranking:
+The Q12/env30 dual-head probe is a rejected post-env30 record, not the current
+next path. It separated image-level count estimation from query-level lane
+quality/ranking:
 
 ```text
 model = ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-dualhead.yaml
@@ -696,7 +700,7 @@ decode = count_logits chooses k_hat, quality_logits ranks/selects top-k
 TEST = closed
 ```
 
-Launch only a 40-epoch official-val probe:
+Historical launch:
 
 ```bash
 RUN_NAME=query_dualhead_quality_count_env30_probe40_v1 \
@@ -843,10 +847,10 @@ geometry/objectness path, then pass official-val gates before any new TEST.
 
 ## Q12 Env30 Query Extent Probe
 
-The next default-off path after the Count Head-only and dual-head reviews is a
-Q12/env30 query extent probe. It adds explicit visible-interval prediction on
-top of the env30 parent protocol, where `gcs_short_geom=1.0` is inherited from
-the parent launch script:
+The Q12/env30 query extent probe is a rejected post-env30 record, not the
+current next path. It added explicit visible-interval prediction on top of the
+env30 parent protocol, where `gcs_short_geom=1.0` was inherited from the
+parent launch script:
 
 ```text
 model = ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-extent.yaml
@@ -855,7 +859,7 @@ decode sweep = none, interval, intersect
 TEST = closed
 ```
 
-Launch only a 40-epoch official-val probe:
+Historical launch:
 
 ```bash
 RUN_NAME=query_extent_env30_probe40_v1 \
@@ -2295,7 +2299,7 @@ Use this test result only as final reporting evidence for the previous `count03_
 
 ## Legacy Train/Val Count-Confusion Diagnostic
 
-The 2026-06-20 train/val diagnostic for `count03_under5_03` groups decoded lane-count confusion by date, GT lane count, and the shortest visible GT lane bucket. It is a legacy diagnostic; `tools/diagnose_tusimple_count_confusion.py` is not present in the active `424ab1c86` rollback code. It used the frozen official-val selected decode and did not touch final test:
+The 2026-06-20 train/val diagnostic for `count03_under5_03` groups decoded lane-count confusion by date, GT lane count, and the shortest visible GT lane bucket. It is a legacy diagnostic; `tools/diagnose_tusimple_count_confusion.py` is not present in the active env30 rollback code. It used the frozen official-val selected decode and did not touch final test:
 
 ```text
 output: runs/gcs_lane/gcs_yolo_lane_s_tusimple_fixed_y_visible_iou_count03_under5_03_count_confusion_train_val_by_visibility/summary.json
@@ -2434,7 +2438,7 @@ short-lane failure trace. The main outputs are `summary.json`,
 ## Legacy GT4 Short-Lane Weighted Training
 
 The GT4 short-lane sampler boost was an explicit post-`b6535f641`
-experimental option. It is not present in the active `424ab1c86` rollback code. Historical
+experimental option. It is not present in the active env30 rollback code. Historical
 defaults were:
 
 ```text
@@ -2935,7 +2939,7 @@ NMS, checkpoint, decode, target floor, or loss weights from this test.
 
 Legacy Q18/count-head guided sweeps used the same
 official-val surface and kept normal/count-guided rows in one sweep table.
-These flags are not available in the active `424ab1c86` rollback code:
+These flags are not available in the active env30 rollback code:
 
 ```bash
 python tools/sweep_tusimple_official.py \
@@ -3039,7 +3043,92 @@ keep valid weights unchanged and move to data-driven reference clustering.
 
 ## TuSimple Final Test
 
-## Q12 Env30 Lateral Candidate Probe
+## Q12 Env30 Gated Candidate v2 Probe
+
+Status: active default-off experiment reopened by the user on 2026-07-28. This
+is not the rejected `query_short_candidate_env30_probe20_fix1` path.
+
+Run the first v2 probe on the remote CUDA server. It trains the dedicated v2
+gated-candidate YAML under the env30 launch protocol, keeps the default/base
+decode official-best path unchanged, runs raw candidate coverage diagnostics,
+and keeps TEST closed. The script defaults to `PRETRAINED=yolo11s-seg.pt`; it
+is not a freeze-only env30 `official_best.pt` selector-head fine-tune unless a
+future command explicitly adds that constraint.
+
+```bash
+RUN_NAME=query_gated_candidate_env30_probe20_v2 \
+EPOCHS=20 \
+RUN_TESTS=0 \
+bash scripts/run_query_gated_candidate_env30_probe20_v2.sh
+```
+
+The dedicated v2 YAML is:
+
+```text
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-gated-candidate-v2.yaml
+```
+
+It emits:
+
+```text
+pred_short_candidate_points: B x 12 x 7 x 56 x 2
+pred_short_candidate_logits: B x 12 x 7
+```
+
+with offsets:
+
+```text
+[0, -20, +20, -40, +40, -60, +60]
+```
+
+Before enabling candidate decode or any TEST run, inspect raw coverage:
+
+```bash
+python tools/diagnose_gcs_short_candidate_coverage.py \
+  --weights runs/gcs_lane/query_gated_candidate_env30_probe20_v2/weights/official_best.pt \
+  --data data/tusimple_gcs_fixed_y_960x544.yaml \
+  --split train \
+  --imgsz 544 960 \
+  --device 0 \
+  --save-json runs/gcs_lane/query_gated_candidate_env30_probe20_v2_candidate_coverage/train_short_candidate_coverage.json
+
+python tools/diagnose_gcs_short_candidate_coverage.py \
+  --weights runs/gcs_lane/query_gated_candidate_env30_probe20_v2/weights/official_best.pt \
+  --data data/tusimple_gcs_fixed_y_960x544.yaml \
+  --split val \
+  --imgsz 544 960 \
+  --device 0 \
+  --save-json runs/gcs_lane/query_gated_candidate_env30_probe20_v2_candidate_coverage/val_short_candidate_coverage.json
+```
+
+Promotion gate remains official-val/train-side only:
+
+```text
+train0601 short GT5 should move from 142/183 toward >=160/183
+official-val short GT5 should move up from 40/53
+short GT4 must not regress
+GT3/GT4 false-extra must not increase
+oracle-rank gain should remain small
+TEST closed
+```
+
+If raw coverage passes, run candidate decode only on official-val:
+
+```bash
+python tools/sweep_tusimple_official.py \
+  --weights runs/gcs_lane/query_gated_candidate_env30_probe20_v2/weights/official_best.pt \
+  --archive-root archive/TUSimple \
+  --split val \
+  --gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
+  --imgsz 544 960 \
+  --candidate-decode \
+  --candidate-score-thr 0.05 \
+  --candidate-short-min-points 2 \
+  --candidate-short-max-points 10 \
+  --device 0
+```
+
+## Rejected Q12 Env30 Lateral Candidate Probe
 
 Status: rejected after `query_short_candidate_env30_probe20_fix1`. Do not
 rerun this command unchanged or enable TEST. The candidate pool has useful

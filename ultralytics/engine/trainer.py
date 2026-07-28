@@ -324,7 +324,6 @@ class BaseTrainer:
                     "See ultralytics.engine.trainer for customization of frozen layers."
                 )
                 v.requires_grad = True
-        self._apply_task_specific_freezing()
 
         # Check AMP
         self.amp = torch.tensor(self.args.amp).to(self.device)  # True or False
@@ -622,10 +621,6 @@ class BaseTrainer:
         except Exception:
             return {}
 
-    def _apply_task_specific_freezing(self):
-        """Allow task trainers to apply custom parameter freezing before optimizer construction."""
-        return None
-
     def _model_train(self):
         """Set model in training mode."""
         self.model.train()
@@ -919,33 +914,6 @@ class BaseTrainer:
                     "gcs_point_y_weight",
                     "gcs_point_x_only",
                     "gcs_pixel_smoothl1_beta",
-                    "gcs_query_extent",
-                    "gcs_query_extent_short_visible_thr",
-                    "gcs_query_extent_short_weight",
-                    "gcs_query_extent_gt_min_lanes",
-                    "gcs_short_local_refine",
-                    "gcs_short_local_refine_visible_thr",
-                    "gcs_short_local_refine_gt_min_lanes",
-                    "gcs_short_local_refine_beta_px",
-                    "gcs_short_local_refine_max_delta_px",
-                    "gcs_short_local_refine_window_search",
-                    "gcs_short_local_refine_window_radius_px",
-                    "gcs_short_local_refine_window_step_px",
-                    "gcs_short_local_refine_freeze_base",
-                    "gcs_short_local_refine_identity_guard",
-                    "gcs_short_local_refine_identity_thr_px",
-                    "gcs_short_local_refine_nearmiss_thr_px",
-                    "gcs_short_local_refine_identity_weight",
-                    "gcs_short_local_refine_nearmiss_weight",
-                    "gcs_short_candidate",
-                    "gcs_short_candidate_visible_thr",
-                    "gcs_short_candidate_gt_min_lanes",
-                    "gcs_short_candidate_beta_px",
-                    "gcs_short_candidate_score_temperature",
-                    "gcs_short_candidate_count",
-                    "gcs_short_candidate_radius_px",
-                    "gcs_short_candidate_step_px",
-                    "gcs_short_candidate_freeze_base",
                     "gcs_official_best",
                     "gcs_official_interval",
                     "gcs_official_archive_root",
@@ -958,24 +926,24 @@ class BaseTrainer:
                     "gcs_official_max_dets",
                     "gcs_official_min_points",
                     "gcs_official_valid_before_maxdet",
-                    "gcs_official_extent_decode_modes",
-                    "gcs_official_count_modes",
-                    "gcs_official_count_aware_topk",
-                    "gcs_official_count_aware_min_k",
-                    "gcs_official_count_aware_max_k",
-                    "gcs_official_count_aware_length_norm",
-                    "gcs_official_count_aware_extra_margins",
                     "gcs_official_score_fp_weight",
                     "gcs_official_score_fn_weight",
                     "gcs_official_half",
-                    "gcs_extent_decode",
-                    "gcs_extent_decode_mode",
+                    "gcs_short_candidate",
+                    "gcs_short_candidate_topk",
+                    "gcs_short_candidate_visible_thr",
+                    "gcs_short_candidate_min_visible",
+                    "gcs_short_candidate_pos_px",
+                    "gcs_short_candidate_soft_px",
+                    "gcs_short_candidate_tau",
+                    "gcs_short_candidate_pull_weight",
+                    "gcs_short_candidate_gt4_weight",
+                    "gcs_short_candidate_gt5_weight",
+                    "gcs_short_candidate_neg_score_thr",
                     "gcs_candidate_decode",
-                    "gcs_candidate_short_gate",
-                    "gcs_candidate_gate_valid_thr",
-                    "gcs_candidate_gate_min_visible",
-                    "gcs_candidate_gate_max_visible",
-                    "gcs_candidate_preserve_base_score",
+                    "gcs_candidate_score_thr",
+                    "gcs_candidate_short_min_points",
+                    "gcs_candidate_short_max_points",
                     "gcs_hard_sampling",
                     "gcs_hard_date_0601_weight",
                     "gcs_hard_gt4_le10_weight",

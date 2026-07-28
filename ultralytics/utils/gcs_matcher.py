@@ -133,7 +133,6 @@ class GCSHungarianMatcher:
         pred_logits: torch.Tensor,
         gt_points: list[torch.Tensor] | tuple[torch.Tensor, ...],
         gt_valid: list[torch.Tensor] | tuple[torch.Tensor, ...],
-        allowed_masks: list[torch.Tensor] | tuple[torch.Tensor, ...] | None = None,
     ) -> list[tuple[torch.Tensor, torch.Tensor]]:
         """Return matched prediction and GT indices for each image.
 
@@ -142,8 +141,6 @@ class GCSHungarianMatcher:
             pred_logits: Predicted lane existence logits with shape B x Q.
             gt_points: Per-image GT normalized lane points, each N_i x K x 2.
             gt_valid: Per-image GT point validity masks, each N_i x K.
-            allowed_masks: Optional per-image Q x N_i bool mask. False entries
-                are forbidden before Hungarian assignment.
         """
         if linear_sum_assignment is None:
             raise ImportError("scipy is required for GCS Hungarian matching.") from _SCIPY_IMPORT_ERROR
@@ -159,8 +156,6 @@ class GCSHungarianMatcher:
             )
         if len(gt_points) != pred_points.shape[0] or len(gt_valid) != pred_points.shape[0]:
             raise ValueError("gt_points and gt_valid must contain one tensor per batch image.")
-        if allowed_masks is not None and len(allowed_masks) != pred_points.shape[0]:
-            raise ValueError("allowed_masks must contain one tensor per batch image when provided.")
 
         device = pred_points.device
         dtype = pred_points.dtype
@@ -190,12 +185,6 @@ class GCSHungarianMatcher:
             gv = gv[valid_lane]
 
             cost = self.cost_matrix(pp, pl, gp, gv)
-            if allowed_masks is not None:
-                allowed = allowed_masks[b].to(device=device, dtype=torch.bool)
-                expected = (pp.shape[0], gt_valid[b].shape[0])
-                if tuple(allowed.shape) != expected:
-                    raise ValueError(f"allowed_masks[{b}] must have shape Q x N={expected}, got {tuple(allowed.shape)}.")
-                cost = cost.masked_fill(~allowed[:, valid_lane], torch.inf)
             finite = torch.isfinite(cost)
             if not finite.any():
                 indices.append(self._empty_indices(device))

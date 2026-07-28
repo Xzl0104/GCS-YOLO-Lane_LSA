@@ -87,33 +87,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-overlap", type=int, default=2, help="Minimum valid overlapping GT points required for eval matching.")
     parser.add_argument("--nms-dist-px", type=float, default=50.0, help="Optional lane duplicate suppression distance in pixels. 0 disables.")
     parser.add_argument("--max-det", type=int, default=8, help="Maximum decoded lane queries per image.")
-    parser.add_argument("--extent-decode", action="store_true", help="Use query start/end extent logits for query-mode visibility.")
-    parser.add_argument(
-        "--extent-decode-mode",
-        choices=("none", "interval", "intersect"),
-        default="interval",
-        help="Query extent decode mode. 'interval' uses extent logits directly; 'intersect' also requires point-valid survival.",
-    )
-    parser.add_argument(
-        "--candidate-decode",
-        action="store_true",
-        help="Use lateral candidate hypotheses only for prediction-gated short-lane queries.",
-    )
-    parser.add_argument(
-        "--candidate-short-gate",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Apply candidate selection only when predicted visible-anchor count is in the configured short-lane range.",
-    )
-    parser.add_argument("--candidate-gate-valid-thr", type=float, default=0.5)
-    parser.add_argument("--candidate-gate-min-visible", type=int, default=2)
-    parser.add_argument("--candidate-gate-max-visible", type=int, default=10)
-    parser.add_argument(
-        "--candidate-preserve-base-score",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Keep the original query score after candidate selection.",
-    )
     parser.add_argument("--count-aware-topk", action="store_true", help="Use count_score to keep only the quality-best dynamic lane count.")
     parser.add_argument("--count-aware-min-k", type=int, default=3, help="Minimum k_hat for --count-aware-topk.")
     parser.add_argument("--count-aware-max-k", type=int, default=5, help="Maximum k_hat for --count-aware-topk.")
@@ -508,14 +481,6 @@ def build_eval_config(
     min_overlap: int,
     nms_dist_px: float,
     max_det: int,
-    extent_decode: bool,
-    extent_decode_mode: str,
-    candidate_decode: bool,
-    candidate_short_gate: bool,
-    candidate_gate_valid_thr: float,
-    candidate_gate_min_visible: int,
-    candidate_gate_max_visible: int,
-    candidate_preserve_base_score: bool,
     count_aware_topk: bool,
     count_aware_min_k: int,
     count_aware_max_k: int,
@@ -575,14 +540,6 @@ def build_eval_config(
             "point_valid_thr": float(point_valid_thr),
             "nms_dist_px": float(nms_dist_px),
             "max_det": int(max_det),
-            "extent_decode": bool(extent_decode),
-            "extent_decode_mode": str(extent_decode_mode),
-            "candidate_decode": bool(candidate_decode),
-            "candidate_short_gate": bool(candidate_short_gate),
-            "candidate_gate_valid_thr": float(candidate_gate_valid_thr),
-            "candidate_gate_min_visible": int(candidate_gate_min_visible),
-            "candidate_gate_max_visible": int(candidate_gate_max_visible),
-            "candidate_preserve_base_score": bool(candidate_preserve_base_score),
             "count_aware_topk": bool(count_aware_topk),
             "count_aware_min_k": int(count_aware_min_k),
             "count_aware_max_k": int(count_aware_max_k),
@@ -606,14 +563,6 @@ def evaluate(
     min_overlap: int = 2,
     nms_dist_px: float = 50.0,
     max_det: int = 8,
-    extent_decode: bool = False,
-    extent_decode_mode: str = "interval",
-    candidate_decode: bool = False,
-    candidate_short_gate: bool = True,
-    candidate_gate_valid_thr: float = 0.5,
-    candidate_gate_min_visible: int = 2,
-    candidate_gate_max_visible: int = 10,
-    candidate_preserve_base_score: bool = True,
     count_aware_topk: bool = False,
     count_aware_min_k: int = 3,
     count_aware_max_k: int = 5,
@@ -722,37 +671,15 @@ def evaluate(
             )
         else:
             pred_valid = preds.get("pred_valid_logits")
-            pred_quality_logits = preds.get("pred_quality_logits")
-            pred_start_logits = preds.get("pred_start_logits")
-            pred_end_logits = preds.get("pred_end_logits")
-            pred_short_candidate_points = preds.get("pred_short_candidate_points")
-            pred_short_candidate_logits = preds.get("pred_short_candidate_logits")
             lanes = decode_gcs_predictions(
                 preds["pred_points"][0],
                 preds["pred_logits"][0],
-                pred_quality_logits=pred_quality_logits[0] if pred_quality_logits is not None else None,
                 pred_valid_logits=pred_valid[0] if pred_valid is not None else None,
-                pred_start_logits=pred_start_logits[0] if pred_start_logits is not None else None,
-                pred_end_logits=pred_end_logits[0] if pred_end_logits is not None else None,
-                pred_short_candidate_points=(
-                    pred_short_candidate_points[0] if pred_short_candidate_points is not None else None
-                ),
-                pred_short_candidate_logits=(
-                    pred_short_candidate_logits[0] if pred_short_candidate_logits is not None else None
-                ),
                 image_shape=img.shape[:2],
                 score_thr=conf,
                 point_valid_thr=point_valid_thr,
                 max_det=max_det,
                 nms_dist_px=nms_dist_px,
-                extent_decode=extent_decode,
-                extent_decode_mode=extent_decode_mode,
-                candidate_decode=candidate_decode,
-                candidate_short_gate=candidate_short_gate,
-                candidate_gate_valid_thr=candidate_gate_valid_thr,
-                candidate_gate_min_visible=candidate_gate_min_visible,
-                candidate_gate_max_visible=candidate_gate_max_visible,
-                candidate_preserve_base_score=candidate_preserve_base_score,
                 count_aware_topk=count_aware_topk,
                 count_aware_min_k=count_aware_min_k,
                 count_aware_max_k=count_aware_max_k,
@@ -809,9 +736,6 @@ def evaluate(
             min_overlap=min_overlap,
             nms_dist_px=nms_dist_px,
             max_det=max_det,
-        extent_decode=extent_decode,
-        extent_decode_mode=extent_decode_mode,
-        candidate_decode=candidate_decode,
             count_aware_topk=count_aware_topk,
             count_aware_min_k=count_aware_min_k,
             count_aware_max_k=count_aware_max_k,
@@ -859,14 +783,6 @@ def main() -> None:
         min_overlap=args.min_overlap,
         nms_dist_px=args.nms_dist_px,
         max_det=args.max_det,
-        extent_decode=args.extent_decode,
-        extent_decode_mode=args.extent_decode_mode,
-        candidate_decode=args.candidate_decode,
-        candidate_short_gate=args.candidate_short_gate,
-        candidate_gate_valid_thr=args.candidate_gate_valid_thr,
-        candidate_gate_min_visible=args.candidate_gate_min_visible,
-        candidate_gate_max_visible=args.candidate_gate_max_visible,
-        candidate_preserve_base_score=args.candidate_preserve_base_score,
         count_aware_topk=args.count_aware_topk,
         count_aware_min_k=args.count_aware_min_k,
         count_aware_max_k=args.count_aware_max_k,

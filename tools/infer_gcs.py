@@ -118,37 +118,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-det", type=int, default=8, help="Maximum lane queries to keep after score sorting.")
     parser.add_argument("--min-points", type=int, default=2, help="Minimum visible anchors required to keep a lane.")
     parser.add_argument("--valid-before-maxdet", action="store_true", help="Filter point-valid/min_points failures before max_det truncation.")
-    parser.add_argument("--extent-decode", action="store_true", help="Use query start/end extent logits for query-mode visibility.")
-    parser.add_argument(
-        "--extent-decode-mode",
-        choices=("none", "interval", "intersect"),
-        default="interval",
-        help="Query extent decode mode. 'interval' uses extent logits directly; 'intersect' also requires point-valid survival.",
-    )
-    parser.add_argument(
-        "--candidate-decode",
-        action="store_true",
-        help="Use lateral candidate hypotheses only for prediction-gated short-lane queries.",
-    )
-    parser.add_argument(
-        "--candidate-short-gate",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Apply candidate selection only when predicted visible-anchor count is in the configured short-lane range.",
-    )
-    parser.add_argument("--candidate-gate-valid-thr", type=float, default=0.5)
-    parser.add_argument("--candidate-gate-min-visible", type=int, default=2)
-    parser.add_argument("--candidate-gate-max-visible", type=int, default=10)
-    parser.add_argument(
-        "--candidate-preserve-base-score",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Keep the original query score after candidate selection.",
-    )
     parser.add_argument("--count-aware-topk", action="store_true", help="Use count_score to keep only the quality-best dynamic lane count.")
     parser.add_argument("--count-aware-min-k", type=int, default=3, help="Minimum k_hat for --count-aware-topk.")
     parser.add_argument("--count-aware-max-k", type=int, default=5, help="Maximum k_hat for --count-aware-topk.")
     parser.add_argument("--count-aware-length-norm", type=float, default=12.0, help="Visible-point count that saturates count-aware length quality.")
+    parser.add_argument("--candidate-decode", action="store_true", help="Enable gated query lateral candidate decode.")
+    parser.add_argument("--candidate-score-thr", type=float, default=0.05)
+    parser.add_argument("--candidate-short-min-points", type=int, default=2)
+    parser.add_argument("--candidate-short-max-points", type=int, default=10)
     parser.add_argument("--max-images", type=int, default=0, help="Limit number of images. 0 means all images.")
     parser.add_argument("--save-dir", default="runs/gcs_lane/infer", help="Directory for rendered images and labels.")
     parser.add_argument("--no-save-img", action="store_true", help="Do not save rendered lane images.")
@@ -286,12 +263,10 @@ def _json_lane(lane: dict) -> dict:
         item["visible_points"] = np.asarray(lane["visible_points"], dtype=float).round(2).tolist()
     if "count_aware_quality" in lane:
         item["count_aware_quality"] = round(float(lane["count_aware_quality"]), 6)
-    if "extent_start_idx" in lane:
-        item["extent_start_idx"] = int(lane["extent_start_idx"])
-    if "extent_end_idx" in lane:
-        item["extent_end_idx"] = int(lane["extent_end_idx"])
-    if "extent_visible_source" in lane:
-        item["extent_visible_source"] = str(lane["extent_visible_source"])
+    if lane.get("candidate_decode_applied", False):
+        item["candidate_decode_applied"] = True
+        item["short_candidate_index"] = int(lane["short_candidate_index"])
+        item["short_candidate_score"] = round(float(lane["short_candidate_score"]), 6)
     return item
 
 
@@ -309,18 +284,14 @@ def run_inference(
     max_det: int = 8,
     min_points: int = 2,
     valid_before_maxdet: bool = False,
-    extent_decode: bool = False,
-    extent_decode_mode: str = "interval",
-    candidate_decode: bool = False,
-    candidate_short_gate: bool = True,
-    candidate_gate_valid_thr: float = 0.5,
-    candidate_gate_min_visible: int = 2,
-    candidate_gate_max_visible: int = 10,
-    candidate_preserve_base_score: bool = True,
     count_aware_topk: bool = False,
     count_aware_min_k: int = 3,
     count_aware_max_k: int = 5,
     count_aware_length_norm: float = 12.0,
+    candidate_decode: bool = False,
+    candidate_score_thr: float = 0.05,
+    candidate_short_min_points: int = 2,
+    candidate_short_max_points: int = 10,
     gcs_min_lanes: int = 2,
     gcs_max_lanes: int = 5,
     gcs_num_slots: int = 5,
@@ -338,6 +309,8 @@ def run_inference(
     device_obj = select_device(device, verbose=False)
     model = load_gcs_model(weights, device=device_obj, half=half, gcs_imgsz=imgsz)
     active_decode_mode = resolve_decode_mode(decode_mode, model)
+    if candidate_decode and active_decode_mode == "ordered_slot":
+        raise RuntimeError("--candidate-decode is query-decode only and is not valid for ordered_slot.")
     ordered_slot_runtime_cfg = (
         ordered_slot_decode_runtime_config(context="infer") if active_decode_mode == "ordered_slot" else None
     )
@@ -401,24 +374,14 @@ def run_inference(
             )
         else:
             pred_valid = preds.get("pred_valid_logits")
-            pred_quality_logits = preds.get("pred_quality_logits")
-            pred_start_logits = preds.get("pred_start_logits")
-            pred_end_logits = preds.get("pred_end_logits")
-            pred_short_candidate_points = preds.get("pred_short_candidate_points")
-            pred_short_candidate_logits = preds.get("pred_short_candidate_logits")
+            pred_candidate_points = preds.get("pred_short_candidate_points")
+            pred_candidate_logits = preds.get("pred_short_candidate_logits")
             lanes = decode_gcs_predictions(
                 preds["pred_points"][0],
                 preds["pred_logits"][0],
-                pred_quality_logits=pred_quality_logits[0] if pred_quality_logits is not None else None,
                 pred_valid_logits=pred_valid[0] if pred_valid is not None else None,
-                pred_start_logits=pred_start_logits[0] if pred_start_logits is not None else None,
-                pred_end_logits=pred_end_logits[0] if pred_end_logits is not None else None,
-                pred_short_candidate_points=(
-                    pred_short_candidate_points[0] if pred_short_candidate_points is not None else None
-                ),
-                pred_short_candidate_logits=(
-                    pred_short_candidate_logits[0] if pred_short_candidate_logits is not None else None
-                ),
+                pred_short_candidate_points=pred_candidate_points[0] if pred_candidate_points is not None else None,
+                pred_short_candidate_logits=pred_candidate_logits[0] if pred_candidate_logits is not None else None,
                 image_shape=img.shape[:2],
                 score_thr=conf,
                 point_valid_thr=point_valid_thr,
@@ -426,18 +389,14 @@ def run_inference(
                 max_det=max_det,
                 nms_dist_px=nms_dist_px,
                 valid_before_maxdet=valid_before_maxdet,
-                extent_decode=extent_decode,
-                extent_decode_mode=extent_decode_mode,
-                candidate_decode=candidate_decode,
-                candidate_short_gate=candidate_short_gate,
-                candidate_gate_valid_thr=candidate_gate_valid_thr,
-                candidate_gate_min_visible=candidate_gate_min_visible,
-                candidate_gate_max_visible=candidate_gate_max_visible,
-                candidate_preserve_base_score=candidate_preserve_base_score,
                 count_aware_topk=count_aware_topk,
                 count_aware_min_k=count_aware_min_k,
                 count_aware_max_k=count_aware_max_k,
                 count_aware_length_norm=count_aware_length_norm,
+                candidate_decode=candidate_decode,
+                candidate_score_thr=candidate_score_thr,
+                candidate_short_min_points=candidate_short_min_points,
+                candidate_short_max_points=candidate_short_max_points,
             )
         post_s = time.perf_counter() - t1
         total_infer += infer_s
@@ -480,18 +439,14 @@ def run_inference(
             "max_det": int(max_det),
             "min_points": int(min_points),
             "valid_before_maxdet": bool(valid_before_maxdet),
-            "extent_decode": bool(extent_decode),
-            "extent_decode_mode": str(extent_decode_mode),
-            "candidate_decode": bool(candidate_decode),
-            "candidate_short_gate": bool(candidate_short_gate),
-            "candidate_gate_valid_thr": float(candidate_gate_valid_thr),
-            "candidate_gate_min_visible": int(candidate_gate_min_visible),
-            "candidate_gate_max_visible": int(candidate_gate_max_visible),
-            "candidate_preserve_base_score": bool(candidate_preserve_base_score),
             "count_aware_topk": bool(count_aware_topk),
             "count_aware_min_k": int(count_aware_min_k),
             "count_aware_max_k": int(count_aware_max_k),
             "count_aware_length_norm": float(count_aware_length_norm),
+            "candidate_decode": bool(candidate_decode),
+            "candidate_score_thr": float(candidate_score_thr),
+            "candidate_short_min_points": int(candidate_short_min_points),
+            "candidate_short_max_points": int(candidate_short_max_points),
             "gcs_min_lanes": int(gcs_min_lanes),
             "gcs_max_lanes": int(gcs_max_lanes),
             "gcs_num_slots": int(gcs_num_slots),
@@ -544,18 +499,14 @@ def main() -> None:
         max_det=args.max_det,
         min_points=args.min_points,
         valid_before_maxdet=args.valid_before_maxdet,
-        extent_decode=args.extent_decode,
-        extent_decode_mode=args.extent_decode_mode,
-        candidate_decode=args.candidate_decode,
-        candidate_short_gate=args.candidate_short_gate,
-        candidate_gate_valid_thr=args.candidate_gate_valid_thr,
-        candidate_gate_min_visible=args.candidate_gate_min_visible,
-        candidate_gate_max_visible=args.candidate_gate_max_visible,
-        candidate_preserve_base_score=args.candidate_preserve_base_score,
         count_aware_topk=args.count_aware_topk,
         count_aware_min_k=args.count_aware_min_k,
         count_aware_max_k=args.count_aware_max_k,
         count_aware_length_norm=args.count_aware_length_norm,
+        candidate_decode=args.candidate_decode,
+        candidate_score_thr=args.candidate_score_thr,
+        candidate_short_min_points=args.candidate_short_min_points,
+        candidate_short_max_points=args.candidate_short_max_points,
         gcs_min_lanes=args.gcs_min_lanes,
         gcs_max_lanes=args.gcs_max_lanes,
         gcs_num_slots=args.gcs_num_slots,

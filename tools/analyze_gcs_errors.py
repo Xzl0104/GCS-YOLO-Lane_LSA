@@ -236,9 +236,6 @@ def main() -> None:
         pred_lanes = decode_gcs_predictions(
             pred_points_t,
             pred_logits_t,
-            pred_quality_logits=preds.get("pred_quality_logits")[0].detach().float()
-            if preds.get("pred_quality_logits") is not None
-            else None,
             pred_valid_logits=pred_valid_t,
             image_shape=img.shape[:2],
             score_thr=args.conf,

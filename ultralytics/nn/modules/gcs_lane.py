@@ -1,10 +1,6 @@
 # Ultralytics AGPL-3.0 License - https://ultralytics.com/license
 """GCS-YOLO-Lane neural network modules."""
 
-import json
-import math
-from pathlib import Path
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -219,19 +215,8 @@ class GCSLaneHead(nn.Module):
         max_lanes=5,
         count_classes=None,
         query_count_head: bool = False,
-        reference_mode: str = "linear",
-        reference_bank=None,
-        query_quality_head: bool = False,
-        query_extent_head: bool = False,
-        query_short_local_refine_head: bool = False,
-        short_local_refine_max_delta_px: float = 40.0,
-        short_local_refine_window_search: bool = False,
-        short_local_refine_window_radius_px: float = 40.0,
-        short_local_refine_window_step_px: float = 20.0,
-        query_short_candidate_head: bool = False,
-        short_candidate_count: int = 7,
-        short_candidate_radius_px: float = 60.0,
-        short_candidate_step_px: float = 20.0,
+        short_candidate_head: bool = False,
+        short_candidate_offsets_px=(0, -20, 20, -40, 40, -60, 60),
     ):
         """Initialize the GCS lane query decoder and training-only auxiliary heads."""
         super().__init__()
@@ -295,21 +280,6 @@ class GCSLaneHead(nn.Module):
             )
         if self.point_mode == "fixed_y":
             self._validate_fixed_y_anchors()
-        self.reference_mode = str(reference_mode or "linear").lower()
-        if self.reference_mode in {"default", "perspective"}:
-            self.reference_mode = "linear"
-        if self.reference_mode not in {"linear", "dualbank"}:
-            raise ValueError(f"GCSLaneHead reference_mode must be 'linear' or 'dualbank', got {reference_mode!r}.")
-        self.reference_bank = reference_bank
-        if self.reference_mode == "dualbank":
-            if self.gcs_mode != "query":
-                raise ValueError("GCSLaneHead reference_mode='dualbank' is only supported for query mode.")
-            if self.point_mode != "fixed_y":
-                raise ValueError("GCSLaneHead reference_mode='dualbank' requires point_mode='fixed_y'.")
-            if self.num_queries not in {20, 24}:
-                raise ValueError(f"GCSLaneHead reference_mode='dualbank' requires num_queries=20 or 24, got {self.num_queries}.")
-            if reference_bank is None or str(reference_bank).strip() == "":
-                raise ValueError("GCSLaneHead reference_mode='dualbank' requires a reference_bank JSON path.")
         self.point_dims = 1 if self.point_mode == "fixed_y" else 2
         self.return_aux = False
         self.min_spatial_tokens = 1024
@@ -371,105 +341,31 @@ class GCSLaneHead(nn.Module):
                 nn.ReLU(inplace=True),
                 nn.Linear(c1, self.count_classes),
             )
-        self.query_quality_head = self.gcs_mode == "query" and bool(query_quality_head)
-        if self.query_quality_head:
-            self.query_quality_mlp = nn.Sequential(
-                nn.Linear(c1, c1),
-                nn.ReLU(inplace=True),
-                nn.Linear(c1, 1),
+        self.short_candidate_head = self.gcs_mode == "query" and bool(short_candidate_head)
+        if self.short_candidate_head:
+            if isinstance(short_candidate_offsets_px, (int, float)):
+                offsets = [float(short_candidate_offsets_px)]
+            else:
+                offsets = [float(x) for x in short_candidate_offsets_px]
+            if not offsets:
+                raise ValueError("GCSLaneHead short_candidate_offsets_px must not be empty when short_candidate_head=True.")
+            if len(offsets) > 32:
+                raise ValueError(
+                    f"GCSLaneHead short_candidate_offsets_px supports at most 32 offsets, got {len(offsets)}."
+                )
+            self.short_candidate_count = len(offsets)
+            self.register_buffer(
+                "short_candidate_offsets_px",
+                torch.tensor(offsets, dtype=torch.float32),
+                persistent=True,
             )
-        self.query_extent_head = self.gcs_mode == "query" and bool(query_extent_head)
-        if self.query_extent_head:
-            self.query_start_mlp = nn.Sequential(
-                nn.Linear(c1, c1),
+            self.short_candidate_offset_embed = nn.Embedding(self.short_candidate_count, c1)
+            self.short_candidate_score_mlp = nn.Sequential(
+                nn.Linear(c1 * 3, c1),
                 nn.ReLU(inplace=True),
-                nn.Linear(c1, num_points),
-            )
-            self.query_end_mlp = nn.Sequential(
-                nn.Linear(c1, c1),
+                nn.Linear(c1, c1 // 2),
                 nn.ReLU(inplace=True),
-                nn.Linear(c1, num_points),
-            )
-        requested_short_local_refine = bool(query_short_local_refine_head)
-        if requested_short_local_refine and (self.gcs_mode != "query" or self.point_mode != "fixed_y"):
-            raise ValueError("query_short_local_refine_head requires query mode with point_mode='fixed_y'.")
-        self.query_short_local_refine_head = requested_short_local_refine
-        self.short_local_refine_max_delta_px = float(short_local_refine_max_delta_px)
-        self.short_local_refine_window_search = bool(short_local_refine_window_search)
-        self.short_local_refine_window_radius_px = float(short_local_refine_window_radius_px)
-        self.short_local_refine_window_step_px = float(short_local_refine_window_step_px)
-        if self.query_short_local_refine_head and self.short_local_refine_max_delta_px <= 0.0:
-            raise ValueError(
-                "short_local_refine_max_delta_px must be > 0 when query_short_local_refine_head is enabled, "
-                f"got {self.short_local_refine_max_delta_px}."
-            )
-        if self.query_short_local_refine_head and self.short_local_refine_window_search:
-            if self.short_local_refine_window_radius_px <= 0.0:
-                raise ValueError(
-                    "short_local_refine_window_radius_px must be > 0 when window search is enabled, "
-                    f"got {self.short_local_refine_window_radius_px}."
-                )
-            if self.short_local_refine_window_step_px <= 0.0:
-                raise ValueError(
-                    "short_local_refine_window_step_px must be > 0 when window search is enabled, "
-                    f"got {self.short_local_refine_window_step_px}."
-                )
-            if self.short_local_refine_window_radius_px > self.short_local_refine_max_delta_px + 1e-9:
-                raise ValueError(
-                    "short_local_refine_window_radius_px must be <= short_local_refine_max_delta_px so the "
-                    "expected window offset respects the max-delta contract, got "
-                    f"{self.short_local_refine_window_radius_px} > {self.short_local_refine_max_delta_px}."
-                )
-            ratio = self.short_local_refine_window_radius_px / self.short_local_refine_window_step_px
-            if not math.isclose(ratio, round(ratio), rel_tol=0.0, abs_tol=1e-6):
-                raise ValueError(
-                    "short_local_refine_window_radius_px must be an integer multiple of "
-                    "short_local_refine_window_step_px for symmetric identity initialization, got "
-                    f"{self.short_local_refine_window_radius_px}/{self.short_local_refine_window_step_px}."
-                )
-        if self.query_short_local_refine_head:
-            self.query_short_local_refine_mlp = nn.Sequential(
-                nn.Linear(c1 * 2, c1),
-                nn.ReLU(inplace=True),
-                nn.Linear(c1, 1),
-            )
-        requested_short_candidate = bool(query_short_candidate_head)
-        if requested_short_candidate and (self.gcs_mode != "query" or self.point_mode != "fixed_y"):
-            raise ValueError("query_short_candidate_head requires query mode with point_mode='fixed_y'.")
-        self.query_short_candidate_head = requested_short_candidate
-        self.short_candidate_count = int(short_candidate_count)
-        self.short_candidate_radius_px = float(short_candidate_radius_px)
-        self.short_candidate_step_px = float(short_candidate_step_px)
-        if self.query_short_candidate_head:
-            if self.short_candidate_count <= 0 or self.short_candidate_count % 2 != 1:
-                raise ValueError(
-                    "short_candidate_count must be a positive odd integer for center-first symmetric hypotheses, "
-                    f"got {self.short_candidate_count}."
-                )
-            if self.short_candidate_radius_px <= 0.0:
-                raise ValueError(
-                    f"short_candidate_radius_px must be > 0 when candidate generation is enabled, got {self.short_candidate_radius_px}."
-                )
-            if self.short_candidate_step_px <= 0.0:
-                raise ValueError(
-                    f"short_candidate_step_px must be > 0 when candidate generation is enabled, got {self.short_candidate_step_px}."
-                )
-            candidate_steps = self.short_candidate_radius_px / self.short_candidate_step_px
-            if not math.isclose(candidate_steps, round(candidate_steps), rel_tol=0.0, abs_tol=1e-6):
-                raise ValueError(
-                    "short_candidate_radius_px must be an integer multiple of short_candidate_step_px, got "
-                    f"{self.short_candidate_radius_px}/{self.short_candidate_step_px}."
-                )
-            expected_count = 2 * int(round(candidate_steps)) + 1
-            if self.short_candidate_count != expected_count:
-                raise ValueError(
-                    "short_candidate_count must equal 2 * (short_candidate_radius_px / short_candidate_step_px) + 1 "
-                    f"for symmetric hypotheses, got count={self.short_candidate_count}, expected={expected_count}."
-                )
-            self.query_short_candidate_mlp = nn.Sequential(
-                nn.Linear(c1 * 2, c1),
-                nn.ReLU(inplace=True),
-                nn.Linear(c1, 1),
+                nn.Linear(c1 // 2, 1),
             )
         if self.gcs_mode == "ordered_slot":
             self.start_mlp = nn.Sequential(
@@ -506,14 +402,8 @@ class GCSLaneHead(nn.Module):
             self._init_interval_heads()
         if self.query_count_head:
             self._init_query_count_head()
-        if self.query_quality_head:
-            self._init_query_quality_head()
-        if self.query_extent_head:
-            self._init_query_extent_head()
-        if self.query_short_local_refine_head:
-            self._init_query_short_local_refine_head()
-        if self.query_short_candidate_head:
-            self._init_query_short_candidate_head()
+        if self.short_candidate_head:
+            self._init_short_candidate_head()
 
     def _build_fixed_y_anchors(self):
         """Build shared bottom-to-top y anchors for fixed-y x-only prediction."""
@@ -539,9 +429,6 @@ class GCSLaneHead(nn.Module):
         query a distinct spatial role while still letting the MLP learn large
         offsets when the image geometry requires it.
         """
-        if getattr(self, "reference_mode", "linear") == "dualbank":
-            return self._build_dualbank_point_references()
-
         y = self._build_fixed_y_anchors()
         bottom_x = torch.linspace(0.05, 0.95, self.num_queries)
         top_x = 0.5 + (bottom_x - 0.5) * 0.25
@@ -551,121 +438,6 @@ class GCSLaneHead(nn.Module):
             return torch.logit(x.clamp(1e-4, 1.0 - 1e-4))
         points = torch.stack((x, y[None].expand(self.num_queries, -1)), dim=-1)
         return torch.logit(points.clamp(1e-4, 1.0 - 1e-4))
-
-    def _resolve_reference_bank_path(self) -> Path:
-        """Resolve a YAML-provided reference-bank path relative to common project roots."""
-        raw = self.reference_bank
-        if isinstance(raw, (list, tuple)):
-            raise ValueError("GCSLaneHead dualbank reference_bank must be a JSON path, not an inline list.")
-        path = Path(str(raw)).expanduser()
-        if path.is_absolute():
-            return path
-        repo_root = Path(__file__).resolve().parents[3]
-        candidates = [Path.cwd() / path, repo_root / path]
-        for candidate in candidates:
-            if candidate.exists():
-                return candidate
-        return candidates[-1]
-
-    def _load_reference_bank_x_norm(self) -> torch.Tensor:
-        """Load Q x K normalized x references from a static reference-bank JSON file."""
-        path = self._resolve_reference_bank_path()
-        if not path.exists():
-            raise FileNotFoundError(f"GCSLaneHead dualbank reference bank not found: {path}")
-        with path.open("r", encoding="utf-8") as f:
-            data = json.load(f)
-
-        if not isinstance(data, dict):
-            raise ValueError(f"GCSLaneHead dualbank reference bank {path} must be a JSON object.")
-        allowed_schemas = {
-            f"q{self.num_queries}_protected_static_reference_bank_v1",
-            f"q{self.num_queries}_dualbank_static_reference_bank_v1",
-        }
-        if data.get("schema") not in allowed_schemas:
-            raise ValueError(f"GCSLaneHead dualbank reference bank has unsupported schema: {data.get('schema')!r}")
-        if data.get("formal_gate_passed") is not True:
-            raise ValueError(f"GCSLaneHead dualbank reference bank did not pass the strict static gate: {path}")
-        if data.get("selection_protocol") != "official_val_train_raw_static_gate_no_test":
-            raise ValueError(f"GCSLaneHead dualbank reference bank has invalid selection protocol: {path}")
-        if data.get("test_used") is not False:
-            raise ValueError(f"GCSLaneHead dualbank reference bank must declare test_used=false: {path}")
-        source_splits = [str(v).lower() for v in data.get("source_splits", [])]
-        if source_splits != ["official_val", "train0601", "train0531"] or any("test" in v for v in source_splits):
-            raise ValueError(f"GCSLaneHead dualbank reference bank has invalid source_splits: {source_splits!r}")
-        if data.get("reference_mode") != "dualbank":
-            raise ValueError(f"GCSLaneHead dualbank reference bank reference_mode must be 'dualbank': {path}")
-        if data.get("point_mode") != "fixed_y":
-            raise ValueError(f"GCSLaneHead dualbank reference bank point_mode must be 'fixed_y': {path}")
-        fixed_y_px = [int(v) for v in data.get("fixed_y_px_desc", [])]
-        expected_fixed_y_px = [int(v) for v in range(710, 150, -10)]
-        if fixed_y_px != expected_fixed_y_px:
-            raise ValueError("GCSLaneHead dualbank reference bank fixed_y_px_desc must be 710..160 step -10.")
-        protected_queries = [int(v) for v in data.get("protected_queries", [])]
-        if protected_queries != list(range(12)):
-            raise ValueError("GCSLaneHead dualbank reference bank must protect queries q0..q11.")
-        extra_queries = [int(v) for v in data.get("extra_queries", [])]
-        expected_extra_queries = list(range(12, int(self.num_queries)))
-        if extra_queries != expected_extra_queries:
-            raise ValueError(f"GCSLaneHead dualbank reference bank extra_queries must be q12..q{self.num_queries - 1}.")
-        gt5_bank_queries = [int(v) for v in data.get("gt5_bank_queries", [])]
-        gt4_bank_queries = [int(v) for v in data.get("gt4_bank_queries", [])]
-        if sorted(gt5_bank_queries + gt4_bank_queries) != expected_extra_queries:
-            raise ValueError("GCSLaneHead dualbank reference bank GT5/GT4 bank queries must partition extra_queries.")
-        if set(gt5_bank_queries).intersection(gt4_bank_queries):
-            raise ValueError("GCSLaneHead dualbank reference bank GT5 and GT4 query partitions overlap.")
-        gate = data.get("gate")
-        if not isinstance(gate, dict) or gate.get("strict_pass") is not True:
-            raise ValueError(f"GCSLaneHead dualbank reference bank must embed a strict-passed gate: {path}")
-        for key in (
-            "val_gt3gt4_normal_risk_no_increase",
-            "train0601_gt3gt4_normal_risk_no_increase",
-            "train0531_gt3gt4_normal_risk_no_increase",
-        ):
-            if gate.get(key) is not True:
-                raise ValueError(f"GCSLaneHead dualbank reference bank failed gate check {key}: {path}")
-        risk_added = gate.get("risk_added_normal_match20")
-        if not isinstance(risk_added, dict):
-            raise ValueError(f"GCSLaneHead dualbank reference bank must embed normal-risk gate metrics: {path}")
-        for key in ("val_gt3gt4_normal_risk", "train0601_gt3gt4_normal_risk", "train0531_gt3gt4_normal_risk"):
-            if float(risk_added.get(key, 1.0)) > 1e-12:
-                raise ValueError(f"GCSLaneHead dualbank reference bank increases normal-risk match20 for {key}: {path}")
-        refs_raw = data.get("references")
-        if not isinstance(refs_raw, list):
-            raise ValueError(f"GCSLaneHead dualbank reference bank {path} must contain a references list.")
-        query_ids = [int(item.get("query_id", -1)) for item in refs_raw]
-        if sorted(query_ids) != list(range(int(self.num_queries))):
-            raise ValueError(f"GCSLaneHead dualbank reference bank query_id coverage must be 0..{self.num_queries - 1}.")
-        refs = sorted(refs_raw, key=lambda item: int(item["query_id"]))
-        x_norm = [item.get("x_norm") for item in refs]
-
-        x = torch.as_tensor(x_norm, dtype=torch.float32)
-        expected = (int(self.num_queries), int(self.num_points))
-        if tuple(x.shape) != expected:
-            raise ValueError(f"GCSLaneHead dualbank reference bank shape must be {expected}, got {tuple(x.shape)}.")
-        if not torch.isfinite(x).all():
-            raise ValueError(f"GCSLaneHead dualbank reference bank contains non-finite x values: {path}")
-        if float(x.min()) <= 0.0 or float(x.max()) >= 1.0:
-            raise ValueError(f"GCSLaneHead dualbank reference bank x_norm values must stay inside (0, 1): {path}")
-
-        meta_q = data.get("num_queries") if isinstance(data, dict) else None
-        meta_k = data.get("num_points") if isinstance(data, dict) else None
-        if meta_q is not None and int(meta_q) != int(self.num_queries):
-            raise ValueError(f"GCSLaneHead dualbank reference bank num_queries={meta_q}, expected {self.num_queries}.")
-        if meta_k is not None and int(meta_k) != int(self.num_points):
-            raise ValueError(f"GCSLaneHead dualbank reference bank num_points={meta_k}, expected {self.num_points}.")
-        t = torch.linspace(0.0, 1.0, int(self.num_points), dtype=torch.float32)
-        bottom_x = torch.linspace(0.05, 0.95, 12, dtype=torch.float32)
-        top_x = 0.5 + (bottom_x - 0.5) * 0.25
-        q12_refs = bottom_x[:, None] * (1.0 - t[None, :]) + top_x[:, None] * t[None, :]
-        max_ref_err = float((x[:12] - q12_refs).abs().max().item())
-        if max_ref_err > 1e-6:
-            raise ValueError(f"GCSLaneHead dualbank reference bank must preserve q0..q11 Q12 references, max error={max_ref_err:.6g}.")
-        return x
-
-    def _build_dualbank_point_references(self):
-        """Build fixed-y x references from a protected static JSON."""
-        x = self._load_reference_bank_x_norm()
-        return torch.logit(x.clamp(1e-4, 1.0 - 1e-4))
 
     def _init_point_delta_head(self):
         """Initialize point deltas near zero while keeping point gradients live."""
@@ -705,30 +477,12 @@ class GCSLaneHead(nn.Module):
         nn.init.normal_(final.weight, mean=0.0, std=1e-3)
         nn.init.zeros_(final.bias)
 
-    def _init_query_quality_head(self):
-        """Initialize query-mode quality logits near neutral."""
-        final = self.query_quality_mlp[-1]
+    def _init_short_candidate_head(self):
+        """Initialize lateral candidate scores conservatively below the decode threshold."""
+        nn.init.normal_(self.short_candidate_offset_embed.weight, mean=0.0, std=1e-3)
+        final = self.short_candidate_score_mlp[-1]
         nn.init.normal_(final.weight, mean=0.0, std=1e-3)
-        nn.init.zeros_(final.bias)
-
-    def _init_query_extent_head(self):
-        """Initialize query-mode start/end extent logits near neutral."""
-        for mlp in (self.query_start_mlp, self.query_end_mlp):
-            final = mlp[-1]
-            nn.init.normal_(final.weight, mean=0.0, std=1e-3)
-            nn.init.zeros_(final.bias)
-
-    def _init_query_short_local_refine_head(self):
-        """Initialize query-mode auxiliary local x refinement to exact zero residual."""
-        final = self.query_short_local_refine_mlp[-1]
-        nn.init.zeros_(final.weight)
-        nn.init.zeros_(final.bias)
-
-    def _init_query_short_candidate_head(self):
-        """Initialize candidate score deltas so the disabled-equivalent center hypothesis is neutral."""
-        final = self.query_short_candidate_mlp[-1]
-        nn.init.zeros_(final.weight)
-        nn.init.zeros_(final.bias)
+        nn.init.constant_(final.bias, -4.0)
 
     def _sample_point_features(self, xs, points):
         """Sample high-resolution image features at normalized point coordinates.
@@ -771,118 +525,6 @@ class GCSLaneHead(nn.Module):
         image_tokens = self.point_image_norm(image_tokens)
         return torch.cat((prior_tokens, image_tokens), dim=-1)
 
-    def _short_local_refine_offsets_px(self, device, dtype):
-        """Return symmetric local-search offsets in pixels for the auxiliary short-lane head."""
-        radius_px = float(getattr(self, "short_local_refine_window_radius_px", 40.0))
-        step_px = float(getattr(self, "short_local_refine_window_step_px", 20.0))
-        steps = int(round(radius_px / step_px))
-        if steps < 1:
-            raise ValueError(
-                "short_local_refine_window_radius_px must be at least one "
-                f"short_local_refine_window_step_px, got radius={radius_px}, step={step_px}."
-            )
-        if not math.isclose(steps * step_px, radius_px, rel_tol=0.0, abs_tol=1e-6):
-            raise ValueError(
-                "short_local_refine_window_radius_px must be an integer multiple of "
-                f"short_local_refine_window_step_px, got radius={radius_px}, step={step_px}."
-            )
-        max_delta_px = float(getattr(self, "short_local_refine_max_delta_px", 40.0))
-        if radius_px > max_delta_px + 1e-9:
-            raise ValueError(
-                "short_local_refine_window_radius_px must be <= short_local_refine_max_delta_px, "
-                f"got {radius_px} > {max_delta_px}."
-            )
-        return torch.arange(-steps, steps + 1, device=device, dtype=dtype) * step_px
-
-    def _short_candidate_offsets_px(self, device, dtype):
-        """Return center-first fixed lateral hypotheses for short-lane candidate generation."""
-        radius_px = float(getattr(self, "short_candidate_radius_px", 60.0))
-        step_px = float(getattr(self, "short_candidate_step_px", 20.0))
-        steps = int(round(radius_px / step_px))
-        if steps < 1 or not math.isclose(steps * step_px, radius_px, rel_tol=0.0, abs_tol=1e-6):
-            raise ValueError(
-                "short_candidate_radius_px must be a positive integer multiple of short_candidate_step_px, got "
-                f"{radius_px}/{step_px}."
-            )
-        offsets = [0.0]
-        for step in range(1, steps + 1):
-            offsets.extend((-step * step_px, step * step_px))
-        offsets = torch.as_tensor(offsets, device=device, dtype=dtype)
-        expected_count = int(getattr(self, "short_candidate_count", offsets.numel()))
-        if offsets.numel() != expected_count:
-            raise ValueError(
-                f"Candidate offset count mismatch: generated {offsets.numel()} offsets, expected {expected_count}."
-            )
-        return offsets
-
-    def _short_candidate_points_and_logits(
-        self,
-        xs,
-        hs,
-        base_points,
-        image_width: int | float | None,
-        point_valid_logits: torch.Tensor | None = None,
-    ):
-        """Generate fixed-y lateral candidates and feature-conditioned relative score logits."""
-        if image_width is None:
-            raise ValueError("query_short_candidate_head requires orig_size=(H, W) to normalize candidate offsets.")
-        width = float(image_width)
-        if width <= 0.0:
-            raise ValueError(f"image_width must be positive for short candidate generation, got {image_width}.")
-        base_detached = base_points.detach()
-        offsets_px = self._short_candidate_offsets_px(base_points.device, base_points.dtype)
-        offsets_norm = offsets_px / base_points.new_tensor(width)
-        candidate_points = base_detached.unsqueeze(2).expand(-1, -1, offsets_norm.numel(), -1, -1).clone()
-        candidate_points[..., 0] = (
-            candidate_points[..., 0] + offsets_norm.view(1, 1, -1, 1)
-        ).clamp(0.0, 1.0)
-        candidate_points_for_sampling = candidate_points.permute(0, 1, 3, 2, 4)
-        candidate_tokens = self._short_local_refine_window_tokens(
-            xs,
-            hs.detach(),
-            candidate_points_for_sampling,
-        ).detach()
-        # Weight anchor evidence by the model's own predicted visibility. This
-        # keeps short-lane scoring focused on visible anchors without using GT.
-        candidate_anchor_logits = self.query_short_candidate_mlp(candidate_tokens).squeeze(-1)
-        if candidate_anchor_logits.ndim != 4:
-            raise ValueError(
-                "Candidate anchor logits must have shape B x Q x K x H, got "
-                f"{tuple(candidate_anchor_logits.shape)}."
-            )
-        if point_valid_logits is None:
-            anchor_weights = candidate_anchor_logits.new_ones(candidate_anchor_logits.shape[:3])
-        else:
-            if point_valid_logits.shape != base_points.shape[:3]:
-                raise ValueError(
-                    "point_valid_logits must have shape B x Q x K for candidate scoring, got "
-                    f"{tuple(point_valid_logits.shape)} vs {tuple(base_points.shape[:3])}."
-                )
-            anchor_weights = torch.sigmoid(point_valid_logits.detach()).to(dtype=candidate_anchor_logits.dtype)
-        weight_sum = anchor_weights.sum(dim=2).clamp_min(1e-6).unsqueeze(-1)
-        candidate_logits = (
-            candidate_anchor_logits * anchor_weights.unsqueeze(-1)
-        ).sum(dim=2) / weight_sum
-        return candidate_points, candidate_logits
-
-    def _short_local_refine_window_tokens(self, xs, hs, window_points):
-        """Build point/offset tokens for feature-conditioned local x-search."""
-        if window_points.ndim != 5 or window_points.shape[-1] != 2:
-            raise ValueError(
-                f"Expected window_points with shape B x Q x K x O x 2, got {tuple(window_points.shape)}."
-            )
-        b, q, k, o, _ = window_points.shape
-        flat_points = window_points.reshape(b, q, k * o, 2)
-        image_tokens = self._sample_point_features(xs, flat_points).reshape(b, q, k, o, self.c1)
-        query_tokens = hs.reshape(b, q, 1, 1, self.c1).expand(-1, -1, k, o, -1)
-        point_tokens = self.point_embed.weight.to(device=hs.device, dtype=hs.dtype).view(1, 1, k, 1, self.c1)
-        point_tokens = point_tokens.expand(b, q, -1, o, -1)
-        coord_tokens = self.point_coord_mlp(window_points.to(device=hs.device, dtype=hs.dtype))
-
-        prior_tokens = self.point_refine_norm(query_tokens + point_tokens + coord_tokens)
-        image_tokens = self.point_image_norm(image_tokens)
-        return torch.cat((prior_tokens, image_tokens), dim=-1)
-
     def _refine_fixed_y_logits(self, xs, hs, coarse_logits, fixed_y):
         """Refine fixed-y x logits with point-level sampled image features."""
         b, q, k = coarse_logits.shape
@@ -894,45 +536,45 @@ class GCSLaneHead(nn.Module):
         refine_delta = self.point_refine_mlp(refine_tokens).squeeze(-1)
         return coarse_logits + refine_delta
 
-    def _short_local_refine_fixed_y_points(self, xs, hs, base_points, image_width: int | float | None):
-        """Build auxiliary short-lane refined points without changing the main fixed-y geometry."""
-        if base_points.ndim != 4 or base_points.shape[-1] != 2:
-            raise ValueError(f"Expected base_points with shape B x Q x K x 2, got {tuple(base_points.shape)}.")
-        if image_width is None:
-            raise ValueError("query_short_local_refine_head requires orig_size=(H, W) to normalize max_delta_px.")
-        width = float(image_width)
-        if width <= 0.0:
-            raise ValueError(f"image_width must be positive for short local x-refine, got {image_width}.")
-
-        base_detached = base_points.detach()
-        max_delta_px = float(getattr(self, "short_local_refine_max_delta_px", 40.0))
-        max_delta_norm = base_points.new_tensor(max_delta_px / width)
-        if bool(getattr(self, "short_local_refine_window_search", False)):
-            offsets_px = self._short_local_refine_offsets_px(base_points.device, base_points.dtype)
-            offsets_norm = offsets_px / base_points.new_tensor(width)
-            window_points = base_detached.unsqueeze(3).expand(-1, -1, -1, int(offsets_norm.numel()), -1).clone()
-            window_points[..., 0] = (window_points[..., 0] + offsets_norm.view(1, 1, 1, -1)).clamp(0.0, 1.0)
-            refine_tokens = self._short_local_refine_window_tokens(xs, hs.detach(), window_points).detach()
-            window_logits = self.query_short_local_refine_mlp(refine_tokens).squeeze(-1)
-            window_probs = F.softmax(window_logits, dim=-1)
-            delta_norm = (window_probs * offsets_norm.view(1, 1, 1, -1)).sum(dim=-1)
-            delta_norm = delta_norm.clamp(-max_delta_norm, max_delta_norm)
-            delta_logits = delta_norm / max_delta_norm.clamp_min(base_points.new_tensor(1e-12))
-        else:
-            refine_tokens = self._point_refine_tokens(xs, hs.detach(), base_detached).detach()
-            delta_logits = self.query_short_local_refine_mlp(refine_tokens).squeeze(-1)
-            window_logits = None
-            delta_norm = torch.tanh(delta_logits) * max_delta_norm
-        refined_x = (base_detached[..., 0] + delta_norm).clamp(0.0, 1.0)
-        refined_points = torch.stack((refined_x, base_detached[..., 1]), dim=-1)
-        return refined_points, delta_logits, delta_norm, window_logits
-
     def _refine_fixed_y_valid_logits(self, xs, hs, pred_points):
         """Refine fixed-y point visibility logits with point-level sampled image features."""
         coarse_valid = self.point_valid_mlp(hs).view(hs.shape[0], self.num_queries, self.num_points)
         refine_tokens = self._point_refine_tokens(xs, hs, pred_points.detach())
         valid_delta = self.point_valid_refine_mlp(refine_tokens).squeeze(-1)
         return coarse_valid + valid_delta
+
+    def _short_candidate_outputs(self, xs, hs, pred_points, pred_valid_logits, orig_size):
+        """Generate fixed lateral candidates and visibility-aware geometry-selector logits."""
+        if orig_size is None:
+            raise ValueError("short_candidate_head requires orig_size=(H, W) to convert px offsets to normalized x.")
+        if pred_points.ndim != 4 or pred_points.shape[-1] != 2:
+            raise ValueError(f"pred_points must have shape B x Q x K x 2, got {tuple(pred_points.shape)}.")
+        b, q, k, _ = pred_points.shape
+        offsets_px = self.short_candidate_offsets_px.to(device=pred_points.device, dtype=pred_points.dtype)
+        width = float(orig_size[1])
+        if width <= 0.0:
+            raise ValueError(f"short_candidate_head received invalid orig_size={orig_size}.")
+        offsets_norm = offsets_px.view(1, 1, -1, 1) / width
+
+        candidate_points = pred_points.unsqueeze(2).expand(-1, -1, self.short_candidate_count, -1, -1).clone()
+        candidate_points[..., 0] = (candidate_points[..., 0] + offsets_norm).clamp(0.0, 1.0)
+
+        flat_points = candidate_points.detach().reshape(b, q * self.short_candidate_count, k, 2)
+        image_tokens = self._sample_point_features(xs, flat_points).view(
+            b, q, self.short_candidate_count, k, self.c1
+        )
+        if pred_valid_logits is None:
+            valid_weight = torch.ones((b, q, 1, k, 1), device=hs.device, dtype=hs.dtype)
+        else:
+            valid_weight = pred_valid_logits.detach().sigmoid().to(device=hs.device, dtype=hs.dtype).view(b, q, 1, k, 1)
+        pooled = (image_tokens * valid_weight).sum(dim=3) / valid_weight.sum(dim=3).clamp_min(1e-6)
+        query_tokens = hs.unsqueeze(2).expand(-1, -1, self.short_candidate_count, -1)
+        offset_tokens = self.short_candidate_offset_embed.weight.to(device=hs.device, dtype=hs.dtype).view(
+            1, 1, self.short_candidate_count, self.c1
+        )
+        score_input = torch.cat((query_tokens, pooled, offset_tokens.expand(b, q, -1, -1)), dim=-1)
+        candidate_logits = self.short_candidate_score_mlp(score_input).squeeze(-1)
+        return candidate_points, candidate_logits
 
     def aux_output_size(self, orig_size=None):
         """Return auxiliary supervision size from the explicit original input image size."""
@@ -1035,13 +677,6 @@ class GCSLaneHead(nn.Module):
         point_delta = self.point_mlp(hs).view(b, self.num_queries, self.num_points, point_dims)
         point_ref = getattr(self, "point_reference_logits", None)
         point_mode = getattr(self, "point_mode", "free")
-        pred_coarse_points = None
-        pred_short_refined_points = None
-        short_refine_delta = None
-        short_refine_delta_norm = None
-        short_refine_window_logits = None
-        pred_short_candidate_points = None
-        short_candidate_logits = None
         if point_mode == "fixed_y":
             if point_ref is None:
                 x_logits = point_delta.squeeze(-1)
@@ -1056,65 +691,37 @@ class GCSLaneHead(nn.Module):
             y = fixed_y.to(device=pred_x.device, dtype=pred_x.dtype).view(1, 1, self.num_points)
             pred_y = y.expand(b, self.num_queries, -1)
             pred_points = torch.stack((pred_x, pred_y), dim=-1)
-            pred_logits = self.exist_mlp(hs).squeeze(-1)
-            if hasattr(self, "point_valid_mlp"):
-                if point_mode == "fixed_y" and hasattr(self, "point_valid_refine_mlp"):
-                    pred_valid_logits = self._refine_fixed_y_valid_logits(xs, hs, pred_points)
-                else:
-                    pred_valid_logits = self.point_valid_mlp(hs).view(b, self.num_queries, self.num_points)
-            else:
-                pred_valid_logits = pred_logits.new_full((b, self.num_queries, self.num_points), 20.0)
-            if getattr(self, "query_short_local_refine_head", False):
-                image_width = None if orig_size is None else int(orig_size[1])
-                pred_short_refined_points, short_refine_delta, short_refine_delta_norm, short_refine_window_logits = (
-                    self._short_local_refine_fixed_y_points(xs, hs, pred_points, image_width)
-                )
-                pred_coarse_points = pred_points
+        elif point_ref is None:
+            # Backward compatibility for checkpoints created before query-specific references existed.
+            pred_points = torch.sigmoid(point_delta)
         else:
-            if point_ref is None:
-                # Backward compatibility for checkpoints created before query-specific references existed.
-                pred_points = torch.sigmoid(point_delta)
+            point_ref = point_ref.to(device=point_delta.device, dtype=point_delta.dtype).unsqueeze(0)
+            pred_points = torch.sigmoid(point_delta + point_ref)
+        pred_logits = self.exist_mlp(hs).squeeze(-1)
+        if hasattr(self, "point_valid_mlp"):
+            if point_mode == "fixed_y" and hasattr(self, "point_valid_refine_mlp"):
+                pred_valid_logits = self._refine_fixed_y_valid_logits(xs, hs, pred_points)
             else:
-                point_ref = point_ref.to(device=point_delta.device, dtype=point_delta.dtype).unsqueeze(0)
-                pred_points = torch.sigmoid(point_delta + point_ref)
-            pred_logits = self.exist_mlp(hs).squeeze(-1)
-            if hasattr(self, "point_valid_mlp"):
                 pred_valid_logits = self.point_valid_mlp(hs).view(b, self.num_queries, self.num_points)
-            else:
-                pred_valid_logits = pred_logits.new_full((b, self.num_queries, self.num_points), 20.0)
-        if getattr(self, "query_short_candidate_head", False) and point_mode == "fixed_y":
-            image_width = None if orig_size is None else int(orig_size[1])
-            pred_short_candidate_points, short_candidate_logits = self._short_candidate_points_and_logits(
-                xs,
-                hs,
-                pred_points,
-                image_width,
-                point_valid_logits=pred_valid_logits,
-            )
+        else:
+            pred_valid_logits = pred_logits.new_full((b, self.num_queries, self.num_points), 20.0)
 
         out = {
             "pred_points": pred_points,
             "pred_logits": pred_logits,
             "pred_valid_logits": pred_valid_logits,
         }
-        if pred_coarse_points is not None:
-            out["pred_coarse_points"] = pred_coarse_points
-        if pred_short_refined_points is not None:
-            out["pred_short_refined_points"] = pred_short_refined_points
-            out["pred_short_refine_delta_logits"] = short_refine_delta
-            out["pred_short_refine_delta_norm"] = short_refine_delta_norm
-            if short_refine_window_logits is not None:
-                out["pred_short_refine_window_logits"] = short_refine_window_logits
-        if pred_short_candidate_points is not None:
-            out["pred_short_candidate_points"] = pred_short_candidate_points
-            out["pred_short_candidate_logits"] = short_candidate_logits
         if getattr(self, "query_count_head", False):
             out["pred_count_logits"] = self.query_count_mlp(hs.mean(dim=1))
-        if getattr(self, "query_quality_head", False):
-            out["pred_quality_logits"] = self.query_quality_mlp(hs).squeeze(-1)
-        if getattr(self, "query_extent_head", False):
-            out["pred_start_logits"] = self.query_start_mlp(hs).view(b, self.num_queries, self.num_points)
-            out["pred_end_logits"] = self.query_end_mlp(hs).view(b, self.num_queries, self.num_points)
+        if getattr(self, "short_candidate_head", False):
+            candidate_points, candidate_logits = self._short_candidate_outputs(
+                xs, hs, pred_points, pred_valid_logits, orig_size
+            )
+            out["pred_short_candidate_points"] = candidate_points
+            out["pred_short_candidate_logits"] = candidate_logits
+            out["pred_short_candidate_offsets_px"] = self.short_candidate_offsets_px.to(
+                device=pred_points.device, dtype=pred_points.dtype
+            )
         if self.gcs_mode == "ordered_slot":
             out["pred_exist_logits"] = pred_logits
             out["pred_start_logits"] = self.start_mlp(hs).view(b, self.num_queries, self.num_points)

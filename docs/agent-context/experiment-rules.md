@@ -56,3 +56,10 @@ Use test only once for final evaluation of a candidate already selected on offic
 Do not add later mainline Count/Quality/Survival/near-miss machinery to this branch unless a future task explicitly changes the algorithm scope. The 2026-06-27 `official_best` hook is an explicit selection-protocol addition only; it does not change the 5-25-3 algorithm body. The 2026-06-27 `count_boundary_loss` is a separate user-requested, default-off loss option for GT3/GT4/GT5 adjacent count-score boundaries; it must be selected only by official-val evidence. The 2026-06-27 `gcs_hard_sampling` option is a separate user-requested, default-off train-dataloader sampler only; it must not affect validation/test dataloaders, labels, decode, or official metrics. The 2026-06-27 `gcs_spurious_neg` option is a separate user-requested, default-off E3-lite loss; it must not change data sampling, matcher logic, point/smooth/curve losses, decode, NMS, or official metrics.
 
 The E3-lite spurious-negative experiment must initialize from the E1 count-boundary checkpoint, not from an E2 hard-sampling or count-aware top-k run. Keep `gcs_hard_sampling` disabled for this experiment unless a future task explicitly starts a separate ablation.
+
+As of 2026-07-28, the active source/config is restored to env30 commit
+`86c8fb31cb4b48a53086be183478a95b0807753d` (`Add GT4 GT5 weak geometry rescue
+run`). All commits after that anchor are rejected experiment records. Do not
+relaunch post-env30 staticref, near20, Q20/Q24, dual-head, extent,
+short-local-refine, lateral-candidate, or gated-candidate work without a new
+explicit user request and fresh official-val/train-side gate.
