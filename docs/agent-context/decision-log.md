@@ -2,6 +2,93 @@
 
 This file records decisions for branch `codex/5-25-3-k56`.
 
+## 2026-07-30: Implement local short-segment proposal-local selector v6
+
+Decision:
+
+Implement the user-requested v6 follow-up after v5 selector collapse. Keep the
+env30 base path frozen, preserve default decode, and train only
+`short_segment_*` parameters.
+
+Implementation:
+
+- add `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-local-segment-proposal-v6.yaml`;
+- add `short_segment_local_evidence=True` as a final default-off
+  `GCSLaneHead` YAML argument;
+- keep v4/v5 outputs unchanged and add no formal decode use;
+- compute proposal endpoints first, sample image features at each proposal's
+  local start/mid/end points, add proposal geometry features
+  `(start/end/length, base x, segment x, endpoint residuals)`, and feed that
+  proposal-local token into both score and replace heads;
+- add `scripts/run_query_local_segment_env30_frozen_probe20_v6.sh` as a thin
+  wrapper over the v5 train/diagnostic protocol with the v6 YAML.
+
+Why:
+
+The completed v5 run proved raw local-segment geometry is strong but the
+selector collapses to non-oracle windows. v5 score/replace heads only saw
+`query token + window embedding`, so they lacked direct evidence about whether
+one concrete proposal was on the lane. v6 gives the selector local image and
+geometry evidence while leaving the proposal geometry, losses, official
+metrics, and default decode contract unchanged.
+
+Gate:
+
+TEST remains closed. The first result must be judged by
+`segment_best_hard_gate.json`: selected-gated short GT5/GT4 hard hit20 on
+official-val and train0601 must convert the raw local-segment headroom before
+any decode promotion.
+
+## 2026-07-30: Reject local short-segment selector/gate v5 result
+
+Decision:
+
+Reject `query_local_segment_env30_frozen_probe20_v5` as a promotion, do not
+run TEST, do not enable short-segment decode, and do not continue the exact
+selector/gate design unchanged.
+
+Evidence:
+
+```text
+official_best official-val ACC/FP/FN =
+  0.972601 / 0.017585 / 0.011019
+env30 official-val ACC/FP/FN =
+  0.973330 / 0.015748 / 0.009642
+
+segment_best_hard_gate selected checkpoint = last
+val short GT5 selected_gated hit20 = 0/53
+val short GT4 selected_gated hit20 = 0/8
+train0601 short GT5 selected_gated hit20 = 0/183
+train0601 short GT4 selected_gated hit20 = 0/19
+```
+
+The raw local-segment geometry still has the expected headroom:
+
+```text
+official-val short GT5 base/raw = 40/52 out of 53
+official-val short GT4 base/raw = 1/4 out of 8
+train0601 short GT5 base/raw = 142/179 out of 183
+train0601 short GT4 base/raw = 9/19 out of 19
+```
+
+Why:
+
+The trainable selector/gate failed, not the segment representation. For all
+checked checkpoints (`last`, `best`, and `official_best`), selected-all and
+selected-gated hard hit20 are zero on the target short GT4/GT5 groups. The
+lane rows show the selector usually chooses a fixed length-3 window candidate
+such as index `41`, while the raw oracle windows are mostly starts `35..44`
+with lengths `4..8`. The selected candidate never equals the oracle candidate
+on the raw-hit lanes.
+
+Next action:
+
+Do not spend more epochs on this v5 loss. The next change must add a
+selection path that has local candidate evidence, for example scoring each
+proposal from image features sampled inside its own short window and/or
+conditioning the selector on the predicted local endpoint geometry. Validate it
+with a selector oracle/ranking diagnostic before any training run.
+
 ## 2026-07-29: Implement default-off local short-segment selector/gate v5
 
 Decision:

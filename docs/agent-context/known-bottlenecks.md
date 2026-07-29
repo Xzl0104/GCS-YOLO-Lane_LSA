@@ -143,6 +143,50 @@ Treat v4 as a diagnostic/probe path until hard official-GT coverage confirms
 raw-segment and selected-gated gains on official-val plus train0601. TEST
 remains closed.
 
+The completed v5 selector/gate probe confirms that the remaining failure is
+the learned proposal selector, not local segment capacity:
+
+```text
+run = query_local_segment_env30_frozen_probe20_v5
+status = rejected for promotion
+TEST used = false
+
+official_best official-val ACC/FP/FN =
+  0.972601 / 0.017585 / 0.011019
+
+segment_best selected-gated hard hit20:
+  official-val short GT5 = 0/53
+  official-val short GT4 = 0/8
+  train0601 short GT5 = 0/183
+  train0601 short GT4 = 0/19
+
+raw local-segment hard hit20:
+  official-val short GT5 = 52/53
+  official-val short GT4 = 4/8
+  train0601 short GT5 = 179/183
+  train0601 short GT4 = 19/19
+```
+
+The selected windows collapse to non-oracle short windows, commonly candidate
+index `41` with length `3`, while the raw oracle windows are mostly lower
+image windows with starts around `35..44` and lengths `4..8`. This means the
+score/replace heads do not have enough proposal-local evidence to rank
+`Q x 404` windows. Do not continue v5 as-is, increase epochs, run TEST, or use
+`segment_best.pt` as a candidate. The next selector must score proposals from
+local window evidence and pass selected-gated hard diagnostics first.
+
+The v6 implementation target for that conclusion is:
+
+```text
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-local-segment-proposal-v6.yaml
+scripts/run_query_local_segment_env30_frozen_probe20_v6.sh
+```
+
+It keeps the v5 hard-gate protocol but scores each proposal from local
+start/mid/end image samples plus proposal geometry. Treat v6 as a diagnostic
+selector probe until `segment_best_hard_gate.json` shows selected-gated gains;
+TEST remains closed.
+
 ## 2026-07-27 Q12/env30 Lateral Candidate Probe Rejection
 
 The run `query_short_candidate_env30_probe20_fix1` is rejected. It trained

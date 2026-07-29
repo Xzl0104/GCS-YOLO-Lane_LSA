@@ -24,6 +24,7 @@ from ultralytics.utils.gcs_loss import GCSLoss  # noqa: E402
 DEFAULT_CFG = ROOT / "ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml"
 SEGMENT_CFG = ROOT / "ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-local-segment-proposal-v4.yaml"
 SEGMENT_V5_CFG = ROOT / "ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-local-segment-proposal-v5.yaml"
+SEGMENT_V6_CFG = ROOT / "ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-local-segment-proposal-v6.yaml"
 
 
 def _logit(p: float) -> float:
@@ -102,6 +103,22 @@ def check_yaml_forward() -> None:
     replace_logits = segment_v5_out["pred_short_segment_replace_logits"]
     if tuple(replace_logits.shape) != (1, 12, expected_segments):
         raise AssertionError(f"segment replace-logit shape mismatch: {tuple(replace_logits.shape)}.")
+    if getattr(segment_v5_head, "short_segment_local_evidence", False):
+        raise AssertionError("v5 segment YAML must not enable proposal-local evidence.")
+
+    segment_v6_head = _head_from_yaml(SEGMENT_V6_CFG)
+    if not getattr(segment_v6_head, "short_segment_local_evidence", False):
+        raise AssertionError("segment v6 YAML should enable proposal-local evidence.")
+    segment_v6_out = segment_v6_head(_head_features(segment_v6_head), orig_size=(544, 960))
+    missing_v6 = (required | {"pred_short_segment_replace_logits"}).difference(segment_v6_out)
+    if missing_v6:
+        raise AssertionError(f"segment v6 YAML missing output keys: {sorted(missing_v6)}.")
+    if tuple(segment_v6_out["pred_short_segment_points"].shape) != (1, 12, expected_segments, 56, 2):
+        raise AssertionError(f"segment v6 point shape mismatch: {tuple(segment_v6_out['pred_short_segment_points'].shape)}.")
+    if tuple(segment_v6_out["pred_short_segment_replace_logits"].shape) != (1, 12, expected_segments):
+        raise AssertionError(
+            f"segment v6 replace-logit shape mismatch: {tuple(segment_v6_out['pred_short_segment_replace_logits'].shape)}."
+        )
 
 
 def _make_short_segment_batch() -> dict:
@@ -276,7 +293,7 @@ def check_empty_segment_batch_has_grad() -> None:
 
 
 def check_freeze_contract() -> None:
-    model = GCSLaneModel(str(SEGMENT_V5_CFG), nc=1, verbose=False)
+    model = GCSLaneModel(str(SEGMENT_V6_CFG), nc=1, verbose=False)
     trainer = object.__new__(GCSLaneTrainer)
     trainer.model = model
     trainer.args = SimpleNamespace(
@@ -298,6 +315,10 @@ def check_freeze_contract() -> None:
         raise AssertionError("short-segment endpoint MLP is not trainable under freeze contract.")
     if not any("short_segment_replace_mlp" in name for name in trainable):
         raise AssertionError("short-segment replace MLP is not trainable under freeze contract.")
+    if not any("short_segment_local_image_proj" in name for name in trainable):
+        raise AssertionError("short-segment local image evidence projection is not trainable under freeze contract.")
+    if not any("short_segment_geometry_mlp" in name for name in trainable):
+        raise AssertionError("short-segment geometry evidence MLP is not trainable under freeze contract.")
 
     optimizer = trainer.build_optimizer(model, name="AdamW", lr=0.001, momentum=0.9, decay=0.0, iterations=1)
     optimizer_param_ids = {
@@ -319,6 +340,10 @@ def check_freeze_contract() -> None:
         raise AssertionError("short-segment endpoint MLP should stay in train mode.")
     if not head.short_segment_replace_mlp.training:
         raise AssertionError("short-segment replace MLP should stay in train mode.")
+    if not head.short_segment_local_image_proj.training:
+        raise AssertionError("short-segment local image evidence projection should stay in train mode.")
+    if not head.short_segment_geometry_mlp.training:
+        raise AssertionError("short-segment geometry evidence MLP should stay in train mode.")
     bn_training = [name for name, module in model.named_modules() if isinstance(module, torch.nn.BatchNorm2d) and module.training]
     if bn_training:
         raise AssertionError(f"frozen base BatchNorm modules stayed in train mode: {bn_training[:5]}.")

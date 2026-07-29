@@ -133,6 +133,14 @@ for query models built from
 The default query YAML and v4 YAML still emit no replace logits, and default
 decode does not consume the v5 tensor.
 
+The optional local short-segment proposal-local selector v6 YAML preserves the
+same public output tensors as v5 and adds no new public prediction tensor. It
+is enabled only by
+`ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-local-segment-proposal-v6.yaml`.
+Internally, the v6 GCS head sets `short_segment_local_evidence=True` so
+score/replace logits receive local image samples and proposal geometry. The
+default query YAML, v4 YAML, v5 YAML, and default decode remain unchanged.
+
 Legacy post-env30 record: the rejected query extent probe added:
 
 ```text

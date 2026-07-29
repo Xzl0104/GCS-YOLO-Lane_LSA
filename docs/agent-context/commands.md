@@ -3462,6 +3462,65 @@ Promotion gate remains selected-gated hard hit20 on official-val/train0601.
 Do not run TEST or enable any formal short-segment decode until selected-gated
 converts the v4 raw-segment headroom without base-hit regressions.
 
+Completed result:
+
+```text
+run = query_local_segment_env30_frozen_probe20_v5
+status = rejected for promotion
+TEST used = false
+
+official_best official-val ACC/FP/FN =
+  0.972601 / 0.017585 / 0.011019
+
+segment_best_hard_gate selected = last
+selected-gated hit20:
+  official-val short GT5 = 0/53
+  official-val short GT4 = 0/8
+  train0601 short GT5 = 0/183
+  train0601 short GT4 = 0/19
+
+raw local-segment hit20:
+  official-val short GT5 = 52/53
+  official-val short GT4 = 4/8
+  train0601 short GT5 = 179/183
+  train0601 short GT4 = 19/19
+```
+
+Do not continue this exact v5 run, do not run TEST, and do not promote
+`weights/segment_best.pt`. The next command should first change the selector
+architecture or diagnostic so it can prove oracle-window ranking before another
+20-epoch run.
+
+## Q12 Env30 Local Short-Segment Proposal-Local Selector v6
+
+The v6 probe keeps the v5 train/diagnostic protocol but changes the selector
+architecture so score/replace logits see proposal-local image and geometry
+evidence. Default decode remains unchanged and TEST stays closed:
+
+```bash
+RUN_NAME=query_local_segment_env30_frozen_probe20_v6 \
+EPOCHS=20 \
+RUN_TESTS=0 \
+bash scripts/run_query_local_segment_env30_frozen_probe20_v6.sh
+```
+
+Dedicated model:
+
+```text
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-local-segment-proposal-v6.yaml
+```
+
+The wrapper script reuses the v5 hard diagnostics and writes:
+
+```text
+runs/gcs_lane/query_local_segment_env30_frozen_probe20_v6/weights/segment_best.pt
+runs/gcs_lane/query_local_segment_env30_frozen_probe20_v6/weights/segment_best_hard_gate.json
+```
+
+Promotion gate remains selected-gated hard hit20 on official-val/train0601.
+Do not run TEST or enable formal short-segment decode unless selected-gated
+converts the raw local-segment headroom without base-hit regressions.
+
 ## Rejected Q12 Env30 Lateral Candidate Probe
 
 Status: rejected after `query_short_candidate_env30_probe20_fix1`. Do not

@@ -190,6 +190,25 @@ diagnostic uses proposal-local segment length and replace score when
 `pred_short_segment_replace_logits` is present; formal/default decode still
 does not consume short-segment tensors. TEST remains closed.
 
+The v6 proposal-local selector follow-up is enabled only by:
+
+```text
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-local-segment-proposal-v6.yaml
+```
+
+It preserves the v5 tensor contract, including:
+
+```text
+pred_short_segment_replace_logits: B x 12 x 404
+```
+
+and adds no new public prediction tensor. Internally, the v6 head sets
+`short_segment_local_evidence=True`, samples image features at each proposal's
+local start/mid/end points, appends proposal geometry evidence, and uses that
+proposal-local token for both segment score and replace logits. The default
+query YAML, v4 YAML, v5 YAML, and formal/default decode remain unchanged.
+TEST remains closed until selected-gated hard diagnostics pass.
+
 Legacy post-env30 record: the 2026-07-25 user-requested Q12/env30 dual-head
 probe was rejected and its YAML/script are not active after the 2026-07-28
 env30 rollback. It added `pred_count_logits: B x 4` for image-level lane count

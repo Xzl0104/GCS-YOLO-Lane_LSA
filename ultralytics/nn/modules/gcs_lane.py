@@ -222,6 +222,7 @@ class GCSLaneHead(nn.Module):
         short_segment_stride: int = 1,
         short_segment_max_delta_px: float = 480.0,
         short_segment_replace_head: bool = False,
+        short_segment_local_evidence: bool = False,
     ):
         """Initialize the GCS lane query decoder and training-only auxiliary heads."""
         super().__init__()
@@ -382,6 +383,7 @@ class GCSLaneHead(nn.Module):
             self.short_segment_stride = int(short_segment_stride)
             self.short_segment_max_delta_px = float(short_segment_max_delta_px)
             self.short_segment_replace_head = bool(short_segment_replace_head)
+            self.short_segment_local_evidence = bool(short_segment_local_evidence)
             if self.short_segment_max_delta_px <= 0.0:
                 raise ValueError(
                     "GCSLaneHead short_segment_max_delta_px must be > 0 when short_segment_head=True, "
@@ -404,6 +406,14 @@ class GCSLaneHead(nn.Module):
                 nn.ReLU(inplace=True),
                 nn.Linear(c1 // 2, 2),
             )
+            if self.short_segment_local_evidence:
+                self.short_segment_local_image_proj = nn.Linear(c1, c1)
+                self.short_segment_geometry_mlp = nn.Sequential(
+                    nn.Linear(12, c1),
+                    nn.ReLU(inplace=True),
+                    nn.Linear(c1, c1),
+                )
+                self.short_segment_local_fuse_norm = nn.LayerNorm(c1)
             if self.short_segment_replace_head:
                 self.short_segment_replace_mlp = nn.Sequential(
                     nn.Linear(c1, c1 // 2),
@@ -576,6 +586,68 @@ class GCSLaneHead(nn.Module):
             replace_final = self.short_segment_replace_mlp[-1]
             nn.init.normal_(replace_final.weight, mean=0.0, std=1e-3)
             nn.init.constant_(replace_final.bias, -4.0)
+        if getattr(self, "short_segment_local_evidence", False):
+            nn.init.normal_(self.short_segment_local_image_proj.weight, mean=0.0, std=1e-3)
+            nn.init.zeros_(self.short_segment_local_image_proj.bias)
+            for module in self.short_segment_geometry_mlp:
+                if isinstance(module, nn.Linear):
+                    nn.init.normal_(module.weight, mean=0.0, std=1e-3)
+                    nn.init.zeros_(module.bias)
+
+    def _short_segment_local_tokens(
+        self,
+        xs,
+        segment_tokens,
+        segment_points,
+        base_start_x,
+        base_end_x,
+        endpoint_delta,
+        starts,
+        ends,
+        width: float,
+    ):
+        """Add proposal-local image and geometry evidence for short-segment selection."""
+        b, q, s, k, _ = segment_points.shape
+        start_points = segment_points.gather(
+            3,
+            starts.view(1, 1, s, 1, 1).expand(b, q, s, 1, 2),
+        ).squeeze(3)
+        end_points = segment_points.gather(
+            3,
+            ends.view(1, 1, s, 1, 1).expand(b, q, s, 1, 2),
+        ).squeeze(3)
+        mid_points = (start_points + end_points) * 0.5
+        evidence_points = torch.stack((start_points, mid_points, end_points), dim=3).detach()
+        local_image = self._sample_point_features(xs, evidence_points.reshape(b, q * s, 3, 2))
+        local_image = local_image.mean(dim=2).view(b, q, s, self.c1)
+        local_image = self.short_segment_local_image_proj(local_image)
+
+        length = (ends - starts + 1).to(device=segment_points.device, dtype=segment_points.dtype)
+        denom = max(float(k - 1), 1.0)
+        start_norm = starts.to(device=segment_points.device, dtype=segment_points.dtype) / denom
+        end_norm = ends.to(device=segment_points.device, dtype=segment_points.dtype) / denom
+        length_norm = length / float(k)
+        delta_scale = max(float(self.short_segment_max_delta_px), 1.0) / max(float(width), 1.0)
+        delta_norm = endpoint_delta / float(delta_scale)
+        geom = torch.stack(
+            (
+                start_norm.view(1, 1, s).expand(b, q, s),
+                end_norm.view(1, 1, s).expand(b, q, s),
+                length_norm.view(1, 1, s).expand(b, q, s),
+                base_start_x,
+                base_end_x,
+                base_end_x - base_start_x,
+                start_points[..., 0],
+                end_points[..., 0],
+                end_points[..., 0] - start_points[..., 0],
+                delta_norm[..., 0],
+                delta_norm[..., 1],
+                (delta_norm[..., 1] - delta_norm[..., 0]),
+            ),
+            dim=-1,
+        )
+        geom_tokens = self.short_segment_geometry_mlp(geom.to(dtype=segment_tokens.dtype))
+        return self.short_segment_local_fuse_norm(segment_tokens + local_image + geom_tokens)
 
     def _sample_point_features(self, xs, points):
         """Sample high-resolution image features at normalized point coordinates.
@@ -669,7 +741,7 @@ class GCSLaneHead(nn.Module):
         candidate_logits = self.short_candidate_score_mlp(score_input).squeeze(-1)
         return candidate_points, candidate_logits
 
-    def _short_segment_outputs(self, hs, pred_points, orig_size):
+    def _short_segment_outputs(self, xs, hs, pred_points, orig_size):
         """Generate local short-window segment proposals with learned endpoint x offsets."""
         if orig_size is None:
             raise ValueError("short_segment_head requires orig_size=(H, W) to convert px offsets to normalized x.")
@@ -691,10 +763,6 @@ class GCSLaneHead(nn.Module):
             self.short_segment_embed.weight.to(device=hs.device, dtype=hs.dtype)
         ).view(1, 1, s, self.c1)
         segment_tokens = self.short_segment_fuse_norm(query_tokens + window_tokens)
-        segment_logits = self.short_segment_score_mlp(segment_tokens).squeeze(-1)
-        replace_logits = None
-        if getattr(self, "short_segment_replace_head", False):
-            replace_logits = self.short_segment_replace_mlp(segment_tokens).squeeze(-1)
 
         max_delta = float(self.short_segment_max_delta_px) / width
         endpoint_delta = torch.tanh(self.short_segment_x_mlp(segment_tokens)) * max_delta
@@ -716,6 +784,23 @@ class GCSLaneHead(nn.Module):
         y = fixed_y.to(device=pred_points.device, dtype=pred_points.dtype).view(1, 1, 1, k).expand(b, q, s, k)
         segment_points = torch.stack((x, y), dim=-1)
         segment_x = torch.stack((x0, x1), dim=-1)
+        score_tokens = segment_tokens
+        if getattr(self, "short_segment_local_evidence", False):
+            score_tokens = self._short_segment_local_tokens(
+                xs,
+                segment_tokens,
+                segment_points,
+                base_start_x,
+                base_end_x,
+                endpoint_delta,
+                starts,
+                ends,
+                width,
+            )
+        segment_logits = self.short_segment_score_mlp(score_tokens).squeeze(-1)
+        replace_logits = None
+        if getattr(self, "short_segment_replace_head", False):
+            replace_logits = self.short_segment_replace_mlp(score_tokens).squeeze(-1)
         return segment_points, segment_logits, segment_x, replace_logits
 
     def aux_output_size(self, orig_size=None):
@@ -866,7 +951,7 @@ class GCSLaneHead(nn.Module):
             )
         if getattr(self, "short_segment_head", False):
             segment_points, segment_logits, segment_x, replace_logits = self._short_segment_outputs(
-                hs, pred_points, orig_size
+                xs, hs, pred_points, orig_size
             )
             out["pred_short_segment_points"] = segment_points
             out["pred_short_segment_logits"] = segment_logits
