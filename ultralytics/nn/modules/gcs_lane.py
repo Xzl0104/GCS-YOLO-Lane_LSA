@@ -217,6 +217,10 @@ class GCSLaneHead(nn.Module):
         query_count_head: bool = False,
         short_candidate_head: bool = False,
         short_candidate_offsets_px=(0, -20, 20, -40, 40, -60, 60),
+        short_segment_head: bool = False,
+        short_segment_lengths=(3, 4, 5, 6, 7, 8, 9, 10),
+        short_segment_stride: int = 1,
+        short_segment_max_delta_px: float = 480.0,
     ):
         """Initialize the GCS lane query decoder and training-only auxiliary heads."""
         super().__init__()
@@ -367,6 +371,37 @@ class GCSLaneHead(nn.Module):
                 nn.ReLU(inplace=True),
                 nn.Linear(c1 // 2, 1),
             )
+        self.short_segment_head = self.gcs_mode == "query" and bool(short_segment_head)
+        if self.short_segment_head:
+            starts, ends, window_mask = self._build_short_segment_windows(
+                short_segment_lengths,
+                short_segment_stride,
+            )
+            self.short_segment_count = int(starts.numel())
+            self.short_segment_stride = int(short_segment_stride)
+            self.short_segment_max_delta_px = float(short_segment_max_delta_px)
+            if self.short_segment_max_delta_px <= 0.0:
+                raise ValueError(
+                    "GCSLaneHead short_segment_max_delta_px must be > 0 when short_segment_head=True, "
+                    f"got {short_segment_max_delta_px}."
+                )
+            self.register_buffer("short_segment_starts", starts, persistent=True)
+            self.register_buffer("short_segment_ends", ends, persistent=True)
+            self.register_buffer("short_segment_window_mask", window_mask, persistent=True)
+            self.short_segment_embed = nn.Embedding(self.short_segment_count, c1)
+            self.short_segment_query_proj = nn.Linear(c1, c1)
+            self.short_segment_window_proj = nn.Linear(c1, c1)
+            self.short_segment_fuse_norm = nn.LayerNorm(c1)
+            self.short_segment_score_mlp = nn.Sequential(
+                nn.Linear(c1, c1 // 2),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1 // 2, 1),
+            )
+            self.short_segment_x_mlp = nn.Sequential(
+                nn.Linear(c1, c1 // 2),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1 // 2, 2),
+            )
         if self.gcs_mode == "ordered_slot":
             self.start_mlp = nn.Sequential(
                 nn.Linear(c1, c1),
@@ -404,6 +439,39 @@ class GCSLaneHead(nn.Module):
             self._init_query_count_head()
         if self.short_candidate_head:
             self._init_short_candidate_head()
+        if self.short_segment_head:
+            self._init_short_segment_head()
+
+    def _build_short_segment_windows(self, lengths, stride: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Build contiguous short-window anchors over the fixed-y K dimension."""
+        stride = int(stride)
+        if stride < 1:
+            raise ValueError(f"GCSLaneHead short_segment_stride must be >= 1, got {stride}.")
+        if isinstance(lengths, (int, float)):
+            length_values = [int(lengths)]
+        else:
+            length_values = [int(x) for x in lengths]
+        length_values = sorted(set(length_values))
+        if not length_values:
+            raise ValueError("GCSLaneHead short_segment_lengths must not be empty when short_segment_head=True.")
+
+        windows: list[tuple[int, int]] = []
+        for length in length_values:
+            if length < 1 or length > int(self.num_points):
+                raise ValueError(
+                    "GCSLaneHead short_segment_lengths entries must be in [1, num_points], "
+                    f"got length={length}, num_points={self.num_points}."
+                )
+            for start in range(0, int(self.num_points) - length + 1, stride):
+                windows.append((int(start), int(start + length - 1)))
+        if not windows:
+            raise ValueError("GCSLaneHead short_segment window construction produced no windows.")
+
+        starts = torch.tensor([x[0] for x in windows], dtype=torch.long)
+        ends = torch.tensor([x[1] for x in windows], dtype=torch.long)
+        point_idx = torch.arange(int(self.num_points), dtype=torch.long).view(1, -1)
+        mask = (point_idx >= starts.view(-1, 1)) & (point_idx <= ends.view(-1, 1))
+        return starts, ends, mask
 
     def _build_fixed_y_anchors(self):
         """Build shared bottom-to-top y anchors for fixed-y x-only prediction."""
@@ -483,6 +551,19 @@ class GCSLaneHead(nn.Module):
         final = self.short_candidate_score_mlp[-1]
         nn.init.normal_(final.weight, mean=0.0, std=1e-3)
         nn.init.constant_(final.bias, -4.0)
+
+    def _init_short_segment_head(self):
+        """Initialize local short-segment proposals near the frozen base geometry."""
+        nn.init.normal_(self.short_segment_embed.weight, mean=0.0, std=1e-3)
+        for module in (self.short_segment_query_proj, self.short_segment_window_proj):
+            nn.init.normal_(module.weight, mean=0.0, std=1e-3)
+            nn.init.zeros_(module.bias)
+        score_final = self.short_segment_score_mlp[-1]
+        nn.init.normal_(score_final.weight, mean=0.0, std=1e-3)
+        nn.init.constant_(score_final.bias, -4.0)
+        x_final = self.short_segment_x_mlp[-1]
+        nn.init.normal_(x_final.weight, mean=0.0, std=1e-3)
+        nn.init.zeros_(x_final.bias)
 
     def _sample_point_features(self, xs, points):
         """Sample high-resolution image features at normalized point coordinates.
@@ -575,6 +656,52 @@ class GCSLaneHead(nn.Module):
         score_input = torch.cat((query_tokens, pooled, offset_tokens.expand(b, q, -1, -1)), dim=-1)
         candidate_logits = self.short_candidate_score_mlp(score_input).squeeze(-1)
         return candidate_points, candidate_logits
+
+    def _short_segment_outputs(self, hs, pred_points, orig_size):
+        """Generate local short-window segment proposals with learned endpoint x offsets."""
+        if orig_size is None:
+            raise ValueError("short_segment_head requires orig_size=(H, W) to convert px offsets to normalized x.")
+        if pred_points.ndim != 4 or pred_points.shape[-1] != 2:
+            raise ValueError(f"pred_points must have shape B x Q x K x 2, got {tuple(pred_points.shape)}.")
+        b, q, k, _ = pred_points.shape
+        if k != int(self.num_points):
+            raise ValueError(f"short_segment_head expected K={self.num_points}, got K={k}.")
+        width = float(orig_size[1])
+        if width <= 0.0:
+            raise ValueError(f"short_segment_head received invalid orig_size={orig_size}.")
+
+        starts = self.short_segment_starts.to(device=pred_points.device)
+        ends = self.short_segment_ends.to(device=pred_points.device)
+        s = int(starts.numel())
+
+        query_tokens = self.short_segment_query_proj(hs).unsqueeze(2)
+        window_tokens = self.short_segment_window_proj(
+            self.short_segment_embed.weight.to(device=hs.device, dtype=hs.dtype)
+        ).view(1, 1, s, self.c1)
+        segment_tokens = self.short_segment_fuse_norm(query_tokens + window_tokens)
+        segment_logits = self.short_segment_score_mlp(segment_tokens).squeeze(-1)
+
+        max_delta = float(self.short_segment_max_delta_px) / width
+        endpoint_delta = torch.tanh(self.short_segment_x_mlp(segment_tokens)) * max_delta
+        base_x = pred_points[..., 0]
+        base_start_x = base_x.index_select(2, starts)
+        base_end_x = base_x.index_select(2, ends)
+        x0 = (base_start_x + endpoint_delta[..., 0]).clamp(0.0, 1.0)
+        x1 = (base_end_x + endpoint_delta[..., 1]).clamp(0.0, 1.0)
+
+        point_idx = torch.arange(k, device=pred_points.device, dtype=pred_points.dtype).view(1, 1, 1, k)
+        start_f = starts.to(dtype=pred_points.dtype).view(1, 1, s, 1)
+        end_f = ends.to(dtype=pred_points.dtype).view(1, 1, s, 1)
+        t = ((point_idx - start_f) / (end_f - start_f).clamp_min(1.0)).clamp(0.0, 1.0)
+        x = x0.unsqueeze(-1) * (1.0 - t) + x1.unsqueeze(-1) * t
+
+        fixed_y = getattr(self, "fixed_y_anchors", None)
+        if fixed_y is None:
+            fixed_y = self._build_fixed_y_anchors()
+        y = fixed_y.to(device=pred_points.device, dtype=pred_points.dtype).view(1, 1, 1, k).expand(b, q, s, k)
+        segment_points = torch.stack((x, y), dim=-1)
+        segment_x = torch.stack((x0, x1), dim=-1)
+        return segment_points, segment_logits, segment_x
 
     def aux_output_size(self, orig_size=None):
         """Return auxiliary supervision size from the explicit original input image size."""
@@ -722,6 +849,14 @@ class GCSLaneHead(nn.Module):
             out["pred_short_candidate_offsets_px"] = self.short_candidate_offsets_px.to(
                 device=pred_points.device, dtype=pred_points.dtype
             )
+        if getattr(self, "short_segment_head", False):
+            segment_points, segment_logits, segment_x = self._short_segment_outputs(hs, pred_points, orig_size)
+            out["pred_short_segment_points"] = segment_points
+            out["pred_short_segment_logits"] = segment_logits
+            out["pred_short_segment_x"] = segment_x
+            out["pred_short_segment_starts"] = self.short_segment_starts.to(device=pred_points.device)
+            out["pred_short_segment_ends"] = self.short_segment_ends.to(device=pred_points.device)
+            out["pred_short_segment_window_mask"] = self.short_segment_window_mask.to(device=pred_points.device)
         if self.gcs_mode == "ordered_slot":
             out["pred_exist_logits"] = pred_logits
             out["pred_start_logits"] = self.start_mlp(hs).view(b, self.num_queries, self.num_points)

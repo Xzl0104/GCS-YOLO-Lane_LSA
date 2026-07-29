@@ -63,6 +63,27 @@ The seven fixed lateral offsets are:
 [0, -20, +20, -40, +40, -60, +60]
 ```
 
+The 2026-07-28 dense-offset follow-up is a separate default-off v3 YAML:
+
+```text
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-gated-candidate-dense13-v3.yaml
+```
+
+It keeps the same frozen-env30/base-path and candidate decode contract, but
+raises the candidate count from `7` to `13`:
+
+```text
+pred_short_candidate_points: B x 12 x 13 x 56 x 2
+pred_short_candidate_logits: B x 12 x 13
+pred_short_candidate_offsets_px: 13
+offsets = [0, -10, +10, -20, +20, -30, +30, -40, +40, -50, +50, -60, +60]
+```
+
+The dense13 route exists because the 7-offset hard official-GT diagnostic only
+improved raw oracle coverage from `40/53` to `43/53` on official-val short GT5
+and from `142/183` to `148/183` on train0601 short GT5, while selected-gated
+coverage stayed at base. TEST remains closed.
+
 Training is controlled by default-off `gcs_short_candidate`. Candidate
 assignment is limited to short GT4/GT5 lanes. APE `<=20px` candidates are
 strong positives, `20..40px` candidates are soft positives with
@@ -96,6 +117,56 @@ decode is considered. The launch script is:
 ```text
 scripts/run_query_gated_candidate_env30_frozen_probe20_v2.sh
 ```
+
+## 2026-07-29 User-Requested Local Short-Segment Proposal v4
+
+The local short-segment proposal route is a new explicit default-off v4
+implementation following the hard oracle that showed contiguous `3..10`
+h-sample segment capacity can cover the remaining short-lane misses. It is
+enabled only by:
+
+```text
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-local-segment-proposal-v4.yaml
+```
+
+The default query YAML and default decode remain unchanged. When enabled, the
+query head adds:
+
+```text
+pred_short_segment_points: B x 12 x 404 x 56 x 2
+pred_short_segment_logits: B x 12 x 404
+pred_short_segment_x: B x 12 x 404 x 2
+pred_short_segment_starts: 404
+pred_short_segment_ends: 404
+pred_short_segment_window_mask: 404 x 56
+```
+
+The `404` segment windows enumerate every contiguous fixed-y window with
+length `3..10` anchors. Each proposal is valid only inside its own window and
+predicts local start/end x as a bounded residual around the frozen base query
+geometry. The main `pred_points`, `pred_logits`, matcher, normal losses, and
+default decode are unchanged unless the v4 YAML and `gcs_short_segment > 0`
+are explicitly selected.
+
+Training is controlled by default-off `gcs_short_segment`. Assignment is
+limited to short GT4/GT5 lanes, uses window-overlap APE with
+`gcs_short_segment_min_overlap=3`, and trains scores from geometry quality
+instead of ordinary existence labels. Logs add:
+
+```text
+short_segment_loss
+short_segment_score_loss
+short_segment_point_loss
+short_segment_pos_count
+short_segment_soft_count
+short_segment_neg_count
+```
+
+The frozen-env30 probe is enabled by
+`--gcs-short-segment-freeze-base`, which freezes all non-`short_segment_*`
+parameters and keeps frozen base modules in eval mode. TEST remains closed.
+The diagnostic gate must use the hard official-GT denominators and compare
+base/raw-segment/selected-gated coverage before any decode promotion.
 
 Legacy post-env30 record: the 2026-07-25 user-requested Q12/env30 dual-head
 probe was rejected and its YAML/script are not active after the 2026-07-28

@@ -81,6 +81,12 @@ class GCSLaneTrainer(BaseTrainer):
         "short_candidate_pos_count",
         "short_candidate_soft_count",
         "short_candidate_neg_count",
+        "short_segment_loss",
+        "short_segment_score_loss",
+        "short_segment_point_loss",
+        "short_segment_pos_count",
+        "short_segment_soft_count",
+        "short_segment_neg_count",
         "query_count_ce_loss",
         "query_count_acc",
         "query_count_pred_mean",
@@ -124,6 +130,12 @@ class GCSLaneTrainer(BaseTrainer):
         "sc_pos",
         "sc_soft",
         "sc_neg",
+        "sseg",
+        "sseg_s",
+        "sseg_p",
+        "ss_pos",
+        "ss_soft",
+        "ss_neg",
         "qcnt_ce",
         "qcnt_acc",
         "qcnt_pred",
@@ -159,16 +171,40 @@ class GCSLaneTrainer(BaseTrainer):
         """Return true for parameters or modules owned by the short-candidate branch."""
         return "short_candidate_" in str(name)
 
+    @staticmethod
+    def _is_short_segment_trainable_name(name: str) -> bool:
+        """Return true for parameters or modules owned by the short-segment branch."""
+        return "short_segment_" in str(name)
+
     def _short_candidate_freeze_base_enabled(self) -> bool:
         """Return whether this run trains only the short-candidate branch."""
         return bool(self._get_arg_value("gcs_short_candidate_freeze_base", False))
 
+    def _short_segment_freeze_base_enabled(self) -> bool:
+        """Return whether this run trains only the short-segment branch."""
+        return bool(self._get_arg_value("gcs_short_segment_freeze_base", False))
+
     def _apply_custom_freeze(self) -> None:
-        """Freeze env30/base parameters for selector-only short-candidate probing."""
-        if not self._short_candidate_freeze_base_enabled():
+        """Freeze env30/base parameters for selector-only proposal probing."""
+        candidate_freeze = self._short_candidate_freeze_base_enabled()
+        segment_freeze = self._short_segment_freeze_base_enabled()
+        if not candidate_freeze and not segment_freeze:
             return
-        if float(self._get_arg_value("gcs_short_candidate", 0.0)) <= 0.0:
+        if candidate_freeze and segment_freeze:
+            raise ValueError(
+                "Use only one frozen proposal mode at a time: "
+                "--gcs-short-candidate-freeze-base or --gcs-short-segment-freeze-base."
+            )
+
+        if candidate_freeze and float(self._get_arg_value("gcs_short_candidate", 0.0)) <= 0.0:
             raise ValueError("gcs_short_candidate_freeze_base=True requires --gcs-short-candidate > 0.")
+        if segment_freeze and float(self._get_arg_value("gcs_short_segment", 0.0)) <= 0.0:
+            raise ValueError("gcs_short_segment_freeze_base=True requires --gcs-short-segment > 0.")
+
+        def is_trainable(name: str) -> bool:
+            if candidate_freeze:
+                return self._is_short_candidate_trainable_name(name)
+            return self._is_short_segment_trainable_name(name)
 
         model = unwrap_model(self.model)
         total_params = 0
@@ -176,20 +212,22 @@ class GCSLaneTrainer(BaseTrainer):
         trainable_tensors: list[str] = []
         for name, param in model.named_parameters():
             total_params += int(param.numel())
-            trainable = self._is_short_candidate_trainable_name(name)
+            trainable = is_trainable(name)
             param.requires_grad = trainable
             if trainable:
                 trainable_params += int(param.numel())
                 trainable_tensors.append(name)
 
         if not trainable_tensors:
+            branch = "short_candidate_*" if candidate_freeze else "short_segment_*"
+            yaml_hint = "gated-candidate-v2" if candidate_freeze else "local-segment-proposal-v4"
             raise ValueError(
-                "gcs_short_candidate_freeze_base=True found no short_candidate_* parameters. "
-                "Use the gated-candidate-v2 YAML."
+                f"frozen-base proposal mode found no {branch} parameters. "
+                f"Use the {yaml_hint} YAML."
             )
 
         LOGGER.info(
-            "GCS short-candidate frozen-base mode: training %d/%d parameters in %d tensors: %s",
+            "GCS frozen-base proposal mode: training %d/%d parameters in %d tensors: %s",
             trainable_params,
             total_params,
             len(trainable_tensors),
@@ -199,12 +237,16 @@ class GCSLaneTrainer(BaseTrainer):
     def _model_train(self):
         """Set training mode while keeping frozen env30/base BatchNorm statistics fixed."""
         super()._model_train()
-        if not self._short_candidate_freeze_base_enabled():
+        candidate_freeze = self._short_candidate_freeze_base_enabled()
+        segment_freeze = self._short_segment_freeze_base_enabled()
+        if not candidate_freeze and not segment_freeze:
             return
 
         model = unwrap_model(self.model)
         for name, module in model.named_modules():
-            if self._is_short_candidate_trainable_name(name):
+            if (candidate_freeze and self._is_short_candidate_trainable_name(name)) or (
+                segment_freeze and self._is_short_segment_trainable_name(name)
+            ):
                 module.train()
             else:
                 module.eval()

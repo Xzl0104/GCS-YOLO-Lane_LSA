@@ -105,6 +105,22 @@ for query models built from
 `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-count.yaml`. The default
 query YAML still emits no `pred_count_logits`.
 
+The optional local short-segment proposal v4 YAML adds only:
+
+```text
+pred_short_segment_points: B x 12 x 404 x 56 x 2
+pred_short_segment_logits: B x 12 x 404
+pred_short_segment_x: B x 12 x 404 x 2
+pred_short_segment_starts: 404
+pred_short_segment_ends: 404
+pred_short_segment_window_mask: 404 x 56
+```
+
+for query models built from
+`ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-local-segment-proposal-v4.yaml`.
+The default query YAML still emits no short-segment tensors and default decode
+does not consume them.
+
 Legacy post-env30 record: the rejected query extent probe added:
 
 ```text

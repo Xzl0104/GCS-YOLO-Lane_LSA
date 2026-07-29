@@ -24,6 +24,7 @@ from ultralytics.utils.gcs_postprocess import decode_gcs_predictions  # noqa: E4
 
 DEFAULT_CFG = ROOT / "ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml"
 CANDIDATE_CFG = ROOT / "ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-gated-candidate-v2.yaml"
+DENSE_CANDIDATE_CFG = ROOT / "ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-gated-candidate-dense13-v3.yaml"
 
 
 def _logit(p: float) -> float:
@@ -49,14 +50,8 @@ def _head_features(head: GCSLaneHead, batch: int = 2) -> list[torch.Tensor]:
     ]
 
 
-@torch.inference_mode()
-def check_yaml_forward() -> None:
-    default_head = _head_from_yaml(DEFAULT_CFG)
-    default_out = default_head(_head_features(default_head), orig_size=(544, 960))
-    if "pred_short_candidate_points" in default_out or "pred_short_candidate_logits" in default_out:
-        raise AssertionError("default query YAML unexpectedly emitted short candidate outputs.")
-
-    candidate_head = _head_from_yaml(CANDIDATE_CFG)
+def _check_candidate_yaml_forward(cfg: Path, offsets: list[float]) -> None:
+    candidate_head = _head_from_yaml(cfg)
     candidate_out = candidate_head(_head_features(candidate_head), orig_size=(544, 960))
     required = {"pred_short_candidate_points", "pred_short_candidate_logits", "pred_short_candidate_offsets_px"}
     missing = required.difference(candidate_out)
@@ -65,17 +60,34 @@ def check_yaml_forward() -> None:
     points = candidate_out["pred_points"]
     cand_points = candidate_out["pred_short_candidate_points"]
     cand_logits = candidate_out["pred_short_candidate_logits"]
-    if tuple(cand_points.shape) != (2, 12, 7, 56, 2):
+    m = len(offsets)
+    if tuple(cand_points.shape) != (2, 12, m, 56, 2):
         raise AssertionError(f"candidate point shape mismatch: {tuple(cand_points.shape)}.")
-    if tuple(cand_logits.shape) != (2, 12, 7):
+    if tuple(cand_logits.shape) != (2, 12, m):
         raise AssertionError(f"candidate logit shape mismatch: {tuple(cand_logits.shape)}.")
-    offsets = candidate_out["pred_short_candidate_offsets_px"].detach().cpu().tolist()
-    if offsets != [0.0, -20.0, 20.0, -40.0, 40.0, -60.0, 60.0]:
-        raise AssertionError(f"candidate offsets mismatch: {offsets}.")
+    actual_offsets = candidate_out["pred_short_candidate_offsets_px"].detach().cpu().tolist()
+    if actual_offsets != offsets:
+        raise AssertionError(f"candidate offsets mismatch for {cfg}: {actual_offsets}.")
     expected = points.unsqueeze(2).expand_as(cand_points).clone()
-    expected[..., 0] = (expected[..., 0] + candidate_out["pred_short_candidate_offsets_px"].view(1, 1, 7, 1) / 960.0).clamp(0.0, 1.0)
+    expected[..., 0] = (
+        expected[..., 0] + candidate_out["pred_short_candidate_offsets_px"].view(1, 1, m, 1) / 960.0
+    ).clamp(0.0, 1.0)
     if not torch.allclose(cand_points, expected, atol=1e-6):
-        raise AssertionError("candidate points are not fixed lateral offsets from pred_points.")
+        raise AssertionError(f"candidate points are not fixed lateral offsets from pred_points for {cfg}.")
+
+
+@torch.inference_mode()
+def check_yaml_forward() -> None:
+    default_head = _head_from_yaml(DEFAULT_CFG)
+    default_out = default_head(_head_features(default_head), orig_size=(544, 960))
+    if "pred_short_candidate_points" in default_out or "pred_short_candidate_logits" in default_out:
+        raise AssertionError("default query YAML unexpectedly emitted short candidate outputs.")
+
+    _check_candidate_yaml_forward(CANDIDATE_CFG, [0.0, -20.0, 20.0, -40.0, 40.0, -60.0, 60.0])
+    _check_candidate_yaml_forward(
+        DENSE_CANDIDATE_CFG,
+        [0.0, -10.0, 10.0, -20.0, 20.0, -30.0, 30.0, -40.0, 40.0, -50.0, 50.0, -60.0, 60.0],
+    )
 
 
 def _make_short_candidate_batch() -> dict:

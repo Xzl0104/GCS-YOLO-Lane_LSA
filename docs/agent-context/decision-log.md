@@ -2,6 +2,256 @@
 
 This file records decisions for branch `codex/5-25-3-k56`.
 
+## 2026-07-29: Implement default-off local short-segment proposal v4
+
+Decision:
+
+Implement the user-requested local short-segment proposal head as a new
+default-off v4 route instead of extending dense13, affine, static, or mask
+proposal selectors.
+
+Implementation:
+
+- add `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-local-segment-proposal-v4.yaml`;
+- add a query-mode `short_segment_head` that enumerates all contiguous fixed-y
+  windows with length `3..10`, for `404` segment proposals per query;
+- each segment predicts local start/end x residuals around the base query and
+  emits a geometry-quality logit;
+- add default-off `gcs_short_segment` loss for short GT4/GT5 lanes only, using
+  window-overlap APE, strong `<=20px` targets, soft `20..40px` targets, and
+  optional local point pull;
+- add `--gcs-short-segment-freeze-base`, which freezes all non-`short_segment_*`
+  parameters and keeps frozen base modules in eval mode;
+- extend the hard official-GT coverage diagnostic so `pred_short_segment_*`
+  candidates are evaluated only inside their `window_mask`;
+- add `scripts/run_query_local_segment_env30_frozen_probe20_v4.sh` and
+  `tools/check_gcs_short_segment_head.py`.
+
+Why:
+
+The local segment oracle showed enough shape capacity:
+
+```text
+official-val short GT5: 40/53 -> 52/53
+train0601 short GT5:    142/183 -> 179/183
+train0601 short GT4:    9/19 -> 19/19
+```
+
+The new implementation follows that representation directly while preserving
+the env30 main path and default decode. It is not a TEST candidate until
+official-val/train-side hard gates show that selected segment proposals convert
+the raw coverage.
+
+## 2026-07-29: Local short-segment proposal oracle identifies the missing capacity
+
+Decision:
+
+Run an additional diagnostic-only shape-capacity oracle after dense13, affine,
+static, and mask proposals all failed the short-GT5 20px gate. The oracle
+enumerates local short-segment proposals that are valid only on a contiguous
+`3..10` h-sample window and linearly interpolate local top/bottom x on that
+short window. This is not a decode path, not training, not TEST evidence, and
+uses GT only to measure shape capacity.
+
+Evidence with a coarse 20px x grid:
+
+```text
+official-val short GT5: base/local_segment = 40/52 out of 53
+train0601 short GT5:    base/local_segment = 142/179 out of 183
+official-val short GT4: base/local_segment = 1/4 out of 8
+train0601 short GT4:    base/local_segment = 9/19 out of 19
+```
+
+The remaining misses are exactly the very-short cases with fewer than three
+visible h-samples under the diagnostic's `match_min_overlap=3` gate:
+
+```text
+official-val short GT5 impossible visible<3 = 1
+train0601 short GT5 impossible visible<3 = 4
+official-val short GT4 impossible visible<3 = 4
+train0601 short GT4 impossible visible<3 = 0
+```
+
+Why:
+
+The previously failed proposals model full-lane geometry or local perturbations
+around an existing Q12 carrier. The hard misses are mostly outer short
+segments whose visible y-span is only about `50..60px`, while x changes by
+hundreds of pixels inside that small span. A full-height static/prototype lane
+spreads the slope across the entire K56 height and cannot represent this local
+bottom-edge segment.
+
+Decision after the gate: stop selector training for dense13, affine, static,
+or raw mask proposals. The next viable implementation target is a trainable
+image-conditioned local short-segment proposal head that predicts a short
+visibility interval plus local segment geometry, then passes the same hard
+official-GT gates before any decode or TEST consideration.
+
+## 2026-07-29: Add static/mask proposal-capacity oracle diagnostics
+
+Decision:
+
+Extend the hard official-GT diagnostic with two explicit proposal-capacity
+oracle modes:
+
+- `--static-proposal-oracle`: adds image-independent line/quadratic proposal
+  templates to the base Q12 pool.
+- `--mask-proposal-oracle`: enables eval-time `return_aux` only inside the
+  diagnostic and extracts connected-component proposals from predicted
+  `aux_mask_logits`.
+
+Both modes are diagnostic-only. They do not change training, default decode,
+official metrics, or TEST policy.
+
+Evidence from env30 `weights/official_best.pt`:
+
+```text
+static96 official-val short GT5: 40/53 -> 41/53
+static96 train0601 short GT5: 142/183 -> 143/183
+static96 train0601 short GT4: 9/19 -> 9/19
+
+mask official-val short GT5: 40/53 -> 40/53
+mask train0601 short GT5: 142/183 -> 143/183
+mask train0601 short GT4: 9/19 -> 12/19
+```
+
+The broader `static1875` val-only check also stayed at short GT5 `41/53`, so
+the failure is not simply static grid density.
+
+Decision after the gate: do not train a selector from static or mask proposals
+and do not run TEST. These proposal sources improve some GT4 or 30/40px APE
+diagnostics, but they do not move the decisive short-GT5 20px gate. The next
+proposal-capacity work must be trainable/image-conditioned or data-mined from
+missed short-GT5 events, not fixed static templates or raw aux-mask connected
+components.
+
+## 2026-07-29: Add affine candidate oracle diagnostic
+
+Decision:
+
+Extend the hard official-GT candidate diagnostic with an `--affine-oracle`
+mode instead of starting another selector-training run. The mode keeps the
+env30 model and default decode unchanged, reads base `pred_points`, and
+enumerates affine candidates:
+
+```text
+x' = x + offset + slope * centered_y
+offsets = [0, -20, +20, -40, +40, -60, +60]
+slopes  = [0, -20, +20, -40, +40]
+```
+
+Evidence from env30 `weights/official_best.pt`:
+
+```text
+official-val short GT5: base/raw_affine = 40/43
+train0601 short GT5: base/raw_affine = 142/148
+train0601 short GT4: base/raw_affine = 9/16
+```
+
+Why:
+
+The affine oracle improves the train0601 GT4 hard lane count by one lane over
+dense13, but it does not improve the decisive GT5 gates: official-val short
+GT5 stays at `43/53`, and train0601 short GT5 stays at `148/183`, far below
+the `~160/183` target.
+
+Decision after the gate: do not train an affine selector and do not open TEST
+from this result. The current Q12 carrier bank lacks enough short-GT5
+proposal coverage even after fixed affine residual enumeration. The next
+smallest useful direction is new query/proposal capacity or a different
+proposal-generation mechanism, not another selector on the same Q12 carriers.
+
+## 2026-07-28: Add dense13 gated-candidate v3 follow-up
+
+Decision:
+
+Add a separate default-off dense-offset candidate YAML and launch script instead
+of mutating the existing 7-offset v2 record.
+
+Implementation:
+
+```text
+model = ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-gated-candidate-dense13-v3.yaml
+script = scripts/run_query_gated_candidate_env30_dense13_frozen_probe20_v3.sh
+offsets = [0, -10, +10, -20, +20, -30, +30, -40, +40, -50, +50, -60, +60]
+candidate output = B x 12 x 13 x 56 x 2 and B x 12 x 13
+```
+
+The hard official-GT diagnostic also supports `--model-yaml` plus
+`--pretrained-base`, so the dense raw-oracle pool can be checked before any
+selector training. The dense13 script runs that pre-training oracle by default
+and can enforce it with `REQUIRE_PRETRAIN_RAW_GATE=1`.
+
+Why:
+
+The 7-offset frozen probe showed too little raw-oracle headroom and no
+selected-gated conversion:
+
+```text
+official-val short GT5: base/raw/selected_gated = 40/43/40
+train0601 short GT5: base/raw/selected_gated = 142/148/142
+train0601 short GT4: base/raw/selected_gated = 9/15/9
+```
+
+The next smallest candidate-generation change is to densify lateral hypotheses
+inside the same bounded `+/-60px` search range. The dense route keeps the
+default query YAML, default decode, loss contract, and TEST policy unchanged.
+
+Gate:
+
+Do not run TEST. First judge official-val/train0601 hard summaries. Candidate
+decode promotion requires both larger raw hit20 and selected-gated conversion
+of that raw headroom. With the default gate thresholds, pre-training raw oracle
+must reach official-val short GT5 `>=44/53`, train0601 short GT5 `>=160/183`,
+and train0601 short GT4 `>=15/19` before training proceeds when
+`REQUIRE_PRETRAIN_RAW_GATE=1`.
+
+Pre-training result:
+
+```text
+official-val short GT5: base/raw_candidate = 40/43
+train0601 short GT5: base/raw_candidate = 142/148
+train0601 short GT4: base/raw_candidate = 9/15
+```
+
+Decision after the gate: dense13 does not justify selector training under the
+current policy. Keep the implementation available for reproducibility, but do
+not run TEST or train this selector unless a future task explicitly overrides
+the failed raw-oracle gate.
+
+## 2026-07-28: Add hard official-GT candidate coverage diagnostic
+
+Decision:
+
+Add `tools/diagnose_gcs_short_candidate_hard_coverage.py` and run it on both
+`query_gated_candidate_env30_frozen_probe20_v2/weights/last.pt` and
+`weights/official_best.pt` to reproduce the old short-GT5 hard denominators
+from TuSimple official json-lines GT rather than converted-label visibility.
+This is diagnostic-only; TEST remains closed.
+
+Evidence:
+
+```text
+official-val short GT5: total=53, base=40, raw_candidate=43, selected_gated=40
+train0601 short GT5: total=183, base=142, raw_candidate=148, selected_gated=142
+train0601 short GT4: total=19, base=9, raw_candidate=15, selected_gated=9
+```
+
+Why:
+
+The previous coverage tool did not expose the old `40/53` and `142/183`
+official-GT denominator directly, making it too easy to over-read converted
+label coverage. The new tool reports base, raw oracle candidates, selected-all,
+and selected-gated candidates under the same hard lane set.
+
+Next action:
+
+Do not run TEST or continue this run unchanged. The selected/gated path
+converts zero 20px hard-lane gains on both checked checkpoints, and the raw
+candidate pool only adds `+3/53` on official-val short GT5 and `+6/183` on
+train0601 short GT5. Improve candidate generation and geometry-quality
+selection first.
+
 ## 2026-07-28: Restore Active Code to Env30 Baseline
 
 Decision:

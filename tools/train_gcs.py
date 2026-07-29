@@ -471,6 +471,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Freeze all non-short-candidate parameters for env30 selector-only probing.",
     )
+    parser.add_argument("--gcs-short-segment", type=float, default=0.0)
+    parser.add_argument("--gcs-short-segment-topk", type=int, default=8)
+    parser.add_argument("--gcs-short-segment-visible-thr", type=int, default=10)
+    parser.add_argument("--gcs-short-segment-min-visible", type=int, default=3)
+    parser.add_argument("--gcs-short-segment-min-overlap", type=int, default=3)
+    parser.add_argument("--gcs-short-segment-pos-px", type=float, default=20.0)
+    parser.add_argument("--gcs-short-segment-soft-px", type=float, default=40.0)
+    parser.add_argument("--gcs-short-segment-tau", type=float, default=25.0)
+    parser.add_argument("--gcs-short-segment-point-weight", type=float, default=0.05)
+    parser.add_argument("--gcs-short-segment-gt4-weight", type=float, default=1.0)
+    parser.add_argument("--gcs-short-segment-gt5-weight", type=float, default=1.5)
+    parser.add_argument("--gcs-short-segment-neg-score-thr", type=float, default=0.6)
+    parser.add_argument(
+        "--gcs-short-segment-freeze-base",
+        action="store_true",
+        help="Freeze all non-short-segment parameters for env30 local-segment proposal probing.",
+    )
     parser.add_argument(
         "--gcs-candidate-decode",
         action="store_true",
@@ -837,6 +854,19 @@ def main() -> None:
         "gcs_short_candidate_gt5_weight": args.gcs_short_candidate_gt5_weight,
         "gcs_short_candidate_neg_score_thr": args.gcs_short_candidate_neg_score_thr,
         "gcs_short_candidate_freeze_base": args.gcs_short_candidate_freeze_base,
+        "gcs_short_segment": args.gcs_short_segment,
+        "gcs_short_segment_topk": args.gcs_short_segment_topk,
+        "gcs_short_segment_visible_thr": args.gcs_short_segment_visible_thr,
+        "gcs_short_segment_min_visible": args.gcs_short_segment_min_visible,
+        "gcs_short_segment_min_overlap": args.gcs_short_segment_min_overlap,
+        "gcs_short_segment_pos_px": args.gcs_short_segment_pos_px,
+        "gcs_short_segment_soft_px": args.gcs_short_segment_soft_px,
+        "gcs_short_segment_tau": args.gcs_short_segment_tau,
+        "gcs_short_segment_point_weight": args.gcs_short_segment_point_weight,
+        "gcs_short_segment_gt4_weight": args.gcs_short_segment_gt4_weight,
+        "gcs_short_segment_gt5_weight": args.gcs_short_segment_gt5_weight,
+        "gcs_short_segment_neg_score_thr": args.gcs_short_segment_neg_score_thr,
+        "gcs_short_segment_freeze_base": args.gcs_short_segment_freeze_base,
         "gcs_candidate_decode": args.gcs_candidate_decode,
         "gcs_candidate_score_thr": args.gcs_candidate_score_thr,
         "gcs_candidate_short_min_points": args.gcs_candidate_short_min_points,

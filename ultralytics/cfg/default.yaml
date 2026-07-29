@@ -194,6 +194,19 @@ gcs_short_candidate_gt4_weight: 1.0 # (float) per-lane score/pull multiplier for
 gcs_short_candidate_gt5_weight: 1.5 # (float) per-lane score/pull multiplier for short GT5 targets
 gcs_short_candidate_neg_score_thr: 0.6 # (float) only far candidates above this score become negatives
 gcs_short_candidate_freeze_base: False # (bool) freeze env30/base path and train only short_candidate_* parameters
+gcs_short_segment: 0.0 # (float) default-off local short-window segment proposal loss for short GT4/GT5 lanes
+gcs_short_segment_topk: 8 # (int) geometry-nearest QxS segment proposals assigned per short GT lane
+gcs_short_segment_visible_thr: 10 # (int) maximum visible anchors for target short GT4/GT5 lanes
+gcs_short_segment_min_visible: 3 # (int) minimum visible anchors for short-segment supervision
+gcs_short_segment_min_overlap: 3 # (int) minimum GT/window overlap anchors for segment APE targets
+gcs_short_segment_pos_px: 20.0 # (float) segment APE that receives strong-positive score target
+gcs_short_segment_soft_px: 40.0 # (float) upper APE for soft-positive segment assignment
+gcs_short_segment_tau: 25.0 # (float) exp(-APE/tau) scale for soft segment score targets
+gcs_short_segment_point_weight: 0.05 # (float) local segment endpoint/point geometry pull fraction
+gcs_short_segment_gt4_weight: 1.0 # (float) per-lane score/pull multiplier for short GT4 segment targets
+gcs_short_segment_gt5_weight: 1.5 # (float) per-lane score/pull multiplier for short GT5 segment targets
+gcs_short_segment_neg_score_thr: 0.6 # (float) only far segment proposals above this score become negatives
+gcs_short_segment_freeze_base: False # (bool) freeze env30/base path and train only short_segment_* parameters
 gcs_candidate_decode: False # (bool) default-off prediction-only gated lateral candidate decode
 gcs_candidate_score_thr: 0.05 # (float) minimum candidate selector score to replace query geometry at decode
 gcs_candidate_short_min_points: 2 # (int) minimum predicted visible anchors for candidate-decode applicability

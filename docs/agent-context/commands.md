@@ -3152,6 +3152,274 @@ python tools/sweep_tusimple_official.py \
   --device 0
 ```
 
+Hard official-GT candidate coverage diagnostic for the frozen-env30 probe.
+This reproduces the old `40/53` and `142/183` denominators from TuSimple
+json-lines GT and keeps TEST closed:
+
+```bash
+python tools/diagnose_gcs_short_candidate_hard_coverage.py \
+  --weights runs/gcs_lane/query_gated_candidate_env30_frozen_probe20_v2/weights/last.pt \
+  --archive-root archive/TUSimple \
+  --split val \
+  --gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
+  --imgsz 544 960 \
+  --device 0 \
+  --half \
+  --save-dir runs/gcs_lane/query_gated_candidate_env30_frozen_probe20_v2_hard_candidate_diag_val
+```
+
+```bash
+python tools/diagnose_gcs_short_candidate_hard_coverage.py \
+  --weights runs/gcs_lane/query_gated_candidate_env30_frozen_probe20_v2/weights/last.pt \
+  --archive-root archive/TUSimple \
+  --split train \
+  --gt-json archive/TUSimple/train_set/label_data_0601.json \
+  --raw-file-contains clips/0601/ \
+  --imgsz 544 960 \
+  --device 0 \
+  --half \
+  --allow-noncanonical-gt \
+  --save-dir runs/gcs_lane/query_gated_candidate_env30_frozen_probe20_v2_hard_candidate_diag_train0601
+```
+
+Dense13 frozen-env30 follow-up. This keeps the base path frozen, changes only
+the candidate offset grid to `0, +/-10, +/-20, +/-30, +/-40, +/-50, +/-60`,
+runs a pre-training raw-oracle hard diagnostic, then runs official-val/base
+decode and post-training hard official-GT diagnostics. TEST stays closed.
+With `REQUIRE_PRETRAIN_RAW_GATE=1`, the script stops before training if the
+dense raw candidate pool does not pass the hard raw gate:
+
+```bash
+RUN_NAME=query_gated_candidate_env30_dense13_frozen_probe20_v3 \
+EPOCHS=20 \
+RUN_TESTS=0 \
+REQUIRE_PRETRAIN_RAW_GATE=1 \
+bash scripts/run_query_gated_candidate_env30_dense13_frozen_probe20_v3.sh
+```
+
+The pre-training raw-oracle summaries are:
+
+```text
+runs/gcs_lane/query_gated_candidate_env30_dense13_frozen_probe20_v3_pretrain_oracle_hard_candidate_diag_val/short_candidate_hard_summary.json
+runs/gcs_lane/query_gated_candidate_env30_dense13_frozen_probe20_v3_pretrain_oracle_hard_candidate_diag_train0601/short_candidate_hard_summary.json
+```
+
+Post-training hard summaries are:
+
+```text
+runs/gcs_lane/query_gated_candidate_env30_dense13_frozen_probe20_v3_hard_candidate_diag_val_last/short_candidate_hard_summary.json
+runs/gcs_lane/query_gated_candidate_env30_dense13_frozen_probe20_v3_hard_candidate_diag_train0601_last/short_candidate_hard_summary.json
+```
+
+Gate:
+
+```text
+official-val short GT5 raw_candidate_hit20 must exceed the 7-offset 43/53
+train0601 short GT5 raw_candidate_hit20 should move toward >=160/183
+train0601 short GT4 raw_candidate_hit20 must stay above the 7-offset 15/19
+selected_gated must convert raw gains before candidate decode promotion
+TEST closed
+```
+
+Current pre-training dense13 result fails the gate:
+
+```text
+official-val short GT5 raw_candidate_hit20 = 43/53
+train0601 short GT5 raw_candidate_hit20 = 148/183
+train0601 short GT4 raw_candidate_hit20 = 15/19
+```
+
+Do not launch selector training from this result unless the failed gate is
+explicitly overridden for a diagnostic-only run.
+
+Affine-oracle hard diagnostic. This reuses env30 `official_best.pt`, keeps
+TEST closed, and enumerates `x' = x + offset + slope * centered_y` candidates
+from base `pred_points`:
+
+```bash
+python tools/diagnose_gcs_short_candidate_hard_coverage.py \
+  --weights runs/gcs_lane/query_alpha05_gt5short_geom_w2_bneg002_env30_nocount_v1/weights/official_best.pt \
+  --archive-root archive/TUSimple \
+  --split val \
+  --gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
+  --imgsz 544 960 \
+  --device 0 \
+  --half \
+  --affine-oracle \
+  --affine-offsets-px 0 -20 20 -40 40 -60 60 \
+  --affine-slopes-px 0 -20 20 -40 40 \
+  --save-dir runs/gcs_lane/affine_candidate_oracle_env30_hard_diag_val
+```
+
+```bash
+python tools/diagnose_gcs_short_candidate_hard_coverage.py \
+  --weights runs/gcs_lane/query_alpha05_gt5short_geom_w2_bneg002_env30_nocount_v1/weights/official_best.pt \
+  --archive-root archive/TUSimple \
+  --split train \
+  --gt-json archive/TUSimple/train_set/label_data_0601.json \
+  --raw-file-contains clips/0601/ \
+  --imgsz 544 960 \
+  --device 0 \
+  --half \
+  --allow-noncanonical-gt \
+  --affine-oracle \
+  --affine-offsets-px 0 -20 20 -40 40 -60 60 \
+  --affine-slopes-px 0 -20 20 -40 40 \
+  --save-dir runs/gcs_lane/affine_candidate_oracle_env30_hard_diag_train0601
+```
+
+Current affine-oracle result fails the GT5 gate:
+
+```text
+official-val short GT5 raw_candidate_hit20 = 43/53
+train0601 short GT5 raw_candidate_hit20 = 148/183
+train0601 short GT4 raw_candidate_hit20 = 16/19
+```
+
+Do not train an affine selector from this result. The GT5 gate did not improve
+over dense13; the next direction should add query/proposal capacity or a
+different proposal-generation mechanism. TEST remains closed.
+
+Static proposal-capacity oracle. This adds image-independent proposal
+templates to the base Q12 pool and keeps TEST closed:
+
+```bash
+python tools/diagnose_gcs_short_candidate_hard_coverage.py \
+  --weights runs/gcs_lane/query_alpha05_gt5short_geom_w2_bneg002_env30_nocount_v1/weights/official_best.pt \
+  --archive-root archive/TUSimple \
+  --split val \
+  --gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
+  --imgsz 544 960 \
+  --device 0 \
+  --half \
+  --static-proposal-oracle \
+  --proposal-bottom-count 16 \
+  --proposal-top-count 6 \
+  --proposal-curves-px 0 \
+  --save-dir runs/gcs_lane/static96_proposal_oracle_env30_hard_diag_val
+```
+
+```bash
+python tools/diagnose_gcs_short_candidate_hard_coverage.py \
+  --weights runs/gcs_lane/query_alpha05_gt5short_geom_w2_bneg002_env30_nocount_v1/weights/official_best.pt \
+  --archive-root archive/TUSimple \
+  --split train \
+  --gt-json archive/TUSimple/train_set/label_data_0601.json \
+  --raw-file-contains clips/0601/ \
+  --imgsz 544 960 \
+  --device 0 \
+  --half \
+  --allow-noncanonical-gt \
+  --static-proposal-oracle \
+  --proposal-bottom-count 16 \
+  --proposal-top-count 6 \
+  --proposal-curves-px 0 \
+  --save-dir runs/gcs_lane/static96_proposal_oracle_env30_hard_diag_train0601
+```
+
+Current static proposal result fails:
+
+```text
+static96 official-val short GT5 = 40/53 -> 41/53
+static96 train0601 short GT5 = 142/183 -> 143/183
+static96 train0601 short GT4 = 9/19 -> 9/19
+static1875 official-val short GT5 = 40/53 -> 41/53
+```
+
+Mask proposal-capacity oracle. This diagnostic enables eval-time aux output
+only inside the tool and extracts connected components from predicted
+`aux_mask_logits`:
+
+```bash
+python tools/diagnose_gcs_short_candidate_hard_coverage.py \
+  --weights runs/gcs_lane/query_alpha05_gt5short_geom_w2_bneg002_env30_nocount_v1/weights/official_best.pt \
+  --archive-root archive/TUSimple \
+  --split val \
+  --gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
+  --imgsz 544 960 \
+  --device 0 \
+  --half \
+  --mask-proposal-oracle \
+  --mask-proposal-thrs 0.1 0.2 0.3 0.4 0.5 \
+  --mask-proposal-min-area 10 \
+  --mask-proposal-max-components 24 \
+  --mask-proposal-row-radius 3 \
+  --save-dir runs/gcs_lane/mask_proposal_oracle_env30_hard_diag_val
+```
+
+```bash
+python tools/diagnose_gcs_short_candidate_hard_coverage.py \
+  --weights runs/gcs_lane/query_alpha05_gt5short_geom_w2_bneg002_env30_nocount_v1/weights/official_best.pt \
+  --archive-root archive/TUSimple \
+  --split train \
+  --gt-json archive/TUSimple/train_set/label_data_0601.json \
+  --raw-file-contains clips/0601/ \
+  --imgsz 544 960 \
+  --device 0 \
+  --half \
+  --allow-noncanonical-gt \
+  --mask-proposal-oracle \
+  --mask-proposal-thrs 0.1 0.2 0.3 0.4 0.5 \
+  --mask-proposal-min-area 10 \
+  --mask-proposal-max-components 24 \
+  --mask-proposal-row-radius 3 \
+  --save-dir runs/gcs_lane/mask_proposal_oracle_env30_hard_diag_train0601
+```
+
+Current mask proposal result also fails:
+
+```text
+mask official-val short GT5 = 40/53 -> 40/53
+mask train0601 short GT5 = 142/183 -> 143/183
+mask train0601 short GT4 = 9/19 -> 12/19
+```
+
+Do not train static/mask proposal selectors or run TEST from these results.
+The next proposal-capacity route must be image-conditioned and trained, or
+data-mined from missed short-GT5 cases first.
+
+## Q12 Env30 Local Short-Segment Proposal v4
+
+The default-off v4 probe trains a local short-window segment proposal head
+after the hard local-segment oracle showed `3..10` contiguous h-sample windows
+can cover the missed short GT4/GT5 lanes. It keeps the env30 base path frozen,
+keeps default decode unchanged, and keeps TEST closed:
+
+```bash
+RUN_NAME=query_local_segment_env30_frozen_probe20_v4 \
+EPOCHS=20 \
+RUN_TESTS=0 \
+bash scripts/run_query_local_segment_env30_frozen_probe20_v4.sh
+```
+
+Dedicated model:
+
+```text
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-local-segment-proposal-v4.yaml
+```
+
+The head emits `B x 12 x 404` short-segment candidates. Each candidate is
+valid only in one contiguous `3..10` fixed-y anchor window, predicts local
+start/end x, and is scored by geometry quality rather than ordinary existence.
+
+Promotion gate remains official-val/train-side only:
+
+```text
+base official-val decode must stay at env30 when segment decode is off
+official-val short GT5 raw_segment hit20 should move from 40/53 toward >=52/53
+train0601 short GT5 raw_segment hit20 should move from 142/183 toward >=179/183
+train0601 short GT4 raw_segment hit20 should move from 9/19 toward 19/19
+selected_gated must convert raw-segment gains before any decode promotion
+TEST closed
+```
+
+Post-training hard summaries are written by the launch script to:
+
+```text
+runs/gcs_lane/query_local_segment_env30_frozen_probe20_v4_hard_segment_diag_val_last/short_candidate_hard_summary.json
+runs/gcs_lane/query_local_segment_env30_frozen_probe20_v4_hard_segment_diag_train0601_last/short_candidate_hard_summary.json
+```
+
 ## Rejected Q12 Env30 Lateral Candidate Probe
 
 Status: rejected after `query_short_candidate_env30_probe20_fix1`. Do not

@@ -237,6 +237,13 @@ CFG_FLOAT_KEYS = frozenset(
         "gcs_short_candidate_pull_weight",
         "gcs_short_candidate_gt4_weight",
         "gcs_short_candidate_gt5_weight",
+        "gcs_short_segment",
+        "gcs_short_segment_pos_px",
+        "gcs_short_segment_soft_px",
+        "gcs_short_segment_tau",
+        "gcs_short_segment_point_weight",
+        "gcs_short_segment_gt4_weight",
+        "gcs_short_segment_gt5_weight",
         "gcs_exist_pos_weight",
         "gcs_exist_focal_gamma",
         "gcs_exist_focal_alpha",
@@ -300,6 +307,7 @@ CFG_FRACTION_KEYS = frozenset(
         "gcs_exist_quality_floor",
         "gcs_eval_point_valid_thr",
         "gcs_short_candidate_neg_score_thr",
+        "gcs_short_segment_neg_score_thr",
         "gcs_candidate_score_thr",
     }
 )
@@ -338,6 +346,10 @@ CFG_INT_KEYS = frozenset(
         "gcs_short_candidate_topk",
         "gcs_short_candidate_visible_thr",
         "gcs_short_candidate_min_visible",
+        "gcs_short_segment_topk",
+        "gcs_short_segment_visible_thr",
+        "gcs_short_segment_min_visible",
+        "gcs_short_segment_min_overlap",
         "gcs_candidate_short_min_points",
         "gcs_candidate_short_max_points",
         "gcs_hard_visible_thr",
@@ -391,6 +403,7 @@ CFG_BOOL_KEYS = frozenset(
         "gcs_spurious_gt_protect",
         "gcs_candidate_decode",
         "gcs_short_candidate_freeze_base",
+        "gcs_short_segment_freeze_base",
     }
 )
 

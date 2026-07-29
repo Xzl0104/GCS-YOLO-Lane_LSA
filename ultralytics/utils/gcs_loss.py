@@ -53,6 +53,12 @@ class GCSLoss(nn.Module):
         "short_candidate_pos_count",
         "short_candidate_soft_count",
         "short_candidate_neg_count",
+        "short_segment_loss",
+        "short_segment_score_loss",
+        "short_segment_point_loss",
+        "short_segment_pos_count",
+        "short_segment_soft_count",
+        "short_segment_neg_count",
         "query_count_ce_loss",
         "query_count_acc",
         "query_count_pred_mean",
@@ -377,6 +383,18 @@ class GCSLoss(nn.Module):
         self.short_candidate_gt4_weight = float(self._arg(args, "gcs_short_candidate_gt4_weight", 1.0))
         self.short_candidate_gt5_weight = float(self._arg(args, "gcs_short_candidate_gt5_weight", 1.5))
         self.short_candidate_neg_score_thr = float(self._arg(args, "gcs_short_candidate_neg_score_thr", 0.6))
+        self.short_segment_gain = float(self._arg(args, "gcs_short_segment", 0.0))
+        self.short_segment_topk = int(self._arg(args, "gcs_short_segment_topk", 8))
+        self.short_segment_visible_thr = int(self._arg(args, "gcs_short_segment_visible_thr", 10))
+        self.short_segment_min_visible = int(self._arg(args, "gcs_short_segment_min_visible", 3))
+        self.short_segment_min_overlap = int(self._arg(args, "gcs_short_segment_min_overlap", 3))
+        self.short_segment_pos_px = float(self._arg(args, "gcs_short_segment_pos_px", 20.0))
+        self.short_segment_soft_px = float(self._arg(args, "gcs_short_segment_soft_px", 40.0))
+        self.short_segment_tau = float(self._arg(args, "gcs_short_segment_tau", 25.0))
+        self.short_segment_point_weight = float(self._arg(args, "gcs_short_segment_point_weight", 0.05))
+        self.short_segment_gt4_weight = float(self._arg(args, "gcs_short_segment_gt4_weight", 1.0))
+        self.short_segment_gt5_weight = float(self._arg(args, "gcs_short_segment_gt5_weight", 1.5))
+        self.short_segment_neg_score_thr = float(self._arg(args, "gcs_short_segment_neg_score_thr", 0.6))
 
         if self.short_geom_gain < 0.0:
             raise ValueError(f"gcs_short_geom must be >= 0, got {self.short_geom_gain}.")
@@ -430,6 +448,35 @@ class GCSLoss(nn.Module):
             raise ValueError("gcs_short_candidate_gt5_weight must be >= 0.")
         if not 0.0 <= self.short_candidate_neg_score_thr <= 1.0:
             raise ValueError("gcs_short_candidate_neg_score_thr must be in [0, 1].")
+        if self.short_segment_gain < 0.0:
+            raise ValueError("gcs_short_segment must be >= 0.")
+        if self.short_segment_topk < 1:
+            raise ValueError("gcs_short_segment_topk must be >= 1.")
+        if self.short_segment_visible_thr < 1:
+            raise ValueError("gcs_short_segment_visible_thr must be >= 1.")
+        if self.short_segment_min_visible < 1:
+            raise ValueError("gcs_short_segment_min_visible must be >= 1.")
+        if self.short_segment_min_overlap < 1:
+            raise ValueError("gcs_short_segment_min_overlap must be >= 1.")
+        if self.short_segment_pos_px < 0.0:
+            raise ValueError("gcs_short_segment_pos_px must be >= 0.")
+        if self.short_segment_soft_px < self.short_segment_pos_px:
+            raise ValueError("gcs_short_segment_soft_px must be >= gcs_short_segment_pos_px.")
+        if self.short_segment_tau <= 0.0:
+            raise ValueError("gcs_short_segment_tau must be > 0.")
+        if self.short_segment_point_weight < 0.0:
+            raise ValueError("gcs_short_segment_point_weight must be >= 0.")
+        if self.short_segment_gt4_weight < 0.0:
+            raise ValueError("gcs_short_segment_gt4_weight must be >= 0.")
+        if self.short_segment_gt5_weight < 0.0:
+            raise ValueError("gcs_short_segment_gt5_weight must be >= 0.")
+        if not 0.0 <= self.short_segment_neg_score_thr <= 1.0:
+            raise ValueError("gcs_short_segment_neg_score_thr must be in [0, 1].")
+        if self.short_candidate_gain > 0.0 and self.short_segment_gain > 0.0:
+            raise ValueError(
+                "gcs_short_candidate and gcs_short_segment are separate default-off probes; "
+                "enable only one candidate/proposal loss in a run."
+            )
 
         self.exist_quality_alpha = float(
             exist_quality_alpha if exist_quality_alpha is not None else self._arg(args, "gcs_exist_quality_alpha", 1.0)
@@ -1214,6 +1261,198 @@ class GCSLoss(nn.Module):
             pred_points.new_tensor(float(neg_count)),
         )
 
+    def short_segment_loss(
+        self,
+        preds: dict[str, torch.Tensor],
+        gt_points: list[torch.Tensor],
+        gt_valid: list[torch.Tensor],
+        gt_lanes: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Train default-off local short-window segment proposals on short GT4/GT5 lanes only."""
+        pred_points = preds["pred_points"]
+        zero = self._zero_like(pred_points)
+        zero_count = pred_points.new_zeros(())
+        segment_points = preds.get("pred_short_segment_points")
+        segment_logits = preds.get("pred_short_segment_logits")
+        window_mask = preds.get("pred_short_segment_window_mask")
+        if float(self.short_segment_gain) == 0.0:
+            return zero, zero, zero, zero_count, zero_count, zero_count
+        if segment_points is None or segment_logits is None or window_mask is None:
+            raise KeyError(
+                "gcs_short_segment > 0 requires a GCS head that emits pred_short_segment_points, "
+                "pred_short_segment_logits, and pred_short_segment_window_mask."
+            )
+        if segment_points.ndim != 5 or segment_points.shape[-1] != 2:
+            raise ValueError(
+                "pred_short_segment_points must have shape B x Q x S x K x 2, "
+                f"got {tuple(segment_points.shape)}."
+            )
+        if segment_logits.shape != segment_points.shape[:3]:
+            raise ValueError(
+                "pred_short_segment_logits must have shape B x Q x S matching segment points, "
+                f"got {tuple(segment_logits.shape)} vs {tuple(segment_points.shape[:3])}."
+            )
+        if segment_points.shape[0] != pred_points.shape[0] or segment_points.shape[1] != pred_points.shape[1]:
+            raise ValueError(
+                "pred_short_segment_points B,Q must match pred_points, "
+                f"got {tuple(segment_points.shape[:2])} vs {tuple(pred_points.shape[:2])}."
+            )
+        if segment_points.shape[3] != pred_points.shape[2]:
+            raise ValueError(
+                "pred_short_segment_points K must match pred_points, "
+                f"got {segment_points.shape[3]} vs {pred_points.shape[2]}."
+            )
+
+        device = pred_points.device
+        dtype = pred_points.dtype
+        bsz, num_queries, num_segments, num_points, _ = segment_points.shape
+        if window_mask.ndim == 2:
+            if tuple(window_mask.shape) != (num_segments, num_points):
+                raise ValueError(
+                    "pred_short_segment_window_mask must have shape S x K or B x Q x S x K, "
+                    f"got {tuple(window_mask.shape)} for S,K={(num_segments, num_points)}."
+                )
+            window_mask_bq = window_mask.to(device=device).bool().view(1, 1, num_segments, num_points)
+            window_mask_bq = window_mask_bq.expand(bsz, num_queries, -1, -1)
+        elif window_mask.ndim == 4:
+            if tuple(window_mask.shape) != (bsz, num_queries, num_segments, num_points):
+                raise ValueError(
+                    "pred_short_segment_window_mask B,Q,S,K must match segment points, "
+                    f"got {tuple(window_mask.shape)} vs {(bsz, num_queries, num_segments, num_points)}."
+                )
+            window_mask_bq = window_mask.to(device=device).bool()
+        else:
+            raise ValueError(
+                "pred_short_segment_window_mask must have shape S x K or B x Q x S x K, "
+                f"got {tuple(window_mask.shape)}."
+            )
+
+        zero = segment_logits.sum() * 0.0 + segment_points.sum() * 0.0
+        flat_count = int(num_queries * num_segments)
+        topk = min(int(self.short_segment_topk), flat_count)
+        pos_px = float(self.short_segment_pos_px)
+        soft_px = float(self.short_segment_soft_px)
+        tau = max(float(self.short_segment_tau), 1e-6)
+        min_visible = int(self.short_segment_min_visible)
+        visible_thr = int(self.short_segment_visible_thr)
+        min_overlap = int(self.short_segment_min_overlap)
+        scale = self._pixel_scale_for(pred_points).view(1, 1, 2)
+
+        score_losses: list[torch.Tensor] = []
+        point_losses: list[torch.Tensor] = []
+        pos_count = 0
+        soft_count = 0
+        neg_count = 0
+
+        gt_lanes = torch.as_tensor(gt_lanes, device=device, dtype=dtype).reshape(-1)
+        if gt_lanes.numel() != bsz:
+            raise ValueError(f"gt_lanes must have one value per image, got {gt_lanes.numel()} vs B={bsz}.")
+
+        for b in range(bsz):
+            gt_count = int(round(float(gt_lanes[b].detach().cpu().item())))
+            if gt_count not in {4, 5}:
+                continue
+            lane_weight = float(self.short_segment_gt4_weight if gt_count == 4 else self.short_segment_gt5_weight)
+            if lane_weight <= 0.0:
+                continue
+
+            target_points_b = gt_points[b].to(device=device, dtype=dtype)
+            target_valid_b = gt_valid[b].to(device=device, dtype=dtype)
+            if target_points_b.numel() == 0:
+                continue
+            visible_counts = target_valid_b.sum(dim=1)
+            short_lane_mask = (visible_counts >= float(min_visible)) & (visible_counts <= float(visible_thr))
+            short_lane_indices = torch.nonzero(short_lane_mask, as_tuple=False).flatten()
+            if short_lane_indices.numel() == 0:
+                continue
+
+            segments_b = segment_points[b].reshape(flat_count, num_points, 2)
+            logits_b = segment_logits[b].reshape(flat_count)
+            masks_b = window_mask_bq[b].reshape(flat_count, num_points)
+            score_target = torch.zeros((flat_count,), device=device, dtype=dtype)
+            score_weight = torch.zeros((flat_count,), device=device, dtype=dtype)
+            min_ape = torch.full((flat_count,), float("inf"), device=device, dtype=dtype)
+
+            for lane_idx in short_lane_indices.tolist():
+                target = target_points_b[lane_idx]
+                valid = target_valid_b[lane_idx].clamp(0.0, 1.0)
+                valid_bool = valid > 0.5
+                valid_count = valid.sum().clamp_min(1.0)
+                overlap_mask = masks_b & valid_bool.view(1, num_points)
+                overlap_counts = overlap_mask.sum(dim=1)
+                enough_overlap = overlap_counts >= min_overlap
+                if not bool(enough_overlap.any()):
+                    continue
+
+                point_error = torch.norm((segments_b.detach() - target.view(1, num_points, 2)) * scale, dim=-1)
+                overlap_weight = overlap_mask.to(dtype=dtype)
+                ape = (point_error * overlap_weight).sum(dim=1) / overlap_counts.to(dtype=dtype).clamp_min(1.0)
+                ape = torch.where(enough_overlap, ape, torch.full_like(ape, float("inf")))
+                min_ape = torch.minimum(min_ape, ape)
+
+                candidate_topk = min(topk, int(enough_overlap.sum().detach().cpu().item()))
+                if candidate_topk <= 0:
+                    continue
+                top_vals, top_idx = torch.topk(ape, k=candidate_topk, largest=False)
+                active = top_vals <= soft_px
+                if not bool(active.any()):
+                    continue
+
+                selected = top_idx[active]
+                selected_ape = top_vals[active]
+                selected_overlap_counts = overlap_counts[selected].to(dtype=dtype)
+                coverage = (selected_overlap_counts / valid_count).clamp(0.0, 1.0)
+                soft_target = torch.exp(-selected_ape / tau) * coverage
+                target_score = torch.where(
+                    selected_ape <= pos_px,
+                    torch.ones_like(selected_ape),
+                    soft_target,
+                ).clamp(0.0, 1.0)
+                score_target[selected] = torch.maximum(score_target[selected], target_score.to(dtype=dtype))
+                score_weight[selected] = torch.maximum(
+                    score_weight[selected],
+                    score_weight.new_full((selected.numel(),), lane_weight),
+                )
+                pos_count += int((selected_ape <= pos_px).sum().detach().cpu().item())
+                soft_count += int(((selected_ape > pos_px) & (selected_ape <= soft_px)).sum().detach().cpu().item())
+
+                if float(self.short_segment_point_weight) > 0.0:
+                    selected_segments = segments_b[selected]
+                    selected_mask = overlap_mask[selected].to(dtype=dtype)
+                    target_px = target.view(1, num_points, 2) * scale
+                    segment_px = selected_segments * scale
+                    point = F.smooth_l1_loss(
+                        segment_px,
+                        target_px.expand_as(segment_px),
+                        reduction="none",
+                    ).sum(dim=-1)
+                    point = (point * selected_mask).sum(dim=1) / selected_mask.sum(dim=1).clamp_min(1.0)
+                    point_losses.append((point * target_score.detach() * lane_weight).mean())
+
+            neg_mask = (score_weight <= 0.0) & (min_ape > soft_px)
+            if float(self.short_segment_neg_score_thr) > 0.0:
+                neg_mask = neg_mask & (logits_b.detach().sigmoid() >= float(self.short_segment_neg_score_thr))
+            if bool(neg_mask.any()):
+                score_weight[neg_mask] = 1.0
+                neg_count += int(neg_mask.sum().detach().cpu().item())
+
+            active_weight = score_weight > 0.0
+            if bool(active_weight.any()):
+                bce = F.binary_cross_entropy_with_logits(logits_b, score_target, reduction="none")
+                score_losses.append((bce * score_weight).sum() / score_weight.sum().clamp_min(1.0))
+
+        score_loss = torch.stack(score_losses).mean() if score_losses else zero
+        point_loss = torch.stack(point_losses).mean() if point_losses else zero
+        total = score_loss + float(self.short_segment_point_weight) * point_loss
+        return (
+            total,
+            score_loss,
+            point_loss,
+            pred_points.new_tensor(float(pos_count)),
+            pred_points.new_tensor(float(soft_count)),
+            pred_points.new_tensor(float(neg_count)),
+        )
+
     def count_boundary_loss(
         self, count_score: torch.Tensor, target: torch.Tensor, return_details: bool = False
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
@@ -1771,6 +2010,14 @@ class GCSLoss(nn.Module):
             short_candidate_neg_count,
         ) = self.short_candidate_loss(preds, gt_points, gt_valid, gt_lanes)
         (
+            short_segment_loss,
+            short_segment_score_loss,
+            short_segment_point_loss,
+            short_segment_pos_count,
+            short_segment_soft_count,
+            short_segment_neg_count,
+        ) = self.short_segment_loss(preds, gt_points, gt_valid, gt_lanes)
+        (
             spurious_neg_loss,
             spurious_negative_count,
             spur_cand,
@@ -1816,6 +2063,8 @@ class GCSLoss(nn.Module):
             total = total + self.query_count_ce_gain * query_count_ce_loss
         if self.short_candidate_gain != 0.0:
             total = total + self.short_candidate_gain * short_candidate_loss
+        if self.short_segment_gain != 0.0:
+            total = total + self.short_segment_gain * short_segment_loss
         if self.spurious_neg_gain != 0.0:
             total = total + self.spurious_neg_gain * self.spurious_neg_weight * spurious_neg_loss
         loss_items = torch.stack(
@@ -1857,6 +2106,12 @@ class GCSLoss(nn.Module):
                 short_candidate_pos_count.detach(),
                 short_candidate_soft_count.detach(),
                 short_candidate_neg_count.detach(),
+                short_segment_loss.detach(),
+                short_segment_score_loss.detach(),
+                short_segment_point_loss.detach(),
+                short_segment_pos_count.detach(),
+                short_segment_soft_count.detach(),
+                short_segment_neg_count.detach(),
                 query_count_ce_loss.detach(),
                 query_count_acc.detach(),
                 query_count_pred_mean.detach(),
