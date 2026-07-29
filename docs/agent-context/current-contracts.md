@@ -209,6 +209,13 @@ proposal-local token for both segment score and replace logits. The default
 query YAML, v4 YAML, v5 YAML, and formal/default decode remain unchanged.
 TEST remains closed until selected-gated hard diagnostics pass.
 
+The completed `query_local_segment_env30_frozen_probe20_v6_b8s1` run is a
+rejected diagnostic record. Its best hard-gate checkpoint (`last`) reaches only
+official-val/train0601 short GT5 selected-gated `11/53` and `32/183`, while raw
+local-segment capacity remains `52/53` and `179/183`. Do not promote its
+`segment_best.pt`, run TEST, or enable formal short-segment decode from this
+result.
+
 Legacy post-env30 record: the 2026-07-25 user-requested Q12/env30 dual-head
 probe was rejected and its YAML/script are not active after the 2026-07-28
 env30 rollback. It added `pred_count_logits: B x 4` for image-level lane count

@@ -187,6 +187,41 @@ start/mid/end image samples plus proposal geometry. Treat v6 as a diagnostic
 selector probe until `segment_best_hard_gate.json` shows selected-gated gains;
 TEST remains closed.
 
+The completed v6 b8s1 probe is rejected for promotion:
+
+```text
+run = query_local_segment_env30_frozen_probe20_v6_b8s1
+status = rejected for promotion
+TEST used = false
+
+official_best base-decode official-val ACC/FP/FN =
+  0.972582 / 0.017585 / 0.011019
+
+segment_best_hard_gate selected = last
+selected-gated hit20:
+  official-val short GT5 = 11/53
+  official-val short GT4 = 3/8
+  train0601 short GT5 = 32/183
+  train0601 short GT4 = 9/19
+
+raw local-segment hit20 on the same selected checkpoint:
+  official-val short GT5 = 52/53
+  official-val short GT4 = 4/8
+  train0601 short GT5 = 179/183
+  train0601 short GT4 = 19/19
+
+base-to-selected-gated GT5 gain/loss20:
+  official-val = +2 / -31
+  train0601 = +5 / -115
+```
+
+Interpretation: proposal-local evidence helped relative to v5's all-zero
+selected-gated result, but the selector still converts only a small fraction
+of raw oracle capacity and damages many base-hit lanes. The current failure is
+not raw segment geometry; it is proposal ranking and base-preserve replacement
+calibration. Do not continue v6 with more epochs, do not run TEST, and do not
+promote `segment_best.pt`.
+
 ## 2026-07-27 Q12/env30 Lateral Candidate Probe Rejection
 
 The run `query_short_candidate_env30_probe20_fix1` is rejected. It trained

@@ -2,6 +2,62 @@
 
 This file records decisions for branch `codex/5-25-3-k56`.
 
+## 2026-07-30: Reject local short-segment proposal-local selector v6 result
+
+Decision:
+
+Reject `query_local_segment_env30_frozen_probe20_v6_b8s1` as a promotion, do
+not run TEST, do not enable short-segment decode, and do not continue the exact
+proposal-local selector unchanged.
+
+Evidence:
+
+```text
+official_best base-decode official-val ACC/FP/FN =
+  0.972582 / 0.017585 / 0.011019
+env30 official-val ACC/FP/FN =
+  0.973330 / 0.015748 / 0.009642
+
+segment_best_hard_gate selected checkpoint = last
+val short GT5 selected_gated hit20 = 11/53
+val short GT4 selected_gated hit20 = 3/8
+train0601 short GT5 selected_gated hit20 = 32/183
+train0601 short GT4 selected_gated hit20 = 9/19
+
+last checkpoint selected-gated base-hit damage:
+  val short GT5 gain/loss20 = +2 / -31
+  train0601 short GT5 gain/loss20 = +5 / -115
+```
+
+The raw local-segment headroom is still large:
+
+```text
+last checkpoint raw local-segment hit20:
+  val short GT5 = 52/53
+  val short GT4 = 4/8
+  train0601 short GT5 = 179/183
+  train0601 short GT4 = 19/19
+```
+
+Why:
+
+v6 fixed part of the v5 zero-selection collapse, but it still ranks the wrong
+proposal for most short GT5 lanes and destroys many base-hit lanes. The
+selector is not merely undertrained: selected-gated APE remains hundreds of
+pixels on many samples while raw oracle APE is near a few pixels, so the
+learning/selection target is not aligned enough with the hard official-GT
+oracle.
+
+Next action:
+
+Do not add epochs or run TEST. The next useful step is a selector-specific
+rank audit before another training run: for every short GT4/GT5 lane, report
+the oracle proposal's rank under score, replace score, score+replace, and
+base-preserve gate; also report selected proposal start/end/query/candidate
+index distributions. If the oracle proposal is usually not in top-k, change
+the ranking loss/sampling target before changing decode. If it is in top-k but
+the hard gate rejects it, fix the replace/applicability gate.
+
 ## 2026-07-30: Implement local short-segment proposal-local selector v6
 
 Decision:

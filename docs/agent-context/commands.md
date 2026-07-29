@@ -3521,6 +3521,35 @@ Promotion gate remains selected-gated hard hit20 on official-val/train0601.
 Do not run TEST or enable formal short-segment decode unless selected-gated
 converts the raw local-segment headroom without base-hit regressions.
 
+Completed result:
+
+```text
+run = query_local_segment_env30_frozen_probe20_v6_b8s1
+status = rejected for promotion
+TEST used = false
+
+official_best base-decode official-val ACC/FP/FN =
+  0.972582 / 0.017585 / 0.011019
+
+segment_best_hard_gate selected = last
+selected-gated hit20:
+  official-val short GT5 = 11/53
+  official-val short GT4 = 3/8
+  train0601 short GT5 = 32/183
+  train0601 short GT4 = 9/19
+
+raw local-segment hit20 on last:
+  official-val short GT5 = 52/53
+  official-val short GT4 = 4/8
+  train0601 short GT5 = 179/183
+  train0601 short GT4 = 19/19
+```
+
+Do not continue this exact v6 run, do not run TEST, and do not promote
+`weights/segment_best.pt`. The next command should be a selector rank audit
+that reports oracle proposal rank under score/replace/base-preserve gates
+before another training run.
+
 ## Rejected Q12 Env30 Lateral Candidate Probe
 
 Status: rejected after `query_short_candidate_env30_probe20_fix1`. Do not
