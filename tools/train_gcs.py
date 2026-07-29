@@ -483,6 +483,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--gcs-short-segment-gt4-weight", type=float, default=1.0)
     parser.add_argument("--gcs-short-segment-gt5-weight", type=float, default=1.5)
     parser.add_argument("--gcs-short-segment-neg-score-thr", type=float, default=0.6)
+    parser.add_argument("--gcs-short-segment-bce-weight", type=float, default=1.0)
+    parser.add_argument("--gcs-short-segment-listwise-weight", type=float, default=0.0)
+    parser.add_argument("--gcs-short-segment-replace-weight", type=float, default=0.0)
+    parser.add_argument("--gcs-short-segment-replace-margin-px", type=float, default=5.0)
+    parser.add_argument(
+        "--gcs-short-segment-base-preserve",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Train replace logits to preserve base-hit lanes when a short segment would miss the 20px gate.",
+    )
     parser.add_argument(
         "--gcs-short-segment-freeze-base",
         action="store_true",
@@ -866,6 +876,11 @@ def main() -> None:
         "gcs_short_segment_gt4_weight": args.gcs_short_segment_gt4_weight,
         "gcs_short_segment_gt5_weight": args.gcs_short_segment_gt5_weight,
         "gcs_short_segment_neg_score_thr": args.gcs_short_segment_neg_score_thr,
+        "gcs_short_segment_bce_weight": args.gcs_short_segment_bce_weight,
+        "gcs_short_segment_listwise_weight": args.gcs_short_segment_listwise_weight,
+        "gcs_short_segment_replace_weight": args.gcs_short_segment_replace_weight,
+        "gcs_short_segment_replace_margin_px": args.gcs_short_segment_replace_margin_px,
+        "gcs_short_segment_base_preserve": args.gcs_short_segment_base_preserve,
         "gcs_short_segment_freeze_base": args.gcs_short_segment_freeze_base,
         "gcs_candidate_decode": args.gcs_candidate_decode,
         "gcs_candidate_score_thr": args.gcs_candidate_score_thr,

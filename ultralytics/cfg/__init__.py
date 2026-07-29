@@ -244,6 +244,10 @@ CFG_FLOAT_KEYS = frozenset(
         "gcs_short_segment_point_weight",
         "gcs_short_segment_gt4_weight",
         "gcs_short_segment_gt5_weight",
+        "gcs_short_segment_bce_weight",
+        "gcs_short_segment_listwise_weight",
+        "gcs_short_segment_replace_weight",
+        "gcs_short_segment_replace_margin_px",
         "gcs_exist_pos_weight",
         "gcs_exist_focal_gamma",
         "gcs_exist_focal_alpha",
@@ -404,6 +408,7 @@ CFG_BOOL_KEYS = frozenset(
         "gcs_candidate_decode",
         "gcs_short_candidate_freeze_base",
         "gcs_short_segment_freeze_base",
+        "gcs_short_segment_base_preserve",
     }
 )
 

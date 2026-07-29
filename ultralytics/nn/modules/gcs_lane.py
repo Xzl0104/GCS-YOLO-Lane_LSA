@@ -221,6 +221,7 @@ class GCSLaneHead(nn.Module):
         short_segment_lengths=(3, 4, 5, 6, 7, 8, 9, 10),
         short_segment_stride: int = 1,
         short_segment_max_delta_px: float = 480.0,
+        short_segment_replace_head: bool = False,
     ):
         """Initialize the GCS lane query decoder and training-only auxiliary heads."""
         super().__init__()
@@ -380,6 +381,7 @@ class GCSLaneHead(nn.Module):
             self.short_segment_count = int(starts.numel())
             self.short_segment_stride = int(short_segment_stride)
             self.short_segment_max_delta_px = float(short_segment_max_delta_px)
+            self.short_segment_replace_head = bool(short_segment_replace_head)
             if self.short_segment_max_delta_px <= 0.0:
                 raise ValueError(
                     "GCSLaneHead short_segment_max_delta_px must be > 0 when short_segment_head=True, "
@@ -402,6 +404,12 @@ class GCSLaneHead(nn.Module):
                 nn.ReLU(inplace=True),
                 nn.Linear(c1 // 2, 2),
             )
+            if self.short_segment_replace_head:
+                self.short_segment_replace_mlp = nn.Sequential(
+                    nn.Linear(c1, c1 // 2),
+                    nn.ReLU(inplace=True),
+                    nn.Linear(c1 // 2, 1),
+                )
         if self.gcs_mode == "ordered_slot":
             self.start_mlp = nn.Sequential(
                 nn.Linear(c1, c1),
@@ -564,6 +572,10 @@ class GCSLaneHead(nn.Module):
         x_final = self.short_segment_x_mlp[-1]
         nn.init.normal_(x_final.weight, mean=0.0, std=1e-3)
         nn.init.zeros_(x_final.bias)
+        if getattr(self, "short_segment_replace_head", False):
+            replace_final = self.short_segment_replace_mlp[-1]
+            nn.init.normal_(replace_final.weight, mean=0.0, std=1e-3)
+            nn.init.constant_(replace_final.bias, -4.0)
 
     def _sample_point_features(self, xs, points):
         """Sample high-resolution image features at normalized point coordinates.
@@ -680,6 +692,9 @@ class GCSLaneHead(nn.Module):
         ).view(1, 1, s, self.c1)
         segment_tokens = self.short_segment_fuse_norm(query_tokens + window_tokens)
         segment_logits = self.short_segment_score_mlp(segment_tokens).squeeze(-1)
+        replace_logits = None
+        if getattr(self, "short_segment_replace_head", False):
+            replace_logits = self.short_segment_replace_mlp(segment_tokens).squeeze(-1)
 
         max_delta = float(self.short_segment_max_delta_px) / width
         endpoint_delta = torch.tanh(self.short_segment_x_mlp(segment_tokens)) * max_delta
@@ -701,7 +716,7 @@ class GCSLaneHead(nn.Module):
         y = fixed_y.to(device=pred_points.device, dtype=pred_points.dtype).view(1, 1, 1, k).expand(b, q, s, k)
         segment_points = torch.stack((x, y), dim=-1)
         segment_x = torch.stack((x0, x1), dim=-1)
-        return segment_points, segment_logits, segment_x
+        return segment_points, segment_logits, segment_x, replace_logits
 
     def aux_output_size(self, orig_size=None):
         """Return auxiliary supervision size from the explicit original input image size."""
@@ -850,13 +865,17 @@ class GCSLaneHead(nn.Module):
                 device=pred_points.device, dtype=pred_points.dtype
             )
         if getattr(self, "short_segment_head", False):
-            segment_points, segment_logits, segment_x = self._short_segment_outputs(hs, pred_points, orig_size)
+            segment_points, segment_logits, segment_x, replace_logits = self._short_segment_outputs(
+                hs, pred_points, orig_size
+            )
             out["pred_short_segment_points"] = segment_points
             out["pred_short_segment_logits"] = segment_logits
             out["pred_short_segment_x"] = segment_x
             out["pred_short_segment_starts"] = self.short_segment_starts.to(device=pred_points.device)
             out["pred_short_segment_ends"] = self.short_segment_ends.to(device=pred_points.device)
             out["pred_short_segment_window_mask"] = self.short_segment_window_mask.to(device=pred_points.device)
+            if replace_logits is not None:
+                out["pred_short_segment_replace_logits"] = replace_logits
         if self.gcs_mode == "ordered_slot":
             out["pred_exist_logits"] = pred_logits
             out["pred_start_logits"] = self.start_mlp(hs).view(b, self.num_queries, self.num_points)

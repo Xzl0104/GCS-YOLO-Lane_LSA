@@ -628,10 +628,12 @@ def main() -> None:
         candidate_logits_t = preds.get("pred_short_candidate_logits")
         segment_points_t = preds.get("pred_short_segment_points")
         segment_logits_t = preds.get("pred_short_segment_logits")
+        segment_replace_logits_t = preds.get("pred_short_segment_replace_logits")
         segment_window_mask_t = preds.get("pred_short_segment_window_mask")
         affine_pairs: list[tuple[float, float]] | None = None
         static_pairs: list[tuple[float, float, float]] | None = None
         candidate_window_masks: torch.Tensor | None = None
+        candidate_replace_logits: torch.Tensor | None = None
         model_candidate_source = "candidate_head"
         if bool(args.affine_oracle):
             candidate_points, affine_pairs = _make_affine_candidate_points(
@@ -663,6 +665,13 @@ def main() -> None:
         elif segment_points_t is not None and segment_logits_t is not None and segment_window_mask_t is not None:
             candidate_points = segment_points_t[0].detach().float().cpu().clamp(0.0, 1.0)
             candidate_logits = segment_logits_t[0].detach().float().cpu()
+            if segment_replace_logits_t is not None:
+                candidate_replace_logits = segment_replace_logits_t[0].detach().float().cpu()
+                if candidate_replace_logits.shape != candidate_logits.shape:
+                    raise RuntimeError(
+                        "Bad pred_short_segment_replace_logits shape: "
+                        f"{tuple(candidate_replace_logits.shape)} vs logits={tuple(candidate_logits.shape)}"
+                    )
             mask_t = segment_window_mask_t.detach().cpu()
             if mask_t.ndim == 2:
                 candidate_window_masks = mask_t.bool().view(1, *mask_t.shape).expand(candidate_points.shape[0], -1, -1)
@@ -683,19 +692,38 @@ def main() -> None:
                 f"Bad candidate output shapes: points={tuple(candidate_points.shape)}, logits={tuple(candidate_logits.shape)}"
             )
 
-        candidate_prob = candidate_logits.sigmoid()
-        best_scores, best_indices = candidate_prob.max(dim=1)
         visible_counts = (valid_scores >= float(args.point_valid_thr)).sum(dim=1)
         short_gate = (visible_counts >= int(args.candidate_short_min_points)) & (
             visible_counts <= int(args.candidate_short_max_points)
         )
         if bool(args.affine_oracle) or bool(args.static_proposal_oracle) or bool(args.mask_proposal_oracle):
+            candidate_prob = candidate_logits.sigmoid()
+            best_scores, best_indices = candidate_prob.max(dim=1)
             short_gate_full = torch.zeros(candidate_points.shape[0], dtype=torch.bool)
             short_gate_full[: short_gate.shape[0]] = short_gate
             short_gate = short_gate_full
             apply_gate = torch.zeros(candidate_points.shape[0], dtype=torch.bool)
+            best_replace_scores = torch.zeros_like(best_scores)
+            selected_segment_lengths = torch.zeros_like(best_indices)
+        elif candidate_replace_logits is not None and candidate_window_masks is not None:
+            segment_lengths = candidate_window_masks.sum(dim=2)
+            segment_length_gate = (segment_lengths >= int(args.candidate_short_min_points)) & (
+                segment_lengths <= int(args.candidate_short_max_points)
+            )
+            selection_logits = candidate_logits + candidate_replace_logits
+            selection_scores = selection_logits.sigmoid().masked_fill(~segment_length_gate, -1.0)
+            best_scores, best_indices = selection_scores.max(dim=1)
+            replace_scores = candidate_replace_logits.sigmoid()
+            best_replace_scores = replace_scores.gather(1, best_indices.view(-1, 1)).squeeze(1)
+            selected_segment_lengths = segment_lengths.gather(1, best_indices.view(-1, 1)).squeeze(1)
+            short_gate = segment_length_gate.gather(1, best_indices.view(-1, 1)).squeeze(1)
+            apply_gate = short_gate & (best_replace_scores >= float(args.candidate_score_thr))
         else:
+            candidate_prob = candidate_logits.sigmoid()
+            best_scores, best_indices = candidate_prob.max(dim=1)
             apply_gate = short_gate & (best_scores >= float(args.candidate_score_thr))
+            best_replace_scores = torch.zeros_like(best_scores)
+            selected_segment_lengths = torch.zeros_like(best_indices)
 
         q_count = int(base_points.shape[0])
         candidate_q_count = int(candidate_points.shape[0])
@@ -854,8 +882,14 @@ def main() -> None:
                 "oracle_query_visible_count": int(visible_counts[oracle_q].item()) if oracle_has_base_query else -1,
                 "oracle_query_short_gate": bool(short_gate[oracle_q].item()) if 0 <= oracle_q < int(short_gate.shape[0]) else False,
                 "oracle_query_best_score": float(best_scores[oracle_q].item()) if oracle_has_candidate_query else float("nan"),
+                "oracle_query_best_replace_score": float(best_replace_scores[oracle_q].item())
+                if oracle_has_candidate_query
+                else float("nan"),
                 "oracle_query_gate_applies": bool(apply_gate[oracle_q].item()) if 0 <= oracle_q < int(apply_gate.shape[0]) else False,
                 "oracle_query_selected_candidate": int(best_indices[oracle_q].item()) if oracle_has_candidate_query else -1,
+                "oracle_query_selected_segment_length": int(selected_segment_lengths[oracle_q].item())
+                if oracle_has_candidate_query
+                else -1,
                 "oracle_query_selected_oracle_candidate": bool(int(best_indices[oracle_q].item()) == oracle_m)
                 if oracle_has_candidate_query
                 else False,
@@ -934,6 +968,12 @@ def main() -> None:
             "candidate_score_thr": float(args.candidate_score_thr),
             "candidate_short_min_points": int(args.candidate_short_min_points),
             "candidate_short_max_points": int(args.candidate_short_max_points),
+            "selected_gate_mode": (
+                "segment_length_and_replace_score"
+                if rows and any(str(r.get("raw_candidate_source", "")) == "segment_head" for r in rows)
+                and any(math.isfinite(float(r.get("oracle_query_best_replace_score", float("nan")))) for r in rows)
+                else "base_visible_count_and_candidate_score"
+            ),
             "imgsz": [int(imgsz[0]), int(imgsz[1])],
             "device": str(args.device),
             "half": bool(args.half),

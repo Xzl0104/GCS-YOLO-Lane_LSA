@@ -121,6 +121,18 @@ for query models built from
 The default query YAML still emits no short-segment tensors and default decode
 does not consume them.
 
+The optional local short-segment selector/gate v5 YAML preserves the v4 outputs
+and additionally emits:
+
+```text
+pred_short_segment_replace_logits: B x 12 x 404
+```
+
+for query models built from
+`ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-local-segment-proposal-v5.yaml`.
+The default query YAML and v4 YAML still emit no replace logits, and default
+decode does not consume the v5 tensor.
+
 Legacy post-env30 record: the rejected query extent probe added:
 
 ```text

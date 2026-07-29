@@ -2,6 +2,39 @@
 
 This file records decisions for branch `codex/5-25-3-k56`.
 
+## 2026-07-29: Implement default-off local short-segment selector/gate v5
+
+Decision:
+
+Implement the user-requested v5 selector/gate follow-up on top of the v4 local
+short-segment proposal head, without changing the env30 base path or default
+decode.
+
+Implementation:
+
+- add `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-local-segment-proposal-v5.yaml`;
+- add optional `pred_short_segment_replace_logits: B x 12 x 404`;
+- preserve v4 default behavior with `gcs_short_segment_bce_weight=1.0`;
+- add default-off `gcs_short_segment_listwise_weight` for softmax ranking over
+  all `Q x 404` segment proposals per short GT4/GT5 lane;
+- add default-off `gcs_short_segment_replace_weight` with base-preserve targets:
+  clearly better candidates and base-miss/candidate-hit cases are positives,
+  while base-hit/candidate-miss cases are strong negatives;
+- update the hard official-GT diagnostic so v5 selected-gated coverage uses
+  proposal-local segment length and replace score instead of only base query
+  visible count;
+- add `scripts/run_query_local_segment_env30_frozen_probe20_v5.sh`, which keeps
+  TEST closed and selects diagnostic `segment_best.pt` from hard selected-gated
+  official-val/train0601 hit20 summaries.
+
+Why:
+
+The v4 result showed raw local-segment geometry was strong, but selected-gated
+coverage converted only part of the raw headroom. The failure is therefore the
+selector/ranking/replacement gate, not the local segment representation itself.
+The v5 change targets that failure directly while keeping normal official
+decode unchanged until hard gates pass.
+
 ## 2026-07-29: Implement default-off local short-segment proposal v4
 
 Decision:

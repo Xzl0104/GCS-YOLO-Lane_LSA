@@ -168,6 +168,28 @@ parameters and keeps frozen base modules in eval mode. TEST remains closed.
 The diagnostic gate must use the hard official-GT denominators and compare
 base/raw-segment/selected-gated coverage before any decode promotion.
 
+The v5 selector/gate follow-up is a separate default-off YAML:
+
+```text
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-local-segment-proposal-v5.yaml
+```
+
+It preserves the v4 raw short-segment geometry and additionally emits:
+
+```text
+pred_short_segment_replace_logits: B x 12 x 404
+```
+
+The default v4 BCE score loss remains controlled by
+`gcs_short_segment_bce_weight=1.0`. The v5 probe can explicitly set
+`gcs_short_segment_bce_weight=0.0`,
+`gcs_short_segment_listwise_weight>0`, and
+`gcs_short_segment_replace_weight>0` so the selector learns listwise ranking
+over `Q x 404` proposals plus a base-preserve replace gate. The hard
+diagnostic uses proposal-local segment length and replace score when
+`pred_short_segment_replace_logits` is present; formal/default decode still
+does not consume short-segment tensors. TEST remains closed.
+
 Legacy post-env30 record: the 2026-07-25 user-requested Q12/env30 dual-head
 probe was rejected and its YAML/script are not active after the 2026-07-28
 env30 rollback. It added `pred_count_logits: B x 4` for image-level lane count

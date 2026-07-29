@@ -23,6 +23,7 @@ from ultralytics.utils.gcs_loss import GCSLoss  # noqa: E402
 
 DEFAULT_CFG = ROOT / "ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml"
 SEGMENT_CFG = ROOT / "ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-local-segment-proposal-v4.yaml"
+SEGMENT_V5_CFG = ROOT / "ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-local-segment-proposal-v5.yaml"
 
 
 def _logit(p: float) -> float:
@@ -69,6 +70,8 @@ def check_yaml_forward() -> None:
     missing = required.difference(segment_out)
     if missing:
         raise AssertionError(f"segment YAML missing output keys: {sorted(missing)}.")
+    if "pred_short_segment_replace_logits" in segment_out:
+        raise AssertionError("v4 segment YAML must not emit pred_short_segment_replace_logits.")
 
     points = segment_out["pred_short_segment_points"]
     logits = segment_out["pred_short_segment_logits"]
@@ -91,6 +94,15 @@ def check_yaml_forward() -> None:
     if not torch.equal(mask.sum(dim=1).cpu(), lengths.cpu()):
         raise AssertionError("segment window masks do not match start/end lengths.")
 
+    segment_v5_head = _head_from_yaml(SEGMENT_V5_CFG)
+    segment_v5_out = segment_v5_head(_head_features(segment_v5_head), orig_size=(544, 960))
+    missing_v5 = (required | {"pred_short_segment_replace_logits"}).difference(segment_v5_out)
+    if missing_v5:
+        raise AssertionError(f"segment v5 YAML missing output keys: {sorted(missing_v5)}.")
+    replace_logits = segment_v5_out["pred_short_segment_replace_logits"]
+    if tuple(replace_logits.shape) != (1, 12, expected_segments):
+        raise AssertionError(f"segment replace-logit shape mismatch: {tuple(replace_logits.shape)}.")
+
 
 def _make_short_segment_batch() -> dict:
     k = 56
@@ -107,7 +119,7 @@ def _make_short_segment_batch() -> dict:
     }
 
 
-def _make_short_segment_preds() -> dict[str, torch.Tensor]:
+def _make_short_segment_preds(*, include_replace: bool = False) -> dict[str, torch.Tensor]:
     b, q, s, k = 1, 12, 2, 56
     y = torch.linspace(710.0 / 720.0, 160.0 / 720.0, k).view(1, 1, k).expand(b, q, k)
     x = torch.full((b, q, k), 0.5)
@@ -119,7 +131,7 @@ def _make_short_segment_preds() -> dict[str, torch.Tensor]:
     window_mask = torch.zeros(s, k, dtype=torch.bool)
     window_mask[0, :5] = True
     window_mask[1, 10:15] = True
-    return {
+    preds = {
         "pred_points": pred_points,
         "pred_logits": torch.full((b, q), _logit(0.2), dtype=torch.float32),
         "pred_valid_logits": torch.full((b, q, k), _logit(0.7), dtype=torch.float32),
@@ -127,6 +139,11 @@ def _make_short_segment_preds() -> dict[str, torch.Tensor]:
         "pred_short_segment_logits": segment_logits,
         "pred_short_segment_window_mask": window_mask,
     }
+    if include_replace:
+        replace_logits = torch.full((b, q, s), _logit(0.02), dtype=torch.float32)
+        replace_logits[0, 0, 0] = _logit(0.5)
+        preds["pred_short_segment_replace_logits"] = replace_logits
+    return preds
 
 
 def _segment_criterion() -> GCSLoss:
@@ -139,6 +156,23 @@ def _segment_criterion() -> GCSLoss:
             "gcs_short_segment_min_visible": 3,
             "gcs_short_segment_min_overlap": 3,
             "gcs_short_segment_neg_score_thr": 0.6,
+        }
+    )
+
+
+def _segment_v5_criterion() -> GCSLoss:
+    return GCSLoss(
+        {
+            "gcs_imgsz": [544, 960],
+            "gcs_short_segment": 0.1,
+            "gcs_short_segment_topk": 2,
+            "gcs_short_segment_visible_thr": 10,
+            "gcs_short_segment_min_visible": 3,
+            "gcs_short_segment_min_overlap": 3,
+            "gcs_short_segment_bce_weight": 0.0,
+            "gcs_short_segment_listwise_weight": 1.0,
+            "gcs_short_segment_replace_weight": 1.0,
+            "gcs_short_segment_replace_margin_px": 5.0,
         }
     )
 
@@ -190,6 +224,35 @@ def check_backward() -> None:
         raise AssertionError("short-segment points received zero pull gradient.")
 
 
+def check_v5_replace_backward() -> None:
+    preds = _make_short_segment_preds(include_replace=True)
+    segment_logits = preds["pred_short_segment_logits"].detach().clone().requires_grad_(True)
+    replace_logits = preds["pred_short_segment_replace_logits"].detach().clone().requires_grad_(True)
+    preds["pred_short_segment_logits"] = segment_logits
+    preds["pred_short_segment_replace_logits"] = replace_logits
+
+    total, items = _segment_v5_criterion()(preds, _make_short_segment_batch())
+    total.backward()
+    if not torch.isfinite(total.detach()) or not torch.isfinite(items).all():
+        raise AssertionError("short-segment v5 backward smoke produced non-finite losses.")
+    if segment_logits.grad is None or not torch.isfinite(segment_logits.grad).all():
+        raise AssertionError("short-segment v5 listwise logits did not receive finite gradients.")
+    if float(segment_logits.grad.abs().sum()) <= 0.0:
+        raise AssertionError("short-segment v5 listwise logits received zero gradient.")
+    if replace_logits.grad is None or not torch.isfinite(replace_logits.grad).all():
+        raise AssertionError("short-segment v5 replace logits did not receive finite gradients.")
+    if float(replace_logits.grad.abs().sum()) <= 0.0:
+        raise AssertionError("short-segment v5 replace logits received zero gradient.")
+
+    missing = _make_short_segment_preds(include_replace=False)
+    try:
+        _segment_v5_criterion()(missing, _make_short_segment_batch())
+    except KeyError:
+        pass
+    else:
+        raise AssertionError("replace-weighted v5 loss should require pred_short_segment_replace_logits.")
+
+
 def check_empty_segment_batch_has_grad() -> None:
     preds = _make_short_segment_preds()
     segment_logits = preds["pred_short_segment_logits"].detach().clone().requires_grad_(True)
@@ -213,7 +276,7 @@ def check_empty_segment_batch_has_grad() -> None:
 
 
 def check_freeze_contract() -> None:
-    model = GCSLaneModel(str(SEGMENT_CFG), nc=1, verbose=False)
+    model = GCSLaneModel(str(SEGMENT_V5_CFG), nc=1, verbose=False)
     trainer = object.__new__(GCSLaneTrainer)
     trainer.model = model
     trainer.args = SimpleNamespace(
@@ -233,6 +296,8 @@ def check_freeze_contract() -> None:
         raise AssertionError(f"short-segment freeze contract left base parameters trainable: {bad[:5]}.")
     if not any("short_segment_x_mlp" in name for name in trainable):
         raise AssertionError("short-segment endpoint MLP is not trainable under freeze contract.")
+    if not any("short_segment_replace_mlp" in name for name in trainable):
+        raise AssertionError("short-segment replace MLP is not trainable under freeze contract.")
 
     optimizer = trainer.build_optimizer(model, name="AdamW", lr=0.001, momentum=0.9, decay=0.0, iterations=1)
     optimizer_param_ids = {
@@ -252,6 +317,8 @@ def check_freeze_contract() -> None:
         raise AssertionError("frozen base GCSLaneHead parent should stay eval to suppress base-path stat drift.")
     if not head.short_segment_x_mlp.training:
         raise AssertionError("short-segment endpoint MLP should stay in train mode.")
+    if not head.short_segment_replace_mlp.training:
+        raise AssertionError("short-segment replace MLP should stay in train mode.")
     bn_training = [name for name, module in model.named_modules() if isinstance(module, torch.nn.BatchNorm2d) and module.training]
     if bn_training:
         raise AssertionError(f"frozen base BatchNorm modules stayed in train mode: {bn_training[:5]}.")
@@ -261,6 +328,7 @@ def main() -> None:
     check_yaml_forward()
     check_loss()
     check_backward()
+    check_v5_replace_backward()
     check_empty_segment_batch_has_grad()
     check_freeze_contract()
     print("GCS short-segment proposal head checks passed.")

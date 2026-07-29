@@ -3420,6 +3420,48 @@ runs/gcs_lane/query_local_segment_env30_frozen_probe20_v4_hard_segment_diag_val_
 runs/gcs_lane/query_local_segment_env30_frozen_probe20_v4_hard_segment_diag_train0601_last/short_candidate_hard_summary.json
 ```
 
+## Q12 Env30 Local Short-Segment Selector/Gate v5
+
+The v5 probe keeps the v4 raw local short-segment proposal geometry, adds a
+replace-gate logit, trains selector ranking with listwise softmax over
+`Q x 404`, and trains base-preserve replacement targets. Default decode
+remains unchanged and TEST stays closed:
+
+```bash
+RUN_NAME=query_local_segment_env30_frozen_probe20_v5 \
+EPOCHS=20 \
+RUN_TESTS=0 \
+bash scripts/run_query_local_segment_env30_frozen_probe20_v5.sh
+```
+
+Dedicated model:
+
+```text
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-local-segment-proposal-v5.yaml
+```
+
+Default v5 selector parameters:
+
+```text
+gcs_short_segment_bce_weight = 0.0
+gcs_short_segment_listwise_weight = 1.0
+gcs_short_segment_replace_weight = 1.0
+gcs_short_segment_replace_margin_px = 5.0
+gcs_short_segment_base_preserve = True
+```
+
+The script runs hard diagnostics for available `last.pt`, `best.pt`, and
+`official_best.pt`, then writes a diagnostic hard-gate selection:
+
+```text
+runs/gcs_lane/query_local_segment_env30_frozen_probe20_v5/weights/segment_best.pt
+runs/gcs_lane/query_local_segment_env30_frozen_probe20_v5/weights/segment_best_hard_gate.json
+```
+
+Promotion gate remains selected-gated hard hit20 on official-val/train0601.
+Do not run TEST or enable any formal short-segment decode until selected-gated
+converts the v4 raw-segment headroom without base-hit regressions.
+
 ## Rejected Q12 Env30 Lateral Candidate Probe
 
 Status: rejected after `query_short_candidate_env30_probe20_fix1`. Do not
