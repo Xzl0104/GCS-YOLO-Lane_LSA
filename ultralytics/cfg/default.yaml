@@ -208,8 +208,15 @@ gcs_short_segment_gt5_weight: 1.5 # (float) per-lane score/pull multiplier for s
 gcs_short_segment_neg_score_thr: 0.6 # (float) only far segment proposals above this score become negatives
 gcs_short_segment_bce_weight: 1.0 # (float) weight for legacy v4 geometry-quality BCE score loss; v5 can set 0
 gcs_short_segment_listwise_weight: 0.0 # (float) default-off softmax ranking loss over QxS segment proposals
+gcs_short_segment_query_rank_weight: 0.0 # (float) default-off v8 per-query candidate ranking loss over S segment windows
 gcs_short_segment_replace_weight: 0.0 # (float) default-off base-preserve replacement gate loss
+gcs_short_segment_query_replace_weight: 0.0 # (float) default-off v8 query-level base-vs-proposal replacement gate loss
+gcs_short_segment_query_replace_neg_weight: 0.25 # (float) v8 no-replace negative weight for finite but non-improving query proposals
 gcs_short_segment_replace_margin_px: 5.0 # (float) candidate must beat base by this margin to be replace-positive
+gcs_short_segment_dense_quality_weight: 0.0 # (float) default-off dense BCE over all QxS segment geometry-quality targets
+gcs_short_segment_dense_neg_weight: 0.05 # (float) negative weight for dense short-segment quality BCE
+gcs_short_segment_replace_dense_neg_weight: 0.0 # (float) default-off dense no-replace negatives when base is already hit20
+gcs_short_segment_listwise_all_candidates: False # (bool) include all QxS candidates in short-segment listwise denominator
 gcs_short_segment_base_preserve: True # (bool) make base-hit/candidate-miss segment replacements strong negatives
 gcs_short_segment_freeze_base: False # (bool) freeze env30/base path and train only short_segment_* parameters
 gcs_candidate_decode: False # (bool) default-off prediction-only gated lateral candidate decode

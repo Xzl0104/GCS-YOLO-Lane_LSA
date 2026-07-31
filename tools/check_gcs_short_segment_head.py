@@ -25,6 +25,8 @@ DEFAULT_CFG = ROOT / "ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml"
 SEGMENT_CFG = ROOT / "ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-local-segment-proposal-v4.yaml"
 SEGMENT_V5_CFG = ROOT / "ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-local-segment-proposal-v5.yaml"
 SEGMENT_V6_CFG = ROOT / "ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-local-segment-proposal-v6.yaml"
+SEGMENT_V7_CFG = ROOT / "ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-local-segment-proposal-v7.yaml"
+SEGMENT_V8_CFG = ROOT / "ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-local-segment-proposal-v8.yaml"
 
 
 def _logit(p: float) -> float:
@@ -120,6 +122,41 @@ def check_yaml_forward() -> None:
             f"segment v6 replace-logit shape mismatch: {tuple(segment_v6_out['pred_short_segment_replace_logits'].shape)}."
         )
 
+    segment_v7_head = _head_from_yaml(SEGMENT_V7_CFG)
+    if not getattr(segment_v7_head, "short_segment_local_evidence", False):
+        raise AssertionError("segment v7 YAML should enable proposal-local evidence.")
+    segment_v7_out = segment_v7_head(_head_features(segment_v7_head), orig_size=(544, 960))
+    missing_v7 = (required | {"pred_short_segment_replace_logits"}).difference(segment_v7_out)
+    if missing_v7:
+        raise AssertionError(f"segment v7 YAML missing output keys: {sorted(missing_v7)}.")
+    if tuple(segment_v7_out["pred_short_segment_points"].shape) != (1, 12, expected_segments, 56, 2):
+        raise AssertionError(f"segment v7 point shape mismatch: {tuple(segment_v7_out['pred_short_segment_points'].shape)}.")
+    if tuple(segment_v7_out["pred_short_segment_replace_logits"].shape) != (1, 12, expected_segments):
+        raise AssertionError(
+            f"segment v7 replace-logit shape mismatch: {tuple(segment_v7_out['pred_short_segment_replace_logits'].shape)}."
+        )
+
+    segment_v8_head = _head_from_yaml(SEGMENT_V8_CFG)
+    if not getattr(segment_v8_head, "short_segment_local_evidence", False):
+        raise AssertionError("segment v8 YAML should enable proposal-local evidence.")
+    if getattr(segment_v8_head, "short_segment_replace_head", False):
+        raise AssertionError("segment v8 YAML should disable per-candidate replace logits.")
+    if not getattr(segment_v8_head, "short_segment_query_replace_head", False):
+        raise AssertionError("segment v8 YAML should enable query-level replace logits.")
+    segment_v8_out = segment_v8_head(_head_features(segment_v8_head), orig_size=(544, 960))
+    missing_v8 = (required | {"pred_short_segment_query_replace_logits"}).difference(segment_v8_out)
+    if missing_v8:
+        raise AssertionError(f"segment v8 YAML missing output keys: {sorted(missing_v8)}.")
+    if "pred_short_segment_replace_logits" in segment_v8_out:
+        raise AssertionError("segment v8 YAML must not emit pred_short_segment_replace_logits.")
+    if tuple(segment_v8_out["pred_short_segment_points"].shape) != (1, 12, expected_segments, 56, 2):
+        raise AssertionError(f"segment v8 point shape mismatch: {tuple(segment_v8_out['pred_short_segment_points'].shape)}.")
+    if tuple(segment_v8_out["pred_short_segment_query_replace_logits"].shape) != (1, 12):
+        raise AssertionError(
+            "segment v8 query replace-logit shape mismatch: "
+            f"{tuple(segment_v8_out['pred_short_segment_query_replace_logits'].shape)}."
+        )
+
 
 def _make_short_segment_batch() -> dict:
     k = 56
@@ -136,7 +173,9 @@ def _make_short_segment_batch() -> dict:
     }
 
 
-def _make_short_segment_preds(*, include_replace: bool = False) -> dict[str, torch.Tensor]:
+def _make_short_segment_preds(
+    *, include_replace: bool = False, include_query_replace: bool = False
+) -> dict[str, torch.Tensor]:
     b, q, s, k = 1, 12, 2, 56
     y = torch.linspace(710.0 / 720.0, 160.0 / 720.0, k).view(1, 1, k).expand(b, q, k)
     x = torch.full((b, q, k), 0.5)
@@ -160,6 +199,10 @@ def _make_short_segment_preds(*, include_replace: bool = False) -> dict[str, tor
         replace_logits = torch.full((b, q, s), _logit(0.02), dtype=torch.float32)
         replace_logits[0, 0, 0] = _logit(0.5)
         preds["pred_short_segment_replace_logits"] = replace_logits
+    if include_query_replace:
+        query_replace_logits = torch.full((b, q), _logit(0.02), dtype=torch.float32)
+        query_replace_logits[0, 0] = _logit(0.5)
+        preds["pred_short_segment_query_replace_logits"] = query_replace_logits
     return preds
 
 
@@ -189,6 +232,49 @@ def _segment_v5_criterion() -> GCSLoss:
             "gcs_short_segment_bce_weight": 0.0,
             "gcs_short_segment_listwise_weight": 1.0,
             "gcs_short_segment_replace_weight": 1.0,
+            "gcs_short_segment_replace_margin_px": 5.0,
+        }
+    )
+
+
+def _segment_v7_criterion() -> GCSLoss:
+    return GCSLoss(
+        {
+            "gcs_imgsz": [544, 960],
+            "gcs_short_segment": 0.1,
+            "gcs_short_segment_topk": 2,
+            "gcs_short_segment_visible_thr": 10,
+            "gcs_short_segment_min_visible": 3,
+            "gcs_short_segment_min_overlap": 3,
+            "gcs_short_segment_bce_weight": 0.0,
+            "gcs_short_segment_listwise_weight": 1.0,
+            "gcs_short_segment_listwise_all_candidates": True,
+            "gcs_short_segment_dense_quality_weight": 1.0,
+            "gcs_short_segment_dense_neg_weight": 0.05,
+            "gcs_short_segment_replace_weight": 1.0,
+            "gcs_short_segment_replace_dense_neg_weight": 0.25,
+            "gcs_short_segment_replace_margin_px": 5.0,
+        }
+    )
+
+
+def _segment_v8_criterion() -> GCSLoss:
+    return GCSLoss(
+        {
+            "gcs_imgsz": [544, 960],
+            "gcs_short_segment": 0.1,
+            "gcs_short_segment_topk": 2,
+            "gcs_short_segment_visible_thr": 10,
+            "gcs_short_segment_min_visible": 3,
+            "gcs_short_segment_min_overlap": 3,
+            "gcs_short_segment_bce_weight": 0.0,
+            "gcs_short_segment_listwise_weight": 0.0,
+            "gcs_short_segment_query_rank_weight": 1.0,
+            "gcs_short_segment_dense_quality_weight": 1.0,
+            "gcs_short_segment_dense_neg_weight": 0.05,
+            "gcs_short_segment_replace_weight": 0.0,
+            "gcs_short_segment_query_replace_weight": 1.0,
+            "gcs_short_segment_query_replace_neg_weight": 0.25,
             "gcs_short_segment_replace_margin_px": 5.0,
         }
     )
@@ -270,6 +356,54 @@ def check_v5_replace_backward() -> None:
         raise AssertionError("replace-weighted v5 loss should require pred_short_segment_replace_logits.")
 
 
+def check_v7_dense_quality_backward() -> None:
+    preds = _make_short_segment_preds(include_replace=True)
+    segment_logits = preds["pred_short_segment_logits"].detach().clone()
+    segment_logits[0, 0, 1] = _logit(0.9)
+    segment_logits.requires_grad_(True)
+    replace_logits = preds["pred_short_segment_replace_logits"].detach().clone()
+    replace_logits[0, 0, 1] = _logit(0.9)
+    replace_logits.requires_grad_(True)
+    preds["pred_short_segment_logits"] = segment_logits
+    preds["pred_short_segment_replace_logits"] = replace_logits
+
+    total, items = _segment_v7_criterion()(preds, _make_short_segment_batch())
+    total.backward()
+    if not torch.isfinite(total.detach()) or not torch.isfinite(items).all():
+        raise AssertionError("short-segment v7 backward smoke produced non-finite losses.")
+    if segment_logits.grad is None or not torch.isfinite(segment_logits.grad).all():
+        raise AssertionError("short-segment v7 dense-quality logits did not receive finite gradients.")
+    if float(segment_logits.grad.abs().sum()) <= 0.0:
+        raise AssertionError("short-segment v7 dense-quality logits received zero gradient.")
+    if replace_logits.grad is None or not torch.isfinite(replace_logits.grad).all():
+        raise AssertionError("short-segment v7 dense replace logits did not receive finite gradients.")
+    if float(replace_logits.grad.abs().sum()) <= 0.0:
+        raise AssertionError("short-segment v7 dense replace logits received zero gradient.")
+
+
+def check_v8_query_replace_backward() -> None:
+    preds = _make_short_segment_preds(include_query_replace=True)
+    segment_logits = preds["pred_short_segment_logits"].detach().clone()
+    segment_logits[0, 0, 1] = _logit(0.9)
+    segment_logits.requires_grad_(True)
+    query_replace_logits = preds["pred_short_segment_query_replace_logits"].detach().clone().requires_grad_(True)
+    preds["pred_short_segment_logits"] = segment_logits
+    preds["pred_short_segment_query_replace_logits"] = query_replace_logits
+
+    total, items = _segment_v8_criterion()(preds, _make_short_segment_batch())
+    total.backward()
+    if not torch.isfinite(total.detach()) or not torch.isfinite(items).all():
+        raise AssertionError("short-segment v8 backward smoke produced non-finite losses.")
+    if segment_logits.grad is None or not torch.isfinite(segment_logits.grad).all():
+        raise AssertionError("short-segment v8 query-rank logits did not receive finite gradients.")
+    if float(segment_logits.grad.abs().sum()) <= 0.0:
+        raise AssertionError("short-segment v8 query-rank logits received zero gradient.")
+    if query_replace_logits.grad is None or not torch.isfinite(query_replace_logits.grad).all():
+        raise AssertionError("short-segment v8 query replace logits did not receive finite gradients.")
+    if float(query_replace_logits.grad.abs().sum()) <= 0.0:
+        raise AssertionError("short-segment v8 query replace logits received zero gradient.")
+
+
 def check_empty_segment_batch_has_grad() -> None:
     preds = _make_short_segment_preds()
     segment_logits = preds["pred_short_segment_logits"].detach().clone().requires_grad_(True)
@@ -348,12 +482,40 @@ def check_freeze_contract() -> None:
     if bn_training:
         raise AssertionError(f"frozen base BatchNorm modules stayed in train mode: {bn_training[:5]}.")
 
+    model_v8 = GCSLaneModel(str(SEGMENT_V8_CFG), nc=1, verbose=False)
+    trainer_v8 = object.__new__(GCSLaneTrainer)
+    trainer_v8.model = model_v8
+    trainer_v8.args = SimpleNamespace(
+        gcs_short_candidate_freeze_base=False,
+        gcs_short_candidate=0.0,
+        gcs_short_segment_freeze_base=True,
+        gcs_short_segment=0.1,
+    )
+    trainer_v8.freeze_layer_names = []
+    trainer_v8._apply_custom_freeze()
+    trainable_v8 = [name for name, param in model_v8.named_parameters() if param.requires_grad]
+    bad_v8 = [name for name in trainable_v8 if "short_segment_" not in name]
+    if bad_v8:
+        raise AssertionError(f"v8 freeze contract left base parameters trainable: {bad_v8[:5]}.")
+    if not any("short_segment_query_replace_mlp" in name for name in trainable_v8):
+        raise AssertionError("v8 query-level replace MLP is not trainable under freeze contract.")
+    if any("short_segment_replace_mlp" in name for name in trainable_v8):
+        raise AssertionError("v8 should not train a per-candidate replace MLP.")
+    trainer_v8._model_train()
+    head_v8 = model_v8.model[-1]
+    if head_v8.training:
+        raise AssertionError("v8 frozen base GCSLaneHead parent should stay eval to suppress base-path stat drift.")
+    if not head_v8.short_segment_query_replace_mlp.training:
+        raise AssertionError("v8 query-level replace MLP should stay in train mode.")
+
 
 def main() -> None:
     check_yaml_forward()
     check_loss()
     check_backward()
     check_v5_replace_backward()
+    check_v7_dense_quality_backward()
+    check_v8_query_replace_backward()
     check_empty_segment_batch_has_grad()
     check_freeze_contract()
     print("GCS short-segment proposal head checks passed.")

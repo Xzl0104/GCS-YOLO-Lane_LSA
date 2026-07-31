@@ -45,8 +45,15 @@ SHORT_SEGMENT_GT5_WEIGHT="${SHORT_SEGMENT_GT5_WEIGHT:-1.5}"
 SHORT_SEGMENT_NEG_SCORE_THR="${SHORT_SEGMENT_NEG_SCORE_THR:-0.6}"
 SHORT_SEGMENT_BCE_WEIGHT="${SHORT_SEGMENT_BCE_WEIGHT:-0.0}"
 SHORT_SEGMENT_LISTWISE_WEIGHT="${SHORT_SEGMENT_LISTWISE_WEIGHT:-1.0}"
+SHORT_SEGMENT_QUERY_RANK_WEIGHT="${SHORT_SEGMENT_QUERY_RANK_WEIGHT:-0.0}"
 SHORT_SEGMENT_REPLACE_WEIGHT="${SHORT_SEGMENT_REPLACE_WEIGHT:-1.0}"
+SHORT_SEGMENT_QUERY_REPLACE_WEIGHT="${SHORT_SEGMENT_QUERY_REPLACE_WEIGHT:-0.0}"
+SHORT_SEGMENT_QUERY_REPLACE_NEG_WEIGHT="${SHORT_SEGMENT_QUERY_REPLACE_NEG_WEIGHT:-0.25}"
 SHORT_SEGMENT_REPLACE_MARGIN_PX="${SHORT_SEGMENT_REPLACE_MARGIN_PX:-5.0}"
+SHORT_SEGMENT_DENSE_QUALITY_WEIGHT="${SHORT_SEGMENT_DENSE_QUALITY_WEIGHT:-0.0}"
+SHORT_SEGMENT_DENSE_NEG_WEIGHT="${SHORT_SEGMENT_DENSE_NEG_WEIGHT:-0.05}"
+SHORT_SEGMENT_REPLACE_DENSE_NEG_WEIGHT="${SHORT_SEGMENT_REPLACE_DENSE_NEG_WEIGHT:-0.0}"
+SHORT_SEGMENT_LISTWISE_ALL_CANDIDATES="${SHORT_SEGMENT_LISTWISE_ALL_CANDIDATES:-0}"
 SHORT_SEGMENT_BASE_PRESERVE="${SHORT_SEGMENT_BASE_PRESERVE:-1}"
 
 OFFICIAL_CONFS="${OFFICIAL_CONFS:-0.005 0.01 0.02 0.05 0.1}"
@@ -56,6 +63,9 @@ OFFICIAL_MAX_DETS="${OFFICIAL_MAX_DETS:-5 6 8}"
 OFFICIAL_MIN_POINTS="${OFFICIAL_MIN_POINTS:-4 5 6}"
 OFFICIAL_COUNT_MODES="${OFFICIAL_COUNT_MODES:-score_sum}"
 HARD_WEIGHT_NAMES="${HARD_WEIGHT_NAMES:-last best official_best}"
+HARD_CANDIDATE_SCORE_THR="${HARD_CANDIDATE_SCORE_THR:-0.05}"
+HARD_SEGMENT_SELECTION_SCORE_MODE="${HARD_SEGMENT_SELECTION_SCORE_MODE:-replace}"
+HARD_SEGMENT_SELECTION_PRED_VALID_OVERLAP_MIN="${HARD_SEGMENT_SELECTION_PRED_VALID_OVERLAP_MIN:-0}"
 
 read -r -a OFFICIAL_CONFS_ARR <<< "${OFFICIAL_CONFS}"
 read -r -a OFFICIAL_POINT_VALID_THRS_ARR <<< "${OFFICIAL_POINT_VALID_THRS}"
@@ -120,6 +130,10 @@ BASE_PRESERVE_ARGS=(--gcs-short-segment-base-preserve)
 if ! is_true "${SHORT_SEGMENT_BASE_PRESERVE}"; then
   BASE_PRESERVE_ARGS=(--no-gcs-short-segment-base-preserve)
 fi
+LISTWISE_SCOPE_ARGS=()
+if is_true "${SHORT_SEGMENT_LISTWISE_ALL_CANDIDATES}"; then
+  LISTWISE_SCOPE_ARGS=(--gcs-short-segment-listwise-all-candidates)
+fi
 
 if is_true "${RUN_TRAIN}"; then
   if [[ -e "${RUN_DIR}" ]]; then
@@ -167,8 +181,15 @@ if is_true "${RUN_TRAIN}"; then
     --gcs-short-segment-neg-score-thr "${SHORT_SEGMENT_NEG_SCORE_THR}" \
     --gcs-short-segment-bce-weight "${SHORT_SEGMENT_BCE_WEIGHT}" \
     --gcs-short-segment-listwise-weight "${SHORT_SEGMENT_LISTWISE_WEIGHT}" \
+    --gcs-short-segment-query-rank-weight "${SHORT_SEGMENT_QUERY_RANK_WEIGHT}" \
     --gcs-short-segment-replace-weight "${SHORT_SEGMENT_REPLACE_WEIGHT}" \
+    --gcs-short-segment-query-replace-weight "${SHORT_SEGMENT_QUERY_REPLACE_WEIGHT}" \
+    --gcs-short-segment-query-replace-neg-weight "${SHORT_SEGMENT_QUERY_REPLACE_NEG_WEIGHT}" \
     --gcs-short-segment-replace-margin-px "${SHORT_SEGMENT_REPLACE_MARGIN_PX}" \
+    --gcs-short-segment-dense-quality-weight "${SHORT_SEGMENT_DENSE_QUALITY_WEIGHT}" \
+    --gcs-short-segment-dense-neg-weight "${SHORT_SEGMENT_DENSE_NEG_WEIGHT}" \
+    --gcs-short-segment-replace-dense-neg-weight "${SHORT_SEGMENT_REPLACE_DENSE_NEG_WEIGHT}" \
+    "${LISTWISE_SCOPE_ARGS[@]}" \
     "${BASE_PRESERVE_ARGS[@]}" \
     --gcs-short-segment-freeze-base \
     --gcs-official-best \
@@ -239,6 +260,9 @@ if is_true "${RUN_HARD_DIAG}"; then
       --imgsz 544 960 \
       --device "${DEVICE}" \
       --warmup "${HARD_WARMUP}" \
+      --candidate-score-thr "${HARD_CANDIDATE_SCORE_THR}" \
+      --segment-selection-score-mode "${HARD_SEGMENT_SELECTION_SCORE_MODE}" \
+      --segment-selection-pred-valid-overlap-min "${HARD_SEGMENT_SELECTION_PRED_VALID_OVERLAP_MIN}" \
       "${HALF_ARGS[@]}" \
       --save-dir "${VAL_DIR}"
 
@@ -251,6 +275,9 @@ if is_true "${RUN_HARD_DIAG}"; then
       --imgsz 544 960 \
       --device "${DEVICE}" \
       --warmup "${HARD_WARMUP}" \
+      --candidate-score-thr "${HARD_CANDIDATE_SCORE_THR}" \
+      --segment-selection-score-mode "${HARD_SEGMENT_SELECTION_SCORE_MODE}" \
+      --segment-selection-pred-valid-overlap-min "${HARD_SEGMENT_SELECTION_PRED_VALID_OVERLAP_MIN}" \
       "${HALF_ARGS[@]}" \
       --allow-noncanonical-gt \
       --save-dir "${TRAIN0601_DIR}"

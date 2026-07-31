@@ -141,6 +141,24 @@ Internally, the v6 GCS head sets `short_segment_local_evidence=True` so
 score/replace logits receive local image samples and proposal geometry. The
 default query YAML, v4 YAML, v5 YAML, and default decode remain unchanged.
 
+The optional local short-segment dense-quality selector v7 YAML preserves the
+same public output tensors as v6 and changes only the default-off loss/script
+protocol for dense quality targets and combined-score hard diagnostics. It is
+enabled only by
+`ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-local-segment-proposal-v7.yaml`.
+
+The optional local short-segment two-stage selector v8 YAML preserves the v6/v7
+proposal geometry and candidate-quality score, disables the old per-candidate
+replace head, and additionally emits:
+
+```text
+pred_short_segment_query_replace_logits: B x 12
+```
+
+It is enabled only by
+`ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-local-segment-proposal-v8.yaml`.
+Default decode does not consume the v8 tensor.
+
 Legacy post-env30 record: the rejected query extent probe added:
 
 ```text

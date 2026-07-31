@@ -14,7 +14,7 @@ import math
 import os
 import sys
 import time
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 from statistics import median
 from typing import Any
@@ -138,6 +138,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--candidate-score-thr", type=float, default=0.05)
     parser.add_argument("--candidate-short-min-points", type=int, default=2)
     parser.add_argument("--candidate-short-max-points", type=int, default=10)
+    parser.add_argument(
+        "--segment-selection-score-mode",
+        choices=("replace", "combined", "query_replace"),
+        default="replace",
+        help=(
+            "Diagnostic-only segment gate score. Default replace preserves v5/v6 hard diagnostic behavior; "
+            "query_replace uses per-query candidate-score selection plus a query-level replace gate."
+        ),
+    )
+    parser.add_argument(
+        "--segment-selection-pred-valid-overlap-min",
+        type=int,
+        default=0,
+        help=(
+            "Diagnostic-only segment selector mask: require a segment window to contain at least this many "
+            "base-query predicted-valid anchors before it can be selected. Default 0 preserves old behavior."
+        ),
+    )
     parser.add_argument("--save-dir", default=None)
     return parser.parse_args()
 
@@ -296,6 +314,45 @@ def _best_ape(pool_xs: list[np.ndarray], gt_lane: list[float], min_overlap: int)
             best_idx = int(idx)
             best_overlap = int(overlap)
     return best_ape, best_idx, best_overlap
+
+
+def _rank_desc(scores: torch.Tensor, index: int, mask: torch.Tensor | None = None) -> int:
+    """Return 1-based descending rank for a candidate score, or -1 if it is not rankable."""
+    flat = scores.detach().float().reshape(-1)
+    idx = int(index)
+    if idx < 0 or idx >= int(flat.numel()):
+        return -1
+    if mask is None:
+        valid = torch.ones_like(flat, dtype=torch.bool)
+    else:
+        valid = mask.detach().reshape(-1).to(device=flat.device).bool()
+        if int(valid.numel()) != int(flat.numel()):
+            raise ValueError(f"Rank mask shape mismatch: {tuple(valid.shape)} vs scores={tuple(flat.shape)}.")
+    value = flat[idx]
+    if (not bool(valid[idx].item())) or (not bool(torch.isfinite(value).item())):
+        return -1
+    comparable = valid & torch.isfinite(flat)
+    return int((flat[comparable] > value).sum().item()) + 1
+
+
+def _score_at(scores: torch.Tensor | None, index: int) -> float:
+    if scores is None:
+        return float("nan")
+    flat = scores.detach().float().reshape(-1)
+    idx = int(index)
+    if idx < 0 or idx >= int(flat.numel()):
+        return float("nan")
+    return float(flat[idx].item())
+
+
+def _prob_at(logits: torch.Tensor | None, index: int) -> float:
+    value = _score_at(logits, index)
+    if not math.isfinite(value):
+        return float("nan")
+    if value >= 0.0:
+        return float(1.0 / (1.0 + math.exp(-value)))
+    exp_value = math.exp(value)
+    return float(exp_value / (1.0 + exp_value))
 
 
 def _centered_y(points: torch.Tensor, mode: str) -> torch.Tensor:
@@ -458,6 +515,56 @@ def _hit_key(px: float) -> str:
     return str(int(px)) if float(px).is_integer() else str(px).replace(".", "p")
 
 
+RANK_FIELDS = (
+    "oracle_score_rank_all",
+    "oracle_score_rank_in_query",
+    "oracle_replace_rank_all",
+    "oracle_replace_rank_in_query",
+    "oracle_query_replace_rank_all",
+    "oracle_combined_rank_all",
+    "oracle_combined_rank_in_query",
+    "oracle_hard_gate_rank_all",
+    "oracle_hard_gate_rank_in_query",
+)
+RANK_TOPKS = (1, 5, 10, 20, 50, 100, 404)
+COUNTER_FIELDS = (
+    "raw_candidate_query",
+    "raw_candidate_index",
+    "raw_candidate_segment_start",
+    "raw_candidate_segment_end",
+    "raw_candidate_segment_length",
+    "oracle_query_selected_candidate",
+    "oracle_query_selected_segment_start",
+    "oracle_query_selected_segment_end",
+    "oracle_query_selected_segment_length",
+    "selected_all_best_query",
+    "selected_all_best_candidate",
+    "selected_all_best_segment_start",
+    "selected_all_best_segment_end",
+    "selected_all_best_segment_length",
+    "selected_gated_best_query",
+    "selected_gated_best_candidate",
+    "selected_gated_best_segment_start",
+    "selected_gated_best_segment_end",
+    "selected_gated_best_segment_length",
+)
+
+
+def _counter_key(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped if stripped else None
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return str(value)
+
+
+def _counter_summary(counter: Counter, topn: int = 12) -> list[dict[str, Any]]:
+    return [{"value": key, "count": int(count)} for key, count in counter.most_common(int(topn))]
+
+
 def _empty_stats(hit_pxs: list[float]) -> dict[str, Any]:
     return {
         "total": 0,
@@ -465,8 +572,13 @@ def _empty_stats(hit_pxs: list[float]) -> dict[str, Any]:
         "raw_candidate_apes": [],
         "selected_all_apes": [],
         "selected_gated_apes": [],
+        "oracle_query_selected_candidate_apes": [],
         "oracle_query_gate_count": 0,
         "oracle_query_selected_count": 0,
+        "oracle_candidate_hard_gate_eligible_count": 0,
+        "oracle_query_selected_and_gate_count": 0,
+        "rank_values": {field: [] for field in RANK_FIELDS},
+        "counters": {field: Counter() for field in COUNTER_FIELDS},
         **{f"base_hit{_hit_key(px)}": 0 for px in hit_pxs},
         **{f"raw_candidate_hit{_hit_key(px)}": 0 for px in hit_pxs},
         **{f"selected_all_hit{_hit_key(px)}": 0 for px in hit_pxs},
@@ -485,8 +597,19 @@ def _update_stats(stats: dict[str, Any], row: dict[str, Any], hit_pxs: list[floa
     stats["raw_candidate_apes"].append(float(row["raw_candidate_ape_px"]))
     stats["selected_all_apes"].append(float(row["selected_all_ape_px"]))
     stats["selected_gated_apes"].append(float(row["selected_gated_ape_px"]))
+    stats["oracle_query_selected_candidate_apes"].append(float(row["oracle_query_selected_candidate_ape_px"]))
     stats["oracle_query_gate_count"] += int(bool(row["oracle_query_gate_applies"]))
     stats["oracle_query_selected_count"] += int(bool(row["oracle_query_selected_oracle_candidate"]))
+    stats["oracle_candidate_hard_gate_eligible_count"] += int(bool(row["oracle_candidate_hard_gate_eligible"]))
+    stats["oracle_query_selected_and_gate_count"] += int(bool(row["oracle_query_selected_and_gate"]))
+    for field in RANK_FIELDS:
+        rank = int(row.get(field, -1))
+        if rank > 0:
+            stats["rank_values"][field].append(rank)
+    for field in COUNTER_FIELDS:
+        key = _counter_key(row.get(field))
+        if key is not None:
+            stats["counters"][field][key] += 1
     for px in hit_pxs:
         key = _hit_key(px)
         base_hit = float(row["base_ape_px"]) <= float(px)
@@ -521,9 +644,38 @@ def _summarize_stats(stats: dict[str, Any], hit_pxs: list[float]) -> dict[str, A
         "oracle_query_gate_rate": round(float(stats["oracle_query_gate_count"]) / max(total, 1), 6),
         "oracle_query_selected_count": int(stats["oracle_query_selected_count"]),
         "oracle_query_selected_rate": round(float(stats["oracle_query_selected_count"]) / max(total, 1), 6),
+        "oracle_candidate_hard_gate_eligible_count": int(stats["oracle_candidate_hard_gate_eligible_count"]),
+        "oracle_candidate_hard_gate_eligible_rate": round(
+            float(stats["oracle_candidate_hard_gate_eligible_count"]) / max(total, 1), 6
+        ),
+        "oracle_query_selected_and_gate_count": int(stats["oracle_query_selected_and_gate_count"]),
+        "oracle_query_selected_and_gate_rate": round(
+            float(stats["oracle_query_selected_and_gate_count"]) / max(total, 1), 6
+        ),
     }
-    for name in ("base_apes", "raw_candidate_apes", "selected_all_apes", "selected_gated_apes"):
+    for name in (
+        "base_apes",
+        "raw_candidate_apes",
+        "selected_all_apes",
+        "selected_gated_apes",
+        "oracle_query_selected_candidate_apes",
+    ):
         out.update(ape_summary(name))
+    for field in RANK_FIELDS:
+        values = [int(x) for x in stats["rank_values"][field] if int(x) > 0]
+        out[f"{field}_count"] = int(len(values))
+        out[f"{field}_mean"] = round(float(sum(values) / len(values)), 6) if values else None
+        out[f"{field}_median"] = round(float(median(values)), 6) if values else None
+        out[f"{field}_p90"] = (
+            None if (p90 := _percentile([float(x) for x in values], 90.0)) is None else round(float(p90), 6)
+        )
+        for topk in RANK_TOPKS:
+            count = int(sum(1 for x in values if x <= int(topk)))
+            out[f"{field}_top{topk}_count"] = count
+            out[f"{field}_top{topk}_rate"] = round(float(count) / max(total, 1), 6)
+    out["distributions"] = {
+        field: _counter_summary(counter) for field, counter in sorted(stats["counters"].items())
+    }
     for px in hit_pxs:
         key = _hit_key(px)
         for prefix in (
@@ -629,11 +781,13 @@ def main() -> None:
         segment_points_t = preds.get("pred_short_segment_points")
         segment_logits_t = preds.get("pred_short_segment_logits")
         segment_replace_logits_t = preds.get("pred_short_segment_replace_logits")
+        segment_query_replace_logits_t = preds.get("pred_short_segment_query_replace_logits")
         segment_window_mask_t = preds.get("pred_short_segment_window_mask")
         affine_pairs: list[tuple[float, float]] | None = None
         static_pairs: list[tuple[float, float, float]] | None = None
         candidate_window_masks: torch.Tensor | None = None
         candidate_replace_logits: torch.Tensor | None = None
+        candidate_query_replace_logits: torch.Tensor | None = None
         model_candidate_source = "candidate_head"
         if bool(args.affine_oracle):
             candidate_points, affine_pairs = _make_affine_candidate_points(
@@ -672,6 +826,13 @@ def main() -> None:
                         "Bad pred_short_segment_replace_logits shape: "
                         f"{tuple(candidate_replace_logits.shape)} vs logits={tuple(candidate_logits.shape)}"
                     )
+            if segment_query_replace_logits_t is not None:
+                candidate_query_replace_logits = segment_query_replace_logits_t[0].detach().float().cpu()
+                if tuple(candidate_query_replace_logits.shape) != tuple(candidate_logits.shape[:1]):
+                    raise RuntimeError(
+                        "Bad pred_short_segment_query_replace_logits shape: "
+                        f"{tuple(candidate_query_replace_logits.shape)} vs Q={tuple(candidate_logits.shape[:1])}"
+                    )
             mask_t = segment_window_mask_t.detach().cpu()
             if mask_t.ndim == 2:
                 candidate_window_masks = mask_t.bool().view(1, *mask_t.shape).expand(candidate_points.shape[0], -1, -1)
@@ -696,34 +857,87 @@ def main() -> None:
         short_gate = (visible_counts >= int(args.candidate_short_min_points)) & (
             visible_counts <= int(args.candidate_short_max_points)
         )
+        segment_length_gate = torch.ones_like(candidate_logits, dtype=torch.bool)
+        selection_logits = candidate_logits
+        hard_gate_mask = torch.ones_like(candidate_logits, dtype=torch.bool)
         if bool(args.affine_oracle) or bool(args.static_proposal_oracle) or bool(args.mask_proposal_oracle):
             candidate_prob = candidate_logits.sigmoid()
             best_scores, best_indices = candidate_prob.max(dim=1)
             short_gate_full = torch.zeros(candidate_points.shape[0], dtype=torch.bool)
             short_gate_full[: short_gate.shape[0]] = short_gate
             short_gate = short_gate_full
+            hard_gate_mask = torch.zeros_like(candidate_logits, dtype=torch.bool)
             apply_gate = torch.zeros(candidate_points.shape[0], dtype=torch.bool)
             best_replace_scores = torch.zeros_like(best_scores)
             selected_segment_lengths = torch.zeros_like(best_indices)
+        elif str(args.segment_selection_score_mode) == "query_replace" and candidate_window_masks is not None:
+            if candidate_query_replace_logits is None:
+                raise RuntimeError(
+                    "--segment-selection-score-mode query_replace requires "
+                    "pred_short_segment_query_replace_logits. Use the local-segment-proposal-v8 YAML."
+                )
+            segment_lengths = candidate_window_masks.sum(dim=2)
+            segment_length_gate = (segment_lengths >= int(args.candidate_short_min_points)) & (
+                segment_lengths <= int(args.candidate_short_max_points)
+            )
+            if int(args.segment_selection_pred_valid_overlap_min) > 0:
+                query_valid = valid_scores >= float(args.point_valid_thr)
+                pred_valid_overlap = (candidate_window_masks & query_valid.view(query_valid.shape[0], 1, -1)).sum(
+                    dim=2
+                )
+                segment_length_gate = segment_length_gate & (
+                    pred_valid_overlap >= int(args.segment_selection_pred_valid_overlap_min)
+                )
+            selection_logits = candidate_logits
+            selection_scores = candidate_logits.sigmoid().masked_fill(~segment_length_gate, -1.0)
+            best_scores, best_indices = selection_scores.max(dim=1)
+            query_replace_scores = candidate_query_replace_logits.sigmoid()
+            best_replace_scores = query_replace_scores
+            selected_segment_lengths = segment_lengths.gather(1, best_indices.view(-1, 1)).squeeze(1)
+            short_gate = segment_length_gate.gather(1, best_indices.view(-1, 1)).squeeze(1)
+            apply_gate = short_gate & (query_replace_scores >= float(args.candidate_score_thr))
+            hard_gate_mask = segment_length_gate & (
+                query_replace_scores.view(-1, 1) >= float(args.candidate_score_thr)
+            )
         elif candidate_replace_logits is not None and candidate_window_masks is not None:
             segment_lengths = candidate_window_masks.sum(dim=2)
             segment_length_gate = (segment_lengths >= int(args.candidate_short_min_points)) & (
                 segment_lengths <= int(args.candidate_short_max_points)
             )
+            if int(args.segment_selection_pred_valid_overlap_min) > 0:
+                query_valid = valid_scores >= float(args.point_valid_thr)
+                pred_valid_overlap = (candidate_window_masks & query_valid.view(query_valid.shape[0], 1, -1)).sum(
+                    dim=2
+                )
+                segment_length_gate = segment_length_gate & (
+                    pred_valid_overlap >= int(args.segment_selection_pred_valid_overlap_min)
+                )
             selection_logits = candidate_logits + candidate_replace_logits
             selection_scores = selection_logits.sigmoid().masked_fill(~segment_length_gate, -1.0)
             best_scores, best_indices = selection_scores.max(dim=1)
             replace_scores = candidate_replace_logits.sigmoid()
+            combined_scores = selection_logits.sigmoid()
             best_replace_scores = replace_scores.gather(1, best_indices.view(-1, 1)).squeeze(1)
+            best_combined_scores = combined_scores.gather(1, best_indices.view(-1, 1)).squeeze(1)
             selected_segment_lengths = segment_lengths.gather(1, best_indices.view(-1, 1)).squeeze(1)
             short_gate = segment_length_gate.gather(1, best_indices.view(-1, 1)).squeeze(1)
-            apply_gate = short_gate & (best_replace_scores >= float(args.candidate_score_thr))
+            if str(args.segment_selection_score_mode) == "combined":
+                gate_scores = best_combined_scores
+                gate_score_map = combined_scores
+            else:
+                gate_scores = best_replace_scores
+                gate_score_map = replace_scores
+            apply_gate = short_gate & (gate_scores >= float(args.candidate_score_thr))
+            hard_gate_mask = segment_length_gate & (gate_score_map >= float(args.candidate_score_thr))
         else:
             candidate_prob = candidate_logits.sigmoid()
             best_scores, best_indices = candidate_prob.max(dim=1)
             apply_gate = short_gate & (best_scores >= float(args.candidate_score_thr))
             best_replace_scores = torch.zeros_like(best_scores)
             selected_segment_lengths = torch.zeros_like(best_indices)
+            hard_gate_mask = short_gate.view(-1, 1).expand_as(candidate_logits) & (
+                candidate_prob >= float(args.candidate_score_thr)
+            )
 
         q_count = int(base_points.shape[0])
         candidate_q_count = int(candidate_points.shape[0])
@@ -844,6 +1058,95 @@ def main() -> None:
             raw_source = str(raw_meta.get("source", "candidate_head"))
             oracle_has_base_query = 0 <= oracle_q < int(visible_counts.shape[0])
             oracle_has_candidate_query = 0 <= oracle_q < int(best_scores.shape[0])
+            model_flat_count = int(candidate_q_count * cand_count)
+            oracle_flat_idx = int(raw_idx) if 0 <= int(raw_idx) < model_flat_count else -1
+            oracle_query_rankable = oracle_has_candidate_query and 0 <= oracle_m < int(cand_count)
+
+            oracle_score_rank_all = _rank_desc(candidate_logits, oracle_flat_idx)
+            oracle_score_rank_in_query = (
+                _rank_desc(candidate_logits[oracle_q], oracle_m) if oracle_query_rankable else -1
+            )
+            if candidate_replace_logits is not None:
+                oracle_replace_rank_all = _rank_desc(candidate_replace_logits, oracle_flat_idx)
+                oracle_replace_rank_in_query = (
+                    _rank_desc(candidate_replace_logits[oracle_q], oracle_m) if oracle_query_rankable else -1
+                )
+            else:
+                oracle_replace_rank_all = -1
+                oracle_replace_rank_in_query = -1
+            oracle_query_replace_rank_all = (
+                _rank_desc(candidate_query_replace_logits, oracle_q)
+                if candidate_query_replace_logits is not None
+                else -1
+            )
+            oracle_combined_rank_all = _rank_desc(selection_logits, oracle_flat_idx, segment_length_gate)
+            oracle_combined_rank_in_query = (
+                _rank_desc(selection_logits[oracle_q], oracle_m, segment_length_gate[oracle_q])
+                if oracle_query_rankable
+                else -1
+            )
+            oracle_hard_gate_rank_all = _rank_desc(selection_logits, oracle_flat_idx, hard_gate_mask)
+            oracle_hard_gate_rank_in_query = (
+                _rank_desc(selection_logits[oracle_q], oracle_m, hard_gate_mask[oracle_q])
+                if oracle_query_rankable
+                else -1
+            )
+            oracle_candidate_hard_gate_eligible = (
+                bool(hard_gate_mask.reshape(-1)[oracle_flat_idx].item()) if oracle_flat_idx >= 0 else False
+            )
+
+            oracle_selected_m = int(best_indices[oracle_q].item()) if oracle_has_candidate_query else -1
+            oracle_selected_flat_idx = (
+                int(oracle_q * cand_count + oracle_selected_m)
+                if oracle_has_candidate_query and 0 <= oracle_selected_m < int(cand_count)
+                else -1
+            )
+            oracle_selected_meta = (
+                raw_candidate_meta[oracle_selected_flat_idx]
+                if 0 <= oracle_selected_flat_idx < len(raw_candidate_meta)
+                else {}
+            )
+            if 0 <= oracle_selected_flat_idx < len(raw_candidate_pool):
+                oracle_selected_ape, oracle_selected_overlap = _ape_px(
+                    raw_candidate_pool[oracle_selected_flat_idx],
+                    gt_lane,
+                    min_overlap=int(args.match_min_overlap),
+                )
+            else:
+                oracle_selected_ape, oracle_selected_overlap = float("inf"), 0
+
+            selected_all_m = int(best_indices[selected_all_idx].item()) if 0 <= selected_all_idx < q_count else -1
+            selected_all_flat_idx = (
+                int(selected_all_idx * cand_count + selected_all_m)
+                if 0 <= selected_all_idx < q_count and 0 <= selected_all_m < int(cand_count)
+                else -1
+            )
+            selected_all_meta = (
+                raw_candidate_meta[selected_all_flat_idx] if 0 <= selected_all_flat_idx < len(raw_candidate_meta) else {}
+            )
+            selected_gated_m = int(best_indices[selected_gated_idx].item()) if 0 <= selected_gated_idx < q_count else -1
+            selected_gated_flat_idx = (
+                int(selected_gated_idx * cand_count + selected_gated_m)
+                if 0 <= selected_gated_idx < q_count
+                and 0 <= selected_gated_m < int(cand_count)
+                and bool(apply_gate[selected_gated_idx].item())
+                else -1
+            )
+            selected_gated_meta = (
+                raw_candidate_meta[selected_gated_flat_idx]
+                if 0 <= selected_gated_flat_idx < len(raw_candidate_meta)
+                else {}
+            )
+            oracle_query_selected_oracle_candidate = (
+                bool(oracle_has_candidate_query and int(best_indices[oracle_q].item()) == oracle_m)
+                if oracle_has_candidate_query
+                else False
+            )
+            oracle_query_selected_and_gate = bool(
+                oracle_query_selected_oracle_candidate
+                and 0 <= oracle_q < int(apply_gate.shape[0])
+                and bool(apply_gate[oracle_q].item())
+            )
             row = {
                 "split": str(args.split),
                 "raw_file": raw_file,
@@ -857,6 +1160,7 @@ def main() -> None:
                 "base_best_overlap": int(base_overlap),
                 "raw_candidate_ape_px": float(raw_ape),
                 "raw_candidate_source": raw_source,
+                "raw_candidate_flat_index": int(raw_idx),
                 "raw_candidate_query": int(raw_meta.get("query", oracle_q)),
                 "raw_candidate_index": int(raw_meta.get("index", oracle_m)),
                 "raw_candidate_offset_px": raw_meta.get("offset_px", ""),
@@ -873,12 +1177,40 @@ def main() -> None:
                 "raw_candidate_mask_centroid_x": raw_meta.get("mask_centroid_x", ""),
                 "raw_candidate_mask_centroid_y": raw_meta.get("mask_centroid_y", ""),
                 "raw_candidate_overlap": int(raw_overlap),
+                "oracle_score_logit": _score_at(candidate_logits, oracle_flat_idx),
+                "oracle_score_prob": _prob_at(candidate_logits, oracle_flat_idx),
+                "oracle_replace_logit": _score_at(candidate_replace_logits, oracle_flat_idx),
+                "oracle_replace_prob": _prob_at(candidate_replace_logits, oracle_flat_idx),
+                "oracle_query_replace_logit": _score_at(candidate_query_replace_logits, oracle_q),
+                "oracle_query_replace_prob": _prob_at(candidate_query_replace_logits, oracle_q),
+                "oracle_combined_logit": _score_at(selection_logits, oracle_flat_idx),
+                "oracle_combined_prob": _prob_at(selection_logits, oracle_flat_idx),
+                "oracle_score_rank_all": int(oracle_score_rank_all),
+                "oracle_score_rank_in_query": int(oracle_score_rank_in_query),
+                "oracle_replace_rank_all": int(oracle_replace_rank_all),
+                "oracle_replace_rank_in_query": int(oracle_replace_rank_in_query),
+                "oracle_query_replace_rank_all": int(oracle_query_replace_rank_all),
+                "oracle_combined_rank_all": int(oracle_combined_rank_all),
+                "oracle_combined_rank_in_query": int(oracle_combined_rank_in_query),
+                "oracle_hard_gate_rank_all": int(oracle_hard_gate_rank_all),
+                "oracle_hard_gate_rank_in_query": int(oracle_hard_gate_rank_in_query),
+                "oracle_candidate_hard_gate_eligible": bool(oracle_candidate_hard_gate_eligible),
                 "selected_all_ape_px": float(selected_all_ape),
                 "selected_all_query": int(selected_all_idx),
                 "selected_all_overlap": int(selected_all_overlap),
+                "selected_all_best_query": int(selected_all_idx),
+                "selected_all_best_candidate": int(selected_all_m),
+                "selected_all_best_segment_start": selected_all_meta.get("segment_start", ""),
+                "selected_all_best_segment_end": selected_all_meta.get("segment_end", ""),
+                "selected_all_best_segment_length": selected_all_meta.get("segment_length", ""),
                 "selected_gated_ape_px": float(selected_gated_ape),
                 "selected_gated_query": int(selected_gated_idx),
                 "selected_gated_overlap": int(selected_gated_overlap),
+                "selected_gated_best_query": int(selected_gated_idx),
+                "selected_gated_best_candidate": int(selected_gated_m) if selected_gated_flat_idx >= 0 else -1,
+                "selected_gated_best_segment_start": selected_gated_meta.get("segment_start", ""),
+                "selected_gated_best_segment_end": selected_gated_meta.get("segment_end", ""),
+                "selected_gated_best_segment_length": selected_gated_meta.get("segment_length", ""),
                 "oracle_query_visible_count": int(visible_counts[oracle_q].item()) if oracle_has_base_query else -1,
                 "oracle_query_short_gate": bool(short_gate[oracle_q].item()) if 0 <= oracle_q < int(short_gate.shape[0]) else False,
                 "oracle_query_best_score": float(best_scores[oracle_q].item()) if oracle_has_candidate_query else float("nan"),
@@ -886,13 +1218,17 @@ def main() -> None:
                 if oracle_has_candidate_query
                 else float("nan"),
                 "oracle_query_gate_applies": bool(apply_gate[oracle_q].item()) if 0 <= oracle_q < int(apply_gate.shape[0]) else False,
-                "oracle_query_selected_candidate": int(best_indices[oracle_q].item()) if oracle_has_candidate_query else -1,
+                "oracle_query_selected_candidate": int(oracle_selected_m),
                 "oracle_query_selected_segment_length": int(selected_segment_lengths[oracle_q].item())
                 if oracle_has_candidate_query
                 else -1,
-                "oracle_query_selected_oracle_candidate": bool(int(best_indices[oracle_q].item()) == oracle_m)
-                if oracle_has_candidate_query
-                else False,
+                "oracle_query_selected_segment_start": oracle_selected_meta.get("segment_start", ""),
+                "oracle_query_selected_segment_end": oracle_selected_meta.get("segment_end", ""),
+                "oracle_query_selected_segment_length_meta": oracle_selected_meta.get("segment_length", ""),
+                "oracle_query_selected_candidate_ape_px": float(oracle_selected_ape),
+                "oracle_query_selected_candidate_overlap": int(oracle_selected_overlap),
+                "oracle_query_selected_oracle_candidate": bool(oracle_query_selected_oracle_candidate),
+                "oracle_query_selected_and_gate": bool(oracle_query_selected_and_gate),
             }
             for px in hit_pxs:
                 key = _hit_key(px)
@@ -968,7 +1304,16 @@ def main() -> None:
             "candidate_score_thr": float(args.candidate_score_thr),
             "candidate_short_min_points": int(args.candidate_short_min_points),
             "candidate_short_max_points": int(args.candidate_short_max_points),
+            "segment_selection_score_mode": str(args.segment_selection_score_mode),
+            "segment_selection_pred_valid_overlap_min": int(args.segment_selection_pred_valid_overlap_min),
+            "selector_rank_audit": True,
+            "selector_rank_fields": list(RANK_FIELDS),
             "selected_gate_mode": (
+                "segment_length_candidate_score_and_query_replace_score"
+                if rows
+                and any(str(r.get("raw_candidate_source", "")) == "segment_head" for r in rows)
+                and str(args.segment_selection_score_mode) == "query_replace"
+                else
                 "segment_length_and_replace_score"
                 if rows and any(str(r.get("raw_candidate_source", "")) == "segment_head" for r in rows)
                 and any(math.isfinite(float(r.get("oracle_query_best_replace_score", float("nan")))) for r in rows)

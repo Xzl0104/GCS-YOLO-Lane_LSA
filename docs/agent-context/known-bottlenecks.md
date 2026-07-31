@@ -222,6 +222,109 @@ not raw segment geometry; it is proposal ranking and base-preserve replacement
 calibration. Do not continue v6 with more epochs, do not run TEST, and do not
 promote `segment_best.pt`.
 
+The completed selector rank audit on `last.pt` localizes the v6 failure more
+precisely:
+
+```text
+rank audit outputs:
+  runs/gcs_lane/query_local_segment_env30_frozen_probe20_v6_b8s1_rank_audit_val_last/
+  runs/gcs_lane/query_local_segment_env30_frozen_probe20_v6_b8s1_rank_audit_train0601_last/
+
+official-val short GT5:
+  base/raw/selected-gated hit20 = 40/52/11 out of 53
+  oracle hard-gate eligible = 52/53
+  oracle selected as query top1 = 2/53
+  oracle combined-rank-in-query top1/top5/top20 = 2/3/19
+  selected window lengths collapse mostly to length 3: 48/53
+
+train0601 short GT5:
+  base/raw/selected-gated hit20 = 142/179/32 out of 183
+  oracle hard-gate eligible = 179/183
+  oracle selected as query top1 = 6/183
+  oracle combined-rank-in-query top1/top5/top20 = 6/22/73
+  selected window lengths collapse mostly to length 3: 164/183
+```
+
+This proves the replace threshold is not the main blocker: the oracle proposal
+usually passes the hard gate, but is not ranked first inside its own query. A
+diagnostic-only predicted-valid-overlap selector mask improves selected-gated
+GT5 coverage only partially:
+
+```text
+official-val short GT5 selected-gated: 11/53 -> 19/53
+train0601 short GT5 selected-gated:    32/183 -> 51/183
+```
+
+It still remains far below the frozen env30 base (`40/53`, `142/183`) and
+continues to damage base-hit lanes. The root cause is training/selection
+misalignment: the listwise target ranks only overlapping GT-visible candidates,
+while `gcs_short_segment_bce_weight=0.0` leaves non-overlap high-score windows
+without direct negative pressure. The next selector must train the same
+applicability/window-overlap condition used at selection time and keep an
+explicit base-preserve no-replace gate.
+
+The v7 implementation target for that conclusion is:
+
+```text
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-local-segment-proposal-v7.yaml
+scripts/run_query_local_segment_env30_frozen_probe20_v7.sh
+```
+
+It keeps the v6 proposal-local selector architecture but changes the training
+target: all-candidate listwise ranking, dense geometry-quality BCE for every
+`Q x 404` proposal, explicit non-overlap/low-overlap negatives, dense
+base-preserve no-replace negatives, and hard diagnostic selection with the same
+combined score+replace logit. Treat v7 as a diagnostic selector probe until
+`segment_best_hard_gate.json` shows selected-gated short GT5 above the frozen
+base on official-val and train0601, with base-hit loss close to zero. TEST
+remains closed.
+
+Completed v7 result:
+
+```text
+run = query_local_segment_env30_frozen_probe20_v7_b4w0s1
+selected checkpoint = last.pt
+
+official-val short GT5 base/raw/selected-gated = 40/52/20 out of 53
+train0601 short GT5 base/raw/selected-gated = 142/179/77 out of 183
+official-val short GT4 selected-gated = 2/8
+train0601 short GT4 selected-gated = 9/19
+
+base-to-selected-gated short GT5 gain/loss20:
+  official-val = +1 / -21
+  train0601 = +5 / -70
+
+oracle combined-rank-all short GT5:
+  official-val top1/top5/top10 = 0/5/6
+  train0601 top1/top5/top10 = 0/8/17
+```
+
+The route is rejected. Dense negatives improved v6's `11/53, 32/183`
+selected-gated result, but the selector still fails to rank the oracle
+proposal first and the replace gate damages base-hit lanes. Increasing the
+diagnostic threshold from `0.5` to `0.8` also fails (`18/53`, `70/183`) and
+increases base-hit loss. The next route must model an explicit calibrated
+no-replace decision or base-versus-proposal comparison; do not add epochs,
+enable decode, or run TEST from v7.
+
+The v8 implementation target for that conclusion is:
+
+```text
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-local-segment-proposal-v8.yaml
+scripts/run_query_local_segment_env30_frozen_probe20_v8.sh
+```
+
+It makes the selector explicitly two-stage. The candidate score head now trains
+with per-query segment ranking and dense geometry-quality targets, while
+`pred_short_segment_query_replace_logits: B x 12` handles the no-replace versus
+replace decision. The old per-candidate replace head is disabled in v8 so hard
+diagnostics cannot maximize `Q x 404` `score + replace` globally. The hard
+diagnostic mode is `segment_selection_score_mode=query_replace`: choose the
+best candidate inside each query by candidate score, then apply that query's
+replace gate. Treat v8 as a diagnostic selector probe until selected-gated
+short GT5 exceeds the frozen env30 base on official-val plus train0601 and
+base-hit loss is near zero. TEST remains closed.
+
 ## 2026-07-27 Q12/env30 Lateral Candidate Probe Rejection
 
 The run `query_short_candidate_env30_probe20_fix1` is rejected. It trained

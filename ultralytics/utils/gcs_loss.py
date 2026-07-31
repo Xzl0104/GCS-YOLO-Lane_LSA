@@ -397,8 +397,25 @@ class GCSLoss(nn.Module):
         self.short_segment_neg_score_thr = float(self._arg(args, "gcs_short_segment_neg_score_thr", 0.6))
         self.short_segment_bce_weight = float(self._arg(args, "gcs_short_segment_bce_weight", 1.0))
         self.short_segment_listwise_weight = float(self._arg(args, "gcs_short_segment_listwise_weight", 0.0))
+        self.short_segment_query_rank_weight = float(self._arg(args, "gcs_short_segment_query_rank_weight", 0.0))
         self.short_segment_replace_weight = float(self._arg(args, "gcs_short_segment_replace_weight", 0.0))
+        self.short_segment_query_replace_weight = float(
+            self._arg(args, "gcs_short_segment_query_replace_weight", 0.0)
+        )
+        self.short_segment_query_replace_neg_weight = float(
+            self._arg(args, "gcs_short_segment_query_replace_neg_weight", 0.25)
+        )
         self.short_segment_replace_margin_px = float(self._arg(args, "gcs_short_segment_replace_margin_px", 5.0))
+        self.short_segment_dense_quality_weight = float(
+            self._arg(args, "gcs_short_segment_dense_quality_weight", 0.0)
+        )
+        self.short_segment_dense_neg_weight = float(self._arg(args, "gcs_short_segment_dense_neg_weight", 0.05))
+        self.short_segment_replace_dense_neg_weight = float(
+            self._arg(args, "gcs_short_segment_replace_dense_neg_weight", 0.0)
+        )
+        self.short_segment_listwise_all_candidates = self._bool_arg(
+            self._arg(args, "gcs_short_segment_listwise_all_candidates", False)
+        )
         self.short_segment_base_preserve = self._bool_arg(
             self._arg(args, "gcs_short_segment_base_preserve", True)
         )
@@ -483,10 +500,22 @@ class GCSLoss(nn.Module):
             raise ValueError("gcs_short_segment_bce_weight must be >= 0.")
         if self.short_segment_listwise_weight < 0.0:
             raise ValueError("gcs_short_segment_listwise_weight must be >= 0.")
+        if self.short_segment_query_rank_weight < 0.0:
+            raise ValueError("gcs_short_segment_query_rank_weight must be >= 0.")
         if self.short_segment_replace_weight < 0.0:
             raise ValueError("gcs_short_segment_replace_weight must be >= 0.")
+        if self.short_segment_query_replace_weight < 0.0:
+            raise ValueError("gcs_short_segment_query_replace_weight must be >= 0.")
+        if self.short_segment_query_replace_neg_weight < 0.0:
+            raise ValueError("gcs_short_segment_query_replace_neg_weight must be >= 0.")
         if self.short_segment_replace_margin_px < 0.0:
             raise ValueError("gcs_short_segment_replace_margin_px must be >= 0.")
+        if self.short_segment_dense_quality_weight < 0.0:
+            raise ValueError("gcs_short_segment_dense_quality_weight must be >= 0.")
+        if self.short_segment_dense_neg_weight < 0.0:
+            raise ValueError("gcs_short_segment_dense_neg_weight must be >= 0.")
+        if self.short_segment_replace_dense_neg_weight < 0.0:
+            raise ValueError("gcs_short_segment_replace_dense_neg_weight must be >= 0.")
         if self.short_candidate_gain > 0.0 and self.short_segment_gain > 0.0:
             raise ValueError(
                 "gcs_short_candidate and gcs_short_segment are separate default-off probes; "
@@ -1290,6 +1319,7 @@ class GCSLoss(nn.Module):
         segment_points = preds.get("pred_short_segment_points")
         segment_logits = preds.get("pred_short_segment_logits")
         replace_logits = preds.get("pred_short_segment_replace_logits")
+        query_replace_logits = preds.get("pred_short_segment_query_replace_logits")
         window_mask = preds.get("pred_short_segment_window_mask")
         if float(self.short_segment_gain) == 0.0:
             return zero, zero, zero, zero_count, zero_count, zero_count
@@ -1323,6 +1353,22 @@ class GCSLoss(nn.Module):
             raise ValueError(
                 "pred_short_segment_replace_logits must have shape B x Q x S matching segment points, "
                 f"got {tuple(replace_logits.shape)} vs {tuple(segment_points.shape[:3])}."
+            )
+        if float(self.short_segment_query_replace_weight) > 0.0:
+            if query_replace_logits is None:
+                raise KeyError(
+                    "gcs_short_segment_query_replace_weight > 0 requires "
+                    "pred_short_segment_query_replace_logits. Use the local-segment-proposal-v8 YAML."
+                )
+            if query_replace_logits.shape != segment_points.shape[:2]:
+                raise ValueError(
+                    "pred_short_segment_query_replace_logits must have shape B x Q matching segment points, "
+                    f"got {tuple(query_replace_logits.shape)} vs {tuple(segment_points.shape[:2])}."
+                )
+        elif query_replace_logits is not None and query_replace_logits.shape != segment_points.shape[:2]:
+            raise ValueError(
+                "pred_short_segment_query_replace_logits must have shape B x Q matching segment points, "
+                f"got {tuple(query_replace_logits.shape)} vs {tuple(segment_points.shape[:2])}."
             )
         if segment_points.shape[0] != pred_points.shape[0] or segment_points.shape[1] != pred_points.shape[1]:
             raise ValueError(
@@ -1362,6 +1408,8 @@ class GCSLoss(nn.Module):
         zero = segment_logits.sum() * 0.0 + segment_points.sum() * 0.0
         if replace_logits is not None:
             zero = zero + replace_logits.sum() * 0.0
+        if query_replace_logits is not None:
+            zero = zero + query_replace_logits.sum() * 0.0
         flat_count = int(num_queries * num_segments)
         topk = min(int(self.short_segment_topk), flat_count)
         pos_px = float(self.short_segment_pos_px)
@@ -1373,8 +1421,11 @@ class GCSLoss(nn.Module):
         scale = self._pixel_scale_for(pred_points).view(1, 1, 2)
 
         bce_losses: list[torch.Tensor] = []
+        dense_quality_losses: list[torch.Tensor] = []
         listwise_losses: list[torch.Tensor] = []
+        query_rank_losses: list[torch.Tensor] = []
         replace_losses: list[torch.Tensor] = []
+        query_replace_losses: list[torch.Tensor] = []
         point_losses: list[torch.Tensor] = []
         pos_count = 0
         soft_count = 0
@@ -1404,11 +1455,44 @@ class GCSLoss(nn.Module):
 
             segments_b = segment_points[b].reshape(flat_count, num_points, 2)
             logits_b = segment_logits[b].reshape(flat_count)
+            logits_qs_b = segment_logits[b]
             replace_logits_b = replace_logits[b].reshape(flat_count) if replace_logits is not None else None
+            query_replace_logits_b = query_replace_logits[b] if query_replace_logits is not None else None
             masks_b = window_mask_bq[b].reshape(flat_count, num_points)
             score_target = torch.zeros((flat_count,), device=device, dtype=dtype)
             score_weight = torch.zeros((flat_count,), device=device, dtype=dtype)
             min_ape = torch.full((flat_count,), float("inf"), device=device, dtype=dtype)
+            min_ape_lane_weight = torch.zeros((flat_count,), device=device, dtype=dtype)
+            query_replace_target = torch.zeros((num_queries,), device=device, dtype=dtype)
+            query_replace_weight = torch.zeros((num_queries,), device=device, dtype=dtype)
+            query_replace_pos = torch.zeros((num_queries,), device=device, dtype=torch.bool)
+            base_hit_any = torch.zeros((num_queries,), device=device, dtype=torch.bool)
+
+            def update_query_replace_weight(mask: torch.Tensor, value: float) -> None:
+                nonlocal query_replace_weight
+                if not bool(mask.any()):
+                    return
+                count = int(mask.sum().detach().cpu().item())
+                query_replace_weight[mask] = torch.maximum(
+                    query_replace_weight[mask],
+                    query_replace_weight.new_full((count,), float(value)),
+                )
+
+            if query_replace_logits_b is not None and float(self.short_segment_query_replace_weight) > 0.0:
+                for all_lane_idx in range(int(target_points_b.shape[0])):
+                    valid_all = target_valid_b[all_lane_idx].clamp(0.0, 1.0)
+                    valid_count_all = valid_all.sum()
+                    if float(valid_count_all.detach().cpu().item()) < float(min_overlap):
+                        continue
+                    target_all = target_points_b[all_lane_idx]
+                    base_error_all = torch.norm(
+                        (pred_points[b].detach() - target_all.view(1, num_points, 2)) * scale,
+                        dim=-1,
+                    )
+                    base_ape_all = (base_error_all * valid_all.view(1, num_points)).sum(dim=1) / valid_count_all.clamp_min(
+                        1.0
+                    )
+                    base_hit_any = base_hit_any | (base_ape_all <= pos_px)
 
             for lane_idx in short_lane_indices.tolist():
                 target = target_points_b[lane_idx]
@@ -1431,16 +1515,39 @@ class GCSLoss(nn.Module):
                 overlap_weight = overlap_mask.to(dtype=dtype)
                 ape = (point_error * overlap_weight).sum(dim=1) / overlap_counts.to(dtype=dtype).clamp_min(1.0)
                 ape = torch.where(enough_overlap, ape, torch.full_like(ape, float("inf")))
+                better_min = ape < min_ape
+                min_ape_lane_weight = torch.where(
+                    better_min,
+                    min_ape_lane_weight.new_full((flat_count,), lane_weight),
+                    min_ape_lane_weight,
+                )
                 min_ape = torch.minimum(min_ape, ape)
 
                 if float(self.short_segment_listwise_weight) > 0.0:
                     best_idx = int(torch.argmin(ape).detach().cpu().item())
-                    masked_logits = logits_b.masked_fill(~enough_overlap, -1.0e4).view(1, -1)
+                    if bool(self.short_segment_listwise_all_candidates):
+                        masked_logits = logits_b.view(1, -1)
+                    else:
+                        masked_logits = logits_b.masked_fill(~enough_overlap, -1.0e4).view(1, -1)
                     listwise = F.cross_entropy(
                         masked_logits,
                         torch.tensor([best_idx], device=device, dtype=torch.long),
                     )
                     listwise_losses.append(listwise * lane_weight)
+
+                query_best_ape, query_best_m = ape.view(num_queries, num_segments).min(dim=1)
+                if float(self.short_segment_query_rank_weight) > 0.0:
+                    rankable_queries = torch.nonzero(
+                        torch.isfinite(query_best_ape) & (query_best_ape <= soft_px),
+                        as_tuple=False,
+                    ).flatten()
+                    for query_idx in rankable_queries.tolist():
+                        target_m = int(query_best_m[query_idx].detach().cpu().item())
+                        query_rank = F.cross_entropy(
+                            logits_qs_b[query_idx].view(1, -1),
+                            torch.tensor([target_m], device=device, dtype=torch.long),
+                        )
+                        query_rank_losses.append(query_rank * lane_weight)
 
                 if (
                     replace_logits_b is not None
@@ -1464,6 +1571,15 @@ class GCSLoss(nn.Module):
 
                     if bool(self.short_segment_base_preserve) and bool((base_best_ape <= pos_px).item()):
                         preserve_negs = enough_overlap & (ape > pos_px)
+                        if float(self.short_segment_replace_dense_neg_weight) > 0.0:
+                            dense_preserve_negs = ape > pos_px
+                            replace_weight[dense_preserve_negs] = torch.maximum(
+                                replace_weight[dense_preserve_negs],
+                                replace_weight.new_full(
+                                    (int(dense_preserve_negs.sum().detach().cpu().item()),),
+                                    lane_weight * float(self.short_segment_replace_dense_neg_weight),
+                                ),
+                            )
                         neg_budget = min(topk, int(preserve_negs.sum().detach().cpu().item()))
                         if neg_budget > 0:
                             neg_values = torch.where(
@@ -1487,6 +1603,41 @@ class GCSLoss(nn.Module):
                         replace_losses.append(
                             (replace_bce * replace_weight).sum() / replace_weight.sum().clamp_min(1.0)
                         )
+
+                if (
+                    query_replace_logits_b is not None
+                    and float(self.short_segment_query_replace_weight) > 0.0
+                    and torch.isfinite(base_best_ape)
+                ):
+                    margin = float(self.short_segment_replace_margin_px)
+                    finite_query = torch.isfinite(query_best_ape)
+                    if bool(self.short_segment_base_preserve) and bool((base_best_ape <= pos_px).item()):
+                        duplicate_good = finite_query & (query_best_ape <= pos_px)
+                        update_query_replace_weight(duplicate_good & ~query_replace_pos, lane_weight)
+                    else:
+                        improves_query = finite_query & (
+                            ((query_best_ape + margin) < base_ape)
+                            | ((base_ape > pos_px) & (query_best_ape <= pos_px))
+                        )
+                        improves_query = improves_query & (query_best_ape <= soft_px) & ~base_hit_any
+                        if bool(improves_query.any()):
+                            pos_values = torch.where(
+                                improves_query,
+                                query_best_ape,
+                                torch.full_like(query_best_ape, float("inf")),
+                            )
+                            pos_query = int(torch.argmin(pos_values).detach().cpu().item())
+                            query_replace_target[pos_query] = 1.0
+                            query_replace_pos[pos_query] = True
+                            update_query_replace_weight(
+                                torch.arange(num_queries, device=device) == pos_query,
+                                lane_weight,
+                            )
+                    negative_query = finite_query & ~query_replace_pos
+                    update_query_replace_weight(
+                        negative_query,
+                        lane_weight * float(self.short_segment_query_replace_neg_weight),
+                    )
 
                 candidate_topk = min(topk, int(enough_overlap.sum().detach().cpu().item()))
                 if candidate_topk <= 0:
@@ -1527,6 +1678,23 @@ class GCSLoss(nn.Module):
                     point = (point * selected_mask).sum(dim=1) / selected_mask.sum(dim=1).clamp_min(1.0)
                     point_losses.append((point * target_score.detach() * lane_weight).mean())
 
+            if query_replace_logits_b is not None and float(self.short_segment_query_replace_weight) > 0.0:
+                if bool(self.short_segment_base_preserve):
+                    query_replace_target[base_hit_any] = 0.0
+                    query_replace_pos[base_hit_any] = False
+                    update_query_replace_weight(base_hit_any, 2.0)
+                active_query_replace = query_replace_weight > 0.0
+                if bool(active_query_replace.any()):
+                    query_replace_bce = F.binary_cross_entropy_with_logits(
+                        query_replace_logits_b,
+                        query_replace_target,
+                        reduction="none",
+                    )
+                    query_replace_losses.append(
+                        (query_replace_bce * query_replace_weight).sum()
+                        / query_replace_weight.sum().clamp_min(1.0)
+                    )
+
             neg_mask = (score_weight <= 0.0) & (min_ape > soft_px)
             if float(self.short_segment_neg_score_thr) > 0.0:
                 neg_mask = neg_mask & (logits_b.detach().sigmoid() >= float(self.short_segment_neg_score_thr))
@@ -1538,14 +1706,39 @@ class GCSLoss(nn.Module):
             if float(self.short_segment_bce_weight) > 0.0 and bool(active_weight.any()):
                 bce = F.binary_cross_entropy_with_logits(logits_b, score_target, reduction="none")
                 bce_losses.append((bce * score_weight).sum() / score_weight.sum().clamp_min(1.0))
+            if float(self.short_segment_dense_quality_weight) > 0.0:
+                finite = torch.isfinite(min_ape)
+                dense_soft = torch.exp(-torch.where(finite, min_ape, torch.zeros_like(min_ape)) / tau)
+                dense_target = torch.where(
+                    finite & (min_ape <= pos_px),
+                    torch.ones_like(min_ape),
+                    torch.where(finite & (min_ape <= soft_px), dense_soft, torch.zeros_like(min_ape)),
+                ).clamp(0.0, 1.0)
+                dense_weight = torch.where(
+                    dense_target > 0.0,
+                    min_ape_lane_weight.clamp_min(1.0),
+                    min_ape_lane_weight.new_full((flat_count,), float(self.short_segment_dense_neg_weight)),
+                )
+                active_dense = dense_weight > 0.0
+                if bool(active_dense.any()):
+                    dense_bce = F.binary_cross_entropy_with_logits(logits_b, dense_target, reduction="none")
+                    dense_quality_losses.append(
+                        (dense_bce * dense_weight).sum() / dense_weight.sum().clamp_min(1.0)
+                    )
 
         bce_loss = torch.stack(bce_losses).mean() if bce_losses else zero
+        dense_quality_loss = torch.stack(dense_quality_losses).mean() if dense_quality_losses else zero
         listwise_loss = torch.stack(listwise_losses).mean() if listwise_losses else zero
+        query_rank_loss = torch.stack(query_rank_losses).mean() if query_rank_losses else zero
         replace_loss = torch.stack(replace_losses).mean() if replace_losses else zero
+        query_replace_loss = torch.stack(query_replace_losses).mean() if query_replace_losses else zero
         score_loss = (
             float(self.short_segment_bce_weight) * bce_loss
+            + float(self.short_segment_dense_quality_weight) * dense_quality_loss
             + float(self.short_segment_listwise_weight) * listwise_loss
+            + float(self.short_segment_query_rank_weight) * query_rank_loss
             + float(self.short_segment_replace_weight) * replace_loss
+            + float(self.short_segment_query_replace_weight) * query_replace_loss
         )
         point_loss = torch.stack(point_losses).mean() if point_losses else zero
         total = score_loss + float(self.short_segment_point_weight) * point_loss

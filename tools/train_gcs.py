@@ -485,8 +485,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--gcs-short-segment-neg-score-thr", type=float, default=0.6)
     parser.add_argument("--gcs-short-segment-bce-weight", type=float, default=1.0)
     parser.add_argument("--gcs-short-segment-listwise-weight", type=float, default=0.0)
+    parser.add_argument("--gcs-short-segment-query-rank-weight", type=float, default=0.0)
     parser.add_argument("--gcs-short-segment-replace-weight", type=float, default=0.0)
+    parser.add_argument("--gcs-short-segment-query-replace-weight", type=float, default=0.0)
+    parser.add_argument("--gcs-short-segment-query-replace-neg-weight", type=float, default=0.25)
     parser.add_argument("--gcs-short-segment-replace-margin-px", type=float, default=5.0)
+    parser.add_argument("--gcs-short-segment-dense-quality-weight", type=float, default=0.0)
+    parser.add_argument("--gcs-short-segment-dense-neg-weight", type=float, default=0.05)
+    parser.add_argument("--gcs-short-segment-replace-dense-neg-weight", type=float, default=0.0)
+    parser.add_argument(
+        "--gcs-short-segment-listwise-all-candidates",
+        action="store_true",
+        help="For short-segment listwise loss, include all QxS candidates in the softmax denominator.",
+    )
     parser.add_argument(
         "--gcs-short-segment-base-preserve",
         action=argparse.BooleanOptionalAction,
@@ -878,8 +889,15 @@ def main() -> None:
         "gcs_short_segment_neg_score_thr": args.gcs_short_segment_neg_score_thr,
         "gcs_short_segment_bce_weight": args.gcs_short_segment_bce_weight,
         "gcs_short_segment_listwise_weight": args.gcs_short_segment_listwise_weight,
+        "gcs_short_segment_query_rank_weight": args.gcs_short_segment_query_rank_weight,
         "gcs_short_segment_replace_weight": args.gcs_short_segment_replace_weight,
+        "gcs_short_segment_query_replace_weight": args.gcs_short_segment_query_replace_weight,
+        "gcs_short_segment_query_replace_neg_weight": args.gcs_short_segment_query_replace_neg_weight,
         "gcs_short_segment_replace_margin_px": args.gcs_short_segment_replace_margin_px,
+        "gcs_short_segment_dense_quality_weight": args.gcs_short_segment_dense_quality_weight,
+        "gcs_short_segment_dense_neg_weight": args.gcs_short_segment_dense_neg_weight,
+        "gcs_short_segment_replace_dense_neg_weight": args.gcs_short_segment_replace_dense_neg_weight,
+        "gcs_short_segment_listwise_all_candidates": args.gcs_short_segment_listwise_all_candidates,
         "gcs_short_segment_base_preserve": args.gcs_short_segment_base_preserve,
         "gcs_short_segment_freeze_base": args.gcs_short_segment_freeze_base,
         "gcs_candidate_decode": args.gcs_candidate_decode,

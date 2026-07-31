@@ -216,6 +216,77 @@ local-segment capacity remains `52/53` and `179/183`. Do not promote its
 `segment_best.pt`, run TEST, or enable formal short-segment decode from this
 result.
 
+The v7 dense-quality selector follow-up is enabled only by:
+
+```text
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-local-segment-proposal-v7.yaml
+```
+
+It preserves the v6 public tensor contract and still emits no new formal decode
+tensor. The v7 change is in the default-off loss/script protocol:
+
+```text
+gcs_short_segment_listwise_all_candidates = true
+gcs_short_segment_dense_quality_weight > 0
+gcs_short_segment_dense_neg_weight > 0
+gcs_short_segment_replace_dense_neg_weight > 0
+```
+
+This trains dense geometry-quality targets over all `Q x 404` proposals,
+including non-overlap/low-overlap negatives, and applies stronger no-replace
+pressure when the env30 base query already hits the 20px gate. The v7 hard
+diagnostic can use `segment_selection_score_mode=combined`, meaning it gates on
+the same `score + replace` logit used for segment selection. Default query
+decode remains unchanged and TEST stays closed until selected-gated hard
+diagnostics pass on official-val plus train0601.
+
+The completed `query_local_segment_env30_frozen_probe20_v7_b4w0s1` is rejected.
+Its selected hard-gate checkpoint is `last.pt` and reaches only:
+
+```text
+official-val short GT5 selected-gated = 20/53
+train0601 short GT5 selected-gated = 77/183
+official-val short GT4 selected-gated = 2/8
+train0601 short GT4 selected-gated = 9/19
+```
+
+The corresponding raw candidate capacity remains `52/53` and `179/183` for
+short GT5, while base-hit losses are `21` and `70`. A diagnostic-only threshold
+increase from `0.5` to `0.8` still reaches only `18/53` and `70/183`, with
+base-hit losses `22` and `74`. Do not promote `segment_best.pt`, run TEST, or
+enable formal short-segment decode from this run.
+
+The v8 explicit two-stage selector follow-up is enabled only by:
+
+```text
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-local-segment-proposal-v8.yaml
+```
+
+It preserves the v6/v7 local short-segment proposal geometry and proposal-local
+candidate-quality score, disables the old per-candidate replace head, and adds:
+
+```text
+pred_short_segment_query_replace_logits: B x 12
+```
+
+The v8 default-off loss/script protocol separates the two decisions:
+
+```text
+gcs_short_segment_query_rank_weight > 0
+gcs_short_segment_query_replace_weight > 0
+gcs_short_segment_replace_weight = 0
+segment_selection_score_mode = query_replace
+```
+
+Candidate scores rank the `404` segment windows inside each query. The
+query-level replace head then decides whether that query may replace the env30
+base geometry. Base-hit queries are trained as hard no-replace, and replace
+positives are allowed only when the base misses the 20px gate and the query's
+best candidate hits or clearly lowers APE. Default query decode remains
+unchanged and TEST stays closed until hard selected-gated diagnostics exceed
+the frozen env30 base on official-val and train0601 with near-zero base-hit
+loss.
+
 Legacy post-env30 record: the 2026-07-25 user-requested Q12/env30 dual-head
 probe was rejected and its YAML/script are not active after the 2026-07-28
 env30 rollback. It added `pred_count_logits: B x 4` for image-level lane count

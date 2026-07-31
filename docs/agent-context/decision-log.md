@@ -2,6 +2,205 @@
 
 This file records decisions for branch `codex/5-25-3-k56`.
 
+## 2026-07-31: Implement local short-segment two-stage selector v8
+
+Decision:
+
+Implement the user-requested v8 follow-up after rejecting the v7 dense-quality
+selector. Keep the env30 base path frozen, preserve default decode, and train
+only `short_segment_*` parameters.
+
+Implementation:
+
+- add `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-local-segment-proposal-v8.yaml`;
+- add `scripts/run_query_local_segment_env30_frozen_probe20_v8.sh`;
+- add `pred_short_segment_query_replace_logits: B x 12`;
+- add default-off `gcs_short_segment_query_rank_weight`,
+  `gcs_short_segment_query_replace_weight`, and
+  `gcs_short_segment_query_replace_neg_weight`;
+- keep v5/v7 per-candidate replace logic available for legacy default-off
+  scripts, but set `gcs_short_segment_replace_weight=0` in v8;
+- extend the hard diagnostic with
+  `segment_selection_score_mode=query_replace`, which first selects each
+  query's best candidate by candidate score and then applies the query-level
+  replace gate.
+
+Why:
+
+The v7 result improved selected-gated coverage over v6 but still selected many
+wrong windows and damaged base-hit lanes. The failure is not raw local-segment
+capacity: raw hard-oracle short GT5 remains `52/53` on official-val and
+`179/183` on train0601. The next smallest change is to stop maximizing a global
+`Q x 404` `score + replace` value and instead train two calibrated decisions:
+candidate geometry quality inside a query, then no-replace/replace at the
+query level.
+
+Gate:
+
+TEST remains closed. The v8 run must be judged by hard selected-gated
+diagnostics: official-val short GT5 must exceed `40/53`, train0601 short GT5
+must exceed `142/183`, base-hit loss should be near zero, and oracle
+score/query-replace ranks must improve before any formal decode promotion.
+
+## 2026-07-31: Implement local short-segment dense-quality selector v7
+
+Decision:
+
+Implement the user-requested v7 follow-up after the v6 selector rank audit.
+Keep the env30 base path frozen, preserve default decode, and train only
+`short_segment_*` parameters.
+
+Implementation:
+
+- add `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-local-segment-proposal-v7.yaml`;
+- add `scripts/run_query_local_segment_env30_frozen_probe20_v7.sh`;
+- add default-off loss flags for dense geometry-quality BCE,
+  dense negative weighting, dense base-preserve replacement negatives, and
+  all-candidate listwise ranking;
+- extend the v5/v6 hard diagnostic so it can gate on the same combined
+  `score + replace` logit used for proposal selection;
+- extend the local short-segment smoke check to build v7 and verify v7
+  score/replace gradients.
+
+Why:
+
+The v6 rank audit showed that raw local-segment capacity remains strong, but
+oracle proposals do not rank first under the learned selector. The root cause
+is loss/selection mismatch: v6 listwise CE only ranked overlapping candidates,
+while inference selected among all length-valid windows and no BCE/focal term
+penalized high-score non-overlap windows when `gcs_short_segment_bce_weight=0`.
+v7 aligns training and selection by applying dense geometry-quality targets to
+the full candidate set and preserving the base path unless a proposal is
+clearly better.
+
+Gate:
+
+TEST remains closed. The run must be judged by `segment_best_hard_gate.json`:
+selected-gated short GT5 must exceed the frozen env30 base on official-val and
+train0601, base-hit loss should be near zero, and oracle combined rank top1/top5
+must improve materially before any decode promotion.
+
+## 2026-07-31: Reject local short-segment dense-quality selector v7 result
+
+Decision:
+
+Reject `query_local_segment_env30_frozen_probe20_v7_b4w0s1` as a promotion.
+Do not run TEST, enable short-segment decode, or continue this exact selector
+unchanged.
+
+Evidence:
+
+```text
+official-val base/raw/selected-gated short GT5 hit20:
+  40/52/20 out of 53
+
+train0601 base/raw/selected-gated short GT5 hit20:
+  142/179/77 out of 183
+
+official-val short GT4 selected-gated:
+  2/8
+train0601 short GT4 selected-gated:
+  9/19
+
+base-to-selected-gated short GT5 gain/loss20:
+  official-val = +1 / -21
+  train0601 = +5 / -70
+
+oracle combined-rank-all on short GT5:
+  official-val top1/top5/top10 = 0/5/6, mean rank = 53.38
+  train0601 top1/top5/top10 = 0/8/17, mean rank = 61.97
+```
+
+The selected hard-gate checkpoint is `last.pt`. Raising the diagnostic
+candidate threshold from `0.5` to `0.8` does not rescue the route:
+
+```text
+threshold=0.8 selected-gated short GT5:
+  official-val = 18/53, base-hit loss = 22
+  train0601 = 70/183, base-hit loss = 74
+```
+
+Interpretation:
+
+The dense all-candidate negative loss improves v6's selected-gated result, but
+the oracle proposal still rarely ranks first and the replace head still
+replaces reliable base carriers with wrong windows. The failure remains
+selector/applicability calibration, not raw local-segment capacity or a simple
+decode threshold.
+
+Next action:
+
+Keep the env30 default path and TEST closed. Do not increase epochs or sweep
+decode thresholds. A future selector must use a calibrated explicit
+`no_replace` state or a per-query base-vs-proposal decision with hard
+base-preserve constraints, and must first pass the same hard rank/gain/loss
+gate before any formal decode experiment.
+
+## 2026-07-31: Complete v6 selector rank audit
+
+Decision:
+
+Reject "add epochs" and "simple predicted-valid selector gate" as fixes for
+`query_local_segment_env30_frozen_probe20_v6_b8s1`. The next version must
+change the selector training target and replacement/applicability contract.
+
+Evidence:
+
+```text
+audited checkpoint = query_local_segment_env30_frozen_probe20_v6_b8s1/weights/last.pt
+TEST used = false
+
+official-val short GT5:
+  base/raw/selected-gated hit20 = 40/52/11 out of 53
+  oracle hard-gate eligible = 52/53
+  oracle selected as query top1 = 2/53
+  oracle combined-rank-in-query top1/top5/top20 = 2/3/19
+  base-to-selected gain/loss20 = +2 / -31
+
+train0601 short GT5:
+  base/raw/selected-gated hit20 = 142/179/32 out of 183
+  oracle hard-gate eligible = 179/183
+  oracle selected as query top1 = 6/183
+  oracle combined-rank-in-query top1/top5/top20 = 6/22/73
+  base-to-selected gain/loss20 = +5 / -115
+```
+
+Selected windows are biased toward length-3 windows while raw oracle windows
+are mostly length `4..8`:
+
+```text
+val selected oracle-query segment length 3 = 48/53
+train0601 selected oracle-query segment length 3 = 164/183
+val raw oracle segment lengths top = 4,5,8,7,9
+train0601 raw oracle segment lengths top = 5,4,8,7,6
+```
+
+A diagnostic-only selector mask requiring at least three base predicted-valid
+anchors inside the segment window reduces some bad replacement but does not
+solve the problem:
+
+```text
+official-val short GT5 selected-gated = 19/53, base-hit loss20 = 23
+train0601 short GT5 selected-gated = 51/183, base-hit loss20 = 95
+```
+
+Why:
+
+The raw local segment representation is sufficient, and the oracle proposal
+usually passes hard-gate eligibility. The failure is ranking/applicability:
+listwise CE trains only among candidates with GT-visible overlap, but inference
+selection considers all length-valid windows; with `gcs_short_segment_bce_weight=0.0`,
+non-overlap high-score windows have no direct negative pressure. The replace
+head then allows many base-hit lanes to be replaced by wrong windows.
+
+Next action:
+
+Implement a v7 selector/loss diagnostic that trains and selects on the same
+proposal-local applicability condition. Keep TEST closed. Required gates before
+decode promotion: recover selected-gated short GT5 above the frozen base on
+official-val and train0601, reduce base-hit loss20 near zero, and show oracle
+combined-rank-in-query top1/top5 improves materially.
+
 ## 2026-07-30: Reject local short-segment proposal-local selector v6 result
 
 Decision:

@@ -3550,6 +3550,90 @@ Do not continue this exact v6 run, do not run TEST, and do not promote
 that reports oracle proposal rank under score/replace/base-preserve gates
 before another training run.
 
+## Q12 Env30 Local Short-Segment Dense-Quality Selector v7
+
+The v7 probe keeps the v6 proposal-local head but changes the selector loss and
+hard diagnostic score alignment. It trains dense geometry-quality targets over
+all `Q x 404` candidates, gives non-overlap/low-overlap windows explicit
+negative pressure, keeps base-preserve no-replace pressure, and uses the
+combined score+replace selector score in the hard diagnostic. Default decode
+remains unchanged and TEST stays closed:
+
+```bash
+RUN_NAME=query_local_segment_env30_frozen_probe20_v7_b8s1 \
+BATCH=8 \
+EPOCHS=20 \
+RUN_TESTS=0 \
+bash scripts/run_query_local_segment_env30_frozen_probe20_v7.sh
+```
+
+Dedicated model:
+
+```text
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-local-segment-proposal-v7.yaml
+```
+
+Default v7 selector parameters:
+
+```text
+gcs_short_segment_bce_weight = 0.0
+gcs_short_segment_listwise_weight = 1.0
+gcs_short_segment_listwise_all_candidates = true
+gcs_short_segment_dense_quality_weight = 1.0
+gcs_short_segment_dense_neg_weight = 0.05
+gcs_short_segment_replace_weight = 1.0
+gcs_short_segment_replace_dense_neg_weight = 0.25
+gcs_short_segment_base_preserve = true
+segment_selection_score_mode = combined
+```
+
+Promotion gate remains official-val/train0601 selected-gated hard hit20. Do not
+run TEST or enable formal short-segment decode unless selected-gated short GT5
+exceeds the frozen env30 base on both splits and base-hit loss is near zero.
+
+## Q12 Env30 Local Short-Segment Two-Stage Selector v8
+
+The v8 probe keeps the v6/v7 local short-segment proposal geometry but
+separates candidate ranking from base replacement. Candidate score ranks
+segment windows inside each query; a query-level no-replace/replace head
+decides whether to replace the frozen env30 base. Default decode remains
+unchanged and TEST stays closed:
+
+```bash
+RUN_NAME=query_local_segment_env30_frozen_probe20_v8_b4w0s1 \
+BATCH=4 \
+WORKERS=0 \
+EPOCHS=20 \
+RUN_TESTS=0 \
+bash scripts/run_query_local_segment_env30_frozen_probe20_v8.sh
+```
+
+Dedicated model:
+
+```text
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-local-segment-proposal-v8.yaml
+```
+
+Default v8 selector parameters:
+
+```text
+gcs_short_segment_bce_weight = 0.0
+gcs_short_segment_listwise_weight = 0.0
+gcs_short_segment_query_rank_weight = 1.0
+gcs_short_segment_dense_quality_weight = 1.0
+gcs_short_segment_dense_neg_weight = 0.05
+gcs_short_segment_replace_weight = 0.0
+gcs_short_segment_query_replace_weight = 1.0
+gcs_short_segment_query_replace_neg_weight = 0.25
+gcs_short_segment_base_preserve = true
+segment_selection_score_mode = query_replace
+```
+
+Promotion gate remains official-val/train0601 selected-gated hard hit20. The
+first v8 gate must show selected-gated short GT5 above the frozen env30 base
+(`official-val >40/53`, `train0601 >142/183`), base-hit loss near zero, and
+better oracle score/query-replace ranks before any formal decode or TEST run.
+
 ## Rejected Q12 Env30 Lateral Candidate Probe
 
 Status: rejected after `query_short_candidate_env30_probe20_fix1`. Do not
