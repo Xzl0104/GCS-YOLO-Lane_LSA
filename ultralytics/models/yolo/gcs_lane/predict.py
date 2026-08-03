@@ -144,6 +144,7 @@ class GCSLanePredictor(BasePredictor):
         valid_logits = preds.get("pred_valid_logits")
         if valid_logits is not None:
             valid_logits = valid_logits.detach()
+        full_lane_decode = bool(self._arg_value(self.args, "gcs_full_lane_decode") or False)
         conf = 0.25 if self.args.conf is None else float(self.args.conf)
         max_det = int(self.args.max_det) if getattr(self.args, "max_det", None) else None
         nms_dist_px = float(getattr(self.args, "gcs_eval_nms_dist_px", 0.0) or 0.0)
@@ -182,6 +183,25 @@ class GCSLanePredictor(BasePredictor):
                     lane_points,
                     lane_logits,
                     pred_valid_logits=lane_valid_logits,
+                    full_lane_decode=full_lane_decode,
+                    pred_full_lane_points=preds.get("pred_full_lane_points", None)[batch_i]
+                    if preds.get("pred_full_lane_points", None) is not None
+                    else None,
+                    pred_full_lane_valid_logits=preds.get("pred_full_lane_valid_logits", None)[batch_i]
+                    if preds.get("pred_full_lane_valid_logits", None) is not None
+                    else None,
+                    pred_full_lane_exist_logits=preds.get("pred_full_lane_exist_logits", None)[batch_i]
+                    if preds.get("pred_full_lane_exist_logits", None) is not None
+                    else None,
+                    pred_full_lane_quality_logits=preds.get("pred_full_lane_quality_logits", None)[batch_i]
+                    if preds.get("pred_full_lane_quality_logits", None) is not None
+                    else None,
+                    pred_full_lane_start_logits=preds.get("pred_full_lane_start_logits", None)[batch_i]
+                    if preds.get("pred_full_lane_start_logits", None) is not None
+                    else None,
+                    pred_full_lane_end_logits=preds.get("pred_full_lane_end_logits", None)[batch_i]
+                    if preds.get("pred_full_lane_end_logits", None) is not None
+                    else None,
                     image_shape=orig_img.shape[:2],
                     score_thr=conf,
                     point_valid_thr=point_valid_thr,

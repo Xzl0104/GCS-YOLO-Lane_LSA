@@ -140,11 +140,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--candidate-short-max-points", type=int, default=10)
     parser.add_argument(
         "--segment-selection-score-mode",
-        choices=("replace", "combined", "query_replace"),
+        choices=("replace", "combined", "query_replace", "base_choice", "unified_choice"),
         default="replace",
         help=(
             "Diagnostic-only segment gate score. Default replace preserves v5/v6 hard diagnostic behavior; "
-            "query_replace uses per-query candidate-score selection plus a query-level replace gate."
+            "query_replace uses per-query candidate-score selection plus a query-level replace gate; "
+            "base_choice treats the frozen base as a zero-logit option against the 404 segment logits; "
+            "unified_choice uses the v12 model-emitted base-plus-segment choice logits."
         ),
     )
     parser.add_argument(
@@ -353,6 +355,11 @@ def _prob_at(logits: torch.Tensor | None, index: int) -> float:
         return float(1.0 / (1.0 + math.exp(-value)))
     exp_value = math.exp(value)
     return float(exp_value / (1.0 + exp_value))
+
+
+def _prob_threshold_to_logit_floor(prob: float) -> float:
+    prob = min(max(float(prob), 1e-6), 1.0 - 1e-6)
+    return float(math.log(prob / (1.0 - prob)))
 
 
 def _centered_y(points: torch.Tensor, mode: str) -> torch.Tensor:
@@ -780,6 +787,7 @@ def main() -> None:
         candidate_logits_t = preds.get("pred_short_candidate_logits")
         segment_points_t = preds.get("pred_short_segment_points")
         segment_logits_t = preds.get("pred_short_segment_logits")
+        segment_choice_logits_t = preds.get("pred_short_segment_choice_logits")
         segment_replace_logits_t = preds.get("pred_short_segment_replace_logits")
         segment_query_replace_logits_t = preds.get("pred_short_segment_query_replace_logits")
         segment_window_mask_t = preds.get("pred_short_segment_window_mask")
@@ -788,6 +796,7 @@ def main() -> None:
         candidate_window_masks: torch.Tensor | None = None
         candidate_replace_logits: torch.Tensor | None = None
         candidate_query_replace_logits: torch.Tensor | None = None
+        candidate_choice_logits: torch.Tensor | None = None
         model_candidate_source = "candidate_head"
         if bool(args.affine_oracle):
             candidate_points, affine_pairs = _make_affine_candidate_points(
@@ -819,6 +828,14 @@ def main() -> None:
         elif segment_points_t is not None and segment_logits_t is not None and segment_window_mask_t is not None:
             candidate_points = segment_points_t[0].detach().float().cpu().clamp(0.0, 1.0)
             candidate_logits = segment_logits_t[0].detach().float().cpu()
+            if segment_choice_logits_t is not None:
+                candidate_choice_logits = segment_choice_logits_t[0].detach().float().cpu()
+                expected_choice_shape = (candidate_points.shape[0], candidate_points.shape[1] + 1)
+                if tuple(candidate_choice_logits.shape) != expected_choice_shape:
+                    raise RuntimeError(
+                        "Bad pred_short_segment_choice_logits shape: "
+                        f"{tuple(candidate_choice_logits.shape)} vs expected={expected_choice_shape}"
+                    )
             if segment_replace_logits_t is not None:
                 candidate_replace_logits = segment_replace_logits_t[0].detach().float().cpu()
                 if candidate_replace_logits.shape != candidate_logits.shape:
@@ -860,6 +877,7 @@ def main() -> None:
         segment_length_gate = torch.ones_like(candidate_logits, dtype=torch.bool)
         selection_logits = candidate_logits
         hard_gate_mask = torch.ones_like(candidate_logits, dtype=torch.bool)
+        selected_is_base = torch.zeros(candidate_points.shape[0], dtype=torch.bool)
         if bool(args.affine_oracle) or bool(args.static_proposal_oracle) or bool(args.mask_proposal_oracle):
             candidate_prob = candidate_logits.sigmoid()
             best_scores, best_indices = candidate_prob.max(dim=1)
@@ -870,6 +888,65 @@ def main() -> None:
             apply_gate = torch.zeros(candidate_points.shape[0], dtype=torch.bool)
             best_replace_scores = torch.zeros_like(best_scores)
             selected_segment_lengths = torch.zeros_like(best_indices)
+        elif str(args.segment_selection_score_mode) == "base_choice" and candidate_window_masks is not None:
+            segment_lengths = candidate_window_masks.sum(dim=2)
+            segment_length_gate = (segment_lengths >= int(args.candidate_short_min_points)) & (
+                segment_lengths <= int(args.candidate_short_max_points)
+            )
+            if int(args.segment_selection_pred_valid_overlap_min) > 0:
+                query_valid = valid_scores >= float(args.point_valid_thr)
+                pred_valid_overlap = (candidate_window_masks & query_valid.view(query_valid.shape[0], 1, -1)).sum(
+                    dim=2
+                )
+                segment_length_gate = segment_length_gate & (
+                    pred_valid_overlap >= int(args.segment_selection_pred_valid_overlap_min)
+                )
+            selection_logits = candidate_logits
+            selection_scores = candidate_logits.masked_fill(~segment_length_gate, float("-inf"))
+            best_segment_logits, best_indices = selection_scores.max(dim=1)
+            best_scores = best_segment_logits.sigmoid()
+            best_replace_scores = torch.zeros_like(best_scores)
+            selected_segment_lengths = segment_lengths.gather(1, best_indices.view(-1, 1)).squeeze(1)
+            short_gate = segment_length_gate.gather(1, best_indices.view(-1, 1)).squeeze(1)
+            min_segment_logit = max(0.0, _prob_threshold_to_logit_floor(float(args.candidate_score_thr)))
+            apply_gate = short_gate & torch.isfinite(best_segment_logits) & (best_segment_logits >= min_segment_logit)
+            hard_gate_mask = segment_length_gate & (candidate_logits >= min_segment_logit)
+        elif str(args.segment_selection_score_mode) == "unified_choice" and candidate_window_masks is not None:
+            if candidate_choice_logits is None:
+                raise RuntimeError(
+                    "--segment-selection-score-mode unified_choice requires "
+                    "pred_short_segment_choice_logits. Use the local-segment-proposal-v12 YAML."
+                )
+            segment_lengths = candidate_window_masks.sum(dim=2)
+            segment_length_gate = (segment_lengths >= int(args.candidate_short_min_points)) & (
+                segment_lengths <= int(args.candidate_short_max_points)
+            )
+            if int(args.segment_selection_pred_valid_overlap_min) > 0:
+                query_valid = valid_scores >= float(args.point_valid_thr)
+                pred_valid_overlap = (candidate_window_masks & query_valid.view(query_valid.shape[0], 1, -1)).sum(
+                    dim=2
+                )
+                segment_length_gate = segment_length_gate & (
+                    pred_valid_overlap >= int(args.segment_selection_pred_valid_overlap_min)
+                )
+            choice_logits = candidate_choice_logits.clone()
+            choice_logits[:, 1:] = choice_logits[:, 1:].masked_fill(~segment_length_gate, float("-inf"))
+            choice_probs = torch.softmax(choice_logits, dim=1)
+            best_choice_probs, best_choice = choice_probs.max(dim=1)
+            selected_is_base = best_choice == 0
+            best_indices = (best_choice - 1).clamp_min(0)
+            best_scores = best_choice_probs
+            best_replace_scores = torch.zeros_like(best_scores)
+            selected_segment_lengths = segment_lengths.gather(1, best_indices.view(-1, 1)).squeeze(1)
+            short_gate = (~selected_is_base) & segment_length_gate.gather(
+                1, best_indices.view(-1, 1)
+            ).squeeze(1)
+            apply_gate = short_gate & (best_choice_probs >= float(args.candidate_score_thr))
+            candidate_logits = choice_logits[:, 1:]
+            selection_logits = candidate_logits
+            hard_gate_mask = segment_length_gate & (
+                choice_probs[:, 1:] >= float(args.candidate_score_thr)
+            )
         elif str(args.segment_selection_score_mode) == "query_replace" and candidate_window_masks is not None:
             if candidate_query_replace_logits is None:
                 raise RuntimeError(
@@ -1018,15 +1095,18 @@ def main() -> None:
         selected_gated_pool_xs = []
         for q in range(q_count):
             m = int(best_indices[q].item())
-            selected_mask = candidate_window_masks[q, m].numpy() if candidate_window_masks is not None else None
-            selected_all_pool_xs.append(
-                _interp_points_to_hsamples(
-                    candidate_points[q, m].numpy(),
-                    h_samples,
-                    original_shape,
-                    valid_mask=selected_mask,
+            if bool(selected_is_base[q].item()):
+                selected_all_pool_xs.append(base_pool_xs[q])
+            else:
+                selected_mask = candidate_window_masks[q, m].numpy() if candidate_window_masks is not None else None
+                selected_all_pool_xs.append(
+                    _interp_points_to_hsamples(
+                        candidate_points[q, m].numpy(),
+                        h_samples,
+                        original_shape,
+                        valid_mask=selected_mask,
+                    )
                 )
-            )
             if bool(apply_gate[q].item()):
                 selected_gated_pool_xs.append(selected_all_pool_xs[-1])
             else:
@@ -1096,9 +1176,16 @@ def main() -> None:
             )
 
             oracle_selected_m = int(best_indices[oracle_q].item()) if oracle_has_candidate_query else -1
+            oracle_selected_is_base = (
+                bool(selected_is_base[oracle_q].item())
+                if oracle_has_candidate_query
+                else False
+            )
             oracle_selected_flat_idx = (
                 int(oracle_q * cand_count + oracle_selected_m)
-                if oracle_has_candidate_query and 0 <= oracle_selected_m < int(cand_count)
+                if oracle_has_candidate_query
+                and not oracle_selected_is_base
+                and 0 <= oracle_selected_m < int(cand_count)
                 else -1
             )
             oracle_selected_meta = (
@@ -1106,7 +1193,13 @@ def main() -> None:
                 if 0 <= oracle_selected_flat_idx < len(raw_candidate_meta)
                 else {}
             )
-            if 0 <= oracle_selected_flat_idx < len(raw_candidate_pool):
+            if oracle_selected_is_base and oracle_has_candidate_query:
+                oracle_selected_ape, oracle_selected_overlap = _ape_px(
+                    base_pool_xs[oracle_q],
+                    gt_lane,
+                    min_overlap=int(args.match_min_overlap),
+                )
+            elif 0 <= oracle_selected_flat_idx < len(raw_candidate_pool):
                 oracle_selected_ape, oracle_selected_overlap = _ape_px(
                     raw_candidate_pool[oracle_selected_flat_idx],
                     gt_lane,
@@ -1116,18 +1209,31 @@ def main() -> None:
                 oracle_selected_ape, oracle_selected_overlap = float("inf"), 0
 
             selected_all_m = int(best_indices[selected_all_idx].item()) if 0 <= selected_all_idx < q_count else -1
+            selected_all_is_base = (
+                bool(selected_is_base[selected_all_idx].item())
+                if 0 <= selected_all_idx < q_count
+                else False
+            )
             selected_all_flat_idx = (
                 int(selected_all_idx * cand_count + selected_all_m)
-                if 0 <= selected_all_idx < q_count and 0 <= selected_all_m < int(cand_count)
+                if 0 <= selected_all_idx < q_count
+                and not selected_all_is_base
+                and 0 <= selected_all_m < int(cand_count)
                 else -1
             )
             selected_all_meta = (
                 raw_candidate_meta[selected_all_flat_idx] if 0 <= selected_all_flat_idx < len(raw_candidate_meta) else {}
             )
             selected_gated_m = int(best_indices[selected_gated_idx].item()) if 0 <= selected_gated_idx < q_count else -1
+            selected_gated_is_base = (
+                bool(selected_is_base[selected_gated_idx].item())
+                if 0 <= selected_gated_idx < q_count
+                else False
+            )
             selected_gated_flat_idx = (
                 int(selected_gated_idx * cand_count + selected_gated_m)
                 if 0 <= selected_gated_idx < q_count
+                and not selected_gated_is_base
                 and 0 <= selected_gated_m < int(cand_count)
                 and bool(apply_gate[selected_gated_idx].item())
                 else -1
@@ -1138,7 +1244,11 @@ def main() -> None:
                 else {}
             )
             oracle_query_selected_oracle_candidate = (
-                bool(oracle_has_candidate_query and int(best_indices[oracle_q].item()) == oracle_m)
+                bool(
+                    oracle_has_candidate_query
+                    and not oracle_selected_is_base
+                    and int(best_indices[oracle_q].item()) == oracle_m
+                )
                 if oracle_has_candidate_query
                 else False
             )
@@ -1309,6 +1419,16 @@ def main() -> None:
             "selector_rank_audit": True,
             "selector_rank_fields": list(RANK_FIELDS),
             "selected_gate_mode": (
+                "segment_length_base_choice_softmax"
+                if rows
+                and any(str(r.get("raw_candidate_source", "")) == "segment_head" for r in rows)
+                and str(args.segment_selection_score_mode) == "base_choice"
+                else
+                "unified_base_plus_segment_softmax"
+                if rows
+                and any(str(r.get("raw_candidate_source", "")) == "segment_head" for r in rows)
+                and str(args.segment_selection_score_mode) == "unified_choice"
+                else
                 "segment_length_candidate_score_and_query_replace_score"
                 if rows
                 and any(str(r.get("raw_candidate_source", "")) == "segment_head" for r in rows)

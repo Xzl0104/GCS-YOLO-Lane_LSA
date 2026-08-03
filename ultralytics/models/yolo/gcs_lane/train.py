@@ -90,6 +90,20 @@ class GCSLaneTrainer(BaseTrainer):
         "query_count_ce_loss",
         "query_count_acc",
         "query_count_pred_mean",
+        "full_lane_proposal_loss",
+        "full_lane_point_loss",
+        "full_lane_valid_loss",
+        "full_lane_interval_loss",
+        "full_lane_exist_loss",
+        "full_lane_quality_loss",
+        "full_lane_match_count",
+        "full_lane_unmatched_count",
+        "dense_instance_loss",
+        "dense_centerline_loss",
+        "dense_endpoint_loss",
+        "dense_embed_pull_loss",
+        "dense_embed_push_loss",
+        "dense_centerline_pos",
     )
     # Keep tqdm headers within BaseTrainer's 11-character progress columns.
     progress_loss_names = (
@@ -139,6 +153,20 @@ class GCSLaneTrainer(BaseTrainer):
         "qcnt_ce",
         "qcnt_acc",
         "qcnt_pred",
+        "flane",
+        "fl_point",
+        "fl_valid",
+        "fl_interval",
+        "fl_exist",
+        "fl_quality",
+        "fl_match",
+        "fl_unmatch",
+        "dense",
+        "dense_ctr",
+        "dense_end",
+        "dense_pull",
+        "dense_push",
+        "dense_pos",
     )
     # YOLO11 backbone -> GCS-YOLO-Lane backbone. LSEM is inserted after old
     # layers 4 and 6, so all later backbone layers must be shifted explicitly.
@@ -176,6 +204,16 @@ class GCSLaneTrainer(BaseTrainer):
         """Return true for parameters or modules owned by the short-segment branch."""
         return "short_segment_" in str(name)
 
+    @staticmethod
+    def _is_full_lane_trainable_name(name: str) -> bool:
+        """Return true for parameters or modules owned by the full-lane proposal branch."""
+        return "full_lane_" in str(name)
+
+    @staticmethod
+    def _is_dense_instance_trainable_name(name: str) -> bool:
+        """Return true for parameters or modules owned by the dense evidence branch."""
+        return "dense_instance_" in str(name)
+
     def _short_candidate_freeze_base_enabled(self) -> bool:
         """Return whether this run trains only the short-candidate branch."""
         return bool(self._get_arg_value("gcs_short_candidate_freeze_base", False))
@@ -184,27 +222,47 @@ class GCSLaneTrainer(BaseTrainer):
         """Return whether this run trains only the short-segment branch."""
         return bool(self._get_arg_value("gcs_short_segment_freeze_base", False))
 
+    def _full_lane_freeze_base_enabled(self) -> bool:
+        """Return whether this run trains only the full-lane proposal branch."""
+        return bool(self._get_arg_value("gcs_full_lane_freeze_base", False))
+
+    def _dense_instance_freeze_base_enabled(self) -> bool:
+        """Return whether this run trains only the dense evidence branch."""
+        return bool(self._get_arg_value("gcs_dense_freeze_base", False))
+
     def _apply_custom_freeze(self) -> None:
         """Freeze env30/base parameters for selector-only proposal probing."""
         candidate_freeze = self._short_candidate_freeze_base_enabled()
         segment_freeze = self._short_segment_freeze_base_enabled()
-        if not candidate_freeze and not segment_freeze:
+        full_lane_freeze = self._full_lane_freeze_base_enabled()
+        dense_freeze = self._dense_instance_freeze_base_enabled()
+        freeze_modes = int(candidate_freeze) + int(segment_freeze) + int(full_lane_freeze) + int(dense_freeze)
+        if freeze_modes == 0:
             return
-        if candidate_freeze and segment_freeze:
+        if freeze_modes > 1:
             raise ValueError(
                 "Use only one frozen proposal mode at a time: "
-                "--gcs-short-candidate-freeze-base or --gcs-short-segment-freeze-base."
+                "--gcs-short-candidate-freeze-base, --gcs-short-segment-freeze-base, "
+                "--gcs-full-lane-freeze-base, or --gcs-dense-freeze-base."
             )
 
         if candidate_freeze and float(self._get_arg_value("gcs_short_candidate", 0.0)) <= 0.0:
             raise ValueError("gcs_short_candidate_freeze_base=True requires --gcs-short-candidate > 0.")
         if segment_freeze and float(self._get_arg_value("gcs_short_segment", 0.0)) <= 0.0:
             raise ValueError("gcs_short_segment_freeze_base=True requires --gcs-short-segment > 0.")
+        if full_lane_freeze and float(self._get_arg_value("gcs_full_lane_proposal", 0.0)) <= 0.0:
+            raise ValueError("gcs_full_lane_freeze_base=True requires --gcs-full-lane-proposal > 0.")
+        if dense_freeze and float(self._get_arg_value("gcs_dense_instance", 0.0)) <= 0.0:
+            raise ValueError("gcs_dense_freeze_base=True requires --gcs-dense-instance > 0.")
 
         def is_trainable(name: str) -> bool:
             if candidate_freeze:
                 return self._is_short_candidate_trainable_name(name)
-            return self._is_short_segment_trainable_name(name)
+            if segment_freeze:
+                return self._is_short_segment_trainable_name(name)
+            if full_lane_freeze:
+                return self._is_full_lane_trainable_name(name)
+            return self._is_dense_instance_trainable_name(name)
 
         model = unwrap_model(self.model)
         total_params = 0
@@ -219,8 +277,18 @@ class GCSLaneTrainer(BaseTrainer):
                 trainable_tensors.append(name)
 
         if not trainable_tensors:
-            branch = "short_candidate_*" if candidate_freeze else "short_segment_*"
-            yaml_hint = "gated-candidate-v2" if candidate_freeze else "local-segment-proposal-v4"
+            if candidate_freeze:
+                branch = "short_candidate_*"
+                yaml_hint = "gated-candidate-v2"
+            elif segment_freeze:
+                branch = "short_segment_*"
+                yaml_hint = "local-segment-proposal-v4"
+            elif full_lane_freeze:
+                branch = "full_lane_*"
+                yaml_hint = "full-lane-proposal"
+            else:
+                branch = "dense_instance_*"
+                yaml_hint = "dense-instance-proposal"
             raise ValueError(
                 f"frozen-base proposal mode found no {branch} parameters. "
                 f"Use the {yaml_hint} YAML."
@@ -239,13 +307,19 @@ class GCSLaneTrainer(BaseTrainer):
         super()._model_train()
         candidate_freeze = self._short_candidate_freeze_base_enabled()
         segment_freeze = self._short_segment_freeze_base_enabled()
-        if not candidate_freeze and not segment_freeze:
+        full_lane_freeze = self._full_lane_freeze_base_enabled()
+        dense_freeze = self._dense_instance_freeze_base_enabled()
+        if not candidate_freeze and not segment_freeze and not full_lane_freeze and not dense_freeze:
             return
 
         model = unwrap_model(self.model)
         for name, module in model.named_modules():
             if (candidate_freeze and self._is_short_candidate_trainable_name(name)) or (
                 segment_freeze and self._is_short_segment_trainable_name(name)
+            ) or (
+                full_lane_freeze and self._is_full_lane_trainable_name(name)
+            ) or (
+                dense_freeze and self._is_dense_instance_trainable_name(name)
             ):
                 module.train()
             else:
@@ -1245,6 +1319,7 @@ class GCSLaneTrainer(BaseTrainer):
             ordered_slot_runtime_context="training_official_best" if ordered_slot else "official_sweep",
             score_fp_weight=float(getattr(self.args, "gcs_official_score_fp_weight", 0.02) or 0.02),
             score_fn_weight=float(getattr(self.args, "gcs_official_score_fn_weight", 0.02) or 0.02),
+            full_lane_decode=bool(getattr(self.args, "gcs_full_lane_decode", False)),
         )
 
     def _write_official_best_artifacts(self, output: dict[str, Any], epoch_num: int, sweep_dir: Path) -> None:

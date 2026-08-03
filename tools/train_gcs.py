@@ -486,6 +486,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--gcs-short-segment-bce-weight", type=float, default=1.0)
     parser.add_argument("--gcs-short-segment-listwise-weight", type=float, default=0.0)
     parser.add_argument("--gcs-short-segment-query-rank-weight", type=float, default=0.0)
+    parser.add_argument("--gcs-short-segment-base-choice-weight", type=float, default=0.0)
     parser.add_argument("--gcs-short-segment-replace-weight", type=float, default=0.0)
     parser.add_argument("--gcs-short-segment-query-replace-weight", type=float, default=0.0)
     parser.add_argument("--gcs-short-segment-query-replace-neg-weight", type=float, default=0.25)
@@ -493,6 +494,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--gcs-short-segment-dense-quality-weight", type=float, default=0.0)
     parser.add_argument("--gcs-short-segment-dense-neg-weight", type=float, default=0.05)
     parser.add_argument("--gcs-short-segment-replace-dense-neg-weight", type=float, default=0.0)
+    parser.add_argument("--gcs-short-segment-unified-choice-weight", type=float, default=0.0)
+    parser.add_argument("--gcs-short-segment-unified-choice-temperature", type=float, default=0.25)
+    parser.add_argument("--gcs-short-segment-unified-choice-base-neg-weight", type=float, default=0.25)
+    parser.add_argument(
+        "--gcs-short-segment-candidate-aware-assignment",
+        action="store_true",
+        help="Use best useful segment geometry to choose the unified-choice query target for short GT4/GT5 lanes.",
+    )
     parser.add_argument(
         "--gcs-short-segment-listwise-all-candidates",
         action="store_true",
@@ -505,9 +514,111 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Train replace logits to preserve base-hit lanes when a short segment would miss the 20px gate.",
     )
     parser.add_argument(
+        "--gcs-short-segment-matched-assignment",
+        action="store_true",
+        help="Use Hungarian matched query-lane pairs for per-query short-segment base-choice targets.",
+    )
+    parser.add_argument(
+        "--gcs-short-segment-official-quality-target",
+        action="store_true",
+        help="Use TuSimple official-style per-point hit-ratio targets for local short-segment selector training.",
+    )
+    parser.add_argument("--gcs-short-segment-official-pt-thresh", type=float, default=0.85)
+    parser.add_argument("--gcs-short-segment-base-valid-thr", type=float, default=0.6)
+    parser.add_argument(
+        "--gcs-short-segment-base-choice-all-queries",
+        action="store_true",
+        help="Train the explicit base/no-replace choice for every query on short GT4/GT5 images.",
+    )
+    parser.add_argument("--gcs-short-segment-base-choice-neg-weight", type=float, default=0.25)
+    parser.add_argument(
         "--gcs-short-segment-freeze-base",
         action="store_true",
         help="Freeze all non-short-segment parameters for env30 local-segment proposal probing.",
+    )
+    parser.add_argument(
+        "--gcs-full-lane-proposal",
+        type=float,
+        default=0.0,
+        help="Independent image-conditioned full-lane proposal set loss gain. 0 disables.",
+    )
+    parser.add_argument(
+        "--gcs-full-lane-quality-tau",
+        type=float,
+        default=25.0,
+        help="APE decay scale in pixels for full-lane geometry-quality targets.",
+    )
+    parser.add_argument(
+        "--gcs-full-lane-unmatched-valid-weight",
+        type=float,
+        default=0.1,
+        help="Visibility-negative weight for unmatched full-lane proposals.",
+    )
+    parser.add_argument(
+        "--gcs-full-lane-unmatched-weight",
+        type=float,
+        default=1.0,
+        help="Existence/quality unmatched-negative weight for full-lane proposals.",
+    )
+    parser.add_argument(
+        "--gcs-full-lane-aux-assignment",
+        action="store_true",
+        help="Train full-lane proposals from proposal-only GT assignment so base queries cannot starve them.",
+    )
+    parser.add_argument(
+        "--gcs-full-lane-unified-matching",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Allow full-lane proposals to compete with base queries in unified Hungarian matching.",
+    )
+    parser.add_argument("--gcs-full-lane-aux-match-min-overlap", type=int, default=2)
+    parser.add_argument(
+        "--gcs-full-lane-aux-match-gate-px",
+        type=float,
+        default=0.0,
+        help="Optional APE gate in pixels for proposal-only full-lane assignment. 0 disables.",
+    )
+    parser.add_argument(
+        "--gcs-full-lane-hard-focus",
+        action="store_true",
+        help="Weight full-lane warmup targets toward base-miss short GT4/GT5 lanes.",
+    )
+    parser.add_argument("--gcs-full-lane-focus-hit-px", type=float, default=20.0)
+    parser.add_argument("--gcs-full-lane-focus-base-valid-thr", type=float, default=0.6)
+    parser.add_argument("--gcs-full-lane-focus-base-min-coverage", type=float, default=1.0)
+    parser.add_argument("--gcs-full-lane-base-hit-weight", type=float, default=1.0)
+    parser.add_argument("--gcs-full-lane-base-miss-weight", type=float, default=1.0)
+    parser.add_argument("--gcs-full-lane-gt4-weight", type=float, default=1.0)
+    parser.add_argument("--gcs-full-lane-gt5-weight", type=float, default=1.0)
+    parser.add_argument("--gcs-full-lane-short-visible-thr", type=int, default=10)
+    parser.add_argument("--gcs-full-lane-short-visible-weight", type=float, default=1.0)
+    parser.add_argument(
+        "--gcs-full-lane-freeze-base",
+        action="store_true",
+        help="Freeze all non-full-lane parameters for full-proposal warmup/probing.",
+    )
+    parser.add_argument(
+        "--gcs-full-lane-decode",
+        action="store_true",
+        help="Enable prediction-only joint decode of base queries and independent full-lane proposals.",
+    )
+    parser.add_argument(
+        "--gcs-dense-instance",
+        type=float,
+        default=0.0,
+        help="Dense centerline/endpoint/instance-evidence loss gain. 0 disables.",
+    )
+    parser.add_argument("--gcs-dense-centerline-weight", type=float, default=1.0)
+    parser.add_argument("--gcs-dense-endpoint-weight", type=float, default=1.0)
+    parser.add_argument("--gcs-dense-embed-pull-weight", type=float, default=0.25)
+    parser.add_argument("--gcs-dense-embed-push-weight", type=float, default=0.25)
+    parser.add_argument("--gcs-dense-embed-margin", type=float, default=0.5)
+    parser.add_argument("--gcs-dense-sigma-px", type=float, default=3.0)
+    parser.add_argument("--gcs-dense-pos-weight-max", type=float, default=50.0)
+    parser.add_argument(
+        "--gcs-dense-freeze-base",
+        action="store_true",
+        help="Freeze env30/base parameters and train only dense_instance_* parameters.",
     )
     parser.add_argument(
         "--gcs-candidate-decode",
@@ -890,6 +1001,7 @@ def main() -> None:
         "gcs_short_segment_bce_weight": args.gcs_short_segment_bce_weight,
         "gcs_short_segment_listwise_weight": args.gcs_short_segment_listwise_weight,
         "gcs_short_segment_query_rank_weight": args.gcs_short_segment_query_rank_weight,
+        "gcs_short_segment_base_choice_weight": args.gcs_short_segment_base_choice_weight,
         "gcs_short_segment_replace_weight": args.gcs_short_segment_replace_weight,
         "gcs_short_segment_query_replace_weight": args.gcs_short_segment_query_replace_weight,
         "gcs_short_segment_query_replace_neg_weight": args.gcs_short_segment_query_replace_neg_weight,
@@ -897,9 +1009,48 @@ def main() -> None:
         "gcs_short_segment_dense_quality_weight": args.gcs_short_segment_dense_quality_weight,
         "gcs_short_segment_dense_neg_weight": args.gcs_short_segment_dense_neg_weight,
         "gcs_short_segment_replace_dense_neg_weight": args.gcs_short_segment_replace_dense_neg_weight,
+        "gcs_short_segment_unified_choice_weight": args.gcs_short_segment_unified_choice_weight,
+        "gcs_short_segment_unified_choice_temperature": args.gcs_short_segment_unified_choice_temperature,
+        "gcs_short_segment_unified_choice_base_neg_weight": args.gcs_short_segment_unified_choice_base_neg_weight,
+        "gcs_short_segment_candidate_aware_assignment": args.gcs_short_segment_candidate_aware_assignment,
         "gcs_short_segment_listwise_all_candidates": args.gcs_short_segment_listwise_all_candidates,
         "gcs_short_segment_base_preserve": args.gcs_short_segment_base_preserve,
+        "gcs_short_segment_matched_assignment": args.gcs_short_segment_matched_assignment,
+        "gcs_short_segment_official_quality_target": args.gcs_short_segment_official_quality_target,
+        "gcs_short_segment_official_pt_thresh": args.gcs_short_segment_official_pt_thresh,
+        "gcs_short_segment_base_valid_thr": args.gcs_short_segment_base_valid_thr,
+        "gcs_short_segment_base_choice_all_queries": args.gcs_short_segment_base_choice_all_queries,
+        "gcs_short_segment_base_choice_neg_weight": args.gcs_short_segment_base_choice_neg_weight,
         "gcs_short_segment_freeze_base": args.gcs_short_segment_freeze_base,
+        "gcs_full_lane_proposal": args.gcs_full_lane_proposal,
+        "gcs_full_lane_quality_tau": args.gcs_full_lane_quality_tau,
+        "gcs_full_lane_unmatched_valid_weight": args.gcs_full_lane_unmatched_valid_weight,
+        "gcs_full_lane_unmatched_weight": args.gcs_full_lane_unmatched_weight,
+        "gcs_full_lane_aux_assignment": args.gcs_full_lane_aux_assignment,
+        "gcs_full_lane_unified_matching": args.gcs_full_lane_unified_matching,
+        "gcs_full_lane_aux_match_min_overlap": args.gcs_full_lane_aux_match_min_overlap,
+        "gcs_full_lane_aux_match_gate_px": args.gcs_full_lane_aux_match_gate_px,
+        "gcs_full_lane_hard_focus": args.gcs_full_lane_hard_focus,
+        "gcs_full_lane_focus_hit_px": args.gcs_full_lane_focus_hit_px,
+        "gcs_full_lane_focus_base_valid_thr": args.gcs_full_lane_focus_base_valid_thr,
+        "gcs_full_lane_focus_base_min_coverage": args.gcs_full_lane_focus_base_min_coverage,
+        "gcs_full_lane_base_hit_weight": args.gcs_full_lane_base_hit_weight,
+        "gcs_full_lane_base_miss_weight": args.gcs_full_lane_base_miss_weight,
+        "gcs_full_lane_gt4_weight": args.gcs_full_lane_gt4_weight,
+        "gcs_full_lane_gt5_weight": args.gcs_full_lane_gt5_weight,
+        "gcs_full_lane_short_visible_thr": args.gcs_full_lane_short_visible_thr,
+        "gcs_full_lane_short_visible_weight": args.gcs_full_lane_short_visible_weight,
+        "gcs_full_lane_freeze_base": args.gcs_full_lane_freeze_base,
+        "gcs_full_lane_decode": args.gcs_full_lane_decode,
+        "gcs_dense_instance": args.gcs_dense_instance,
+        "gcs_dense_centerline_weight": args.gcs_dense_centerline_weight,
+        "gcs_dense_endpoint_weight": args.gcs_dense_endpoint_weight,
+        "gcs_dense_embed_pull_weight": args.gcs_dense_embed_pull_weight,
+        "gcs_dense_embed_push_weight": args.gcs_dense_embed_push_weight,
+        "gcs_dense_embed_margin": args.gcs_dense_embed_margin,
+        "gcs_dense_sigma_px": args.gcs_dense_sigma_px,
+        "gcs_dense_pos_weight_max": args.gcs_dense_pos_weight_max,
+        "gcs_dense_freeze_base": args.gcs_dense_freeze_base,
         "gcs_candidate_decode": args.gcs_candidate_decode,
         "gcs_candidate_score_thr": args.gcs_candidate_score_thr,
         "gcs_candidate_short_min_points": args.gcs_candidate_short_min_points,

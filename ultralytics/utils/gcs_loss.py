@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -10,6 +12,10 @@ import torch.nn.functional as F
 from ultralytics.utils.gcs_matcher import GCSHungarianMatcher
 from ultralytics.utils.gcs_point_loss import aspect_weighted_l1_point_loss
 from ultralytics.utils.gcs_shape import assert_gcs_image_tensor, assert_gcs_shape, normalize_imgsz
+from ultralytics.utils.gcs_full_lane import (
+    full_lane_proposal_score_probability,
+    probability_to_logit,
+)
 
 
 class GCSLoss(nn.Module):
@@ -62,6 +68,20 @@ class GCSLoss(nn.Module):
         "query_count_ce_loss",
         "query_count_acc",
         "query_count_pred_mean",
+        "full_lane_proposal_loss",
+        "full_lane_point_loss",
+        "full_lane_valid_loss",
+        "full_lane_interval_loss",
+        "full_lane_exist_loss",
+        "full_lane_quality_loss",
+        "full_lane_match_count",
+        "full_lane_unmatched_count",
+        "dense_instance_loss",
+        "dense_centerline_loss",
+        "dense_endpoint_loss",
+        "dense_embed_pull_loss",
+        "dense_embed_push_loss",
+        "dense_centerline_pos",
     )
 
     def __init__(
@@ -398,6 +418,9 @@ class GCSLoss(nn.Module):
         self.short_segment_bce_weight = float(self._arg(args, "gcs_short_segment_bce_weight", 1.0))
         self.short_segment_listwise_weight = float(self._arg(args, "gcs_short_segment_listwise_weight", 0.0))
         self.short_segment_query_rank_weight = float(self._arg(args, "gcs_short_segment_query_rank_weight", 0.0))
+        self.short_segment_base_choice_weight = float(
+            self._arg(args, "gcs_short_segment_base_choice_weight", 0.0)
+        )
         self.short_segment_replace_weight = float(self._arg(args, "gcs_short_segment_replace_weight", 0.0))
         self.short_segment_query_replace_weight = float(
             self._arg(args, "gcs_short_segment_query_replace_weight", 0.0)
@@ -413,12 +436,96 @@ class GCSLoss(nn.Module):
         self.short_segment_replace_dense_neg_weight = float(
             self._arg(args, "gcs_short_segment_replace_dense_neg_weight", 0.0)
         )
+        self.short_segment_unified_choice_weight = float(
+            self._arg(args, "gcs_short_segment_unified_choice_weight", 0.0)
+        )
+        self.short_segment_unified_choice_temperature = float(
+            self._arg(args, "gcs_short_segment_unified_choice_temperature", 0.25)
+        )
+        self.short_segment_unified_choice_base_neg_weight = float(
+            self._arg(args, "gcs_short_segment_unified_choice_base_neg_weight", 0.25)
+        )
+        self.short_segment_candidate_aware_assignment = self._bool_arg(
+            self._arg(args, "gcs_short_segment_candidate_aware_assignment", False)
+        )
         self.short_segment_listwise_all_candidates = self._bool_arg(
             self._arg(args, "gcs_short_segment_listwise_all_candidates", False)
         )
         self.short_segment_base_preserve = self._bool_arg(
             self._arg(args, "gcs_short_segment_base_preserve", True)
         )
+        self.short_segment_matched_assignment = self._bool_arg(
+            self._arg(args, "gcs_short_segment_matched_assignment", False)
+        )
+        self.short_segment_official_quality_target = self._bool_arg(
+            self._arg(args, "gcs_short_segment_official_quality_target", False)
+        )
+        self.short_segment_official_pt_thresh = float(
+            self._arg(args, "gcs_short_segment_official_pt_thresh", 0.85)
+        )
+        self.short_segment_base_valid_thr = float(
+            self._arg(args, "gcs_short_segment_base_valid_thr", 0.6)
+        )
+        self.short_segment_base_choice_all_queries = self._bool_arg(
+            self._arg(args, "gcs_short_segment_base_choice_all_queries", False)
+        )
+        self.short_segment_base_choice_neg_weight = float(
+            self._arg(args, "gcs_short_segment_base_choice_neg_weight", 0.25)
+        )
+        self.full_lane_proposal_gain = float(self._arg(args, "gcs_full_lane_proposal", 0.0))
+        self.full_lane_quality_tau = float(self._arg(args, "gcs_full_lane_quality_tau", 25.0))
+        self.full_lane_unmatched_valid_weight = float(
+            self._arg(args, "gcs_full_lane_unmatched_valid_weight", 0.1)
+        )
+        self.full_lane_unmatched_weight = float(
+            self._arg(args, "gcs_full_lane_unmatched_weight", 1.0)
+        )
+        self.full_lane_aux_assignment = self._bool_arg(
+            self._arg(args, "gcs_full_lane_aux_assignment", False)
+        )
+        self.full_lane_unified_matching = self._bool_arg(
+            self._arg(args, "gcs_full_lane_unified_matching", True)
+        )
+        self.full_lane_aux_match_min_overlap = int(
+            self._arg(args, "gcs_full_lane_aux_match_min_overlap", 2)
+        )
+        self.full_lane_aux_match_gate_px = float(
+            self._arg(args, "gcs_full_lane_aux_match_gate_px", 0.0)
+        )
+        self.full_lane_hard_focus = self._bool_arg(
+            self._arg(args, "gcs_full_lane_hard_focus", False)
+        )
+        self.full_lane_focus_hit_px = float(
+            self._arg(args, "gcs_full_lane_focus_hit_px", 20.0)
+        )
+        self.full_lane_focus_base_valid_thr = float(
+            self._arg(args, "gcs_full_lane_focus_base_valid_thr", 0.6)
+        )
+        self.full_lane_focus_base_min_coverage = float(
+            self._arg(args, "gcs_full_lane_focus_base_min_coverage", 1.0)
+        )
+        self.full_lane_base_hit_weight = float(
+            self._arg(args, "gcs_full_lane_base_hit_weight", 1.0)
+        )
+        self.full_lane_base_miss_weight = float(
+            self._arg(args, "gcs_full_lane_base_miss_weight", 1.0)
+        )
+        self.full_lane_gt4_weight = float(self._arg(args, "gcs_full_lane_gt4_weight", 1.0))
+        self.full_lane_gt5_weight = float(self._arg(args, "gcs_full_lane_gt5_weight", 1.0))
+        self.full_lane_short_visible_thr = int(
+            self._arg(args, "gcs_full_lane_short_visible_thr", 10)
+        )
+        self.full_lane_short_visible_weight = float(
+            self._arg(args, "gcs_full_lane_short_visible_weight", 1.0)
+        )
+        self.dense_instance_gain = float(self._arg(args, "gcs_dense_instance", 0.0))
+        self.dense_centerline_weight = float(self._arg(args, "gcs_dense_centerline_weight", 1.0))
+        self.dense_endpoint_weight = float(self._arg(args, "gcs_dense_endpoint_weight", 1.0))
+        self.dense_embed_pull_weight = float(self._arg(args, "gcs_dense_embed_pull_weight", 0.25))
+        self.dense_embed_push_weight = float(self._arg(args, "gcs_dense_embed_push_weight", 0.25))
+        self.dense_embed_margin = float(self._arg(args, "gcs_dense_embed_margin", 0.5))
+        self.dense_sigma_px = float(self._arg(args, "gcs_dense_sigma_px", 3.0))
+        self.dense_pos_weight_max = float(self._arg(args, "gcs_dense_pos_weight_max", 50.0))
 
         if self.short_geom_gain < 0.0:
             raise ValueError(f"gcs_short_geom must be >= 0, got {self.short_geom_gain}.")
@@ -502,6 +609,8 @@ class GCSLoss(nn.Module):
             raise ValueError("gcs_short_segment_listwise_weight must be >= 0.")
         if self.short_segment_query_rank_weight < 0.0:
             raise ValueError("gcs_short_segment_query_rank_weight must be >= 0.")
+        if self.short_segment_base_choice_weight < 0.0:
+            raise ValueError("gcs_short_segment_base_choice_weight must be >= 0.")
         if self.short_segment_replace_weight < 0.0:
             raise ValueError("gcs_short_segment_replace_weight must be >= 0.")
         if self.short_segment_query_replace_weight < 0.0:
@@ -516,6 +625,67 @@ class GCSLoss(nn.Module):
             raise ValueError("gcs_short_segment_dense_neg_weight must be >= 0.")
         if self.short_segment_replace_dense_neg_weight < 0.0:
             raise ValueError("gcs_short_segment_replace_dense_neg_weight must be >= 0.")
+        if self.short_segment_unified_choice_weight < 0.0:
+            raise ValueError("gcs_short_segment_unified_choice_weight must be >= 0.")
+        if self.short_segment_unified_choice_temperature <= 0.0:
+            raise ValueError("gcs_short_segment_unified_choice_temperature must be > 0.")
+        if self.short_segment_unified_choice_base_neg_weight < 0.0:
+            raise ValueError("gcs_short_segment_unified_choice_base_neg_weight must be >= 0.")
+        if not 0.0 < self.short_segment_official_pt_thresh <= 1.0:
+            raise ValueError("gcs_short_segment_official_pt_thresh must be in (0, 1].")
+        if not 0.0 <= self.short_segment_base_valid_thr <= 1.0:
+            raise ValueError("gcs_short_segment_base_valid_thr must be in [0, 1].")
+        if self.short_segment_base_choice_neg_weight < 0.0:
+            raise ValueError("gcs_short_segment_base_choice_neg_weight must be >= 0.")
+        if self.full_lane_proposal_gain < 0.0:
+            raise ValueError("gcs_full_lane_proposal must be >= 0.")
+        if self.full_lane_quality_tau <= 0.0:
+            raise ValueError("gcs_full_lane_quality_tau must be > 0.")
+        if self.full_lane_unmatched_valid_weight < 0.0:
+            raise ValueError("gcs_full_lane_unmatched_valid_weight must be >= 0.")
+        if self.full_lane_unmatched_weight < 0.0:
+            raise ValueError("gcs_full_lane_unmatched_weight must be >= 0.")
+        if self.full_lane_aux_match_min_overlap < 1:
+            raise ValueError("gcs_full_lane_aux_match_min_overlap must be >= 1.")
+        if self.full_lane_aux_match_gate_px < 0.0:
+            raise ValueError("gcs_full_lane_aux_match_gate_px must be >= 0.")
+        if self.full_lane_focus_hit_px < 0.0:
+            raise ValueError("gcs_full_lane_focus_hit_px must be >= 0.")
+        if not 0.0 <= self.full_lane_focus_base_valid_thr <= 1.0:
+            raise ValueError("gcs_full_lane_focus_base_valid_thr must be in [0, 1].")
+        if not 0.0 <= self.full_lane_focus_base_min_coverage <= 1.0:
+            raise ValueError("gcs_full_lane_focus_base_min_coverage must be in [0, 1].")
+        if self.full_lane_base_hit_weight < 0.0:
+            raise ValueError("gcs_full_lane_base_hit_weight must be >= 0.")
+        if self.full_lane_base_miss_weight < 0.0:
+            raise ValueError("gcs_full_lane_base_miss_weight must be >= 0.")
+        if self.full_lane_gt4_weight < 0.0:
+            raise ValueError("gcs_full_lane_gt4_weight must be >= 0.")
+        if self.full_lane_gt5_weight < 0.0:
+            raise ValueError("gcs_full_lane_gt5_weight must be >= 0.")
+        if self.full_lane_short_visible_thr < 1:
+            raise ValueError("gcs_full_lane_short_visible_thr must be >= 1.")
+        if self.full_lane_short_visible_weight < 0.0:
+            raise ValueError("gcs_full_lane_short_visible_weight must be >= 0.")
+        if self.dense_instance_gain < 0.0:
+            raise ValueError("gcs_dense_instance must be >= 0.")
+        if self.dense_centerline_weight < 0.0 or self.dense_endpoint_weight < 0.0:
+            raise ValueError("gcs_dense_centerline_weight and gcs_dense_endpoint_weight must be >= 0.")
+        if self.dense_embed_pull_weight < 0.0 or self.dense_embed_push_weight < 0.0:
+            raise ValueError("gcs_dense_embed_pull_weight and gcs_dense_embed_push_weight must be >= 0.")
+        if self.dense_embed_margin <= 0.0:
+            raise ValueError("gcs_dense_embed_margin must be > 0.")
+        if self.dense_sigma_px <= 0.0:
+            raise ValueError("gcs_dense_sigma_px must be > 0.")
+        if self.dense_pos_weight_max < 1.0:
+            raise ValueError("gcs_dense_pos_weight_max must be >= 1.")
+        if self.full_lane_proposal_gain > 0.0 and not (
+            self.full_lane_aux_assignment or self.full_lane_unified_matching
+        ):
+            raise ValueError(
+                "gcs_full_lane_proposal > 0 requires either "
+                "gcs_full_lane_aux_assignment=True or gcs_full_lane_unified_matching=True."
+            )
         if self.short_candidate_gain > 0.0 and self.short_segment_gain > 0.0:
             raise ValueError(
                 "gcs_short_candidate and gcs_short_segment are separate default-off probes; "
@@ -593,6 +763,15 @@ class GCSLoss(nn.Module):
             max_x_dist=float(match_max_x_dist if match_max_x_dist is not None else self._arg(args, "gcs_match_max_x_dist", 0.0)),
             match_gate_px=float(match_gate_px if match_gate_px is not None else self._arg(args, "gcs_match_gate_px", 160.0)),
         )
+        self.full_lane_aux_matcher = GCSHungarianMatcher(
+            cost_point=1.0,
+            cost_curve=0.0,
+            cost_exist=0.0,
+            image_size=self.image_size,
+            min_overlap=int(self.full_lane_aux_match_min_overlap),
+            max_x_dist=0.0,
+            match_gate_px=float(self.full_lane_aux_match_gate_px),
+        )
 
     @staticmethod
     def _arg(args, name: str, default):
@@ -640,6 +819,27 @@ class GCSLoss(nn.Module):
     def _zero_like(pred_points: torch.Tensor) -> torch.Tensor:
         """Return a differentiable scalar zero on the prediction device."""
         return pred_points.sum() * 0.0
+
+    @staticmethod
+    def _official_point_threshold(
+        target: torch.Tensor,
+        valid: torch.Tensor,
+        pixel_scale: torch.Tensor,
+        pixel_thresh: float,
+    ) -> torch.Tensor:
+        """Return TuSimple-style x-error threshold adjusted by the GT lane angle."""
+        valid_bool = valid > 0.5
+        if int(valid_bool.sum().detach().cpu().item()) < 2:
+            return target.new_tensor(float(pixel_thresh))
+        target_px = target * pixel_scale.view(1, 2)
+        x = target_px[valid_bool, 0]
+        y = target_px[valid_bool, 1]
+        y_centered = y - y.mean()
+        denom = (y_centered.square()).sum()
+        if bool((denom <= 1.0e-6).item()):
+            return target.new_tensor(float(pixel_thresh))
+        slope = (y_centered * (x - x.mean())).sum() / denom
+        return target.new_tensor(float(pixel_thresh)) * torch.sqrt(1.0 + slope.square())
 
     def _exist_quality_from_ape(self, ape: torch.Tensor) -> torch.Tensor:
         """Map matched lane APE in pixels to an existence target quality."""
@@ -1311,15 +1511,18 @@ class GCSLoss(nn.Module):
         gt_points: list[torch.Tensor],
         gt_valid: list[torch.Tensor],
         gt_lanes: torch.Tensor,
+        indices: list[tuple[torch.Tensor, torch.Tensor]] | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Train default-off local short-window segment proposals on short GT4/GT5 lanes only."""
         pred_points = preds["pred_points"]
         zero = self._zero_like(pred_points)
         zero_count = pred_points.new_zeros(())
+        pred_valid_logits = preds.get("pred_valid_logits")
         segment_points = preds.get("pred_short_segment_points")
         segment_logits = preds.get("pred_short_segment_logits")
         replace_logits = preds.get("pred_short_segment_replace_logits")
         query_replace_logits = preds.get("pred_short_segment_query_replace_logits")
+        unified_choice_logits = preds.get("pred_short_segment_choice_logits")
         window_mask = preds.get("pred_short_segment_window_mask")
         if float(self.short_segment_gain) == 0.0:
             return zero, zero, zero, zero_count, zero_count, zero_count
@@ -1337,6 +1540,19 @@ class GCSLoss(nn.Module):
             raise ValueError(
                 "pred_short_segment_logits must have shape B x Q x S matching segment points, "
                 f"got {tuple(segment_logits.shape)} vs {tuple(segment_points.shape[:3])}."
+            )
+        if pred_valid_logits is not None and (
+            pred_valid_logits.ndim != 3
+            or tuple(pred_valid_logits.shape) != (segment_points.shape[0], segment_points.shape[1], segment_points.shape[3])
+        ):
+            raise ValueError(
+                "pred_valid_logits must have shape B x Q x K when used by short-segment loss, "
+                f"got {tuple(pred_valid_logits.shape)} vs "
+                f"{(segment_points.shape[0], segment_points.shape[1], segment_points.shape[3])}."
+            )
+        if self.short_segment_official_quality_target and pred_valid_logits is None:
+            raise KeyError(
+                "gcs_short_segment_official_quality_target requires pred_valid_logits for base/no-replace quality."
             )
         if float(self.short_segment_replace_weight) > 0.0:
             if replace_logits is None:
@@ -1370,6 +1586,25 @@ class GCSLoss(nn.Module):
                 "pred_short_segment_query_replace_logits must have shape B x Q matching segment points, "
                 f"got {tuple(query_replace_logits.shape)} vs {tuple(segment_points.shape[:2])}."
             )
+        if float(self.short_segment_unified_choice_weight) > 0.0:
+            if unified_choice_logits is None:
+                raise KeyError(
+                    "gcs_short_segment_unified_choice_weight > 0 requires "
+                    "pred_short_segment_choice_logits. Use the local-segment-proposal-v12 YAML."
+                )
+            expected_choice_shape = (segment_points.shape[0], segment_points.shape[1], segment_points.shape[2] + 1)
+            if tuple(unified_choice_logits.shape) != expected_choice_shape:
+                raise ValueError(
+                    "pred_short_segment_choice_logits must have shape B x Q x (S+1), "
+                    f"got {tuple(unified_choice_logits.shape)} vs {expected_choice_shape}."
+                )
+        elif unified_choice_logits is not None:
+            expected_choice_shape = (segment_points.shape[0], segment_points.shape[1], segment_points.shape[2] + 1)
+            if tuple(unified_choice_logits.shape) != expected_choice_shape:
+                raise ValueError(
+                    "pred_short_segment_choice_logits must have shape B x Q x (S+1), "
+                    f"got {tuple(unified_choice_logits.shape)} vs {expected_choice_shape}."
+                )
         if segment_points.shape[0] != pred_points.shape[0] or segment_points.shape[1] != pred_points.shape[1]:
             raise ValueError(
                 "pred_short_segment_points B,Q must match pred_points, "
@@ -1410,6 +1645,8 @@ class GCSLoss(nn.Module):
             zero = zero + replace_logits.sum() * 0.0
         if query_replace_logits is not None:
             zero = zero + query_replace_logits.sum() * 0.0
+        if unified_choice_logits is not None:
+            zero = zero + unified_choice_logits.sum() * 0.0
         flat_count = int(num_queries * num_segments)
         topk = min(int(self.short_segment_topk), flat_count)
         pos_px = float(self.short_segment_pos_px)
@@ -1419,11 +1656,24 @@ class GCSLoss(nn.Module):
         visible_thr = int(self.short_segment_visible_thr)
         min_overlap = int(self.short_segment_min_overlap)
         scale = self._pixel_scale_for(pred_points).view(1, 1, 2)
+        pixel_scale = scale.reshape(-1)
+        official_quality_target = bool(self.short_segment_official_quality_target)
+        official_pt_thresh = float(self.short_segment_official_pt_thresh)
+        base_valid_thr = float(self.short_segment_base_valid_thr)
+        base_choice_all_queries = bool(self.short_segment_base_choice_all_queries)
+        unified_choice_active = (
+            float(self.short_segment_unified_choice_weight) > 0.0 and unified_choice_logits is not None
+        )
+        unified_choice_temperature = float(self.short_segment_unified_choice_temperature)
+        unified_choice_base_neg_weight = float(self.short_segment_unified_choice_base_neg_weight)
+        candidate_aware_assignment = bool(self.short_segment_candidate_aware_assignment)
 
         bce_losses: list[torch.Tensor] = []
         dense_quality_losses: list[torch.Tensor] = []
         listwise_losses: list[torch.Tensor] = []
         query_rank_losses: list[torch.Tensor] = []
+        base_choice_losses: list[torch.Tensor] = []
+        unified_choice_losses: list[torch.Tensor] = []
         replace_losses: list[torch.Tensor] = []
         query_replace_losses: list[torch.Tensor] = []
         point_losses: list[torch.Tensor] = []
@@ -1434,6 +1684,16 @@ class GCSLoss(nn.Module):
         gt_lanes = torch.as_tensor(gt_lanes, device=device, dtype=dtype).reshape(-1)
         if gt_lanes.numel() != bsz:
             raise ValueError(f"gt_lanes must have one value per image, got {gt_lanes.numel()} vs B={bsz}.")
+        if self.short_segment_matched_assignment or float(self.short_segment_unified_choice_weight) > 0.0:
+            if indices is None:
+                raise ValueError(
+                    "short-segment matched/unified choice supervision requires Hungarian matcher indices."
+                )
+            if len(indices) != bsz:
+                raise ValueError(
+                    "Hungarian matcher indices must contain one pair per image, "
+                    f"got {len(indices)} vs B={bsz}."
+                )
 
         for b in range(bsz):
             gt_count = int(round(float(gt_lanes[b].detach().cpu().item())))
@@ -1456,17 +1716,43 @@ class GCSLoss(nn.Module):
             segments_b = segment_points[b].reshape(flat_count, num_points, 2)
             logits_b = segment_logits[b].reshape(flat_count)
             logits_qs_b = segment_logits[b]
+            unified_choice_logits_b = unified_choice_logits[b] if unified_choice_active else None
             replace_logits_b = replace_logits[b].reshape(flat_count) if replace_logits is not None else None
             query_replace_logits_b = query_replace_logits[b] if query_replace_logits is not None else None
             masks_b = window_mask_bq[b].reshape(flat_count, num_points)
+            base_valid_mask_b = None
+            if official_quality_target:
+                base_valid_mask_b = (
+                    pred_valid_logits[b].detach().float().sigmoid() >= base_valid_thr
+                )
             score_target = torch.zeros((flat_count,), device=device, dtype=dtype)
             score_weight = torch.zeros((flat_count,), device=device, dtype=dtype)
             min_ape = torch.full((flat_count,), float("inf"), device=device, dtype=dtype)
             min_ape_lane_weight = torch.zeros((flat_count,), device=device, dtype=dtype)
+            official_quality = torch.zeros((flat_count,), device=device, dtype=dtype)
+            official_quality_lane_weight = torch.zeros((flat_count,), device=device, dtype=dtype)
+            official_quality_best_idx = torch.full((flat_count,), -1, device=device, dtype=torch.long)
             query_replace_target = torch.zeros((num_queries,), device=device, dtype=dtype)
             query_replace_weight = torch.zeros((num_queries,), device=device, dtype=dtype)
             query_replace_pos = torch.zeros((num_queries,), device=device, dtype=torch.bool)
+            base_choice_target = torch.zeros((num_queries,), device=device, dtype=torch.long)
+            base_choice_weight = torch.zeros((num_queries,), device=device, dtype=dtype)
             base_hit_any = torch.zeros((num_queries,), device=device, dtype=torch.bool)
+            base_official_quality = torch.zeros((num_queries,), device=device, dtype=dtype)
+            base_official_lane_weight = torch.zeros((num_queries,), device=device, dtype=dtype)
+            matched_query_for_lane: dict[int, int] = {}
+            if self.short_segment_matched_assignment or float(self.short_segment_unified_choice_weight) > 0.0:
+                src_idx, tgt_idx = indices[b]
+                src_idx = src_idx.to(device=device, dtype=torch.long).reshape(-1)
+                tgt_idx = tgt_idx.to(device=device, dtype=torch.long).reshape(-1)
+                if src_idx.numel() != tgt_idx.numel():
+                    raise ValueError(
+                        "Hungarian matcher source/target index lengths must match, "
+                        f"got {src_idx.numel()} vs {tgt_idx.numel()}."
+                    )
+                for query_idx, lane_idx in zip(src_idx.tolist(), tgt_idx.tolist()):
+                    if 0 <= int(query_idx) < num_queries and 0 <= int(lane_idx) < int(target_points_b.shape[0]):
+                        matched_query_for_lane[int(lane_idx)] = int(query_idx)
 
             def update_query_replace_weight(mask: torch.Tensor, value: float) -> None:
                 nonlocal query_replace_weight
@@ -1478,7 +1764,20 @@ class GCSLoss(nn.Module):
                     query_replace_weight.new_full((count,), float(value)),
                 )
 
-            if query_replace_logits_b is not None and float(self.short_segment_query_replace_weight) > 0.0:
+            def update_base_choice(query_idx: int, target_idx: int, value: float) -> None:
+                if query_idx < 0 or query_idx >= num_queries:
+                    return
+                current = float(base_choice_weight[query_idx].detach().cpu().item())
+                if float(value) >= current:
+                    base_choice_target[query_idx] = int(target_idx)
+                base_choice_weight[query_idx] = torch.maximum(
+                    base_choice_weight[query_idx],
+                    base_choice_weight.new_tensor(float(value)),
+                )
+
+            train_base_choice = float(self.short_segment_base_choice_weight) > 0.0
+            train_query_replace = query_replace_logits_b is not None and float(self.short_segment_query_replace_weight) > 0.0
+            if train_query_replace or (train_base_choice and not self.short_segment_matched_assignment):
                 for all_lane_idx in range(int(target_points_b.shape[0])):
                     valid_all = target_valid_b[all_lane_idx].clamp(0.0, 1.0)
                     valid_count_all = valid_all.sum()
@@ -1502,15 +1801,75 @@ class GCSLoss(nn.Module):
                 overlap_mask = masks_b & valid_bool.view(1, num_points)
                 overlap_counts = overlap_mask.sum(dim=1)
                 enough_overlap = overlap_counts >= min_overlap
-                if not bool(enough_overlap.any()):
-                    continue
-
                 base_point_error = torch.norm(
                     (pred_points[b].detach() - target.view(1, num_points, 2)) * scale,
                     dim=-1,
                 )
                 base_ape = (base_point_error * valid.view(1, num_points)).sum(dim=1) / valid_count
                 base_best_ape = base_ape.min()
+
+                if official_quality_target:
+                    official_threshold = self._official_point_threshold(
+                        target,
+                        valid,
+                        pixel_scale,
+                        pos_px,
+                    )
+                    official_valid_count = valid_bool.sum().to(dtype).clamp_min(1.0)
+                    segment_x_error = (
+                        (segments_b.detach()[..., 0] - target.view(1, num_points, 2)[..., 0]).abs()
+                        * pixel_scale[0]
+                    )
+                    official_hits = (
+                        (segment_x_error < official_threshold)
+                        & overlap_mask
+                    ).sum(dim=1).to(dtype)
+                    official_quality_b = torch.where(
+                        enough_overlap,
+                        official_hits / official_valid_count,
+                        torch.zeros_like(official_hits),
+                    ).clamp(0.0, 1.0)
+                    better_official = official_quality_b > official_quality
+                    official_quality_lane_weight = torch.where(
+                        better_official,
+                        official_quality_lane_weight.new_full((flat_count,), lane_weight),
+                        official_quality_lane_weight,
+                    )
+                    official_quality_best_idx = torch.where(
+                        better_official,
+                        torch.arange(flat_count, device=device, dtype=torch.long),
+                        official_quality_best_idx,
+                    )
+                    official_quality = torch.maximum(official_quality, official_quality_b)
+
+                    base_x_error = (
+                        (pred_points[b].detach()[..., 0] - target.view(1, num_points, 2)[..., 0]).abs()
+                        * pixel_scale[0]
+                    )
+                    base_overlap = base_valid_mask_b & valid_bool.view(1, num_points)
+                    base_hits = (
+                        (base_x_error < official_threshold) & base_overlap
+                    ).sum(dim=1).to(dtype)
+                    base_quality_b = (base_hits / official_valid_count).clamp(0.0, 1.0)
+                    better_base = base_quality_b > base_official_quality
+                    base_official_lane_weight = torch.where(
+                        better_base,
+                        base_official_lane_weight.new_full((num_queries,), lane_weight),
+                        base_official_lane_weight,
+                    )
+                    base_official_quality = torch.maximum(base_official_quality, base_quality_b)
+                    base_hit_any = base_hit_any | (base_quality_b >= official_pt_thresh)
+
+                if not bool(enough_overlap.any()):
+                    if train_base_choice and self.short_segment_matched_assignment and not base_choice_all_queries:
+                        pos_query = matched_query_for_lane.get(int(lane_idx))
+                        if pos_query is not None and bool(torch.isfinite(base_ape[pos_query]).item()):
+                            choice_weight = lane_weight * (
+                                2.0 if bool((base_ape[pos_query] <= pos_px).item()) else 1.0
+                            )
+                            update_base_choice(pos_query, 0, choice_weight)
+                    continue
+
                 point_error = torch.norm((segments_b.detach() - target.view(1, num_points, 2)) * scale, dim=-1)
                 overlap_weight = overlap_mask.to(dtype=dtype)
                 ape = (point_error * overlap_weight).sum(dim=1) / overlap_counts.to(dtype=dtype).clamp_min(1.0)
@@ -1548,6 +1907,48 @@ class GCSLoss(nn.Module):
                             torch.tensor([target_m], device=device, dtype=torch.long),
                         )
                         query_rank_losses.append(query_rank * lane_weight)
+
+                if train_base_choice and not base_choice_all_queries and torch.isfinite(base_best_ape):
+                    margin = float(self.short_segment_replace_margin_px)
+                    if self.short_segment_matched_assignment:
+                        pos_query = matched_query_for_lane.get(int(lane_idx))
+                        if pos_query is not None and bool(torch.isfinite(base_ape[pos_query]).item()):
+                            matched_base_ape = base_ape[pos_query]
+                            matched_segment_ape = query_best_ape[pos_query]
+                            target_idx = 0
+                            choice_weight = lane_weight
+                            if bool((matched_base_ape <= pos_px).item()):
+                                # A base lane that already passes the 20 px gate is protected.
+                                choice_weight = lane_weight * 2.0
+                            elif bool(torch.isfinite(matched_segment_ape).item()) and bool(
+                                (
+                                    (matched_segment_ape <= soft_px)
+                                    & (
+                                        ((matched_segment_ape + margin) < matched_base_ape)
+                                        | (matched_segment_ape <= pos_px)
+                                    )
+                                ).item()
+                            ):
+                                pos_segment = int(query_best_m[pos_query].detach().cpu().item())
+                                target_idx = pos_segment + 1
+                            update_base_choice(pos_query, target_idx, choice_weight)
+                    else:
+                        finite_query = torch.isfinite(query_best_ape)
+                        improves_query = finite_query & (
+                            ((query_best_ape + margin) < base_ape)
+                            | ((base_ape > pos_px) & (query_best_ape <= pos_px))
+                        )
+                        improves_query = improves_query & (query_best_ape <= soft_px)
+                        if bool(improves_query.any()):
+                            pos_values = torch.where(
+                                improves_query,
+                                query_best_ape,
+                                torch.full_like(query_best_ape, float("inf")),
+                            )
+                            pos_query = int(torch.argmin(pos_values).detach().cpu().item())
+                            if not bool(base_hit_any[pos_query].item()):
+                                pos_segment = int(query_best_m[pos_query].detach().cpu().item())
+                                update_base_choice(pos_query, pos_segment + 1, lane_weight)
 
                 if (
                     replace_logits_b is not None
@@ -1678,6 +2079,201 @@ class GCSLoss(nn.Module):
                     point = (point * selected_mask).sum(dim=1) / selected_mask.sum(dim=1).clamp_min(1.0)
                     point_losses.append((point * target_score.detach() * lane_weight).mean())
 
+            if unified_choice_active and unified_choice_logits_b is not None:
+                # One per-query choice distribution whose class 0 is the
+                # untouched base lane and classes 1..S are segment windows.
+                # v13 can choose the positive query from raw candidate geometry
+                # instead of forcing all short GT lanes through the frozen-base
+                # Hungarian assignment.
+                choice_target_dist = torch.zeros(
+                    (num_queries, num_segments + 1),
+                    device=device,
+                    dtype=unified_choice_logits_b.dtype,
+                )
+                choice_target_dist[:, 0] = 1.0
+                choice_weight = unified_choice_logits_b.new_full(
+                    (num_queries,),
+                    unified_choice_base_neg_weight,
+                )
+                choice_lane_target = torch.zeros((num_queries,), device=device, dtype=torch.bool)
+                choice_protected = torch.zeros((num_queries,), device=device, dtype=torch.bool)
+                segment_points_qs = segments_b.view(num_queries, num_segments, num_points, 2).detach()
+                window_masks_qs = masks_b.view(num_queries, num_segments, num_points)
+                base_points_q = pred_points[b].detach()
+                if pred_valid_logits is not None:
+                    base_valid_q = pred_valid_logits[b].detach().float().sigmoid() >= base_valid_thr
+                else:
+                    base_valid_q = torch.ones((num_queries, num_points), device=device, dtype=torch.bool)
+
+                def set_choice_target(query_idx: int, target_dist: torch.Tensor, target_weight: float) -> None:
+                    if query_idx < 0 or query_idx >= num_queries:
+                        return
+                    current = float(choice_weight[query_idx].detach().cpu().item())
+                    if float(target_weight) >= current:
+                        choice_target_dist[query_idx] = target_dist
+                        choice_weight[query_idx] = float(target_weight)
+                        choice_lane_target[query_idx] = True
+
+                for lane_idx in short_lane_indices.tolist():
+                    target = target_points_b[lane_idx]
+                    valid = target_valid_b[lane_idx].clamp(0.0, 1.0)
+                    valid_bool = valid > 0.5
+                    valid_count = valid.sum().clamp_min(1.0)
+                    valid_count_f = valid_count.to(dtype=dtype)
+
+                    segment_error = torch.norm(
+                        (segment_points_qs - target.view(1, 1, num_points, 2)) * scale,
+                        dim=-1,
+                    )
+                    segment_overlap = window_masks_qs & valid_bool.view(1, 1, num_points)
+                    overlap_counts = segment_overlap.sum(dim=-1)
+                    enough_overlap = overlap_counts >= min_overlap
+                    segment_ape = (
+                        (segment_error * segment_overlap.to(dtype=segment_error.dtype)).sum(dim=-1)
+                        / overlap_counts.clamp_min(1).to(dtype=segment_error.dtype)
+                    )
+                    segment_ape = torch.where(
+                        enough_overlap,
+                        segment_ape,
+                        torch.full_like(segment_ape, float("inf")),
+                    )
+                    segment_coverage = (overlap_counts.to(dtype=dtype) / valid_count_f).clamp(0.0, 1.0)
+                    segment_quality = torch.exp(
+                        -torch.where(
+                            torch.isfinite(segment_ape),
+                            segment_ape,
+                            torch.zeros_like(segment_ape),
+                        )
+                        / tau
+                    ) * segment_coverage
+                    segment_quality = torch.where(
+                        torch.isfinite(segment_ape),
+                        segment_quality,
+                        torch.zeros_like(segment_quality),
+                    ).clamp(0.0, 1.0)
+
+                    base_error = torch.norm(
+                        (base_points_q - target.view(1, num_points, 2)) * scale,
+                        dim=-1,
+                    )
+                    base_ape = (
+                        (base_error * valid.view(1, num_points)).sum(dim=-1) / valid_count
+                    )
+                    base_overlap = base_valid_q & valid_bool.view(1, num_points)
+                    base_coverage = (
+                        base_overlap.sum(dim=-1).to(dtype=dtype) / valid_count_f
+                    ).clamp(0.0, 1.0)
+                    base_quality = (
+                        torch.exp(-base_ape / tau) * base_coverage
+                    ).clamp(0.0, 1.0)
+
+                    query_best_ape, query_best_m = segment_ape.min(dim=1)
+                    lane_base_hit = bool((base_ape.min() <= pos_px).item())
+                    selected_query = matched_query_for_lane.get(int(lane_idx))
+                    selected_segment = None
+                    use_hard_segment_target = False
+                    if candidate_aware_assignment and not lane_base_hit:
+                        finite_query = torch.isfinite(query_best_ape)
+                        margin = float(self.short_segment_replace_margin_px)
+                        useful_query = finite_query & (query_best_ape <= soft_px)
+                        improves_query = useful_query & (
+                            ((query_best_ape + margin) < base_ape)
+                            | ((base_ape > pos_px) & (query_best_ape <= pos_px))
+                        )
+                        if bool(useful_query.any()):
+                            choice_protected |= useful_query
+                        if bool(improves_query.any()):
+                            pos_values = torch.where(
+                                improves_query,
+                                query_best_ape,
+                                torch.full_like(query_best_ape, float("inf")),
+                            )
+                            selected_query = int(torch.argmin(pos_values).detach().cpu().item())
+                            selected_segment = int(query_best_m[selected_query].detach().cpu().item())
+                            use_hard_segment_target = True
+
+                    if selected_query is None:
+                        continue
+
+                    if use_hard_segment_target:
+                        target_dist = torch.zeros(
+                            (num_segments + 1,),
+                            device=device,
+                            dtype=unified_choice_logits_b.dtype,
+                        )
+                        target_dist[int(selected_segment) + 1] = 1.0
+                        set_choice_target(selected_query, target_dist, lane_weight)
+                        continue
+
+                    query_segment_ape = segment_ape[selected_query]
+                    query_segment_quality = segment_quality[selected_query]
+                    base_hit = bool((base_ape[selected_query] <= pos_px).item())
+                    candidate_hit = bool((query_segment_ape <= pos_px).any().item())
+                    if lane_base_hit or base_hit or not candidate_hit:
+                        target_dist = torch.zeros(
+                            (num_segments + 1,),
+                            device=device,
+                            dtype=unified_choice_logits_b.dtype,
+                        )
+                        target_dist[0] = 1.0
+                        target_weight = lane_weight * (2.0 if lane_base_hit or base_hit else 1.0)
+                    else:
+                        quality = torch.cat(
+                            (
+                                base_quality[selected_query].view(1),
+                                query_segment_quality,
+                            ),
+                            dim=0,
+                        ).to(dtype=unified_choice_logits_b.dtype)
+                        target_dist = F.softmax(
+                            torch.log(quality.clamp_min(1.0e-6)) / unified_choice_temperature,
+                            dim=0,
+                        )
+                        target_weight = lane_weight
+                    set_choice_target(selected_query, target_dist, target_weight)
+
+                if candidate_aware_assignment and bool(choice_protected.any()):
+                    ignore_base_neg = choice_protected & ~choice_lane_target
+                    if bool(ignore_base_neg.any()):
+                        choice_weight[ignore_base_neg] = 0.0
+
+                active_choice = choice_weight > 0.0
+                if bool(active_choice.any()):
+                    choice_log_probs = F.log_softmax(unified_choice_logits_b, dim=-1)
+                    choice_ce = -(choice_target_dist * choice_log_probs).sum(dim=-1)
+                    unified_choice_losses.append(
+                        (choice_ce * choice_weight).sum() / choice_weight.sum().clamp_min(1.0)
+                    )
+
+            if train_base_choice and base_choice_all_queries:
+                if not official_quality_target:
+                    raise ValueError(
+                        "gcs_short_segment_base_choice_all_queries requires "
+                        "gcs_short_segment_official_quality_target=True."
+                    )
+                best_quality_q, best_segment_q = official_quality.view(num_queries, num_segments).max(dim=1)
+                best_weight_q = official_quality_lane_weight.view(num_queries, num_segments).gather(
+                    1, best_segment_q.view(-1, 1)
+                ).squeeze(1)
+                base_hit_q = base_official_quality >= official_pt_thresh
+                candidate_hit_q = best_quality_q >= official_pt_thresh
+                candidate_better_q = (
+                    candidate_hit_q
+                    & ~base_hit_q
+                    & (best_quality_q > base_official_quality)
+                )
+                base_choice_target.zero_()
+                base_choice_target[candidate_better_q] = best_segment_q[candidate_better_q] + 1
+                base_choice_weight.fill_(float(self.short_segment_base_choice_neg_weight))
+                base_choice_weight[base_hit_q] = torch.maximum(
+                    base_choice_weight[base_hit_q],
+                    (base_official_lane_weight[base_hit_q] * 2.0).clamp_min(1.0),
+                )
+                base_choice_weight[candidate_better_q] = torch.maximum(
+                    base_choice_weight[candidate_better_q],
+                    best_weight_q[candidate_better_q].clamp_min(1.0),
+                )
+
             if query_replace_logits_b is not None and float(self.short_segment_query_replace_weight) > 0.0:
                 if bool(self.short_segment_base_preserve):
                     query_replace_target[base_hit_any] = 0.0
@@ -1695,6 +2291,26 @@ class GCSLoss(nn.Module):
                         / query_replace_weight.sum().clamp_min(1.0)
                     )
 
+            if train_base_choice:
+                if (
+                    bool(self.short_segment_base_preserve)
+                    and not self.short_segment_matched_assignment
+                    and not base_choice_all_queries
+                ):
+                    for query_idx in torch.nonzero(base_hit_any, as_tuple=False).flatten().tolist():
+                        update_base_choice(int(query_idx), 0, 2.0)
+                active_base_choice = base_choice_weight > 0.0
+                if bool(active_base_choice.any()):
+                    active_logits = logits_qs_b[active_base_choice]
+                    base_logits = active_logits.new_zeros((active_logits.shape[0], 1))
+                    choice_logits = torch.cat((base_logits, active_logits), dim=1)
+                    choice_targets = base_choice_target[active_base_choice].clamp(0, num_segments)
+                    choice_ce = F.cross_entropy(choice_logits, choice_targets, reduction="none")
+                    choice_weight = base_choice_weight[active_base_choice]
+                    base_choice_losses.append(
+                        (choice_ce * choice_weight).sum() / choice_weight.sum().clamp_min(1.0)
+                    )
+
             neg_mask = (score_weight <= 0.0) & (min_ape > soft_px)
             if float(self.short_segment_neg_score_thr) > 0.0:
                 neg_mask = neg_mask & (logits_b.detach().sigmoid() >= float(self.short_segment_neg_score_thr))
@@ -1707,18 +2323,26 @@ class GCSLoss(nn.Module):
                 bce = F.binary_cross_entropy_with_logits(logits_b, score_target, reduction="none")
                 bce_losses.append((bce * score_weight).sum() / score_weight.sum().clamp_min(1.0))
             if float(self.short_segment_dense_quality_weight) > 0.0:
-                finite = torch.isfinite(min_ape)
-                dense_soft = torch.exp(-torch.where(finite, min_ape, torch.zeros_like(min_ape)) / tau)
-                dense_target = torch.where(
-                    finite & (min_ape <= pos_px),
-                    torch.ones_like(min_ape),
-                    torch.where(finite & (min_ape <= soft_px), dense_soft, torch.zeros_like(min_ape)),
-                ).clamp(0.0, 1.0)
-                dense_weight = torch.where(
-                    dense_target > 0.0,
-                    min_ape_lane_weight.clamp_min(1.0),
-                    min_ape_lane_weight.new_full((flat_count,), float(self.short_segment_dense_neg_weight)),
-                )
+                if official_quality_target:
+                    dense_target = (official_quality >= official_pt_thresh).to(dtype=dtype)
+                    dense_weight = torch.where(
+                        dense_target > 0.0,
+                        official_quality_lane_weight.clamp_min(1.0),
+                        official_quality.new_full((flat_count,), float(self.short_segment_dense_neg_weight)),
+                    )
+                else:
+                    finite = torch.isfinite(min_ape)
+                    dense_soft = torch.exp(-torch.where(finite, min_ape, torch.zeros_like(min_ape)) / tau)
+                    dense_target = torch.where(
+                        finite & (min_ape <= pos_px),
+                        torch.ones_like(min_ape),
+                        torch.where(finite & (min_ape <= soft_px), dense_soft, torch.zeros_like(min_ape)),
+                    ).clamp(0.0, 1.0)
+                    dense_weight = torch.where(
+                        dense_target > 0.0,
+                        min_ape_lane_weight.clamp_min(1.0),
+                        min_ape_lane_weight.new_full((flat_count,), float(self.short_segment_dense_neg_weight)),
+                    )
                 active_dense = dense_weight > 0.0
                 if bool(active_dense.any()):
                     dense_bce = F.binary_cross_entropy_with_logits(logits_b, dense_target, reduction="none")
@@ -1730,6 +2354,8 @@ class GCSLoss(nn.Module):
         dense_quality_loss = torch.stack(dense_quality_losses).mean() if dense_quality_losses else zero
         listwise_loss = torch.stack(listwise_losses).mean() if listwise_losses else zero
         query_rank_loss = torch.stack(query_rank_losses).mean() if query_rank_losses else zero
+        base_choice_loss = torch.stack(base_choice_losses).mean() if base_choice_losses else zero
+        unified_choice_loss = torch.stack(unified_choice_losses).mean() if unified_choice_losses else zero
         replace_loss = torch.stack(replace_losses).mean() if replace_losses else zero
         query_replace_loss = torch.stack(query_replace_losses).mean() if query_replace_losses else zero
         score_loss = (
@@ -1737,6 +2363,8 @@ class GCSLoss(nn.Module):
             + float(self.short_segment_dense_quality_weight) * dense_quality_loss
             + float(self.short_segment_listwise_weight) * listwise_loss
             + float(self.short_segment_query_rank_weight) * query_rank_loss
+            + float(self.short_segment_base_choice_weight) * base_choice_loss
+            + float(self.short_segment_unified_choice_weight) * unified_choice_loss
             + float(self.short_segment_replace_weight) * replace_loss
             + float(self.short_segment_query_replace_weight) * query_replace_loss
         )
@@ -1749,6 +2377,586 @@ class GCSLoss(nn.Module):
             pred_points.new_tensor(float(pos_count)),
             pred_points.new_tensor(float(soft_count)),
             pred_points.new_tensor(float(neg_count)),
+        )
+
+    @staticmethod
+    def _full_lane_outputs(
+        preds: dict[str, torch.Tensor],
+        pred_points: torch.Tensor,
+    ) -> tuple[
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+    ] | None:
+        """Validate and return the independent full-lane proposal tensors."""
+        names = (
+            "pred_full_lane_points",
+            "pred_full_lane_valid_logits",
+            "pred_full_lane_exist_logits",
+            "pred_full_lane_quality_logits",
+            "pred_full_lane_start_logits",
+            "pred_full_lane_end_logits",
+        )
+        if not all(name in preds for name in names):
+            return None
+
+        full_points = preds["pred_full_lane_points"]
+        full_valid = preds["pred_full_lane_valid_logits"]
+        full_exist = preds["pred_full_lane_exist_logits"]
+        full_quality = preds["pred_full_lane_quality_logits"]
+        full_start = preds["pred_full_lane_start_logits"]
+        full_end = preds["pred_full_lane_end_logits"]
+        if full_points.ndim != 4 or full_points.shape[-1] != 2:
+            raise ValueError(
+                "pred_full_lane_points must have shape B x P x K x 2, "
+                f"got {tuple(full_points.shape)}."
+            )
+        expected_bpk = (pred_points.shape[0], full_points.shape[1], pred_points.shape[2])
+        if tuple(full_valid.shape) != expected_bpk:
+            raise ValueError(
+                "pred_full_lane_valid_logits must have shape B x P x K, "
+                f"got {tuple(full_valid.shape)} vs {expected_bpk}."
+            )
+        if tuple(full_exist.shape) != expected_bpk[:2]:
+            raise ValueError(
+                "pred_full_lane_exist_logits must have shape B x P, "
+                f"got {tuple(full_exist.shape)} vs {expected_bpk[:2]}."
+            )
+        if tuple(full_quality.shape) != expected_bpk[:2]:
+            raise ValueError(
+                "pred_full_lane_quality_logits must have shape B x P, "
+                f"got {tuple(full_quality.shape)} vs {expected_bpk[:2]}."
+            )
+        if tuple(full_start.shape) != expected_bpk or tuple(full_end.shape) != expected_bpk:
+            raise ValueError(
+                "pred_full_lane_start_logits and pred_full_lane_end_logits must have shape B x P x K, "
+                f"got {tuple(full_start.shape)} and {tuple(full_end.shape)} vs {expected_bpk}."
+            )
+        if "pred_full_lane_score_logits" in preds and tuple(preds["pred_full_lane_score_logits"].shape) != expected_bpk[:2]:
+            raise ValueError(
+                "pred_full_lane_score_logits must have shape B x P, "
+                f"got {tuple(preds['pred_full_lane_score_logits'].shape)} vs {expected_bpk[:2]}."
+            )
+        return full_points, full_valid, full_exist, full_quality, full_start, full_end
+
+    def _full_lane_unified_indices(
+        self,
+        pred_points: torch.Tensor,
+        pred_logits: torch.Tensor,
+        pred_valid_logits: torch.Tensor | None,
+        full_outputs: tuple[torch.Tensor, ...],
+        gt_points: list[torch.Tensor],
+        gt_valid: list[torch.Tensor],
+    ) -> list[tuple[torch.Tensor, torch.Tensor]]:
+        """Match base queries and independent full proposals in one set."""
+        full_points, full_valid, full_exist, full_quality, full_start, full_end = full_outputs
+        base_score = full_lane_proposal_score_probability(
+            pred_logits,
+            quality_logits=None,
+            valid_logits=pred_valid_logits,
+        )
+        full_score = full_lane_proposal_score_probability(
+            full_exist,
+            quality_logits=full_quality,
+            valid_logits=full_valid,
+            start_logits=full_start,
+            end_logits=full_end,
+        )
+        combined_points = torch.cat((pred_points, full_points), dim=1)
+        combined_score = torch.cat((base_score, full_score), dim=1)
+        combined_logits = probability_to_logit(combined_score)
+        return self.matcher(combined_points, combined_logits, gt_points, gt_valid)
+
+    def _full_lane_aux_indices(
+        self,
+        full_outputs: tuple[torch.Tensor, ...],
+        gt_points: list[torch.Tensor],
+        gt_valid: list[torch.Tensor],
+    ) -> list[tuple[torch.Tensor, torch.Tensor]]:
+        """Match only full-lane proposals to GT so the new head cannot be starved by base queries."""
+        full_points = full_outputs[0]
+        neutral_logits = full_points.new_zeros(full_points.shape[:2])
+        return self.full_lane_aux_matcher(full_points, neutral_logits, gt_points, gt_valid)
+
+    def _full_lane_focus_target_weights(
+        self,
+        pred_points: torch.Tensor,
+        pred_valid_logits: torch.Tensor | None,
+        gt_points: list[torch.Tensor],
+        gt_valid: list[torch.Tensor],
+    ) -> list[torch.Tensor] | None:
+        """Build per-GT weights that focus full proposals on base-miss short GT4/GT5 lanes."""
+        if not self.full_lane_hard_focus:
+            return None
+        device = pred_points.device
+        dtype = pred_points.dtype
+        pixel_scale = self._pixel_scale_for(pred_points).to(device=device, dtype=dtype).view(1, 1, 1, 2)
+        hit_px = float(self.full_lane_focus_hit_px)
+        valid_thr = float(self.full_lane_focus_base_valid_thr)
+        min_coverage = float(self.full_lane_focus_base_min_coverage)
+        weights: list[torch.Tensor] = []
+        for b, (gt_points_b, gt_valid_b) in enumerate(zip(gt_points, gt_valid)):
+            gt_points_b = gt_points_b.to(device=device, dtype=dtype)
+            gt_valid_b = gt_valid_b.to(device=device, dtype=dtype).clamp(0.0, 1.0)
+            lane_count = int(gt_points_b.shape[0])
+            if lane_count <= 0:
+                weights.append(pred_points.new_zeros((0,)))
+                continue
+            visible_count = gt_valid_b.sum(dim=1)
+            valid_denom = visible_count.clamp_min(1.0)
+            base_points_b = pred_points[b].to(dtype=dtype)
+            if base_points_b.numel():
+                error = torch.norm((base_points_b[:, None] - gt_points_b[None]) * pixel_scale, dim=-1)
+                ape = (error * gt_valid_b[None]).sum(dim=-1) / valid_denom[None]
+                if pred_valid_logits is not None:
+                    base_valid_b = pred_valid_logits[b].to(device=device, dtype=dtype).sigmoid()
+                    valid_hit = (base_valid_b[:, None] >= valid_thr).to(dtype=dtype) * gt_valid_b[None]
+                    coverage = valid_hit.sum(dim=-1) / valid_denom[None]
+                    base_hit = ((ape <= hit_px) & (coverage >= min_coverage)).any(dim=0)
+                else:
+                    base_hit = (ape <= hit_px).any(dim=0)
+            else:
+                base_hit = torch.zeros((lane_count,), device=device, dtype=torch.bool)
+
+            lane_weight = torch.where(
+                base_hit,
+                pred_points.new_tensor(float(self.full_lane_base_hit_weight)),
+                pred_points.new_tensor(float(self.full_lane_base_miss_weight)),
+            )
+            if lane_count == 4:
+                lane_weight = lane_weight * float(self.full_lane_gt4_weight)
+            elif lane_count >= 5:
+                lane_weight = lane_weight * float(self.full_lane_gt5_weight)
+            short_mask = visible_count <= float(self.full_lane_short_visible_thr)
+            lane_weight = lane_weight * torch.where(
+                short_mask,
+                pred_points.new_tensor(float(self.full_lane_short_visible_weight)),
+                pred_points.new_tensor(1.0),
+            )
+            weights.append(lane_weight.to(device=device, dtype=dtype))
+        return weights
+
+    @staticmethod
+    def _split_full_lane_indices(
+        indices: list[tuple[torch.Tensor, torch.Tensor]],
+        base_query_count: int,
+    ) -> tuple[list[tuple[torch.Tensor, torch.Tensor]], list[tuple[torch.Tensor, torch.Tensor]]]:
+        """Split unified set matches into base-query and full-proposal indices."""
+        base_indices: list[tuple[torch.Tensor, torch.Tensor]] = []
+        full_indices: list[tuple[torch.Tensor, torch.Tensor]] = []
+        for src_idx, tgt_idx in indices:
+            base_mask = src_idx < int(base_query_count)
+            base_indices.append((src_idx[base_mask], tgt_idx[base_mask]))
+            full_indices.append(
+                (
+                    src_idx[~base_mask] - int(base_query_count),
+                    tgt_idx[~base_mask],
+                )
+            )
+        return base_indices, full_indices
+
+    def full_lane_proposal_loss(
+        self,
+        full_outputs: tuple[torch.Tensor, ...],
+        gt_points: list[torch.Tensor],
+        gt_valid: list[torch.Tensor],
+        full_indices: list[tuple[torch.Tensor, torch.Tensor]],
+        unmatched_weight: float | None = None,
+        target_weights: list[torch.Tensor] | None = None,
+    ) -> tuple[torch.Tensor, ...]:
+        """Supervise complete full-lane proposals selected by unified matching."""
+        full_points, full_valid, full_exist, full_quality, full_start, full_end = full_outputs
+        device = full_points.device
+        dtype = full_points.dtype
+        batch_size, proposal_count, num_points, _ = full_points.shape
+        unmatched_weight = float(self.full_lane_unmatched_weight if unmatched_weight is None else unmatched_weight)
+        if len(full_indices) != batch_size:
+            raise ValueError(
+                "full-lane indices must contain one pair per image, "
+                f"got {len(full_indices)} vs B={batch_size}."
+            )
+        if target_weights is not None and len(target_weights) != batch_size:
+            raise ValueError(
+                "full-lane target weights must contain one tensor per image, "
+                f"got {len(target_weights)} vs B={batch_size}."
+            )
+
+        zero = full_points.sum() * 0.0
+        point_losses: list[torch.Tensor] = []
+        point_weights: list[torch.Tensor] = []
+        valid_losses: list[torch.Tensor] = []
+        interval_losses: list[torch.Tensor] = []
+        interval_weights: list[torch.Tensor] = []
+        exist_losses: list[torch.Tensor] = []
+        quality_losses: list[torch.Tensor] = []
+        matched_count = 0
+        unmatched_count = 0
+        pixel_scale = self._pixel_scale_for(full_points).view(1, 1, 2)
+        tau = max(float(self.full_lane_quality_tau), 1.0e-6)
+
+        for b in range(batch_size):
+            src_idx, tgt_idx = full_indices[b]
+            src_idx = src_idx.to(device=device, dtype=torch.long).reshape(-1)
+            tgt_idx = tgt_idx.to(device=device, dtype=torch.long).reshape(-1)
+            matched_mask = torch.zeros((proposal_count,), device=device, dtype=torch.bool)
+            if src_idx.numel():
+                matched_mask[src_idx] = True
+            unmatched_count += int((~matched_mask).sum().detach().cpu().item())
+            matched_count += int(src_idx.numel())
+
+            exist_target = matched_mask.to(dtype=dtype)
+            quality_target = torch.zeros((proposal_count,), device=device, dtype=dtype)
+            valid_target = torch.zeros((proposal_count, num_points), device=device, dtype=dtype)
+            valid_weight = torch.full(
+                (proposal_count,),
+                float(self.full_lane_unmatched_valid_weight) * unmatched_weight,
+                device=device,
+                dtype=dtype,
+            )
+            matched_target_weight = full_points.new_ones((int(src_idx.numel()),), dtype=dtype)
+            if target_weights is not None and src_idx.numel():
+                target_weight_b = target_weights[b].to(device=device, dtype=dtype).reshape(-1)
+                if int(target_weight_b.numel()) != int(gt_points[b].shape[0]):
+                    raise ValueError(
+                        "full-lane target weight count must match GT lane count, "
+                        f"got {int(target_weight_b.numel())} vs {int(gt_points[b].shape[0])}."
+                    )
+                matched_target_weight = target_weight_b[tgt_idx].clamp_min(0.0)
+            if src_idx.numel():
+                valid_weight[src_idx] = matched_target_weight
+
+            if src_idx.numel():
+                target_points = gt_points[b].to(device=device, dtype=dtype)[tgt_idx]
+                target_valid = gt_valid[b].to(device=device, dtype=dtype)[tgt_idx].clamp(0.0, 1.0)
+                pred_points_b = full_points[b, src_idx]
+                pred_valid_b = full_valid[b, src_idx].sigmoid()
+                point_error = torch.norm((pred_points_b - target_points) * pixel_scale, dim=-1)
+                ape = (point_error * target_valid).sum(dim=1) / target_valid.sum(dim=1).clamp_min(1.0)
+                visible_coverage = (
+                    (pred_valid_b * target_valid).sum(dim=1) / target_valid.sum(dim=1).clamp_min(1.0)
+                ).clamp(0.0, 1.0)
+                quality = (torch.exp(-ape / tau) * visible_coverage).clamp(0.0, 1.0)
+                quality_target[src_idx] = quality.detach().to(dtype=dtype)
+                # Existence answers whether this proposal is assigned to a
+                # lane; geometry quality is supervised independently.
+                exist_target[src_idx] = 1.0
+                valid_target[src_idx] = target_valid
+
+                for local_idx in range(int(src_idx.numel())):
+                    valid_bool = target_valid[local_idx] > 0.5
+                    if bool(valid_bool.any()):
+                        point_losses.append(
+                            aspect_weighted_l1_point_loss(
+                                pred_points_b[local_idx],
+                                target_points[local_idx],
+                                valid_bool,
+                                image_size=self.image_size,
+                            )
+                        )
+                        point_weights.append(matched_target_weight[local_idx])
+                        valid_indices = torch.nonzero(valid_bool, as_tuple=False).flatten()
+                        start_target = valid_indices[0].view(1)
+                        end_target = valid_indices[-1].view(1)
+                        proposal_idx = src_idx[local_idx]
+                        interval_losses.append(
+                            F.cross_entropy(full_start[b, proposal_idx].view(1, -1), start_target)
+                            + F.cross_entropy(full_end[b, proposal_idx].view(1, -1), end_target)
+                        )
+                        interval_weights.append(matched_target_weight[local_idx])
+
+            proposal_weight = torch.full(
+                (proposal_count,),
+                unmatched_weight,
+                device=device,
+                dtype=dtype,
+            )
+            if src_idx.numel():
+                proposal_weight[src_idx] = matched_target_weight
+            exist_bce = F.binary_cross_entropy_with_logits(
+                full_exist[b],
+                exist_target,
+                reduction="none",
+            )
+            quality_bce = F.binary_cross_entropy_with_logits(
+                full_quality[b],
+                quality_target,
+                reduction="none",
+            )
+            exist_losses.append((exist_bce * proposal_weight).sum() / proposal_weight.sum().clamp_min(1.0))
+            quality_losses.append((quality_bce * proposal_weight).sum() / proposal_weight.sum().clamp_min(1.0))
+            valid_bce = F.binary_cross_entropy_with_logits(
+                full_valid[b],
+                valid_target,
+                reduction="none",
+            ).mean(dim=1)
+            valid_losses.append((valid_bce * valid_weight).sum() / valid_weight.sum().clamp_min(1.0))
+
+        if point_losses:
+            point_loss_values = torch.stack(point_losses)
+            point_weight_values = torch.stack(point_weights).to(device=device, dtype=dtype)
+            point_loss = (point_loss_values * point_weight_values).sum() / point_weight_values.sum().clamp_min(1.0)
+        else:
+            point_loss = zero
+        valid_loss = torch.stack(valid_losses).mean() if valid_losses else zero
+        if interval_losses:
+            interval_loss_values = torch.stack(interval_losses)
+            interval_weight_values = torch.stack(interval_weights).to(device=device, dtype=dtype)
+            interval_loss = (
+                (interval_loss_values * interval_weight_values).sum()
+                / interval_weight_values.sum().clamp_min(1.0)
+            )
+        else:
+            interval_loss = zero
+        exist_loss = torch.stack(exist_losses).mean() if exist_losses else zero
+        quality_loss = torch.stack(quality_losses).mean() if quality_losses else zero
+        total = point_loss + valid_loss + interval_loss + exist_loss + quality_loss
+        return (
+            total,
+            point_loss,
+            valid_loss,
+            interval_loss,
+            exist_loss,
+            quality_loss,
+            full_points.new_tensor(float(matched_count)),
+            full_points.new_tensor(float(unmatched_count)),
+        )
+
+    @staticmethod
+    def _dense_draw_gaussian(
+        target: torch.Tensor,
+        channel: int,
+        x: float,
+        y: float,
+        sigma: float,
+    ) -> None:
+        """Draw one clipped Gaussian on a dense target map in-place."""
+        height, width = int(target.shape[-2]), int(target.shape[-1])
+        if height <= 0 or width <= 0 or not math.isfinite(float(x)) or not math.isfinite(float(y)):
+            return
+        radius = max(int(math.ceil(3.0 * float(sigma))), 1)
+        center_x = int(round(float(x)))
+        center_y = int(round(float(y)))
+        x0 = max(center_x - radius, 0)
+        x1 = min(center_x + radius, width - 1)
+        y0 = max(center_y - radius, 0)
+        y1 = min(center_y + radius, height - 1)
+        if x0 > x1 or y0 > y1:
+            return
+        yy, xx = torch.meshgrid(
+            torch.arange(y0, y1 + 1, device=target.device, dtype=target.dtype),
+            torch.arange(x0, x1 + 1, device=target.device, dtype=target.dtype),
+            indexing="ij",
+        )
+        patch = torch.exp(-((xx - float(x)) ** 2 + (yy - float(y)) ** 2) / (2.0 * float(sigma) ** 2))
+        current = target[channel, y0 : y1 + 1, x0 : x1 + 1]
+        target[channel, y0 : y1 + 1, x0 : x1 + 1] = torch.maximum(current, patch)
+
+    @classmethod
+    def _dense_draw_line(
+        cls,
+        target: torch.Tensor,
+        channel: int,
+        start: torch.Tensor,
+        end: torch.Tensor,
+        sigma: float,
+    ) -> None:
+        """Rasterize a line segment between two fixed-y lane anchors."""
+        distance = float(torch.linalg.vector_norm(end - start).detach().cpu().item())
+        steps = max(int(math.ceil(distance)) + 1, 2)
+        values = torch.linspace(0.0, 1.0, steps=steps, device=target.device, dtype=target.dtype)
+        for value in values:
+            point = start.to(device=target.device, dtype=target.dtype) * (1.0 - value) + end.to(
+                device=target.device, dtype=target.dtype
+            ) * value
+            cls._dense_draw_gaussian(target, channel, float(point[0].item()), float(point[1].item()), sigma)
+
+    @classmethod
+    def _dense_targets(
+        cls,
+        gt_points: list[torch.Tensor],
+        gt_valid: list[torch.Tensor],
+        output_hw: tuple[int, int],
+        sigma_px: float,
+        image_size,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Rasterize centerline and endpoint evidence from normalized lane points."""
+        output_h, output_w = int(output_hw[0]), int(output_hw[1])
+        if output_h <= 0 or output_w <= 0:
+            raise ValueError(f"Dense evidence output size must be positive, got {output_hw}.")
+        image_h, image_w = normalize_imgsz(image_size)
+        stride_x = float(image_w) / float(max(output_w - 1, 1))
+        stride_y = float(image_h) / float(max(output_h - 1, 1))
+        sigma_cells = max(float(sigma_px) / max((stride_x + stride_y) * 0.5, 1.0), 0.5)
+        batch_size = len(gt_points)
+        centerline = torch.zeros((batch_size, 1, output_h, output_w), device=gt_points[0].device if batch_size else "cpu")
+        endpoints = torch.zeros_like(centerline).expand(batch_size, 2, output_h, output_w).clone()
+
+        for batch_index, (points_b, valid_b) in enumerate(zip(gt_points, gt_valid)):
+            points_b = points_b.to(device=centerline.device, dtype=torch.float32)
+            valid_b = valid_b.to(device=centerline.device, dtype=torch.float32)
+            if points_b.ndim != 3 or points_b.shape[-1] != 2:
+                raise ValueError(f"Dense GT points must have shape N x K x 2, got {tuple(points_b.shape)}.")
+            if tuple(valid_b.shape) != tuple(points_b.shape[:2]):
+                raise ValueError(
+                    "Dense GT validity must match point shape, "
+                    f"got {tuple(valid_b.shape)} vs {tuple(points_b.shape[:2])}."
+                )
+            for lane_points, lane_valid in zip(points_b, valid_b):
+                indices = torch.nonzero(lane_valid > 0.5, as_tuple=False).flatten()
+                if indices.numel() == 0:
+                    continue
+                coords = lane_points[indices].clone()
+                coords[:, 0] *= float(max(output_w - 1, 1))
+                coords[:, 1] *= float(max(output_h - 1, 1))
+                for point in coords:
+                    cls._dense_draw_gaussian(
+                        centerline[batch_index],
+                        0,
+                        float(point[0].item()),
+                        float(point[1].item()),
+                        sigma_cells,
+                    )
+                for point_index in range(int(indices.numel()) - 1):
+                    if int(indices[point_index + 1] - indices[point_index]) == 1:
+                        cls._dense_draw_line(
+                            centerline[batch_index],
+                            0,
+                            coords[point_index],
+                            coords[point_index + 1],
+                            sigma_cells,
+                        )
+                cls._dense_draw_gaussian(
+                    endpoints[batch_index],
+                    0,
+                    float(coords[0, 0].item()),
+                    float(coords[0, 1].item()),
+                    sigma_cells,
+                )
+                cls._dense_draw_gaussian(
+                    endpoints[batch_index],
+                    1,
+                    float(coords[-1, 0].item()),
+                    float(coords[-1, 1].item()),
+                    sigma_cells,
+                )
+        return centerline, endpoints
+
+    def dense_instance_loss(
+        self,
+        preds: dict[str, torch.Tensor],
+        gt_points: list[torch.Tensor],
+        gt_valid: list[torch.Tensor],
+    ) -> tuple[torch.Tensor, ...]:
+        """Train dense centerline, endpoint, and instance-embedding evidence."""
+        centerline_logits = preds.get("pred_dense_centerline_logits")
+        endpoint_logits = preds.get("pred_dense_endpoint_logits")
+        instance_embed = preds.get("pred_dense_instance_embed")
+        if centerline_logits is None or endpoint_logits is None or instance_embed is None:
+            raise KeyError(
+                "gcs_dense_instance > 0 requires pred_dense_centerline_logits, "
+                "pred_dense_endpoint_logits, and pred_dense_instance_embed."
+            )
+        if centerline_logits.ndim != 4 or tuple(centerline_logits.shape[1:2]) != (1,):
+            raise ValueError(
+                "pred_dense_centerline_logits must have shape B x 1 x Hf x Wf, "
+                f"got {tuple(centerline_logits.shape)}."
+            )
+        if endpoint_logits.ndim != 4 or tuple(endpoint_logits.shape[1:2]) != (2,):
+            raise ValueError(
+                "pred_dense_endpoint_logits must have shape B x 2 x Hf x Wf, "
+                f"got {tuple(endpoint_logits.shape)}."
+            )
+        if instance_embed.ndim != 4 or instance_embed.shape[0] != centerline_logits.shape[0]:
+            raise ValueError(
+                "pred_dense_instance_embed must have shape B x D x Hf x Wf, "
+                f"got {tuple(instance_embed.shape)}."
+            )
+        if tuple(endpoint_logits.shape[-2:]) != tuple(centerline_logits.shape[-2:]) or tuple(
+            instance_embed.shape[-2:]
+        ) != tuple(centerline_logits.shape[-2:]):
+            raise ValueError("Dense evidence logits and embeddings must share Hf,Wf.")
+        if len(gt_points) != int(centerline_logits.shape[0]) or len(gt_valid) != len(gt_points):
+            raise ValueError(
+                "Dense evidence targets must contain one GT point/valid tensor per batch image, "
+                f"got points={len(gt_points)}, valid={len(gt_valid)}, batch={int(centerline_logits.shape[0])}."
+            )
+
+        center_target, endpoint_target = self._dense_targets(
+            gt_points,
+            gt_valid,
+            tuple(centerline_logits.shape[-2:]),
+            sigma_px=float(self.dense_sigma_px),
+            image_size=self.image_size,
+        )
+        center_target = center_target.to(device=centerline_logits.device, dtype=centerline_logits.dtype)
+        endpoint_target = endpoint_target.to(device=endpoint_logits.device, dtype=endpoint_logits.dtype)
+
+        def sparse_bce(logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+            positive = target.sum()
+            negative = target.numel() - positive
+            pos_weight = (negative / positive.clamp_min(1.0)).clamp(
+                min=1.0,
+                max=float(self.dense_pos_weight_max),
+            )
+            return F.binary_cross_entropy_with_logits(logits, target, pos_weight=pos_weight)
+
+        centerline_loss = sparse_bce(centerline_logits, center_target)
+        endpoint_loss = sparse_bce(endpoint_logits, endpoint_target)
+
+        normalized_embed = F.normalize(instance_embed, dim=1, eps=1.0e-6)
+        pull_losses: list[torch.Tensor] = []
+        push_losses: list[torch.Tensor] = []
+        for batch_index, (points_b, valid_b) in enumerate(zip(gt_points, gt_valid)):
+            points_b = points_b.to(device=normalized_embed.device, dtype=normalized_embed.dtype)
+            valid_b = valid_b.to(device=normalized_embed.device)
+            if points_b.numel() == 0:
+                continue
+            image_lane_means: list[torch.Tensor] = []
+            for lane_points, lane_valid in zip(points_b, valid_b):
+                lane_mask = lane_valid > 0.5
+                if int(lane_mask.sum().item()) < 2:
+                    continue
+                coords = lane_points[lane_mask, :2].clamp(0.0, 1.0)
+                grid = coords.mul(2.0).sub(1.0).view(1, -1, 1, 2)
+                sampled = F.grid_sample(
+                    normalized_embed[batch_index : batch_index + 1],
+                    grid,
+                    mode="bilinear",
+                    padding_mode="border",
+                    align_corners=True,
+                ).squeeze(0).squeeze(-1).transpose(0, 1)
+                sampled = F.normalize(sampled, dim=1, eps=1.0e-6)
+                mean_embedding = F.normalize(sampled.mean(dim=0, keepdim=True), dim=1, eps=1.0e-6)[0]
+                pull_losses.append((1.0 - (sampled * mean_embedding.view(1, -1)).sum(dim=1)).mean())
+                image_lane_means.append(mean_embedding)
+
+            # Instance identity is only defined within one image. Do not push
+            # lane embeddings from different batch images apart.
+            if len(image_lane_means) >= 2:
+                means = torch.stack(image_lane_means, dim=0)
+                pair_losses = []
+                for left in range(int(means.shape[0]) - 1):
+                    distances = torch.linalg.vector_norm(means[left + 1 :] - means[left], dim=1)
+                    pair_losses.append(F.relu(float(self.dense_embed_margin) - distances).square().mean())
+                push_losses.append(torch.stack(pair_losses).mean())
+        embed_push_loss = torch.stack(push_losses).mean() if push_losses else centerline_logits.sum() * 0.0
+        embed_pull_loss = torch.stack(pull_losses).mean() if pull_losses else centerline_logits.sum() * 0.0
+        dense_loss = (
+            float(self.dense_centerline_weight) * centerline_loss
+            + float(self.dense_endpoint_weight) * endpoint_loss
+            + float(self.dense_embed_pull_weight) * embed_pull_loss
+            + float(self.dense_embed_push_weight) * embed_push_loss
+        )
+        return (
+            dense_loss,
+            centerline_loss,
+            endpoint_loss,
+            embed_pull_loss,
+            embed_push_loss,
+            center_target.sum().detach(),
         )
 
     def count_boundary_loss(
@@ -2262,7 +3470,85 @@ class GCSLoss(nn.Module):
             )
         gt_points, gt_valid = self._targets_from_batch(batch)
 
-        indices = self.matcher(pred_points, pred_logits, gt_points, gt_valid)
+        base_indices = self.matcher(pred_points, pred_logits, gt_points, gt_valid)
+        indices = base_indices
+        full_outputs = self._full_lane_outputs(preds, pred_points)
+        full_lane_loss = self._zero_like(pred_points)
+        full_lane_point_loss = self._zero_like(pred_points)
+        full_lane_valid_loss = self._zero_like(pred_points)
+        full_lane_interval_loss = self._zero_like(pred_points)
+        full_lane_exist_loss = self._zero_like(pred_points)
+        full_lane_quality_loss = self._zero_like(pred_points)
+        full_lane_match_count = self._zero_like(pred_points)
+        full_lane_unmatched_count = self._zero_like(pred_points)
+        if self.full_lane_proposal_gain > 0.0:
+            if full_outputs is None:
+                raise KeyError(
+                    "gcs_full_lane_proposal > 0 requires an independent full-lane proposal head "
+                    "that emits pred_full_lane_points/valid/exist/quality/start/end."
+                )
+            if pred_valid_logits is None:
+                raise KeyError("gcs_full_lane_proposal > 0 requires base pred_valid_logits.")
+            if self.full_lane_aux_assignment:
+                full_indices = self._full_lane_aux_indices(full_outputs, gt_points, gt_valid)
+                indices = base_indices
+            elif self.full_lane_unified_matching:
+                unified_indices = self._full_lane_unified_indices(
+                    pred_points,
+                    pred_logits,
+                    pred_valid_logits,
+                    full_outputs,
+                    gt_points,
+                    gt_valid,
+                )
+                base_indices, full_indices = self._split_full_lane_indices(
+                    unified_indices,
+                    base_query_count=int(pred_points.shape[1]),
+                )
+                indices = base_indices
+            else:
+                raise RuntimeError(
+                    "gcs_full_lane_proposal > 0 reached loss without aux or unified assignment. "
+                    "Enable gcs_full_lane_aux_assignment or gcs_full_lane_unified_matching."
+                )
+            full_lane_target_weights = self._full_lane_focus_target_weights(
+                pred_points,
+                pred_valid_logits,
+                gt_points,
+                gt_valid,
+            )
+            (
+                full_lane_loss,
+                full_lane_point_loss,
+                full_lane_valid_loss,
+                full_lane_interval_loss,
+                full_lane_exist_loss,
+                full_lane_quality_loss,
+                full_lane_match_count,
+                full_lane_unmatched_count,
+            ) = self.full_lane_proposal_loss(
+                full_outputs,
+                gt_points,
+                gt_valid,
+                full_indices,
+                unmatched_weight=float(self.full_lane_unmatched_weight),
+                target_weights=full_lane_target_weights,
+            )
+        dense_instance_loss = self._zero_like(pred_points)
+        dense_centerline_loss = self._zero_like(pred_points)
+        dense_endpoint_loss = self._zero_like(pred_points)
+        dense_embed_pull_loss = self._zero_like(pred_points)
+        dense_embed_push_loss = self._zero_like(pred_points)
+        dense_centerline_pos = self._zero_like(pred_points)
+        if self.dense_instance_gain > 0.0:
+            (
+                dense_instance_loss,
+                dense_centerline_loss,
+                dense_endpoint_loss,
+                dense_embed_pull_loss,
+                dense_embed_push_loss,
+                dense_centerline_pos,
+            ) = self.dense_instance_loss(preds, gt_points, gt_valid)
         exist_loss = self.exist_loss(pred_logits, pred_points, pred_valid_logits, gt_points, gt_valid, indices)
         gt_lanes = self.target_lane_count(pred_logits, batch, gt_valid)
         point_loss = self.point_loss(pred_points, gt_points, gt_valid, indices, gt_lanes=gt_lanes)
@@ -2314,7 +3600,7 @@ class GCSLoss(nn.Module):
             short_segment_pos_count,
             short_segment_soft_count,
             short_segment_neg_count,
-        ) = self.short_segment_loss(preds, gt_points, gt_valid, gt_lanes)
+        ) = self.short_segment_loss(preds, gt_points, gt_valid, gt_lanes, indices=indices)
         (
             spurious_neg_loss,
             spurious_negative_count,
@@ -2353,6 +3639,8 @@ class GCSLoss(nn.Module):
             + self.count_gain * count_loss
             + self.count_under5_gain * count_under5_loss
         )
+        if self.full_lane_proposal_gain != 0.0:
+            total = total + self.full_lane_proposal_gain * full_lane_loss
         if self.count_boundary_gain != 0.0:
             total = total + self.count_boundary_gain * count_boundary_loss
         if self.boundary_pseudo_neg_gain != 0.0:
@@ -2365,6 +3653,8 @@ class GCSLoss(nn.Module):
             total = total + self.short_segment_gain * short_segment_loss
         if self.spurious_neg_gain != 0.0:
             total = total + self.spurious_neg_gain * self.spurious_neg_weight * spurious_neg_loss
+        if self.dense_instance_gain != 0.0:
+            total = total + self.dense_instance_gain * dense_instance_loss
         loss_items = torch.stack(
             (
                 exist_loss.detach(),
@@ -2413,6 +3703,20 @@ class GCSLoss(nn.Module):
                 query_count_ce_loss.detach(),
                 query_count_acc.detach(),
                 query_count_pred_mean.detach(),
+                full_lane_loss.detach(),
+                full_lane_point_loss.detach(),
+                full_lane_valid_loss.detach(),
+                full_lane_interval_loss.detach(),
+                full_lane_exist_loss.detach(),
+                full_lane_quality_loss.detach(),
+                full_lane_match_count.detach(),
+                full_lane_unmatched_count.detach(),
+                dense_instance_loss.detach(),
+                dense_centerline_loss.detach(),
+                dense_endpoint_loss.detach(),
+                dense_embed_pull_loss.detach(),
+                dense_embed_push_loss.detach(),
+                dense_centerline_pos.detach(),
             )
         )
         return total, loss_items

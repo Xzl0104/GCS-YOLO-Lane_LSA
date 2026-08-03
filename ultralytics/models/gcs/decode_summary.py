@@ -25,6 +25,7 @@ QUERY_DECODE_KEYS = frozenset(
         "count_aware_length_norm",
         "count_aware_extra_margin",
         "count_mode",
+        "full_lane_decode",
     }
 )
 QUERY_SWEEP_DECODE_KEYS = frozenset(
@@ -276,10 +277,16 @@ def _bool_value(value: Any) -> bool:
     return bool(value)
 
 
-def query_decode_cfg(best_row: Mapping[str, Any], valid_before_maxdet: Any = None) -> dict[str, Any]:
+def query_decode_cfg(
+    best_row: Mapping[str, Any],
+    valid_before_maxdet: Any = None,
+    full_lane_decode: Any = None,
+) -> dict[str, Any]:
     """Build the official query decode-yaml schema from a selected sweep row."""
     if valid_before_maxdet is None:
         valid_before_maxdet = best_row.get("valid_before_maxdet", False)
+    if full_lane_decode is None:
+        full_lane_decode = best_row.get("full_lane_decode", False)
     cfg = {
         "schema": QUERY_DECODE_SCHEMA,
         "decode_mode": "query",
@@ -295,6 +302,7 @@ def query_decode_cfg(best_row: Mapping[str, Any], valid_before_maxdet: Any = Non
         "count_aware_length_norm": float(best_row.get("count_aware_length_norm", 12.0) or 12.0),
         "count_aware_extra_margin": int(best_row.get("count_aware_extra_margin", 0) or 0),
         "count_mode": str(best_row.get("count_mode", "score_sum") or "score_sum"),
+        "full_lane_decode": _bool_value(full_lane_decode),
     }
     validate_decode_yaml_for_model(cfg, model_mode="query")
     return cfg
@@ -312,7 +320,15 @@ def build_official_best_decode_cfg(best_row: Mapping[str, Any], model_mode: str,
             "valid_before_maxdet",
             _arg(args, "gcs_official_valid_before_maxdet", False),
         )
-        return query_decode_cfg(best_row, valid_before_maxdet=valid_before_maxdet)
+        full_lane_decode = best_row.get(
+            "full_lane_decode",
+            _arg(args, "gcs_full_lane_decode", False),
+        )
+        return query_decode_cfg(
+            best_row,
+            valid_before_maxdet=valid_before_maxdet,
+            full_lane_decode=full_lane_decode,
+        )
     raise ValueError(f"Unknown model_mode={model_mode!r}.")
 
 
@@ -360,7 +376,12 @@ def validate_decode_yaml_for_model(decode_cfg: Mapping[str, Any], model_mode: st
     if model_mode == "query":
         if schema != QUERY_DECODE_SCHEMA:
             raise RuntimeError(f"Invalid query schema={schema!r}. Expected {QUERY_DECODE_SCHEMA}.")
-        required = QUERY_DECODE_KEYS - {"valid_before_maxdet", "count_mode", "count_aware_extra_margin"}
+        required = QUERY_DECODE_KEYS - {
+            "valid_before_maxdet",
+            "count_mode",
+            "count_aware_extra_margin",
+            "full_lane_decode",
+        }
         missing = sorted(required.difference(decode_cfg))
         if missing:
             raise RuntimeError(f"Invalid query decode yaml: missing keys {missing}.")

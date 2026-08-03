@@ -2,6 +2,142 @@
 
 This file records the active contracts for branch `codex/5-25-3-k56`.
 
+## 2026-08-01 v10 Matched-Assignment Follow-up
+
+The v10 default-off selector path adds
+`gcs_short_segment_matched_assignment`. When enabled, short-segment
+base-choice targets must use the Hungarian query-to-GT indices instead of
+cross-GT query protection. The intended launch path is:
+
+```text
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-local-segment-proposal-v10.yaml
+scripts/run_query_local_segment_env30_frozen_probe20_v10.sh
+```
+
+The completed run
+`query_local_segment_env30_frozen_probe20_v10_b4w0s1` is not valid evidence
+for the matched-assignment change: its `args.yaml` and trainer log do not
+contain `gcs_short_segment_matched_assignment: true` or
+`--gcs-short-segment-matched-assignment`. The server script was updated after
+that run. Do not promote it as the v10 matched-assignment result.
+
+The run is still useful as a base-choice diagnostic. With `last.pt`, hard
+selected-gated coverage was:
+
+```text
+official-val short GT5: base/raw/selected = 40/52/43 of 53
+train0601 short GT5:    base/raw/selected = 142/179/151 of 183
+official-val short GT4: base/raw/selected = 1/4/4 of 8
+train0601 short GT4:    base/raw/selected = 9/19/16 of 19
+```
+
+Base-hit loss was zero for these `last.pt` groups, but the oracle candidate
+was still rank-1 in only `0/53` official-val and `8/179` train0601 short GT5
+cases. The raw geometry headroom therefore remained mostly unconverted.
+`TEST` stayed closed and `candidate_decode` stayed false.
+
+The original v10 official sweep omitted the env30 baseline threshold
+`conf=0.001`. A same-protocol official-val sweep of final `last.pt` at
+`conf=0.001`, `point_valid_thr=0.6`, `nms_dist_px=0`, `max_det=5`,
+`min_points=4` returned `ACC=0.973346`, `FP=0.015748`, `FN=0.009642`.
+This matches the env30 baseline and shows that the frozen base path itself
+did not materially regress. A valid v10 matched-assignment run must verify
+the flag in `args.yaml` before training results are interpreted.
+
+The valid matched-assignment run
+`query_local_segment_env30_frozen_probe20_v10_matched_b4w0s1` completed all
+`20/20` epochs with the required flags:
+
+```text
+gcs_short_segment_matched_assignment = true
+gcs_short_segment_base_choice_weight = 1.0
+gcs_short_segment_freeze_base = true
+gcs_candidate_decode = false
+TEST = closed
+```
+
+Under the matched run's official-val sweep grid, base-only selection was:
+
+```text
+env30 baseline: epoch-selected ACC/FP/FN = 0.973330 / 0.015748 / 0.009642
+matched epoch 5 official_best: 0.972568 / 0.017585 / 0.011019
+matched epoch 20 last:          0.972501 / 0.017126 / 0.011019
+```
+
+The matched sweep grid omitted the env30 reference point
+`conf=0.001, point_valid_thr=0.6`, so these rows are not a strict
+same-protocol base-regression comparison. They show no formal ACC gain in
+the matched run's own sweep and are not sufficient to promote the base path.
+
+The hard GT diagnostic did improve when the hard-gate-selected
+`segment_best.pt` (a copy of `last.pt`) was used:
+
+```text
+official-val short GT5: base/raw/selected-gated = 40/52/47 of 53
+train0601    short GT5: base/raw/selected-gated = 142/179/156 of 183
+official-val short GT4: base/raw/selected-gated = 1/4/3 of 8
+train0601    short GT4: base/raw/selected-gated = 9/18/15 of 19
+```
+
+Base-hit losses for these four groups were `0`, `1`, `0`, and `0`.
+The oracle exact-score rank is still low inside the matched query:
+short GT5 oracle score top-1/top-5 is `2/53` and `9/53` on official-val,
+and `7/183` and `30/183` on train0601. Therefore matched assignment fixes
+part of the target-conflict problem and converts useful raw capacity, but
+does not solve exact proposal ranking. The result is diagnostic-only until
+an official-val decode sweep proves a formal gain. Keep both
+`gcs_candidate_decode=false` and `segment_decode=false` by default and keep
+TEST closed.
+
+## 2026-08-01 v10 Segment Decode Sweep
+
+The v10 local-segment tensors use a separate default-off evaluation path:
+
+```text
+--segment-decode
+--segment-score-thr 0.5
+--segment-short-min-points 3
+--segment-short-max-points 10
+--segment-pred-valid-overlap-min 0
+```
+
+`segment_decode` is prediction-only and mutually exclusive with the older
+`candidate_decode` and count-aware top-k paths. It treats the frozen env30
+base geometry as a fixed zero-logit option, selects the highest-scoring
+length-valid `pred_short_segment_*` window per query, and replaces base only
+when the segment probability reaches the configured threshold. Replaced
+queries use the selected window mask for point-valid filtering; query
+existence logits, Lane-NMS, and official metrics are otherwise unchanged.
+The default query decode and training-time decode remain unchanged.
+
+The previous candidate sweep command failed because it requested
+`--candidate-decode` for a v10 checkpoint that emits
+`pred_short_segment_points/logits/window_mask`, not
+`pred_short_candidate_points/logits`. The evaluation adapter was corrected,
+locally and remotely compiled, and covered by
+`tools/check_gcs_short_segment_head.py`.
+
+Same-checkpoint official-val evidence using
+`segment_best.pt` and the env30 reference point
+`conf=0.001, point_valid_thr=0.6, nms_dist_px=0, max_det=5, min_points=4`:
+
+```text
+segment_decode=false: ACC/FP/FN = 0.973346 / 0.015748 / 0.009642
+segment_score_thr=0.5: ACC/FP/FN = 0.973117 / 0.015886 / 0.010560
+segment_score_thr=0.6: ACC/FP/FN = 0.973276 / 0.015197 / 0.009642
+segment_score_thr=0.7: ACC/FP/FN = 0.973276 / 0.015197 / 0.009642
+segment_score_thr=0.8: ACC/FP/FN = 0.973346 / 0.015197 / 0.009642
+segment_score_thr=0.9: ACC/FP/FN = 0.973346 / 0.015748 / 0.009642
+```
+
+The full official-val grid's best segment row is
+`ACC/FP/FN=0.973117/0.015886/0.010560`, below the same-grid base row
+`0.973346/0.014509/0.009642`. The `0.8` row ties ACC but lowers
+`count_acc_5` from `0.986486` to `0.972973`; `0.9` is effectively the base
+path. The raw/hard coverage is therefore not sufficient to promote formal
+segment decode. Keep `segment_decode=false`, do not run TEST, and do not
+continue threshold tuning on this checkpoint.
+
 ## Branch Scope
 
 This branch imports the historical `5-25-3.zip` algorithm and changes only the TuSimple fixed-y contract:
@@ -286,6 +422,62 @@ best candidate hits or clearly lowers APE. Default query decode remains
 unchanged and TEST stays closed until hard selected-gated diagnostics exceed
 the frozen env30 base on official-val and train0601 with near-zero base-hit
 loss.
+
+The completed `query_local_segment_env30_frozen_probe20_v8_b4w0s1` run is
+rejected. It recorded only epochs `1..10` from the requested 20 epochs; no TEST
+was used. Its base-decode official-val result remains below env30:
+
+```text
+official_best epoch5 ACC/FP/FN = 0.972582 / 0.017585 / 0.011019
+last/best epoch10 ACC/FP/FN   = 0.972501 / 0.017126 / 0.011019
+env30 baseline ACC/FP/FN      = 0.973330 / 0.015748 / 0.009642
+```
+
+The hard selected-gated gate does not exceed the frozen base:
+
+```text
+last/best short GT5 base/raw/selected-gated:
+  official-val = 40/51/40 out of 53
+  train0601    = 142/176/141 out of 183
+
+official_best short GT5 base/raw/selected-gated:
+  official-val = 40/52/40 out of 53
+  train0601    = 142/179/142 out of 183
+```
+
+Do not promote `official_best.pt`, `best.pt`, `last.pt`, or any v8 diagnostic
+checkpoint from this run; do not run TEST or enable formal short-segment decode
+from this result. Any follow-up must change the selector target/decision,
+preferably by making the env30 base geometry a first-class candidate in the
+same per-query choice as the short-segment proposals.
+
+The v9 base-choice selector follow-up is enabled only by:
+
+```text
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-local-segment-proposal-v9.yaml
+```
+
+It preserves the v6/v7/v8 local short-segment proposal geometry and
+proposal-local candidate-quality score, but emits no per-candidate replace
+logits and no query-level replace logits. It adds no new public prediction
+tensor beyond the v4 short-segment proposal contract. The v9 default-off
+loss/script protocol is:
+
+```text
+gcs_short_segment_base_choice_weight > 0
+gcs_short_segment_query_rank_weight = 0
+gcs_short_segment_replace_weight = 0
+gcs_short_segment_query_replace_weight = 0
+segment_selection_score_mode = base_choice
+```
+
+The supervised v9 decision is a per-query softmax over
+`[base, segment_0, ..., segment_403]`, with a fixed zero logit for `base`.
+Base-hit queries are trained to choose base. A segment is a positive choice
+only when the base misses the 20px gate and the segment hits or clearly lowers
+APE. Default query decode remains unchanged and TEST stays closed until hard
+selected-gated diagnostics exceed the frozen env30 base on official-val and
+train0601.
 
 Legacy post-env30 record: the 2026-07-25 user-requested Q12/env30 dual-head
 probe was rejected and its YAML/script are not active after the 2026-07-28
@@ -1814,3 +2006,391 @@ training-time `official_best` tie-break order is:
 
 Do not select the final checkpoint only by `val/total_loss`, internal
 `val/f1`, or generic `best.pt`.
+
+## 2026-08-01 v11 Official-Quality Dense Selector Result
+
+The frozen-base v11 probe
+`query_local_segment_env30_frozen_probe20_v11_official85_allq_b4w0s1`
+completed 20 epochs with:
+
+```text
+gcs_short_segment_matched_assignment = true
+gcs_short_segment_official_quality_target = true
+gcs_short_segment_official_pt_thresh = 0.85
+gcs_short_segment_base_choice_all_queries = true
+gcs_short_segment_dense_quality_weight = 1.0
+gcs_short_segment_dense_neg_weight = 1.0
+gcs_short_segment_freeze_base = true
+candidate_decode = false
+segment_decode = false
+TEST = closed
+```
+
+The training-time official sweep did not beat the env30 reference. Epoch 5
+was selected with `official_acc/FP/FN = 0.972568/0.017585/0.011019`;
+epoch 20 was `0.972501/0.017126/0.011019`. A strict reference-point
+base sweep on the selected checkpoint
+(`conf=0.001`, `point_valid_thr=0.6`, `nms_dist_px=0`, `max_det=5`,
+`min_points=4`) returned `0.973330/0.015748/0.009642`, matching the frozen
+env30 path within sweep rounding. The base path therefore did not regress.
+
+Hard official-val coverage with `candidate-score-thr=0.5` was:
+
+```text
+short GT5: base/raw/selected-gated = 40/52/40 of 53
+short GT4: base/raw/selected-gated = 1/4/1 of 8
+```
+
+Hard train0601 coverage was:
+
+```text
+short GT5: base/raw/selected-gated = 142/178/142 of 183
+short GT4: base/raw/selected-gated = 9/18/9 of 19
+```
+
+The same official-val diagnostic at `candidate-score-thr=0.05` produced the
+same selected-gated counts. Within-query oracle score top-1/top-5 was only
+`2/5` of 53 official-val short GT5 lanes and `6/13` of 183 train0601 short
+GT5 lanes; hard-gate oracle top-1/top-5 was `0/0` on both splits. The raw
+segment geometry still has capacity, but v11 does not convert it into a
+usable selector signal.
+
+Decision: reject v11 as a diagnostic promotion. Keep all short-segment
+decode paths default-off and do not run TEST. A future v12 must use a
+matched per-query base-plus-segment choice target, continuous geometry
+quality, explicit wrong-window negatives, and the exact same combined score
+for training, audit, and decode. Do not continue v11 by adding epochs or
+tuning its gate threshold.
+
+## 2026-08-01 v12 Unified Choice Result
+
+The default-off v12 selector adds:
+
+```text
+pred_short_segment_choice_logits: B x 12 x 405
+```
+
+where class `0` is base and classes `1..404` are short-segment windows. The
+completed frozen-base probe was:
+
+```text
+query_local_segment_env30_frozen_probe20_v12_b4w0s1
+```
+
+It completed `20/20` epochs with matched assignment enabled, but hard
+selected-gated coverage did not exceed base:
+
+```text
+official-val short GT5 = 40/53
+train0601    short GT5 = 142/183
+official-val short GT4 = 1/8
+train0601    short GT4 = 9/19
+```
+
+The raw segment oracle remained `52/53`, `179/183`, `4/8`, and `19/19` in
+the same order. Keep v12 default-off, keep both `segment_decode=false` and
+`candidate_decode=false`, and keep TEST closed.
+
+The v12 positive target currently follows the frozen-base Hungarian
+query-to-GT assignment. This is not sufficient when a useful raw segment is
+generated by a different query. A reopened v13 must use candidate-aware
+query-to-GT assignment and conditional unmatched-query negatives before any
+formal decode is considered.
+
+## 2026-08-02 v13 Candidate-Aware Unified Choice Result
+
+The default-off v13 selector keeps the v12
+`pred_short_segment_choice_logits: B x 12 x 405` contract and enables:
+
+```text
+gcs_short_segment_candidate_aware_assignment = true
+gcs_short_segment_matched_assignment = true
+gcs_short_segment_unified_choice_weight = 1.0
+gcs_short_segment_unified_choice_base_neg_weight = 0.25
+gcs_short_segment_bce_weight = 0.0
+gcs_short_segment_dense_quality_weight = 0.0
+gcs_short_segment_freeze_base = true
+candidate_decode = false
+TEST = closed
+```
+
+The completed run was:
+
+```text
+query_local_segment_env30_frozen_probe20_v13_b4w0s1
+```
+
+Training completed `20/20` epochs. Training-time default-decode
+`official_best.pt` stayed at epoch 5 with:
+
+```text
+official_acc/FP/FN = 0.972568 / 0.017585 / 0.011019
+count_acc_4/count_acc_5 = 0.984848 / 0.986486
+```
+
+Epoch 10, 15, and 20 default-decode official sweeps did not improve this
+candidate (`epoch20 = 0.972501 / 0.017126 / 0.011019`). This is below the
+env30 reference-point baseline and is not promotion evidence.
+
+Hard selected-gated diagnostics using `segment_selection_score_mode =
+unified_choice` failed to convert raw local-segment capacity:
+
+```text
+last.pt:
+  official-val short GT5 base/raw/selected-gated = 40/52/40 of 53
+  train0601    short GT5 base/raw/selected-gated = 142/179/142 of 183
+  official-val short GT4 base/raw/selected-gated = 1/4/1 of 8
+  train0601    short GT4 base/raw/selected-gated = 9/19/9 of 19
+
+best.pt:
+  official-val short GT5 base/raw/selected-gated = 40/51/40 of 53
+  train0601    short GT5 base/raw/selected-gated = 142/177/142 of 183
+  official-val short GT4 base/raw/selected-gated = 1/4/1 of 8
+  train0601    short GT4 base/raw/selected-gated = 9/19/9 of 19
+
+official_best.pt:
+  official-val short GT5 base/raw/selected-gated = 40/52/40 of 53
+  train0601    short GT5 base/raw/selected-gated = 142/179/142 of 183
+  official-val short GT4 base/raw/selected-gated = 1/4/1 of 8
+  train0601    short GT4 base/raw/selected-gated = 9/19/9 of 19
+```
+
+Base-hit loss was zero, but selected-gated gain was also zero on every group.
+The oracle raw candidates remained eligible (`val GT5 52/53`, `train0601 GT5
+179/183` for last/official_best), yet `oracle_query_selected_count`,
+`oracle_query_gate_count`, and `oracle_query_selected_and_gate_count` were
+all zero. Score/combined top-1 remained very low, e.g. last.pt short GT5
+`score top1/top5 = 1/4` on official-val and `1/17` on train0601.
+
+Decision: reject v13 as a selector fix. Do not run TEST, do not run formal
+segment decode, and do not continue this run by adding epochs. Candidate-aware
+assignment alone did not solve the class-0/base prior in the unified choice
+head. A future v14 must stop using a global default base class as both
+"preserve this lane" and "no short-segment candidate for this query". Train
+candidate geometry quality densely over all segment windows, train base-vs-
+segment choice only on assigned/protected short-lane queries, and keep
+unassigned normal queries out of the base-vs-segment softmax instead of using
+them as default class-0 negatives.
+
+## 2026-08-02 Independent Full-Lane Proposal Set Decoder
+
+The local short-segment route is closed as a formal solution path because its
+oracle only covers a partial lane window. The explicit replacement path is an
+image-conditioned full-lane proposal set decoder enabled only by:
+
+```text
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-full-lane-proposal.yaml
+```
+
+The full head emits eight independent proposals, each with:
+
+```text
+pred_full_lane_points: B x 8 x 56 x 2
+pred_full_lane_valid_logits: B x 8 x 56
+pred_full_lane_exist_logits: B x 8
+pred_full_lane_quality_logits: B x 8
+pred_full_lane_start_logits: B x 8 x 56
+pred_full_lane_end_logits: B x 8 x 56
+pred_full_lane_score_logits: B x 8
+```
+
+When `gcs_full_lane_proposal > 0`, base queries and full proposals are
+concatenated before one global Hungarian matching. Matched full proposals
+receive complete geometry, visibility, interval, existence, and quality
+supervision; unmatched full proposals receive negative existence/visibility
+supervision. The shared proposal score is:
+
+```text
+sigmoid(existence) * sigmoid(quality) * mean(sigmoid(valid) inside predicted interval)
+```
+
+The same score helper is used by matching, direct decode, and cached decode.
+`gcs_full_lane_decode` / `--full-lane-decode` are prediction-only and
+default-off, and are mutually exclusive with candidate, segment, and
+count-aware top-k decode paths. The default env30 YAML and output contract are
+unchanged.
+
+The completed first probe was:
+
+```text
+full_lane_proposal_env30_probe20_v1
+```
+
+It completed `20/20` epochs with `gcs_full_lane_proposal=1.0` and
+`gcs_full_lane_decode=true`, but is rejected as full-lane proposal evidence.
+The new proposal head received no positive matches:
+
+```text
+train/full_lane_match_count = 0 for every epoch
+val/full_lane_match_count   = 0 for every epoch
+train/full_lane_point_loss  = 0
+val/full_lane_point_loss    = 0
+train/full_lane_interval_loss = 0
+val/full_lane_interval_loss   = 0
+```
+
+The full proposal loss therefore collapsed to unmatched negative supervision.
+The paired official-val decode check on the same `official_best.pt` and the
+same row `conf=0.003, point_valid_thr=0.6, nms_dist_px=0, max_det=6` found:
+
+```text
+base decode:      ACC/FP/FN = 0.974316 / 0.013636 / 0.011938
+full-lane decode: ACC/FP/FN = 0.974316 / 0.012948 / 0.011938
+```
+
+The strict full-visible-span oracle found no complete proposal capacity from
+the new full-lane proposals:
+
+```text
+official-val all: full_proposal_oracle_full_span/full_hit = 0 / 0 of 1303 lanes
+official-val GT5: full_proposal_oracle_full_span/full_hit = 0 / 0 of 370 lanes
+train0601 all:    full_proposal_oracle_full_span/full_hit = 0 / 0 of 1787 lanes
+train0601 GT5:    full_proposal_oracle_full_span/full_hit = 0 / 0 of 1195 lanes
+```
+
+Do not promote v1, do not add epochs, and do not run TEST from this result.
+The next full-lane attempt must first fix the training target so full proposals
+receive independent positive geometry/visibility/interval supervision before
+they compete with the mature env30 base queries in unified Hungarian matching.
+Promotion still requires a full-visible-span oracle and learned set-decoder
+result on official-val and train-side diagnostics, with no FP/FN or
+GT3/GT4/GT5 count regression. Partial-window overlap is not a promotion metric.
+
+The v2 warmup implementation keeps the default behavior unchanged and adds
+explicit default-off controls:
+
+```text
+gcs_full_lane_aux_assignment
+gcs_full_lane_unified_matching
+gcs_full_lane_unmatched_weight
+gcs_full_lane_aux_match_min_overlap
+gcs_full_lane_aux_match_gate_px
+gcs_full_lane_freeze_base
+```
+
+The dedicated warmup command is:
+
+```text
+scripts/run_full_lane_proposal_env30_auxwarm_v2.sh
+```
+
+In the v2 warmup script, full proposals are matched to GT with proposal-only
+Hungarian assignment, env30/base parameters are frozen, unified base/full
+matching is disabled, and unmatched negative pressure defaults to zero. The
+diagnostic checkpoint is `last.pt`, not the base-only `official_best.pt`.
+
+v2 is not a promoted decode path. Before any full-lane official decode sweep,
+the run must first show:
+
+```text
+full_lane_match_count > 0
+full_lane_point_loss > 0 and decreasing
+full_lane_interval_loss > 0 and decreasing
+official-val full_proposal_oracle_full_span > 0
+train0601 full_proposal_oracle_full_span > 0
+TEST closed
+```
+
+The completed v2 E5 and E5-to-20 warmup diagnostics prove this first closure
+gate is necessary but not sufficient. Continuing the E5 checkpoint for 15 more
+epochs improved full proposal supervision losses and full-span/full-hit counts,
+but did not produce meaningful target-lane union gain:
+
+```text
+run = full_lane_proposal_env30_auxwarm_v2_e5to20_gate_fix3
+checkpoint = last.pt
+TEST = closed
+
+official-val all: base/full/union full-hit = 1071 / 237 / 1088 of 1303, gain +17
+official-val GT5: base/full/union full-hit = 312 / 50 / 313 of 370, gain +1
+train0601 all:    base/full/union full-hit = 1468 / 233 / 1477 of 1787, gain +9
+train0601 GT5:    base/full/union full-hit = 987 / 125 / 990 of 1195, gain +3
+
+official-val gt5_vis_6_10: base/full/union full-hit = 39 / 1 / 39 of 49, gain +0
+train0601 gt5_vis_6_10:    base/full/union full-hit = 130 / 1 / 130 of 170, gain +0
+```
+
+The dominant failure is full-span geometry miss, not missing positive
+assignment: official-val GT5 has `249` full-span proposals but only `50`
+full-hits, and train0601 GT5 has `771` full-span proposals but only `125`
+full-hits. For `gt5_vis_6_10`, almost every covered proposal still misses the
+20px gate (`43/44` on official-val and `153/154` on train0601). Do not promote
+v2, run TEST, or enter full-lane decode from this checkpoint. A future v3 must
+focus proposal assignment/loss on base-miss short GT4/GT5 hard lanes and reduce
+ordinary base-hit GT supervision so the new proposals do not spend capacity
+copying lanes the frozen env30 base already solves.
+
+The v3 hard-focus follow-up was completed and also rejected. It enabled
+`gcs_full_lane_hard_focus=true` with base-hit/base-miss weights
+`0.05/4.0`, GT4/GT5 weights `2.0/3.0`, and short-visible weight `4.0`.
+The full proposal head was still trained with proposal-only assignment and the
+base path remained frozen. Same-protocol strict oracle results were:
+
+```text
+official-val gt5_vis_6_10: base/full/union full-hit = 39 / 1 / 39 of 49
+train0601 gt5_vis_6_10:    base/full/union full-hit = 130 / 4 / 131 of 170
+official-val GT5: base/full/union full-hit = 312 / 35 / 313 of 370
+train0601 GT5:    base/full/union full-hit = 987 / 104 / 995 of 1195
+```
+
+The hard-focus weighting improved train-side oracle score rank but did not
+produce consistent geometry rescue on official-val; the official GT5 full-hit
+count decreased from `50` in v2 to `35` in v3. Therefore v3 is not eligible
+for full-lane decode or TEST. The full-proposal warmup path is closed as a
+promotion route. Future work should use an image-conditioned
+instance/keypoint/segmentation-first proposal representation that generates
+new lane instances from dense evidence before fitting complete K56 lane
+sequences, rather than continuing to reweight the same independent proposal
+head.
+
+## 2026-08-03 Dense Instance/Keypoint Evidence Probe
+
+The next direction is an image-conditioned dense evidence path, enabled only
+by:
+
+```text
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-dense-instance-proposal.yaml
+```
+
+The default env30 YAML and default output contract are unchanged. The dense
+YAML preserves the normal query outputs and adds:
+
+```text
+pred_dense_centerline_logits: B x 1 x H/4 x W/4
+pred_dense_endpoint_logits: B x 2 x H/4 x W/4
+pred_dense_instance_embed: B x D x H/4 x W/4
+```
+
+The dense loss rasterizes normalized fixed-y GT lanes into centerline and
+top/bottom endpoint evidence. Instance embedding pull/push is image-local:
+points from the same lane are pulled together, and different lanes in the
+same image are pushed apart. Embeddings from different batch images are not
+compared because lane identity is not shared across images.
+
+This is currently a diagnostic/evidence stage only. It does not assemble
+connected components into lane instances, replace query predictions, alter
+official decode, or open TEST. The dedicated launch script is:
+
+```text
+scripts/run_dense_instance_proposal_env30_probe20_v1.sh
+```
+
+The launch script enables `gcs_dense_freeze_base` by default. In that mode
+only `dense_instance_*` parameters train; shared backbone/query parameters
+remain frozen and frozen modules, including their BatchNorm statistics, stay
+in eval mode. The config/CLI default remains false so the behavior is
+explicit and opt-in.
+
+The strict prediction-only diagnostic is:
+
+```text
+tools/diagnose_gcs_dense_instance_oracle.py
+```
+
+It uses GT only after model forward to measure full visible-span centerline
+support, endpoint support, embedding separation, and evidence on frozen
+env30 base-miss lanes. It must not be interpreted as official ACC or as a
+complete lane proposal oracle. Before any dense lane assembly or decode is
+implemented, the evidence stage must show nontrivial complete-span support on
+official-val and train0601 base-miss GT5, with no change to the default env30
+path and `TEST` closed.

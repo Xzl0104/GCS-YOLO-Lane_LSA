@@ -209,6 +209,7 @@ gcs_short_segment_neg_score_thr: 0.6 # (float) only far segment proposals above 
 gcs_short_segment_bce_weight: 1.0 # (float) weight for legacy v4 geometry-quality BCE score loss; v5 can set 0
 gcs_short_segment_listwise_weight: 0.0 # (float) default-off softmax ranking loss over QxS segment proposals
 gcs_short_segment_query_rank_weight: 0.0 # (float) default-off v8 per-query candidate ranking loss over S segment windows
+gcs_short_segment_base_choice_weight: 0.0 # (float) default-off v9 softmax over [base, S segment proposals] per query
 gcs_short_segment_replace_weight: 0.0 # (float) default-off base-preserve replacement gate loss
 gcs_short_segment_query_replace_weight: 0.0 # (float) default-off v8 query-level base-vs-proposal replacement gate loss
 gcs_short_segment_query_replace_neg_weight: 0.25 # (float) v8 no-replace negative weight for finite but non-improving query proposals
@@ -216,9 +217,48 @@ gcs_short_segment_replace_margin_px: 5.0 # (float) candidate must beat base by t
 gcs_short_segment_dense_quality_weight: 0.0 # (float) default-off dense BCE over all QxS segment geometry-quality targets
 gcs_short_segment_dense_neg_weight: 0.05 # (float) negative weight for dense short-segment quality BCE
 gcs_short_segment_replace_dense_neg_weight: 0.0 # (float) default-off dense no-replace negatives when base is already hit20
+gcs_short_segment_unified_choice_weight: 0.0 # (float) default-off v12 CE/KL over [base, 404 segment proposals] per query
+gcs_short_segment_unified_choice_temperature: 0.25 # (float) temperature for continuous geometry-quality target distributions
+gcs_short_segment_unified_choice_base_neg_weight: 0.25 # (float) all-query base/no-replace negative pressure
+gcs_short_segment_candidate_aware_assignment: False # (bool) default-off v13: assign unified-choice positives to the query with the best useful segment
 gcs_short_segment_listwise_all_candidates: False # (bool) include all QxS candidates in short-segment listwise denominator
 gcs_short_segment_base_preserve: True # (bool) make base-hit/candidate-miss segment replacements strong negatives
+gcs_short_segment_matched_assignment: False # (bool) use Hungarian matched query-lane pairs for v10 base-choice targets
+gcs_short_segment_official_quality_target: False # (bool) use TuSimple official-style point-hit targets for selector quality
+gcs_short_segment_official_pt_thresh: 0.85 # (float) official-style fraction of GT points that must hit within the pixel gate
+gcs_short_segment_base_valid_thr: 0.6 # (float) predicted-valid probability threshold used for base/no-replace quality
+gcs_short_segment_base_choice_all_queries: False # (bool) train explicit base/no-replace choice for every query
+gcs_short_segment_base_choice_neg_weight: 0.25 # (float) weight for all-query base/no-replace negatives
 gcs_short_segment_freeze_base: False # (bool) freeze env30/base path and train only short_segment_* parameters
+gcs_full_lane_proposal: 0.0 # (float) default-off independent full-lane proposal set loss
+gcs_full_lane_quality_tau: 25.0 # (float) APE decay scale for full-lane geometry-quality targets
+gcs_full_lane_unmatched_valid_weight: 0.1 # (float) visibility-negative weight for unmatched full proposals
+gcs_full_lane_unmatched_weight: 1.0 # (float) existence/quality unmatched-negative weight for full proposals
+gcs_full_lane_aux_assignment: False # (bool) train full proposals from proposal-only GT assignment instead of base/full competition
+gcs_full_lane_unified_matching: True # (bool) allow full proposals to compete with base queries in unified Hungarian matching
+gcs_full_lane_aux_match_min_overlap: 2 # (int) minimum valid GT points for proposal-only full-lane assignment
+gcs_full_lane_aux_match_gate_px: 0.0 # (float) optional APE gate for proposal-only full-lane assignment; 0 disables
+gcs_full_lane_hard_focus: False # (bool) weight full-lane warmup toward base-miss short GT4/GT5 lanes
+gcs_full_lane_focus_hit_px: 20.0 # (float) base-hit APE threshold for hard-focus target weighting
+gcs_full_lane_focus_base_valid_thr: 0.6 # (float) base valid probability threshold for hard-focus full-span coverage
+gcs_full_lane_focus_base_min_coverage: 1.0 # (float) required base valid coverage ratio for hard-focus base-hit
+gcs_full_lane_base_hit_weight: 1.0 # (float) full-lane target weight when frozen base already hits
+gcs_full_lane_base_miss_weight: 1.0 # (float) full-lane target weight when frozen base misses
+gcs_full_lane_gt4_weight: 1.0 # (float) multiplier for full-lane targets from GT4 images
+gcs_full_lane_gt5_weight: 1.0 # (float) multiplier for full-lane targets from GT5 images
+gcs_full_lane_short_visible_thr: 10 # (int) visible-anchor cutoff for short-lane full-proposal focus
+gcs_full_lane_short_visible_weight: 1.0 # (float) multiplier for short full-lane targets
+gcs_full_lane_freeze_base: False # (bool) freeze env30/base path and train only full_lane_* parameters
+gcs_full_lane_decode: False # (bool) default-off prediction-only joint base/full-lane proposal decode
+gcs_dense_instance: 0.0 # (float) default-off dense centerline/endpoint/instance evidence loss gain
+gcs_dense_centerline_weight: 1.0 # (float) dense centerline BCE weight
+gcs_dense_endpoint_weight: 1.0 # (float) dense endpoint BCE weight
+gcs_dense_embed_pull_weight: 0.25 # (float) same-instance embedding pull weight
+gcs_dense_embed_push_weight: 0.25 # (float) different-instance embedding push weight
+gcs_dense_embed_margin: 0.5 # (float) minimum different-instance embedding distance
+gcs_dense_sigma_px: 3.0 # (float) dense target rasterization sigma in input pixels
+gcs_dense_pos_weight_max: 50.0 # (float) maximum sparse-positive BCE reweighting
+gcs_dense_freeze_base: False # (bool) freeze env30/base path and train only dense_instance_* parameters
 gcs_candidate_decode: False # (bool) default-off prediction-only gated lateral candidate decode
 gcs_candidate_score_thr: 0.05 # (float) minimum candidate selector score to replace query geometry at decode
 gcs_candidate_short_min_points: 2 # (int) minimum predicted visible anchors for candidate-decode applicability

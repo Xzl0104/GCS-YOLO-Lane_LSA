@@ -10,6 +10,71 @@ All TuSimple commands must use:
 
 This is H,W order.
 
+## Valid v10 Matched-Assignment Probe
+
+Run only on the remote CUDA server. Use a new run name and verify the saved
+`args.yaml` before interpreting the result:
+
+```bash
+RUN_NAME=query_local_segment_env30_frozen_probe20_v10_matched_b4w0s1 \
+BATCH=4 \
+WORKERS=0 \
+EPOCHS=20 \
+RUN_TESTS=0 \
+SHORT_SEGMENT_MATCHED_ASSIGNMENT=1 \
+bash scripts/run_query_local_segment_env30_frozen_probe20_v10.sh
+```
+
+Required post-launch check:
+
+```bash
+grep -E "gcs_short_segment_matched_assignment|gcs_short_segment_base_choice_weight" \
+  runs/gcs_lane/query_local_segment_env30_frozen_probe20_v10_matched_b4w0s1/args.yaml
+```
+
+The output must contain `gcs_short_segment_matched_assignment: true`.
+Keep `gcs_candidate_decode=false` and `RUN_TESTS=0` until official-val and
+train0601 selected-gated/rank gates pass.
+
+The valid matched run passed the hard diagnostic gate with `last.pt`:
+
+```text
+official-val short GT5 base/raw/selected-gated = 40/52/47 of 53
+train0601    short GT5 base/raw/selected-gated = 142/179/156 of 183
+official-val short GT4 base/raw/selected-gated = 1/4/3 of 8
+train0601    short GT4 base/raw/selected-gated = 9/18/15 of 19
+```
+
+The copied checkpoint
+`runs/gcs_lane/query_local_segment_env30_frozen_probe20_v10_matched_b4w0s1/weights/segment_best.pt`
+is diagnostic-selected from hard coverage only. It is not yet an official
+checkpoint. The completed official-val-only experiment used the separate
+local-segment decoder. Do not pass `--candidate-decode` to this v10 checkpoint:
+that flag requires the older `pred_short_candidate_*` output contract.
+
+```bash
+python tools/sweep_tusimple_official.py \
+  --weights runs/gcs_lane/query_local_segment_env30_frozen_probe20_v10_matched_b4w0s1/weights/segment_best.pt \
+  --archive-root archive/TUSimple \
+  --split val \
+  --gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
+  --imgsz 544 960 \
+  --segment-decode \
+  --segment-score-thr 0.5 \
+  --segment-short-min-points 3 \
+  --segment-short-max-points 10 \
+  --segment-pred-valid-overlap-min 0 \
+  --device 0
+```
+
+This experiment is rejected for promotion. At the env30 reference point,
+segment-off returned `ACC/FP/FN=0.973346/0.015748/0.009642`, while
+segment-on at threshold `0.5` returned
+`0.973117/0.015886/0.010560`. Thresholds `0.6..0.8` only recovered the
+base ACC without converting the hard raw headroom, and `0.9` was effectively
+base-only. Keep `segment_decode=false`, do not use this path for TEST, and
+return to selector calibration/rank diagnostics.
+
 ## Branch Contract
 
 ```text
@@ -3634,6 +3699,72 @@ first v8 gate must show selected-gated short GT5 above the frozen env30 base
 (`official-val >40/53`, `train0601 >142/183`), base-hit loss near zero, and
 better oracle score/query-replace ranks before any formal decode or TEST run.
 
+Completed result:
+
+```text
+run = query_local_segment_env30_frozen_probe20_v8_b4w0s1
+status = rejected for promotion
+training rows recorded = 10, requested epochs = 20
+TEST used = false
+
+base-decode official-val ACC/FP/FN:
+  official_best epoch5 = 0.972582 / 0.017585 / 0.011019
+  last/best epoch10   = 0.972501 / 0.017126 / 0.011019
+  env30 baseline      = 0.973330 / 0.015748 / 0.009642
+
+short GT5 base/raw/selected-gated hit20:
+  last/best official-val = 40/51/40 out of 53
+  last/best train0601    = 142/176/141 out of 183
+  official_best val      = 40/52/40 out of 53
+  official_best train0601= 142/179/142 out of 183
+```
+
+Do not relaunch this exact command just to add epochs, do not promote any v8
+checkpoint, and do not run TEST. The next command must change the selector
+decision, not only the run length.
+
+## Q12 Env30 Local Short-Segment Base-Choice Selector v9
+
+The v9 probe keeps the v6/v7/v8 local short-segment proposal geometry but
+trains a single per-query choice over `[base, 404 segment proposals]`. It does
+not use the v8 query-level replace head. Default decode remains unchanged and
+TEST stays closed:
+
+```bash
+RUN_NAME=query_local_segment_env30_frozen_probe20_v9_b4w0s1 \
+BATCH=4 \
+WORKERS=0 \
+EPOCHS=20 \
+RUN_TESTS=0 \
+bash scripts/run_query_local_segment_env30_frozen_probe20_v9.sh
+```
+
+Dedicated model:
+
+```text
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-local-segment-proposal-v9.yaml
+```
+
+Default v9 selector parameters:
+
+```text
+gcs_short_segment_bce_weight = 0.0
+gcs_short_segment_listwise_weight = 0.0
+gcs_short_segment_query_rank_weight = 0.0
+gcs_short_segment_base_choice_weight = 1.0
+gcs_short_segment_dense_quality_weight = 1.0
+gcs_short_segment_dense_neg_weight = 0.05
+gcs_short_segment_replace_weight = 0.0
+gcs_short_segment_query_replace_weight = 0.0
+gcs_short_segment_base_preserve = true
+segment_selection_score_mode = base_choice
+```
+
+Promotion gate remains official-val/train0601 selected-gated hard hit20. The
+first v9 gate must show selected-gated short GT5 above the frozen env30 base
+(`official-val >40/53`, `train0601 >142/183`), with short GT4 not regressing
+and no TEST use.
+
 ## Rejected Q12 Env30 Lateral Candidate Probe
 
 Status: rejected after `query_short_candidate_env30_probe20_fix1`. Do not
@@ -3733,4 +3864,361 @@ python tools/eval_tusimple_official.py \
   --split test \
   --archive-root archive/TUSimple \
   --imgsz 544 960
+
+## v11 Official-Quality Selector Review
+
+Run name:
+
+```text
+query_local_segment_env30_frozen_probe20_v11_official85_allq_b4w0s1
 ```
+
+The completed run kept `candidate_decode=false`, `segment_decode=false`, and
+`RUN_TESTS=0`. The training-time official-best was epoch 5 with
+`official_acc=0.972568`; epoch 20 was `0.972501`. The strict reference-point
+base sweep on `weights/official_best.pt` was:
+
+```text
+conf=0.001
+point_valid_thr=0.6
+nms_dist_px=0
+max_det=5
+min_points=4
+official_acc/FP/FN = 0.973330/0.015748/0.009642
+```
+
+Hard diagnostic outputs:
+
+```text
+runs/gcs_lane/query_local_segment_env30_frozen_probe20_v11_official85_allq_b4w0s1_hard_segment_diag_val_official_best/short_candidate_hard_summary.json
+runs/gcs_lane/query_local_segment_env30_frozen_probe20_v11_official85_allq_b4w0s1_hard_segment_diag_train0601_official_best/short_candidate_hard_summary.json
+runs/gcs_lane/query_local_segment_env30_frozen_probe20_v11_official85_allq_b4w0s1_hard_segment_diag_val_official_best_thr005/short_candidate_hard_summary.json
+```
+
+Official-val hard coverage:
+
+```text
+short GT5 base/raw/selected-gated = 40/52/40 of 53
+short GT4 base/raw/selected-gated = 1/4/1 of 8
+```
+
+Train0601 hard coverage:
+
+```text
+short GT5 base/raw/selected-gated = 142/178/142 of 183
+short GT4 base/raw/selected-gated = 9/18/9 of 19
+```
+
+Decision: v11 is diagnostic-only/rejected. Do not run TEST, enable segment
+decode, or continue the same v11 loss with more epochs. The next command
+must belong to a new matched per-query base-plus-segment selector experiment
+and must pass raw/rank/selected-gated gates first.
+```
+
+## v10 Recheck and v12 Decision
+
+The corrected v10 recheck command uses `--segment-decode`, not
+`--candidate-decode`:
+
+```bash
+python tools/sweep_tusimple_official.py \
+  --weights runs/gcs_lane/query_local_segment_env30_frozen_probe20_v10_matched_b4w0s1/weights/segment_best.pt \
+  --archive-root archive/TUSimple \
+  --split val \
+  --gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
+  --imgsz 544 960 \
+  --segment-decode \
+  --segment-score-thr 0.5 \
+  --segment-short-min-points 3 \
+  --segment-short-max-points 10 \
+  --segment-pred-valid-overlap-min 0 \
+  --device 0
+```
+
+The fresh paired recheck used 50 validation combinations and found the
+segment path below the same-checkpoint base path on every row. Do not rerun
+this checkpoint for TEST.
+
+The v12 probe result is diagnostic-only. The next experiment is not another
+epoch or threshold run; it is a candidate-aware query assignment audit and
+selector probe. Candidate-aware assignment must be shown to improve oracle
+query rank before formal segment decode is reopened.
+
+## Independent Full-Lane Proposal Set Decoder
+
+The full-lane path is a new default-off experiment and is not the env30
+default model:
+
+```text
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-full-lane-proposal.yaml
+```
+
+Enable its training loss explicitly with:
+
+```text
+--gcs-full-lane-proposal 1.0
+```
+
+The prediction-only evaluation flag is:
+
+```text
+--full-lane-decode
+```
+
+The direct and cached official-val helpers both support this flag. Cached
+prediction caches must be rebuilt for a checkpoint that emits the full-lane
+tensors:
+
+```bash
+python tools/sweep_tusimple_official_cached.py \
+  --weights <full-lane-checkpoint.pt> \
+  --archive-root archive/TUSimple \
+  --split val \
+  --imgsz 544 960 \
+  --full-lane-decode \
+  --rebuild-cache
+```
+
+Keep candidate/segment decode, count-aware top-k, and TEST disabled until a
+full-visible-span oracle and learned set-decoder pass the official-val and
+train-side gates. The local short-window overlap diagnostic is not a
+full-lane promotion gate.
+
+Remote 20-epoch probe with training-time official-val selection and strict
+full-visible-span diagnostics:
+
+```bash
+RUN_NAME=full_lane_proposal_env30_probe20_v1 \
+EPOCHS=20 \
+RUN_TESTS=0 \
+bash scripts/run_full_lane_proposal_env30_probe20_v1.sh
+```
+
+The script uses the dedicated full-lane YAML, enables
+`--gcs-full-lane-proposal 1.0` and `--gcs-full-lane-decode`, includes the
+env30 reference point in the official-val grid, runs canonical val plus
+train0601 oracle diagnostics, and never runs TEST. Set `RUN_TRAIN=0` to reuse
+an existing run, or `RUN_FINAL_SWEEP=1` to rebuild a prediction cache and run
+an explicit official-val full-lane sweep after the diagnostic gate.
+
+Strict full-visible-span oracle diagnostic:
+
+```bash
+python tools/diagnose_gcs_full_lane_oracle.py \
+  --weights <full-lane-checkpoint.pt> \
+  --archive-root archive/TUSimple \
+  --split val \
+  --imgsz 544 960 \
+  --point-valid-thr 0.5 \
+  --hit-px 20
+```
+
+This diagnostic is prediction-only and keeps TEST closed. Its promotion
+metric requires complete visible-span coverage of each GT lane; partial
+window overlap is auxiliary only.
+
+Completed v1 result:
+
+```text
+run = full_lane_proposal_env30_probe20_v1
+status = rejected as full-lane proposal evidence
+TEST used = false
+```
+
+Do not relaunch v1 just to add epochs, and do not run TEST from its
+`official_best.pt`. The training log shows `full_lane_match_count=0` for all
+20 epochs, with zero full-lane point and interval losses. The paired
+official-val check at the selected row found no ACC gain from
+`--full-lane-decode`:
+
+```text
+base decode      ACC/FP/FN = 0.974316 / 0.013636 / 0.011938
+full-lane decode ACC/FP/FN = 0.974316 / 0.012948 / 0.011938
+```
+
+The strict full-visible-span oracle found no complete full-proposal hits:
+
+```text
+official-val all/GT5 full proposal full-span hits = 0/1303 and 0/370
+train0601 all/GT5 full proposal full-span hits    = 0/1787 and 0/1195
+```
+
+The next command must be a new v2 training protocol that gives the full-lane
+proposal head independent positive assignment or warmup supervision before it
+competes with env30 base queries in unified Hungarian matching.
+
+## Full-Lane Proposal v2 Aux-Warmup
+
+The v2 command is diagnostic-only and exists to prove that full proposals can
+receive positive complete-lane supervision. It freezes the env30/base path,
+uses proposal-only assignment, disables unified base/full Hungarian
+competition, and starts with unmatched negative pressure disabled:
+
+```bash
+RUN_NAME=full_lane_proposal_env30_auxwarm_v2 \
+EPOCHS=20 \
+RUN_TESTS=0 \
+bash scripts/run_full_lane_proposal_env30_auxwarm_v2.sh
+```
+
+If the server or CUDA/PyTorch stack changed, run this one-epoch closure smoke
+before a formal v2 diagnostic:
+
+```bash
+RUN_NAME=full_lane_proposal_env30_auxwarm_v2_smoke_b4w0_e1_fix1 \
+EPOCHS=1 \
+BATCH=4 \
+WORKERS=0 \
+RUN_ORACLE=0 \
+RUN_TESTS=0 \
+OFFICIAL_INTERVAL=99 \
+OFFICIAL_WARMUP=99 \
+bash scripts/run_full_lane_proposal_env30_auxwarm_v2.sh
+```
+
+The smoke must write `results.csv` and show nonzero
+`train/full_lane_match_count`, `train/full_lane_point_loss`, and
+`train/full_lane_interval_loss`. The verified smoke after the AMP dtype fix
+was:
+
+```text
+run = full_lane_proposal_env30_auxwarm_v2_smoke_b4w0_e1_fix1
+train/full_lane_match_count = 15.2414
+val/full_lane_match_count = 29.5217
+official-val full proposal full-span/full-hit = 423/8 of 1303
+train0601 full proposal full-span/full-hit = 551/8 of 1787
+TEST used = false
+```
+
+Expected args in `args.yaml`:
+
+```text
+gcs_full_lane_proposal: 1.0
+gcs_full_lane_aux_assignment: true
+gcs_full_lane_unified_matching: false
+gcs_full_lane_unmatched_weight: 0.0
+gcs_full_lane_unmatched_valid_weight: 0.0
+gcs_full_lane_freeze_base: true
+gcs_full_lane_decode: false
+```
+
+First gate, before any official full-lane decode sweep:
+
+```text
+full_lane_match_count > 0
+full_lane_point_loss > 0 and trending down
+full_lane_interval_loss > 0 and trending down
+full_lane_valid_loss > 0 and trending down
+official-val full proposal full-span oracle > 0
+train0601 full proposal full-span oracle > 0
+TEST used = false
+```
+
+Only if this gate passes should the next command enable a second-stage
+base/full unified competition or a prediction-only official-val
+`--full-lane-decode` sweep. Do not run TEST from the warmup checkpoint.
+
+Completed v2 multi-epoch diagnostics:
+
+```bash
+RUN_NAME=full_lane_proposal_env30_auxwarm_v2_e5_gate_fix2 \
+EPOCHS=5 \
+BATCH=16 \
+RUN_TESTS=0 \
+bash scripts/run_full_lane_proposal_env30_auxwarm_v2.sh
+
+RUN_NAME=full_lane_proposal_env30_auxwarm_v2_e5to20_gate_fix3 \
+PRETRAINED=runs/gcs_lane/full_lane_proposal_env30_auxwarm_v2_e5_gate_fix2/weights/last.pt \
+EPOCHS=15 \
+BATCH=16 \
+RUN_TESTS=0 \
+bash scripts/run_full_lane_proposal_env30_auxwarm_v2.sh
+```
+
+Do not relaunch plain v2 warmup as the next experiment. The E5-to-20 run
+already passed the supervision-closure gate but failed the target hard-lane
+gate:
+
+```text
+official-val GT5 union gain = +1 of 370
+train0601 GT5 union gain    = +3 of 1195
+official-val gt5_vis_6_10 union gain = +0 of 49
+train0601 gt5_vis_6_10 union gain    = +0 of 170
+TEST used = false
+```
+
+The next command should be a new hard-miss focused full-lane warmup, not
+`--full-lane-decode` and not TEST. Its first gate must exceed the env30 base
+on `gt5_vis_6_10` (`39/49` official-val, `130/170` train0601) before any
+official decode sweep is considered.
+
+The v3 hard-focus command was run once:
+
+```bash
+RUN_NAME=full_lane_proposal_env30_hardfocus_v3_b16_e20_gate1 \
+EPOCHS=20 \
+BATCH=16 \
+WORKERS=4 \
+RUN_TESTS=0 \
+FULL_LANE_DECODE=0 \
+bash scripts/run_full_lane_proposal_env30_hardfocus_v3.sh
+```
+
+Its strict oracle result did not pass the promotion gate:
+
+```text
+official-val gt5_vis_6_10 union = 39/49
+train0601 gt5_vis_6_10 union    = 131/170
+official-val GT5 union gain     = +1
+train0601 GT5 union gain        = +8
+TEST used = false
+```
+
+Do not rerun v3 with more epochs or weight sweeps. The next command should be
+for a new dense instance/keypoint/segmentation-first proposal diagnostic. It
+must first establish complete-visible-span oracle headroom on base-miss GT5
+before implementing learned selection or enabling any decode path.
+
+## 2026-08-03 Dense Instance/Keypoint Evidence Probe
+
+Run formal training on the remote CUDA server only. The dense path is
+default-off and `RUN_TESTS=0` is mandatory:
+
+```bash
+ssh gcs-ebcloud-lane
+cd /root/GCS-YOLO-Lane_LSA_5-25-3-k56
+source /root/miniconda3/etc/profile.d/conda.sh
+conda activate ssh_lane
+
+RUN_NAME=dense_instance_proposal_env30_probe20_v1 \
+EPOCHS=20 \
+BATCH=32 \
+DENSE_FREEZE_BASE=1 \
+RUN_TESTS=0 \
+bash scripts/run_dense_instance_proposal_env30_probe20_v1.sh
+```
+
+If the env30 checkpoint is not at the script default, set it explicitly:
+
+```bash
+PRETRAINED=/path/to/env30/official_best.pt \
+RUN_NAME=dense_instance_proposal_env30_probe20_v1 \
+EPOCHS=20 \
+DENSE_FREEZE_BASE=1 \
+RUN_TESTS=0 \
+bash scripts/run_dense_instance_proposal_env30_probe20_v1.sh
+```
+
+The script trains only `dense_instance_*` by default and keeps the env30/base
+path and its BatchNorm statistics frozen. It diagnoses centerline/endpoint/
+embedding evidence only; it does not run TEST or enable a dense decoder.
+Review:
+
+```text
+runs/gcs_lane/<RUN_NAME>_dense_diag_val_last/dense_instance_oracle_summary.json
+runs/gcs_lane/<RUN_NAME>_dense_diag_train0601_last/dense_instance_oracle_summary.json
+```
+
+Do not start dense lane assembly or official decode unless complete-span
+evidence on base-miss GT5 is nontrivial on both splits and the default env30
+official path remains unchanged.

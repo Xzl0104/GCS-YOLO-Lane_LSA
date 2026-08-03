@@ -3,11 +3,17 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import cv2
 import numpy as np
 import torch
+
+from ultralytics.utils.gcs_full_lane import (
+    full_lane_interval_mask,
+    full_lane_proposal_score_probability,
+)
 
 __all__ = (
     "decode_gcs_predictions",
@@ -176,6 +182,18 @@ def _count_aware_lane_quality(lane: dict, length_norm: float) -> float:
     return float(exist_prob * mean_valid_prob * length_factor)
 
 
+def _prob_threshold_to_logit_floor(probability: float) -> float:
+    """Convert a probability gate to a finite logit threshold."""
+    probability = float(probability)
+    if not 0.0 <= probability <= 1.0:
+        raise ValueError(f"probability threshold must be in [0, 1], got {probability}.")
+    if probability <= 0.0:
+        return float("-inf")
+    if probability >= 1.0:
+        return float("inf")
+    return float(math.log(probability / (1.0 - probability)))
+
+
 def _apply_count_aware_topk(lanes: list[dict], k_hat: int, length_norm: float) -> list[dict]:
     """Keep the highest-quality lanes after ordinary conf filtering and Lane-NMS."""
     if not lanes:
@@ -188,6 +206,186 @@ def _apply_count_aware_topk(lanes: list[dict], k_hat: int, length_norm: float) -
     keep_by_quality = sorted(range(len(lanes)), key=lambda i: (-qualities[i], i))[: int(k_hat)]
     keep = set(keep_by_quality)
     return [lane for i, lane in enumerate(lanes) if i in keep]
+
+
+def _decode_full_lane_proposals(
+    pred_points: torch.Tensor,
+    pred_logits: torch.Tensor,
+    pred_valid_logits: torch.Tensor | None,
+    pred_full_lane_points: torch.Tensor,
+    pred_full_lane_valid_logits: torch.Tensor,
+    pred_full_lane_exist_logits: torch.Tensor,
+    pred_full_lane_quality_logits: torch.Tensor,
+    pred_full_lane_start_logits: torch.Tensor,
+    pred_full_lane_end_logits: torch.Tensor,
+    image_shape: tuple[int, int] | None,
+    score_thr: float,
+    point_valid_thr: float,
+    min_points: int,
+    max_det: int | None,
+    nms_dist_px: float,
+) -> list[dict]:
+    """Decode base and independent full-lane proposals as one prediction set."""
+    if pred_valid_logits is None:
+        raise ValueError("full_lane_decode requires base pred_valid_logits.")
+    if pred_points.ndim != 3 or pred_points.shape[-1] != 2:
+        raise ValueError(f"pred_points must have shape Q x K x 2, got {tuple(pred_points.shape)}.")
+    if pred_full_lane_points.ndim != 3 or pred_full_lane_points.shape[-1] != 2:
+        raise ValueError(
+            "pred_full_lane_points must have shape P x K x 2, "
+            f"got {tuple(pred_full_lane_points.shape)}."
+        )
+    proposal_count, point_count = pred_full_lane_points.shape[:2]
+    if pred_points.shape[1] != point_count:
+        raise ValueError(
+            "Base and full-lane proposals must use the same K, "
+            f"got {pred_points.shape[1]} and {point_count}."
+        )
+    expected_pk = (proposal_count, point_count)
+    if tuple(pred_full_lane_valid_logits.shape) != expected_pk:
+        raise ValueError(
+            "pred_full_lane_valid_logits must have shape P x K, "
+            f"got {tuple(pred_full_lane_valid_logits.shape)} vs {expected_pk}."
+        )
+    if tuple(pred_full_lane_exist_logits.shape) != (proposal_count,):
+        raise ValueError(
+            "pred_full_lane_exist_logits must have shape P, "
+            f"got {tuple(pred_full_lane_exist_logits.shape)}."
+        )
+    if tuple(pred_full_lane_quality_logits.shape) != (proposal_count,):
+        raise ValueError(
+            "pred_full_lane_quality_logits must have shape P, "
+            f"got {tuple(pred_full_lane_quality_logits.shape)}."
+        )
+    if tuple(pred_full_lane_start_logits.shape) != expected_pk or tuple(pred_full_lane_end_logits.shape) != expected_pk:
+        raise ValueError(
+            "pred_full_lane_start_logits and pred_full_lane_end_logits must have shape P x K, "
+            f"got {tuple(pred_full_lane_start_logits.shape)} and {tuple(pred_full_lane_end_logits.shape)}."
+        )
+    base_points = pred_points.detach().float().cpu().clamp(0.0, 1.0)
+    base_valid_scores = pred_valid_logits.detach().float().cpu().sigmoid()
+    base_valid_mask = base_valid_scores >= float(point_valid_thr)
+    base_scores = full_lane_proposal_score_probability(
+        pred_logits.detach().float().cpu(),
+        quality_logits=None,
+        valid_logits=pred_valid_logits.detach().float().cpu(),
+    ).cpu()
+
+    full_points = pred_full_lane_points.detach().float().cpu().clamp(0.0, 1.0)
+    full_valid_scores = pred_full_lane_valid_logits.detach().float().cpu().sigmoid()
+    full_start = pred_full_lane_start_logits.detach().float().cpu()
+    full_end = pred_full_lane_end_logits.detach().float().cpu()
+    full_interval = full_lane_interval_mask(full_start, full_end).cpu()
+    full_valid_mask = (full_valid_scores >= float(point_valid_thr)) & full_interval
+    full_scores = full_lane_proposal_score_probability(
+        pred_full_lane_exist_logits.detach().float().cpu(),
+        pred_full_lane_quality_logits.detach().float().cpu(),
+        pred_full_lane_valid_logits.detach().float().cpu(),
+        pred_full_lane_start_logits.detach().float().cpu(),
+        pred_full_lane_end_logits.detach().float().cpu(),
+    ).cpu()
+
+    points = torch.cat((base_points, full_points), dim=0)
+    valid_scores = torch.cat((base_valid_scores, full_valid_scores), dim=0)
+    valid_masks = torch.cat((base_valid_mask, full_valid_mask), dim=0)
+    scores = torch.cat((base_scores, full_scores), dim=0)
+    source = torch.cat(
+        (
+            torch.zeros((base_points.shape[0],), dtype=torch.long),
+            torch.ones((full_points.shape[0],), dtype=torch.long),
+        ),
+        dim=0,
+    )
+    proposal_indices = torch.cat(
+        (
+            torch.arange(base_points.shape[0], dtype=torch.long),
+            torch.arange(full_points.shape[0], dtype=torch.long),
+        ),
+        dim=0,
+    )
+    if int(min_points) < 1 or int(min_points) > int(point_count):
+        raise ValueError(f"min_points must be in [1, K], got {min_points} for K={point_count}.")
+
+    keep = (scores >= float(score_thr)) & (valid_masks.sum(dim=1) >= int(min_points))
+    keep_indices = torch.nonzero(keep, as_tuple=False).flatten()
+    if keep_indices.numel() == 0:
+        return []
+
+    points = points[keep_indices]
+    valid_scores = valid_scores[keep_indices]
+    valid_masks = valid_masks[keep_indices]
+    scores = scores[keep_indices]
+    source = source[keep_indices]
+    proposal_indices = proposal_indices[keep_indices]
+    order = torch.argsort(scores, descending=True)
+    points = points[order]
+    valid_scores = valid_scores[order]
+    valid_masks = valid_masks[order]
+    scores = scores[order]
+    source = source[order]
+    proposal_indices = proposal_indices[order]
+
+    if nms_dist_px > 0.0:
+        if image_shape is None:
+            raise ValueError("full_lane_decode requires image_shape when nms_dist_px > 0.")
+        keep_nms = lane_nms(
+            points,
+            scores,
+            image_shape=image_shape,
+            dist_thr_px=float(nms_dist_px),
+            valid_masks=valid_masks,
+        )
+        points = points[keep_nms]
+        valid_scores = valid_scores[keep_nms]
+        valid_masks = valid_masks[keep_nms]
+        scores = scores[keep_nms]
+        source = source[keep_nms]
+        proposal_indices = proposal_indices[keep_nms]
+
+    if max_det is not None and int(max_det) > 0:
+        keep_max = torch.arange(min(int(max_det), points.shape[0]), dtype=torch.long)
+        points = points[keep_max]
+        valid_scores = valid_scores[keep_max]
+        valid_masks = valid_masks[keep_max]
+        scores = scores[keep_max]
+        source = source[keep_max]
+        proposal_indices = proposal_indices[keep_max]
+
+    scale = None
+    if image_shape is not None:
+        h, w = int(image_shape[0]), int(image_shape[1])
+        scale = torch.tensor([w, h], dtype=points.dtype).view(1, 1, 2)
+
+    lanes: list[dict] = []
+    for lane_points, lane_valid_scores, lane_valid_mask, lane_score, lane_source, lane_idx in zip(
+        points,
+        valid_scores,
+        valid_masks,
+        scores,
+        source,
+        proposal_indices,
+    ):
+        visible_mask = longest_contiguous_valid_mask(lane_valid_mask, min_points=int(min_points))
+        if int(visible_mask.sum()) < int(min_points):
+            continue
+        lane_norm = lane_points.numpy().astype(np.float32)
+        item = {
+            "score": float(lane_score),
+            "query": int(lane_idx),
+            "source": "full_lane_proposal" if int(lane_source) else "base_query",
+            "points_norm": lane_norm,
+            "point_valid_scores": lane_valid_scores.numpy().astype(np.float32),
+            "point_valid": visible_mask.numpy().astype(np.float32),
+            "visible_points_norm": lane_norm[visible_mask.numpy()],
+        }
+        if int(lane_source):
+            item["full_lane_proposal_index"] = int(lane_idx)
+        if scale is not None:
+            points_px = (lane_points.unsqueeze(0) * scale).squeeze(0).numpy().astype(np.float32)
+            item["points"] = points_px
+            item["visible_points"] = points_px[visible_mask.numpy()]
+        lanes.append(item)
+    return lanes
 
 
 def decode_gcs_predictions(
@@ -215,6 +413,24 @@ def decode_gcs_predictions(
     candidate_score_thr: float = 0.05,
     candidate_short_min_points: int = 2,
     candidate_short_max_points: int = 10,
+    pred_short_segment_points: torch.Tensor | None = None,
+    pred_short_segment_logits: torch.Tensor | None = None,
+    pred_short_segment_window_mask: torch.Tensor | None = None,
+    segment_decode: bool = False,
+    segment_score_thr: float = 0.5,
+    segment_short_min_points: int = 3,
+    segment_short_max_points: int = 10,
+    segment_pred_valid_overlap_min: int = 0,
+    segment_score_as_lane_score: bool = False,
+    segment_rescue_base_miss_only: bool = False,
+    pred_short_segment_choice_logits: torch.Tensor | None = None,
+    full_lane_decode: bool = False,
+    pred_full_lane_points: torch.Tensor | None = None,
+    pred_full_lane_valid_logits: torch.Tensor | None = None,
+    pred_full_lane_exist_logits: torch.Tensor | None = None,
+    pred_full_lane_quality_logits: torch.Tensor | None = None,
+    pred_full_lane_start_logits: torch.Tensor | None = None,
+    pred_full_lane_end_logits: torch.Tensor | None = None,
 ) -> list[dict]:
     """Decode ``pred_points`` and ``pred_logits`` into ordered lane point sequences.
 
@@ -245,6 +461,26 @@ def decode_gcs_predictions(
         candidate_score_thr: Minimum selector probability required before candidate geometry replaces base geometry.
         candidate_short_min_points: Minimum predicted visible anchors for candidate-decode applicability.
         candidate_short_max_points: Maximum predicted visible anchors for candidate-decode applicability.
+        pred_short_segment_points: Optional Q x S x K x 2 local short-segment proposals for one image.
+        pred_short_segment_logits: Optional Q x S selector logits for local short-segment proposals.
+        pred_short_segment_window_mask: Optional S x K validity mask for local short-segment proposals.
+        segment_decode: If true, use the best valid local segment as a base-choice option. The base query
+            has a fixed zero logit, so the segment must exceed ``segment_score_thr`` to replace it.
+        segment_score_thr: Minimum local-segment probability required before replacing base geometry.
+        segment_short_min_points: Minimum fixed-y window length allowed for segment selection.
+        segment_short_max_points: Maximum fixed-y window length allowed for segment selection.
+        segment_pred_valid_overlap_min: Optional minimum overlap between the segment window and base
+            predicted-valid anchors before the segment can be selected.
+        segment_score_as_lane_score: If true, a selected segment may raise the final lane score to
+            ``max(base_probability, segment_probability)``. This is off by default.
+        segment_rescue_base_miss_only: If true, only queries whose base probability is below
+            ``score_thr`` may be replaced by a segment. This is off by default.
+        pred_short_segment_choice_logits: Optional Q x (S+1) logits from the v12 unified selector.
+            Class 0 is the base geometry and classes 1..S are the segment windows. When present,
+            ``segment_decode`` uses this unified choice distribution instead of the legacy segment
+            threshold path.
+        full_lane_decode: If true, decode base queries and independent full-lane proposals as one set.
+            This is prediction-only and default-off.
 
     Returns:
         A list of dictionaries with score, query index, normalized points, and optional pixel points.
@@ -266,11 +502,56 @@ def decode_gcs_predictions(
                 "pred_valid_logits must have shape Q x K matching pred_points, "
                 f"got {tuple(pred_valid_logits.shape)} vs {tuple(pred_points.shape[:2])}."
             )
+    if full_lane_decode:
+        if candidate_decode or segment_decode:
+            raise ValueError("full_lane_decode is mutually exclusive with candidate_decode and segment_decode.")
+        if count_aware_topk:
+            raise ValueError("full_lane_decode is mutually exclusive with count_aware_topk.")
+        required = (
+            pred_full_lane_points,
+            pred_full_lane_valid_logits,
+            pred_full_lane_exist_logits,
+            pred_full_lane_quality_logits,
+            pred_full_lane_start_logits,
+            pred_full_lane_end_logits,
+        )
+        if any(value is None for value in required):
+            raise ValueError(
+                "full_lane_decode requires pred_full_lane_points, pred_full_lane_valid_logits, "
+                "pred_full_lane_exist_logits, pred_full_lane_quality_logits, "
+                "pred_full_lane_start_logits, and pred_full_lane_end_logits."
+            )
+        return _decode_full_lane_proposals(
+            pred_points,
+            pred_logits,
+            pred_valid_logits,
+            pred_full_lane_points,
+            pred_full_lane_valid_logits,
+            pred_full_lane_exist_logits,
+            pred_full_lane_quality_logits,
+            pred_full_lane_start_logits,
+            pred_full_lane_end_logits,
+            image_shape=image_shape,
+            score_thr=score_thr,
+            point_valid_thr=point_valid_thr,
+            min_points=min_points,
+            max_det=max_det,
+            nms_dist_px=nms_dist_px,
+        )
 
     points = pred_points.detach().float().cpu().clamp(0.0, 1.0)
     scores = pred_logits.detach().float().cpu().sigmoid()
     short_candidate_indices = torch.full((points.shape[0],), -1, dtype=torch.long)
     short_candidate_scores = torch.zeros((points.shape[0],), dtype=torch.float32)
+    short_segment_indices = torch.full((points.shape[0],), -1, dtype=torch.long)
+    short_segment_scores = torch.zeros((points.shape[0],), dtype=torch.float32)
+    segment_window_override = torch.ones(points.shape[:2], dtype=torch.bool)
+    if candidate_decode and segment_decode:
+        raise ValueError("candidate_decode and segment_decode are mutually exclusive query decode modes.")
+    if segment_score_as_lane_score and not segment_decode:
+        raise ValueError("segment_score_as_lane_score requires segment_decode=True.")
+    if segment_rescue_base_miss_only and not segment_score_as_lane_score:
+        raise ValueError("segment_rescue_base_miss_only requires segment_score_as_lane_score=True.")
     if candidate_decode:
         if count_aware_topk:
             raise ValueError("candidate_decode is mutually exclusive with count_aware_topk for query decode.")
@@ -313,6 +594,115 @@ def decode_gcs_predictions(
             points[query_ids] = candidate_points[query_ids, best_indices[query_ids]]
             short_candidate_indices[query_ids] = best_indices[query_ids]
             short_candidate_scores[query_ids] = best_scores[query_ids]
+    if segment_decode:
+        if count_aware_topk:
+            raise ValueError("segment_decode is mutually exclusive with count_aware_topk for query decode.")
+        if pred_valid_logits is None:
+            raise ValueError("segment_decode requires pred_valid_logits for prediction-only gating.")
+        if (
+            pred_short_segment_points is None
+            or pred_short_segment_logits is None
+            or pred_short_segment_window_mask is None
+        ):
+            raise ValueError(
+                "segment_decode requires pred_short_segment_points, pred_short_segment_logits, "
+                "and pred_short_segment_window_mask."
+            )
+        segment_points = pred_short_segment_points.detach().float().cpu().clamp(0.0, 1.0)
+        segment_logits = pred_short_segment_logits.detach().float().cpu()
+        segment_window_mask = pred_short_segment_window_mask.detach().bool().cpu()
+        if segment_points.ndim != 4 or segment_points.shape[-1] != 2:
+            raise ValueError(
+                "pred_short_segment_points must have shape Q x S x K x 2 for one image, "
+                f"got {tuple(segment_points.shape)}."
+            )
+        if segment_points.shape[0] != points.shape[0] or segment_points.shape[2] != points.shape[1]:
+            raise ValueError(
+                "pred_short_segment_points Q,K must match pred_points, "
+                f"got {tuple(segment_points.shape)} vs {tuple(points.shape)}."
+            )
+        if segment_logits.shape != segment_points.shape[:2]:
+            raise ValueError(
+                "pred_short_segment_logits must have shape Q x S matching segment points, "
+                f"got {tuple(segment_logits.shape)} vs {tuple(segment_points.shape[:2])}."
+            )
+        if segment_window_mask.ndim == 3 and segment_window_mask.shape[0] == 1:
+            segment_window_mask = segment_window_mask[0]
+        if segment_window_mask.ndim != 2 or segment_window_mask.shape != segment_points.shape[1:3]:
+            raise ValueError(
+                "pred_short_segment_window_mask must have shape S x K matching segment points, "
+                f"got {tuple(segment_window_mask.shape)} vs {tuple(segment_points.shape[1:3])}."
+            )
+        segment_short_min_points = int(segment_short_min_points)
+        segment_short_max_points = int(segment_short_max_points)
+        segment_pred_valid_overlap_min = int(segment_pred_valid_overlap_min)
+        if segment_short_min_points < 1 or segment_short_max_points < segment_short_min_points:
+            raise ValueError(
+                "segment short point bounds must satisfy 1 <= min <= max, "
+                f"got {segment_short_min_points}/{segment_short_max_points}."
+            )
+        if segment_pred_valid_overlap_min < 0:
+            raise ValueError(
+                f"segment_pred_valid_overlap_min must be >= 0, got {segment_pred_valid_overlap_min}."
+            )
+        valid_scores_for_gate = pred_valid_logits.detach().float().cpu().sigmoid()
+        if valid_scores_for_gate.shape != points.shape[:2]:
+            raise ValueError(
+                "pred_valid_logits must have shape Q x K before segment_decode, "
+                f"got {tuple(valid_scores_for_gate.shape)} vs {tuple(points.shape[:2])}."
+            )
+        segment_lengths = segment_window_mask.sum(dim=1)
+        segment_gate = (segment_lengths >= segment_short_min_points) & (
+            segment_lengths <= segment_short_max_points
+        )
+        segment_gate = segment_gate.view(1, -1).expand(points.shape[0], -1)
+        if segment_pred_valid_overlap_min > 0:
+            query_valid = valid_scores_for_gate >= float(point_valid_thr)
+            valid_overlap = (
+                segment_window_mask.view(1, segment_window_mask.shape[0], segment_window_mask.shape[1])
+                & query_valid.view(query_valid.shape[0], 1, query_valid.shape[1])
+            ).sum(dim=2)
+            segment_gate = segment_gate & (valid_overlap >= segment_pred_valid_overlap_min)
+        if pred_short_segment_choice_logits is not None:
+            choice_logits = pred_short_segment_choice_logits.detach().float().cpu()
+            expected_choice_shape = (points.shape[0], segment_points.shape[1] + 1)
+            if tuple(choice_logits.shape) != expected_choice_shape:
+                raise ValueError(
+                    "pred_short_segment_choice_logits must have shape Q x (S+1), "
+                    f"got {tuple(choice_logits.shape)} vs {expected_choice_shape}."
+                )
+            choice_logits = choice_logits.clone()
+            choice_logits[:, 1:] = choice_logits[:, 1:].masked_fill(~segment_gate, float("-inf"))
+            choice_probs = torch.softmax(choice_logits, dim=1)
+            best_choice_probs, best_choice = choice_probs.max(dim=1)
+            apply_gate = (best_choice > 0) & torch.isfinite(best_choice_probs)
+            if bool(apply_gate.any()):
+                query_ids = torch.nonzero(apply_gate, as_tuple=False).flatten()
+                selected_indices = best_choice[query_ids] - 1
+                points[query_ids] = segment_points[query_ids, selected_indices]
+                short_segment_indices[query_ids] = selected_indices
+                short_segment_scores[query_ids] = best_choice_probs[query_ids]
+                segment_window_override[query_ids] = segment_window_mask[selected_indices]
+                # The unified selector is calibrated against the base class, so
+                # its selected probability is the only segment score allowed to
+                # rescue a low base existence score.
+                scores[query_ids] = torch.maximum(scores[query_ids], best_choice_probs[query_ids])
+        else:
+            selection_logits = segment_logits.masked_fill(~segment_gate, float("-inf"))
+            best_segment_logits, best_indices = selection_logits.max(dim=1)
+            threshold_logit = _prob_threshold_to_logit_floor(segment_score_thr)
+            apply_gate = torch.isfinite(best_segment_logits) & (best_segment_logits >= threshold_logit)
+            if segment_rescue_base_miss_only:
+                apply_gate = apply_gate & (scores < float(score_thr))
+            if bool(apply_gate.any()):
+                query_ids = torch.nonzero(apply_gate, as_tuple=False).flatten()
+                selected_indices = best_indices[query_ids]
+                points[query_ids] = segment_points[query_ids, selected_indices]
+                short_segment_indices[query_ids] = selected_indices
+                short_segment_scores[query_ids] = best_segment_logits[query_ids].sigmoid()
+                segment_window_override[query_ids] = segment_window_mask[selected_indices]
+                if segment_score_as_lane_score:
+                    scores[query_ids] = torch.maximum(scores[query_ids], short_segment_scores[query_ids])
     count_aware_k = None
     count_aware_base_k = None
     if count_aware_topk:
@@ -365,17 +755,24 @@ def decode_gcs_predictions(
 
     sorted_points = []
     sorted_valid_scores = []
+    sorted_segment_window_overrides = []
     for i in keep:
         order_i = torch.argsort(points[i, :, 1], descending=True, stable=True)
         sorted_points.append(points[i][order_i])
         if point_valid_scores is not None:
             sorted_valid_scores.append(point_valid_scores[i][order_i])
+        sorted_segment_window_overrides.append(segment_window_override[i][order_i])
     points = torch.stack(sorted_points, dim=0)
     point_valid_scores = torch.stack(sorted_valid_scores, dim=0) if sorted_valid_scores else None
+    segment_window_override = torch.stack(sorted_segment_window_overrides, dim=0)
     scores = scores[keep]
     query_indices = query_indices[keep]
     short_candidate_indices = short_candidate_indices[keep]
     short_candidate_scores = short_candidate_scores[keep]
+    short_segment_indices = short_segment_indices[keep]
+    short_segment_scores = short_segment_scores[keep]
+    if segment_decode and point_valid_scores is not None:
+        point_valid_scores = point_valid_scores * segment_window_override.to(dtype=point_valid_scores.dtype)
 
     order = torch.argsort(scores, descending=True)
     if nms_dist_px > 0.0:
@@ -386,6 +783,8 @@ def decode_gcs_predictions(
         sorted_queries = query_indices[order]
         sorted_candidate_indices = short_candidate_indices[order]
         sorted_candidate_scores = short_candidate_scores[order]
+        sorted_segment_indices = short_segment_indices[order]
+        sorted_segment_scores = short_segment_scores[order]
         sorted_valid_masks = None
         if point_valid_scores is not None:
             sorted_valid_masks = torch.stack(
@@ -407,6 +806,8 @@ def decode_gcs_predictions(
         query_indices = sorted_queries[keep_sorted]
         short_candidate_indices = sorted_candidate_indices[keep_sorted]
         short_candidate_scores = sorted_candidate_scores[keep_sorted]
+        short_segment_indices = sorted_segment_indices[keep_sorted]
+        short_segment_scores = sorted_segment_scores[keep_sorted]
         if point_valid_scores is not None:
             point_valid_scores = point_valid_scores[order][keep_sorted]
         order = torch.arange(scores.shape[0], dtype=torch.long)
@@ -424,6 +825,8 @@ def decode_gcs_predictions(
         query_indices = query_indices[keep_valid]
         short_candidate_indices = short_candidate_indices[keep_valid]
         short_candidate_scores = short_candidate_scores[keep_valid]
+        short_segment_indices = short_segment_indices[keep_valid]
+        short_segment_scores = short_segment_scores[keep_valid]
         point_valid_scores = point_valid_scores[keep_valid]
         order = torch.argsort(scores, descending=True)
     if max_det is not None and max_det > 0:
@@ -433,6 +836,8 @@ def decode_gcs_predictions(
     query_indices = query_indices[order]
     short_candidate_indices = short_candidate_indices[order]
     short_candidate_scores = short_candidate_scores[order]
+    short_segment_indices = short_segment_indices[order]
+    short_segment_scores = short_segment_scores[order]
     if point_valid_scores is not None:
         point_valid_scores = point_valid_scores[order]
 
@@ -458,6 +863,11 @@ def decode_gcs_predictions(
             item["candidate_decode_applied"] = True
             item["short_candidate_index"] = cand_idx
             item["short_candidate_score"] = float(short_candidate_scores[lane_i].item())
+        segment_idx = int(short_segment_indices[lane_i].item())
+        if segment_idx >= 0:
+            item["segment_decode_applied"] = True
+            item["short_segment_index"] = segment_idx
+            item["short_segment_score"] = float(short_segment_scores[lane_i].item())
         visible_mask = None
         if point_valid_scores is not None:
             visible_mask_t = longest_contiguous_valid_mask(

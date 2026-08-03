@@ -126,6 +126,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--candidate-score-thr", type=float, default=0.05)
     parser.add_argument("--candidate-short-min-points", type=int, default=2)
     parser.add_argument("--candidate-short-max-points", type=int, default=10)
+    parser.add_argument(
+        "--full-lane-decode",
+        action="store_true",
+        help="Enable default-off joint decode of base queries and independent full-lane proposals.",
+    )
     parser.add_argument("--max-images", type=int, default=0, help="Limit number of images. 0 means all images.")
     parser.add_argument("--save-dir", default="runs/gcs_lane/infer", help="Directory for rendered images and labels.")
     parser.add_argument("--no-save-img", action="store_true", help="Do not save rendered lane images.")
@@ -292,6 +297,7 @@ def run_inference(
     candidate_score_thr: float = 0.05,
     candidate_short_min_points: int = 2,
     candidate_short_max_points: int = 10,
+    full_lane_decode: bool = False,
     gcs_min_lanes: int = 2,
     gcs_max_lanes: int = 5,
     gcs_num_slots: int = 5,
@@ -311,6 +317,12 @@ def run_inference(
     active_decode_mode = resolve_decode_mode(decode_mode, model)
     if candidate_decode and active_decode_mode == "ordered_slot":
         raise RuntimeError("--candidate-decode is query-decode only and is not valid for ordered_slot.")
+    if full_lane_decode and active_decode_mode == "ordered_slot":
+        raise RuntimeError("--full-lane-decode is query-decode only and is not valid for ordered_slot.")
+    if full_lane_decode and candidate_decode:
+        raise RuntimeError("--full-lane-decode and --candidate-decode are mutually exclusive.")
+    if full_lane_decode and count_aware_topk:
+        raise RuntimeError("--full-lane-decode and --count-aware-topk are mutually exclusive.")
     ordered_slot_runtime_cfg = (
         ordered_slot_decode_runtime_config(context="infer") if active_decode_mode == "ordered_slot" else None
     )
@@ -376,6 +388,12 @@ def run_inference(
             pred_valid = preds.get("pred_valid_logits")
             pred_candidate_points = preds.get("pred_short_candidate_points")
             pred_candidate_logits = preds.get("pred_short_candidate_logits")
+            pred_full_lane_points = preds.get("pred_full_lane_points")
+            pred_full_lane_valid_logits = preds.get("pred_full_lane_valid_logits")
+            pred_full_lane_exist_logits = preds.get("pred_full_lane_exist_logits")
+            pred_full_lane_quality_logits = preds.get("pred_full_lane_quality_logits")
+            pred_full_lane_start_logits = preds.get("pred_full_lane_start_logits")
+            pred_full_lane_end_logits = preds.get("pred_full_lane_end_logits")
             lanes = decode_gcs_predictions(
                 preds["pred_points"][0],
                 preds["pred_logits"][0],
@@ -397,6 +415,23 @@ def run_inference(
                 candidate_score_thr=candidate_score_thr,
                 candidate_short_min_points=candidate_short_min_points,
                 candidate_short_max_points=candidate_short_max_points,
+                full_lane_decode=full_lane_decode,
+                pred_full_lane_points=pred_full_lane_points[0] if pred_full_lane_points is not None else None,
+                pred_full_lane_valid_logits=(
+                    pred_full_lane_valid_logits[0] if pred_full_lane_valid_logits is not None else None
+                ),
+                pred_full_lane_exist_logits=(
+                    pred_full_lane_exist_logits[0] if pred_full_lane_exist_logits is not None else None
+                ),
+                pred_full_lane_quality_logits=(
+                    pred_full_lane_quality_logits[0] if pred_full_lane_quality_logits is not None else None
+                ),
+                pred_full_lane_start_logits=(
+                    pred_full_lane_start_logits[0] if pred_full_lane_start_logits is not None else None
+                ),
+                pred_full_lane_end_logits=(
+                    pred_full_lane_end_logits[0] if pred_full_lane_end_logits is not None else None
+                ),
             )
         post_s = time.perf_counter() - t1
         total_infer += infer_s
@@ -447,6 +482,7 @@ def run_inference(
             "candidate_score_thr": float(candidate_score_thr),
             "candidate_short_min_points": int(candidate_short_min_points),
             "candidate_short_max_points": int(candidate_short_max_points),
+            "full_lane_decode": bool(full_lane_decode),
             "gcs_min_lanes": int(gcs_min_lanes),
             "gcs_max_lanes": int(gcs_max_lanes),
             "gcs_num_slots": int(gcs_num_slots),
@@ -507,6 +543,7 @@ def main() -> None:
         candidate_score_thr=args.candidate_score_thr,
         candidate_short_min_points=args.candidate_short_min_points,
         candidate_short_max_points=args.candidate_short_max_points,
+        full_lane_decode=args.full_lane_decode,
         gcs_min_lanes=args.gcs_min_lanes,
         gcs_max_lanes=args.gcs_max_lanes,
         gcs_num_slots=args.gcs_num_slots,

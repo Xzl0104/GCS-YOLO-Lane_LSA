@@ -70,6 +70,20 @@ LOSS_NAMES = (
     "query_count_ce_loss",
     "query_count_acc",
     "query_count_pred_mean",
+    "full_lane_proposal_loss",
+    "full_lane_point_loss",
+    "full_lane_valid_loss",
+    "full_lane_interval_loss",
+    "full_lane_exist_loss",
+    "full_lane_quality_loss",
+    "full_lane_match_count",
+    "full_lane_unmatched_count",
+    "dense_instance_loss",
+    "dense_centerline_loss",
+    "dense_endpoint_loss",
+    "dense_embed_pull_loss",
+    "dense_embed_push_loss",
+    "dense_centerline_pos",
 )
 LOSS_GAIN_ARGS = (
     "gcs_exist",
@@ -118,6 +132,20 @@ LOSS_GAIN_ARGS = (
     "gcs_query_count_ce",
     None,
     None,
+    "gcs_full_lane_proposal",
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    "gcs_dense_instance",
+    None,
+    None,
+    None,
+    None,
+    None,
 )
 DEFAULT_LOSS_GAINS = (
     2.0,
@@ -127,6 +155,20 @@ DEFAULT_LOSS_GAINS = (
     0.1,
     0.2,
     0.2,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
     0.0,
     0.0,
     0.0,
@@ -654,6 +696,35 @@ class GCSLaneValidator:
                     pred_short_candidate_logits=preds.get("pred_short_candidate_logits", None)[i]
                     if preds.get("pred_short_candidate_logits", None) is not None
                     else None,
+                    pred_short_segment_points=preds.get("pred_short_segment_points", None)[i]
+                    if preds.get("pred_short_segment_points", None) is not None
+                    else None,
+                    pred_short_segment_logits=preds.get("pred_short_segment_logits", None)[i]
+                    if preds.get("pred_short_segment_logits", None) is not None
+                    else None,
+                    pred_short_segment_window_mask=preds.get("pred_short_segment_window_mask", None),
+                    pred_short_segment_choice_logits=preds.get("pred_short_segment_choice_logits", None)[i]
+                    if preds.get("pred_short_segment_choice_logits", None) is not None
+                    else None,
+                    full_lane_decode=bool(self._arg(self.args, "gcs_full_lane_decode", False)),
+                    pred_full_lane_points=preds.get("pred_full_lane_points", None)[i]
+                    if preds.get("pred_full_lane_points", None) is not None
+                    else None,
+                    pred_full_lane_valid_logits=preds.get("pred_full_lane_valid_logits", None)[i]
+                    if preds.get("pred_full_lane_valid_logits", None) is not None
+                    else None,
+                    pred_full_lane_exist_logits=preds.get("pred_full_lane_exist_logits", None)[i]
+                    if preds.get("pred_full_lane_exist_logits", None) is not None
+                    else None,
+                    pred_full_lane_quality_logits=preds.get("pred_full_lane_quality_logits", None)[i]
+                    if preds.get("pred_full_lane_quality_logits", None) is not None
+                    else None,
+                    pred_full_lane_start_logits=preds.get("pred_full_lane_start_logits", None)[i]
+                    if preds.get("pred_full_lane_start_logits", None) is not None
+                    else None,
+                    pred_full_lane_end_logits=preds.get("pred_full_lane_end_logits", None)[i]
+                    if preds.get("pred_full_lane_end_logits", None) is not None
+                    else None,
                     image_shape=(h, w),
                     score_thr=conf,
                     point_valid_thr=point_valid_thr,
@@ -663,6 +734,13 @@ class GCSLaneValidator:
                     candidate_score_thr=float(self._arg(self.args, "gcs_candidate_score_thr", 0.05)),
                     candidate_short_min_points=int(self._arg(self.args, "gcs_candidate_short_min_points", 2)),
                     candidate_short_max_points=int(self._arg(self.args, "gcs_candidate_short_max_points", 10)),
+                    segment_decode=bool(self._arg(self.args, "gcs_segment_decode", False)),
+                    segment_score_thr=float(self._arg(self.args, "gcs_segment_score_thr", 0.5)),
+                    segment_short_min_points=int(self._arg(self.args, "gcs_segment_short_min_points", 3)),
+                    segment_short_max_points=int(self._arg(self.args, "gcs_segment_short_max_points", 10)),
+                    segment_pred_valid_overlap_min=int(
+                        self._arg(self.args, "gcs_segment_pred_valid_overlap_min", 0)
+                    ),
                 )
             gt_lanes, gt_valid = self._valid_gt_lanes(gt_lanes_t, gt_valid_t)
             tp, fp, fn, apes_tp, apes_all, apes_fp = self._match_lanes(

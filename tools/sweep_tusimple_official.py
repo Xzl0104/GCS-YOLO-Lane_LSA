@@ -176,6 +176,40 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--candidate-score-thr", type=float, default=0.05)
     parser.add_argument("--candidate-short-min-points", type=int, default=2)
     parser.add_argument("--candidate-short-max-points", type=int, default=10)
+    parser.add_argument(
+        "--segment-decode",
+        action="store_true",
+        help="Enable default-off local short-segment base-choice decode for pred_short_segment_* outputs.",
+    )
+    parser.add_argument(
+        "--segment-score-thr",
+        type=float,
+        default=0.5,
+        help="Minimum local short-segment selector probability required to replace the base query.",
+    )
+    parser.add_argument("--segment-short-min-points", type=int, default=3)
+    parser.add_argument("--segment-short-max-points", type=int, default=10)
+    parser.add_argument(
+        "--segment-pred-valid-overlap-min",
+        type=int,
+        default=0,
+        help="Optional minimum overlap between a segment window and base predicted-valid anchors.",
+    )
+    parser.add_argument(
+        "--segment-score-as-lane-score",
+        action="store_true",
+        help="When segment decode applies, let segment probability raise the final lane score.",
+    )
+    parser.add_argument(
+        "--segment-rescue-base-miss-only",
+        action="store_true",
+        help="Apply segment replacement only to queries below the base existence threshold.",
+    )
+    parser.add_argument(
+        "--full-lane-decode",
+        action="store_true",
+        help="Enable default-off joint decode of base queries and independent full-lane proposals.",
+    )
     parser.add_argument("--max-images", type=int, default=0, help="Limit number of GT records. 0 means all.")
     parser.add_argument("--warmup", type=int, default=20, help="Number of untimed warmup forwards.")
     parser.add_argument("--device", default="0", help="Inference device, e.g. 0 or cpu.")
@@ -217,6 +251,10 @@ def resolve_save_dir(
     count_aware_extra_margins: list[int] | tuple[int, ...] | None = None,
     valid_before_maxdet: bool = False,
     candidate_decode: bool = False,
+    segment_decode: bool = False,
+    segment_score_as_lane_score: bool = False,
+    segment_rescue_base_miss_only: bool = False,
+    full_lane_decode: bool = False,
     decode_mode: str = "auto",
 ) -> Path:
     if save_dir is not None and str(save_dir).strip():
@@ -234,6 +272,14 @@ def resolve_save_dir(
             suffix += "_valid_before_maxdet"
         if candidate_decode:
             suffix += "_candidate_decode"
+        if segment_decode:
+            suffix += "_segment_decode"
+        if segment_score_as_lane_score:
+            suffix += "_segment_score_lane"
+        if segment_rescue_base_miss_only:
+            suffix += "_segment_base_miss"
+        if full_lane_decode:
+            suffix += "_full_lane_decode"
     run_dir = _weight_run_dir(weights)
     if run_dir is not None:
         return run_dir / f"official_sweep_{split}{suffix}"
@@ -268,8 +314,8 @@ def build_combos(args: argparse.Namespace, decode_yaml_cfg: dict | None = None) 
     combos: list[dict] = []
     decode_mode = str(getattr(args, "decode_mode", "query"))
     if decode_mode == "ordered_slot":
-        if bool(getattr(args, "candidate_decode", False)):
-            raise RuntimeError("--candidate-decode is query-decode only and is not valid for ordered_slot.")
+        if bool(getattr(args, "candidate_decode", False)) or bool(getattr(args, "segment_decode", False)):
+            raise RuntimeError("candidate/segment decode is query-decode only and is not valid for ordered_slot.")
         runtime_cfg = ordered_slot_decode_runtime_config(context=_ordered_slot_runtime_context(args))
         ordered_params = ordered_slot_decode_params(args, decode_yaml_cfg)
         effective_decode = build_ordered_slot_decode_summary(
@@ -300,16 +346,47 @@ def build_combos(args: argparse.Namespace, decode_yaml_cfg: dict | None = None) 
     candidate_score_thr = float(getattr(args, "candidate_score_thr", 0.05))
     candidate_short_min_points = int(getattr(args, "candidate_short_min_points", 2))
     candidate_short_max_points = int(getattr(args, "candidate_short_max_points", 10))
+    segment_decode = bool(getattr(args, "segment_decode", False))
+    segment_score_thr = float(getattr(args, "segment_score_thr", 0.5))
+    segment_short_min_points = int(getattr(args, "segment_short_min_points", 3))
+    segment_short_max_points = int(getattr(args, "segment_short_max_points", 10))
+    segment_pred_valid_overlap_min = int(getattr(args, "segment_pred_valid_overlap_min", 0))
+    segment_score_as_lane_score = bool(getattr(args, "segment_score_as_lane_score", False))
+    segment_rescue_base_miss_only = bool(getattr(args, "segment_rescue_base_miss_only", False))
+    full_lane_decode = bool(getattr(args, "full_lane_decode", False))
     if any(int(x) < 0 for x in count_aware_extra_margins):
         raise ValueError(f"count-aware extra margins must be >= 0, got {count_aware_extra_margins}.")
-    if candidate_decode and count_aware_topk:
-        raise ValueError("--candidate-decode is mutually exclusive with --count-aware-topk.")
+    if candidate_decode and segment_decode:
+        raise ValueError("--candidate-decode and --segment-decode are mutually exclusive.")
+    if full_lane_decode and (candidate_decode or segment_decode):
+        raise ValueError("--full-lane-decode is mutually exclusive with candidate/segment decode.")
+    if (candidate_decode or segment_decode) and count_aware_topk:
+        raise ValueError("candidate/segment decode is mutually exclusive with --count-aware-topk.")
+    if full_lane_decode and count_aware_topk:
+        raise ValueError("--full-lane-decode is mutually exclusive with --count-aware-topk.")
+    if full_lane_decode and decode_mode == "ordered_slot":
+        raise ValueError("--full-lane-decode is query-decode only and is not valid for ordered_slot.")
+    if segment_score_as_lane_score and not segment_decode:
+        raise ValueError("--segment-score-as-lane-score requires --segment-decode.")
+    if segment_rescue_base_miss_only and not segment_score_as_lane_score:
+        raise ValueError("--segment-rescue-base-miss-only requires --segment-score-as-lane-score.")
     if candidate_score_thr < 0.0 or candidate_score_thr > 1.0:
         raise ValueError(f"candidate-score-thr must be in [0, 1], got {candidate_score_thr}.")
     if candidate_short_min_points < 1 or candidate_short_max_points < candidate_short_min_points:
         raise ValueError(
             "candidate short point bounds must satisfy 1 <= min <= max, "
             f"got {candidate_short_min_points}/{candidate_short_max_points}."
+        )
+    if segment_score_thr < 0.0 or segment_score_thr > 1.0:
+        raise ValueError(f"segment-score-thr must be in [0, 1], got {segment_score_thr}.")
+    if segment_short_min_points < 1 or segment_short_max_points < segment_short_min_points:
+        raise ValueError(
+            "segment short point bounds must satisfy 1 <= min <= max, "
+            f"got {segment_short_min_points}/{segment_short_max_points}."
+        )
+    if segment_pred_valid_overlap_min < 0:
+        raise ValueError(
+            f"segment-pred-valid-overlap-min must be >= 0, got {segment_pred_valid_overlap_min}."
         )
     if count_aware_topk:
         if count_aware_min_k < 0 or count_aware_max_k < 0 or count_aware_min_k > count_aware_max_k:
@@ -356,6 +433,14 @@ def build_combos(args: argparse.Namespace, decode_yaml_cfg: dict | None = None) 
                 "candidate_score_thr": candidate_score_thr,
                 "candidate_short_min_points": candidate_short_min_points,
                 "candidate_short_max_points": candidate_short_max_points,
+                "segment_decode": segment_decode,
+                "segment_score_thr": segment_score_thr,
+                "segment_short_min_points": segment_short_min_points,
+                "segment_short_max_points": segment_short_max_points,
+                "segment_pred_valid_overlap_min": segment_pred_valid_overlap_min,
+                "segment_score_as_lane_score": segment_score_as_lane_score,
+                "segment_rescue_base_miss_only": segment_rescue_base_miss_only,
+                "full_lane_decode": full_lane_decode,
             }
         )
     if not combos:
@@ -400,6 +485,18 @@ def write_csv(path: Path, rows: list[dict]) -> None:
         "count_aware_length_norm",
         "count_aware_extra_margin",
         "count_mode",
+        "candidate_decode",
+        "candidate_score_thr",
+        "candidate_short_min_points",
+        "candidate_short_max_points",
+        "segment_decode",
+        "segment_score_thr",
+        "segment_short_min_points",
+        "segment_short_max_points",
+        "segment_pred_valid_overlap_min",
+        "segment_score_as_lane_score",
+        "segment_rescue_base_miss_only",
+        "full_lane_decode",
         "strict_order_valid",
         "ordered_slot_order_violations",
         "ordered_slot_order_violation_images",
@@ -472,6 +569,7 @@ def sweep(args: argparse.Namespace) -> dict:
             args.count_aware_length_norm = float(decode_yaml_cfg["count_aware_length_norm"])
             args.count_aware_extra_margins = [int(decode_yaml_cfg.get("count_aware_extra_margin", 0))]
             args.count_modes = [str(decode_yaml_cfg.get("count_mode", "score_sum"))]
+            args.full_lane_decode = bool(decode_yaml_cfg.get("full_lane_decode", False))
     else:
         args.decode_mode = resolve_decode_mode(getattr(args, "decode_mode", "auto"), model)
     if str(getattr(args, "decode_mode", "query")) == "ordered_slot":
@@ -537,6 +635,10 @@ def sweep(args: argparse.Namespace) -> dict:
                 pred_count_logits = preds.get("pred_count_logits")
                 pred_candidate_points = preds.get("pred_short_candidate_points")
                 pred_candidate_logits = preds.get("pred_short_candidate_logits")
+                pred_segment_points = preds.get("pred_short_segment_points")
+                pred_segment_logits = preds.get("pred_short_segment_logits")
+                pred_segment_window_mask = preds.get("pred_short_segment_window_mask")
+                pred_segment_choice_logits = preds.get("pred_short_segment_choice_logits")
                 lanes = decode_gcs_predictions(
                     preds["pred_points"][0],
                     preds["pred_logits"][0],
@@ -544,6 +646,12 @@ def sweep(args: argparse.Namespace) -> dict:
                     pred_count_logits=pred_count_logits[0] if pred_count_logits is not None else None,
                     pred_short_candidate_points=pred_candidate_points[0] if pred_candidate_points is not None else None,
                     pred_short_candidate_logits=pred_candidate_logits[0] if pred_candidate_logits is not None else None,
+                    pred_short_segment_points=pred_segment_points[0] if pred_segment_points is not None else None,
+                    pred_short_segment_logits=pred_segment_logits[0] if pred_segment_logits is not None else None,
+                    pred_short_segment_window_mask=pred_segment_window_mask,
+                    pred_short_segment_choice_logits=(
+                        pred_segment_choice_logits[0] if pred_segment_choice_logits is not None else None
+                    ),
                     image_shape=original_shape,
                     score_thr=combo["conf"],
                     point_valid_thr=combo["point_valid_thr"],
@@ -561,6 +669,32 @@ def sweep(args: argparse.Namespace) -> dict:
                     candidate_score_thr=combo.get("candidate_score_thr", 0.05),
                     candidate_short_min_points=combo.get("candidate_short_min_points", 2),
                     candidate_short_max_points=combo.get("candidate_short_max_points", 10),
+                    segment_decode=combo.get("segment_decode", False),
+                    segment_score_thr=combo.get("segment_score_thr", 0.5),
+                    segment_short_min_points=combo.get("segment_short_min_points", 3),
+                    segment_short_max_points=combo.get("segment_short_max_points", 10),
+                    segment_pred_valid_overlap_min=combo.get("segment_pred_valid_overlap_min", 0),
+                    segment_score_as_lane_score=combo.get("segment_score_as_lane_score", False),
+                    segment_rescue_base_miss_only=combo.get("segment_rescue_base_miss_only", False),
+                    full_lane_decode=combo.get("full_lane_decode", False),
+                    pred_full_lane_points=preds.get("pred_full_lane_points", None)[0]
+                    if preds.get("pred_full_lane_points", None) is not None
+                    else None,
+                    pred_full_lane_valid_logits=preds.get("pred_full_lane_valid_logits", None)[0]
+                    if preds.get("pred_full_lane_valid_logits", None) is not None
+                    else None,
+                    pred_full_lane_exist_logits=preds.get("pred_full_lane_exist_logits", None)[0]
+                    if preds.get("pred_full_lane_exist_logits", None) is not None
+                    else None,
+                    pred_full_lane_quality_logits=preds.get("pred_full_lane_quality_logits", None)[0]
+                    if preds.get("pred_full_lane_quality_logits", None) is not None
+                    else None,
+                    pred_full_lane_start_logits=preds.get("pred_full_lane_start_logits", None)[0]
+                    if preds.get("pred_full_lane_start_logits", None) is not None
+                    else None,
+                    pred_full_lane_end_logits=preds.get("pred_full_lane_end_logits", None)[0]
+                    if preds.get("pred_full_lane_end_logits", None) is not None
+                    else None,
                 )
             tusimple_lanes = gcs_lanes_to_tusimple_lanes(lanes, record["h_samples"], image_shape=original_shape)
             combo_records[_combo_key(combo)].append(
@@ -615,6 +749,10 @@ def sweep(args: argparse.Namespace) -> dict:
         count_aware_extra_margins=effective_count_aware_extra_margins,
         valid_before_maxdet=bool(getattr(args, "valid_before_maxdet", False)),
         candidate_decode=bool(getattr(args, "candidate_decode", False)),
+        segment_decode=bool(getattr(args, "segment_decode", False)),
+        segment_score_as_lane_score=bool(getattr(args, "segment_score_as_lane_score", False)),
+        segment_rescue_base_miss_only=bool(getattr(args, "segment_rescue_base_miss_only", False)),
+        full_lane_decode=bool(getattr(args, "full_lane_decode", False)),
         decode_mode=str(getattr(args, "decode_mode", "query")),
     )
     save_dir.mkdir(parents=True, exist_ok=True)
@@ -690,6 +828,14 @@ def sweep(args: argparse.Namespace) -> dict:
                 "candidate_score_thr": float(getattr(args, "candidate_score_thr", 0.05)),
                 "candidate_short_min_points": int(getattr(args, "candidate_short_min_points", 2)),
                 "candidate_short_max_points": int(getattr(args, "candidate_short_max_points", 10)),
+                "segment_decode": bool(getattr(args, "segment_decode", False)),
+                "segment_score_thr": float(getattr(args, "segment_score_thr", 0.5)),
+                "segment_short_min_points": int(getattr(args, "segment_short_min_points", 3)),
+                "segment_short_max_points": int(getattr(args, "segment_short_max_points", 10)),
+                "segment_pred_valid_overlap_min": int(getattr(args, "segment_pred_valid_overlap_min", 0)),
+                "segment_score_as_lane_score": bool(getattr(args, "segment_score_as_lane_score", False)),
+                "segment_rescue_base_miss_only": bool(getattr(args, "segment_rescue_base_miss_only", False)),
+                "full_lane_decode": bool(getattr(args, "full_lane_decode", False)),
             }
         )
 

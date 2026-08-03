@@ -59,6 +59,7 @@ from ultralytics.models.gcs.decode_summary import (  # noqa: E402
 from ultralytics.models.gcs.mode_utils import resolve_decode_mode  # noqa: E402
 from ultralytics.nn.modules import GCSLaneHead  # noqa: E402
 from ultralytics.utils.gcs_shape import normalize_imgsz, shape_str  # noqa: E402
+from ultralytics.utils.gcs_postprocess import decode_gcs_predictions  # noqa: E402
 from ultralytics.utils.torch_utils import select_device  # noqa: E402
 
 
@@ -85,6 +86,13 @@ PREDICTION_KEYS = (
     "pred_start_logits",
     "pred_end_logits",
     "pred_exist_logits",
+    "pred_full_lane_points",
+    "pred_full_lane_valid_logits",
+    "pred_full_lane_exist_logits",
+    "pred_full_lane_quality_logits",
+    "pred_full_lane_start_logits",
+    "pred_full_lane_end_logits",
+    "pred_full_lane_score_logits",
 )
 
 
@@ -135,6 +143,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-points", nargs="+", type=int, default=[6], help="Minimum visible-anchor floors to sweep.")
     parser.add_argument("--valid-before-maxdet", action="store_true", help="Filter point-valid/min_points failures before max_det truncation.")
     parser.add_argument("--count-aware-topk", action="store_true", help="Use count_score to keep only the quality-best dynamic lane count.")
+    parser.add_argument(
+        "--full-lane-decode",
+        action="store_true",
+        help="Decode base queries and independent full-lane proposals as one set; prediction-only and default-off.",
+    )
     parser.add_argument("--count-aware-min-k", type=int, default=3, help="Minimum k_hat for --count-aware-topk.")
     parser.add_argument("--count-aware-max-k", type=int, default=5, help="Maximum k_hat for --count-aware-topk.")
     parser.add_argument("--count-aware-length-norm", type=float, default=12.0, help="Visible-point count that saturates count-aware length quality.")
@@ -219,6 +232,7 @@ def resolve_cached_save_dir(args: argparse.Namespace, effective_margins: list[in
         count_aware_topk=bool(getattr(args, "count_aware_topk", False)),
         count_aware_extra_margins=effective_margins,
         valid_before_maxdet=bool(getattr(args, "valid_before_maxdet", False)),
+        full_lane_decode=bool(getattr(args, "full_lane_decode", False)),
         decode_mode=decode_mode,
     )
     return base.with_name(f"{base.name}_cached")
@@ -275,6 +289,7 @@ def _apply_query_decode_yaml(args: argparse.Namespace, decode_yaml_cfg: dict[str
     args.count_aware_length_norm = float(decode_yaml_cfg["count_aware_length_norm"])
     args.count_aware_extra_margins = [int(decode_yaml_cfg.get("count_aware_extra_margin", 0))]
     args.count_modes = [str(decode_yaml_cfg.get("count_mode", "score_sum"))]
+    args.full_lane_decode = bool(decode_yaml_cfg.get("full_lane_decode", False))
 
 
 def _load_decode_yaml_for_sweep(args: argparse.Namespace) -> dict[str, Any] | None:
@@ -581,26 +596,128 @@ class CachedQueryPrediction:
         points = np.clip(points, 0.0, 1.0)
         order = np.argsort(-points[:, :, 1], axis=1, kind="stable")
         self.points = np.take_along_axis(points, order[:, :, None], axis=1).astype(np.float32)
+        self.logits = logits
         self.scores = _sigmoid_np(logits)
         self.query_indices = np.arange(self.points.shape[0], dtype=np.int64)
         self.k = int(self.points.shape[1])
 
         pred_valid = preds.get("pred_valid_logits")
         self.valid_scores: np.ndarray | None = None
+        self.valid_logits: np.ndarray | None = None
         if isinstance(pred_valid, torch.Tensor):
             valid_logits = pred_valid.float().cpu().numpy().astype(np.float32)
             if valid_logits.ndim == 3 and valid_logits.shape[-1] == 1:
                 valid_logits = np.squeeze(valid_logits, axis=-1)
             if tuple(valid_logits.shape) != tuple(self.points.shape[:2]):
                 raise ValueError(f"pred_valid_logits shape mismatch for {self.raw_file}: {valid_logits.shape} vs {self.points.shape[:2]}.")
+            self.valid_logits = np.take_along_axis(valid_logits, order, axis=1).astype(np.float32)
             valid_scores = _sigmoid_np(valid_logits)
             self.valid_scores = np.take_along_axis(valid_scores, order, axis=1).astype(np.float32)
+
+        full_keys = (
+            "pred_full_lane_points",
+            "pred_full_lane_valid_logits",
+            "pred_full_lane_exist_logits",
+            "pred_full_lane_quality_logits",
+            "pred_full_lane_start_logits",
+            "pred_full_lane_end_logits",
+        )
+        full_present = [key in preds for key in full_keys]
+        self.full_lane_points: np.ndarray | None = None
+        self.full_lane_valid_logits: np.ndarray | None = None
+        self.full_lane_exist_logits: np.ndarray | None = None
+        self.full_lane_quality_logits: np.ndarray | None = None
+        self.full_lane_start_logits: np.ndarray | None = None
+        self.full_lane_end_logits: np.ndarray | None = None
+        self.full_lane_score_logits: np.ndarray | None = None
+        if any(full_present):
+            if not all(full_present):
+                missing = [key for key, present in zip(full_keys, full_present) if not present]
+                raise ValueError(
+                    f"Incomplete full-lane prediction cache for {self.raw_file}; missing {missing}."
+                )
+            full_points = preds["pred_full_lane_points"].float().cpu().numpy().astype(np.float32)
+            full_valid_logits = preds["pred_full_lane_valid_logits"].float().cpu().numpy().astype(np.float32)
+            full_exist_logits = preds["pred_full_lane_exist_logits"].float().cpu().numpy().astype(np.float32).reshape(-1)
+            full_quality_logits = preds["pred_full_lane_quality_logits"].float().cpu().numpy().astype(np.float32).reshape(-1)
+            full_start_logits = preds["pred_full_lane_start_logits"].float().cpu().numpy().astype(np.float32)
+            full_end_logits = preds["pred_full_lane_end_logits"].float().cpu().numpy().astype(np.float32)
+            expected_pk = (full_points.shape[0], self.k)
+            if full_points.ndim != 3 or full_points.shape[-1] != 2 or tuple(full_points.shape[:2]) != expected_pk:
+                raise ValueError(
+                    f"pred_full_lane_points must have P x K x 2 with K={self.k} for {self.raw_file}, "
+                    f"got {full_points.shape}."
+                )
+            for name, value in (
+                ("pred_full_lane_valid_logits", full_valid_logits),
+                ("pred_full_lane_start_logits", full_start_logits),
+                ("pred_full_lane_end_logits", full_end_logits),
+            ):
+                if tuple(value.shape) != expected_pk:
+                    raise ValueError(f"{name} must have shape P x K for {self.raw_file}, got {value.shape} vs {expected_pk}.")
+            proposal_count = int(full_points.shape[0])
+            if full_exist_logits.shape != (proposal_count,) or full_quality_logits.shape != (proposal_count,):
+                raise ValueError(
+                    "pred_full_lane_exist_logits and pred_full_lane_quality_logits must have shape P "
+                    f"for {self.raw_file}, got {full_exist_logits.shape} and {full_quality_logits.shape}."
+                )
+            full_order = np.argsort(-full_points[:, :, 1], axis=1, kind="stable")
+            self.full_lane_points = np.take_along_axis(full_points, full_order[:, :, None], axis=1).astype(np.float32)
+            self.full_lane_valid_logits = np.take_along_axis(full_valid_logits, full_order, axis=1).astype(np.float32)
+            self.full_lane_start_logits = np.take_along_axis(full_start_logits, full_order, axis=1).astype(np.float32)
+            self.full_lane_end_logits = np.take_along_axis(full_end_logits, full_order, axis=1).astype(np.float32)
+            self.full_lane_exist_logits = full_exist_logits
+            self.full_lane_quality_logits = full_quality_logits
+            full_score_logits = preds.get("pred_full_lane_score_logits")
+            if isinstance(full_score_logits, torch.Tensor):
+                full_score_logits = full_score_logits.float().cpu().numpy().astype(np.float32).reshape(-1)
+                if full_score_logits.shape != (proposal_count,):
+                    raise ValueError(
+                        "pred_full_lane_score_logits must have shape P "
+                        f"for {self.raw_file}, got {full_score_logits.shape}."
+                    )
+                self.full_lane_score_logits = full_score_logits
 
         pred_count_logits = preds.get("pred_count_logits")
         self.pred_count_logits: np.ndarray | None = None
         if isinstance(pred_count_logits, torch.Tensor):
             self.pred_count_logits = pred_count_logits.float().cpu().numpy().astype(np.float32).reshape(-1)
         self._valid_cache: dict[tuple[float, int, float], dict[str, Any]] = {}
+
+    def _decode_full_lane_tusimple_lanes(self, combo: dict[str, Any]) -> list[list[int]]:
+        """Decode the cached base/full proposal set through the canonical decoder."""
+        required = (
+            self.full_lane_points,
+            self.full_lane_valid_logits,
+            self.full_lane_exist_logits,
+            self.full_lane_quality_logits,
+            self.full_lane_start_logits,
+            self.full_lane_end_logits,
+            self.valid_logits,
+        )
+        if any(value is None for value in required):
+            raise ValueError(
+                f"full_lane_decode requires complete base/full proposal tensors in the cache for {self.raw_file}."
+            )
+        lanes = decode_gcs_predictions(
+            torch.from_numpy(self.points),
+            torch.from_numpy(self.logits),
+            pred_valid_logits=torch.from_numpy(self.valid_logits),
+            image_shape=self.image_shape,
+            score_thr=float(combo["conf"]),
+            point_valid_thr=float(combo["point_valid_thr"]),
+            min_points=int(combo["min_points"]),
+            max_det=int(combo["max_det"]),
+            nms_dist_px=float(combo["nms_dist_px"]),
+            full_lane_decode=True,
+            pred_full_lane_points=torch.from_numpy(self.full_lane_points),
+            pred_full_lane_valid_logits=torch.from_numpy(self.full_lane_valid_logits),
+            pred_full_lane_exist_logits=torch.from_numpy(self.full_lane_exist_logits),
+            pred_full_lane_quality_logits=torch.from_numpy(self.full_lane_quality_logits),
+            pred_full_lane_start_logits=torch.from_numpy(self.full_lane_start_logits),
+            pred_full_lane_end_logits=torch.from_numpy(self.full_lane_end_logits),
+        )
+        return gcs_lanes_to_tusimple_lanes(lanes, self.h_samples, image_shape=self.image_shape)
 
     def _valid_context(self, point_valid_thr: float, min_points: int, length_norm: float) -> dict[str, Any]:
         key = (round(float(point_valid_thr), 12), int(min_points), float(length_norm))
@@ -704,6 +821,9 @@ class CachedQueryPrediction:
         return np.asarray(keep_positions, dtype=np.int64)
 
     def decode_tusimple_lanes(self, combo: dict[str, Any]) -> list[list[int]]:
+        if bool(combo.get("full_lane_decode", False)):
+            return self._decode_full_lane_tusimple_lanes(combo)
+
         min_points = int(combo["min_points"])
         if min_points > self.k:
             return []
@@ -1023,6 +1143,7 @@ def _config_for_summary(
                 "count_aware_length_norm": float(getattr(args, "count_aware_length_norm", 12.0)),
                 "count_aware_extra_margins": effective_margins,
                 "count_modes": [str(x) for x in sorted({str(x) for x in getattr(args, "count_modes", ["score_sum"])})],
+                "full_lane_decode": bool(getattr(args, "full_lane_decode", False)),
                 "query_cache_precompute": "valid_masks_tusimple_lanes_count_aware_quality",
             }
         )

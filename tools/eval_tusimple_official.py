@@ -125,6 +125,40 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--candidate-score-thr", type=float, default=0.05)
     parser.add_argument("--candidate-short-min-points", type=int, default=2)
     parser.add_argument("--candidate-short-max-points", type=int, default=10)
+    parser.add_argument(
+        "--segment-decode",
+        action="store_true",
+        help="Enable default-off local short-segment base-choice decode for pred_short_segment_* outputs.",
+    )
+    parser.add_argument(
+        "--segment-score-thr",
+        type=float,
+        default=0.5,
+        help="Minimum local short-segment selector probability required to replace the base query.",
+    )
+    parser.add_argument("--segment-short-min-points", type=int, default=3)
+    parser.add_argument("--segment-short-max-points", type=int, default=10)
+    parser.add_argument(
+        "--segment-pred-valid-overlap-min",
+        type=int,
+        default=0,
+        help="Optional minimum overlap between a segment window and base predicted-valid anchors.",
+    )
+    parser.add_argument(
+        "--segment-score-as-lane-score",
+        action="store_true",
+        help="When segment decode applies, let segment probability raise the final lane score.",
+    )
+    parser.add_argument(
+        "--segment-rescue-base-miss-only",
+        action="store_true",
+        help="Apply segment replacement only to queries below the base existence threshold.",
+    )
+    parser.add_argument(
+        "--full-lane-decode",
+        action="store_true",
+        help="Enable default-off joint decode of base queries and independent full-lane proposals.",
+    )
     parser.add_argument("--max-images", type=int, default=0, help="Limit number of GT records. 0 means all.")
     parser.add_argument("--warmup", type=int, default=20, help="Number of untimed warmup forwards.")
     parser.add_argument("--device", default="0", help="Inference device, e.g. 0 or cpu.")
@@ -182,6 +216,10 @@ def resolve_save_dir(
     count_aware_topk: bool = False,
     valid_before_maxdet: bool = False,
     oracle_count: bool = False,
+    segment_decode: bool = False,
+    segment_score_as_lane_score: bool = False,
+    segment_rescue_base_miss_only: bool = False,
+    full_lane_decode: bool = False,
     decode_mode: str = "auto",
 ) -> Path:
     if save_dir is not None and str(save_dir).strip():
@@ -194,9 +232,14 @@ def resolve_save_dir(
             count_tag += f"_extra{int(count_aware_extra_margin)}"
         oracle_tag = "_oraclecount" if oracle_count else ""
         valid_tag = "_validbeforemaxdet" if valid_before_maxdet else ""
+        segment_tag = "_segment_decode" if segment_decode else ""
+        segment_score_tag = "_segment_score_lane" if segment_score_as_lane_score else ""
+        segment_rescue_tag = "_segment_base_miss" if segment_rescue_base_miss_only else ""
+        full_lane_tag = "_full_lane_decode" if full_lane_decode else ""
         tag = (
             f"official_{split}_conf{float(conf):.4g}_pvalid{float(point_valid_thr):.4g}_"
-            f"nms{float(nms_dist_px):.4g}_maxdet{int(max_det)}_minp{int(min_points)}{count_tag}{oracle_tag}{valid_tag}"
+            f"nms{float(nms_dist_px):.4g}_maxdet{int(max_det)}_minp{int(min_points)}"
+            f"{count_tag}{oracle_tag}{valid_tag}{segment_tag}{segment_score_tag}{segment_rescue_tag}{full_lane_tag}"
         ).replace(".", "p")
     run_dir = _weight_run_dir(weights)
     if run_dir is not None:
@@ -320,6 +363,14 @@ def generate_predictions(
     candidate_score_thr: float = 0.05,
     candidate_short_min_points: int = 2,
     candidate_short_max_points: int = 10,
+    segment_decode: bool = False,
+    segment_score_thr: float = 0.5,
+    segment_short_min_points: int = 3,
+    segment_short_max_points: int = 10,
+    segment_pred_valid_overlap_min: int = 0,
+    segment_score_as_lane_score: bool = False,
+    segment_rescue_base_miss_only: bool = False,
+    full_lane_decode: bool = False,
     valid_before_maxdet: bool = False,
     decode_mode: str = "auto",
     decode_yaml_cfg: dict | None = None,
@@ -355,8 +406,29 @@ def generate_predictions(
             raise RuntimeError("--oracle-count is query-decode diagnostic only and is not valid for ordered_slot.")
         count_aware_topk = True
         count_mode = "oracle_gt"
-    if candidate_decode and str(decode_mode) == "ordered_slot":
-        raise RuntimeError("--candidate-decode is query-decode only and is not valid for ordered_slot.")
+    if (candidate_decode or segment_decode) and str(decode_mode) == "ordered_slot":
+        raise RuntimeError("candidate/segment decode is query-decode only and is not valid for ordered_slot.")
+    if candidate_decode and segment_decode:
+        raise RuntimeError("--candidate-decode and --segment-decode are mutually exclusive.")
+    if full_lane_decode and (candidate_decode or segment_decode):
+        raise RuntimeError("--full-lane-decode is mutually exclusive with candidate/segment decode.")
+    if (candidate_decode or segment_decode) and count_aware_topk:
+        raise RuntimeError("candidate/segment decode is mutually exclusive with --count-aware-topk.")
+    if full_lane_decode and count_aware_topk:
+        raise RuntimeError("--full-lane-decode is mutually exclusive with --count-aware-topk.")
+    if full_lane_decode and str(decode_mode) == "ordered_slot":
+        raise RuntimeError("--full-lane-decode is query-decode only and is not valid for ordered_slot.")
+    if not 0.0 <= float(segment_score_thr) <= 1.0:
+        raise ValueError(f"segment-score-thr must be in [0, 1], got {segment_score_thr}.")
+    if int(segment_short_min_points) < 1 or int(segment_short_max_points) < int(segment_short_min_points):
+        raise ValueError(
+            "segment short point bounds must satisfy 1 <= min <= max, "
+            f"got {segment_short_min_points}/{segment_short_max_points}."
+        )
+    if int(segment_pred_valid_overlap_min) < 0:
+        raise ValueError(
+            f"segment-pred-valid-overlap-min must be >= 0, got {segment_pred_valid_overlap_min}."
+        )
     if str(decode_mode) == "ordered_slot" and query_decode_defaults is not None:
         guard_no_query_decode_args_for_ordered_slot(
             {
@@ -441,6 +513,10 @@ def generate_predictions(
             pred_count_logits = preds.get("pred_count_logits")
             pred_candidate_points = preds.get("pred_short_candidate_points")
             pred_candidate_logits = preds.get("pred_short_candidate_logits")
+            pred_segment_points = preds.get("pred_short_segment_points")
+            pred_segment_logits = preds.get("pred_short_segment_logits")
+            pred_segment_window_mask = preds.get("pred_short_segment_window_mask")
+            pred_segment_choice_logits = preds.get("pred_short_segment_choice_logits")
             lanes = decode_gcs_predictions(
                 preds["pred_points"][0],
                 preds["pred_logits"][0],
@@ -448,6 +524,12 @@ def generate_predictions(
                 pred_count_logits=pred_count_logits[0] if pred_count_logits is not None else None,
                 pred_short_candidate_points=pred_candidate_points[0] if pred_candidate_points is not None else None,
                 pred_short_candidate_logits=pred_candidate_logits[0] if pred_candidate_logits is not None else None,
+                pred_short_segment_points=pred_segment_points[0] if pred_segment_points is not None else None,
+                pred_short_segment_logits=pred_segment_logits[0] if pred_segment_logits is not None else None,
+                pred_short_segment_window_mask=pred_segment_window_mask,
+                pred_short_segment_choice_logits=(
+                    pred_segment_choice_logits[0] if pred_segment_choice_logits is not None else None
+                ),
                 oracle_count=_gt_lane_count(record) if oracle_count else None,
                 image_shape=original_shape,
                 score_thr=conf,
@@ -466,6 +548,32 @@ def generate_predictions(
                 candidate_score_thr=candidate_score_thr,
                 candidate_short_min_points=candidate_short_min_points,
                 candidate_short_max_points=candidate_short_max_points,
+                segment_decode=segment_decode,
+                segment_score_thr=segment_score_thr,
+                segment_short_min_points=segment_short_min_points,
+                segment_short_max_points=segment_short_max_points,
+                segment_pred_valid_overlap_min=segment_pred_valid_overlap_min,
+                segment_score_as_lane_score=segment_score_as_lane_score,
+                segment_rescue_base_miss_only=segment_rescue_base_miss_only,
+                full_lane_decode=full_lane_decode,
+                pred_full_lane_points=preds.get("pred_full_lane_points", None)[0]
+                if preds.get("pred_full_lane_points", None) is not None
+                else None,
+                pred_full_lane_valid_logits=preds.get("pred_full_lane_valid_logits", None)[0]
+                if preds.get("pred_full_lane_valid_logits", None) is not None
+                else None,
+                pred_full_lane_exist_logits=preds.get("pred_full_lane_exist_logits", None)[0]
+                if preds.get("pred_full_lane_exist_logits", None) is not None
+                else None,
+                pred_full_lane_quality_logits=preds.get("pred_full_lane_quality_logits", None)[0]
+                if preds.get("pred_full_lane_quality_logits", None) is not None
+                else None,
+                pred_full_lane_start_logits=preds.get("pred_full_lane_start_logits", None)[0]
+                if preds.get("pred_full_lane_start_logits", None) is not None
+                else None,
+                pred_full_lane_end_logits=preds.get("pred_full_lane_end_logits", None)[0]
+                if preds.get("pred_full_lane_end_logits", None) is not None
+                else None,
             )
         tusimple_lanes = gcs_lanes_to_tusimple_lanes(lanes, record["h_samples"], image_shape=original_shape)
         t2 = time.perf_counter()
@@ -519,6 +627,8 @@ def evaluate_official(args: argparse.Namespace) -> dict:
             raise RuntimeError("--oracle-count requires model inference and cannot be used with --pred-json.")
         if bool(getattr(args, "candidate_decode", False)):
             raise RuntimeError("--candidate-decode requires model inference and cannot be used with --pred-json.")
+        if bool(getattr(args, "segment_decode", False)):
+            raise RuntimeError("--segment-decode requires model inference and cannot be used with --pred-json.")
         pred_path = Path(pred_json)
         pred_records = _limit_records(read_tusimple_json_lines(pred_path), args.max_images)
     else:
@@ -539,6 +649,14 @@ def evaluate_official(args: argparse.Namespace) -> dict:
         query_candidate_score_thr = float(getattr(args, "candidate_score_thr", 0.05))
         query_candidate_short_min_points = int(getattr(args, "candidate_short_min_points", 2))
         query_candidate_short_max_points = int(getattr(args, "candidate_short_max_points", 10))
+        query_segment_decode = bool(getattr(args, "segment_decode", False))
+        query_segment_score_thr = float(getattr(args, "segment_score_thr", 0.5))
+        query_segment_short_min_points = int(getattr(args, "segment_short_min_points", 3))
+        query_segment_short_max_points = int(getattr(args, "segment_short_max_points", 10))
+        query_segment_pred_valid_overlap_min = int(getattr(args, "segment_pred_valid_overlap_min", 0))
+        query_segment_score_as_lane_score = bool(getattr(args, "segment_score_as_lane_score", False))
+        query_segment_rescue_base_miss_only = bool(getattr(args, "segment_rescue_base_miss_only", False))
+        query_full_lane_decode = bool(getattr(args, "full_lane_decode", False))
         if query_oracle_count:
             query_count_aware_topk = True
             query_count_mode = "oracle_gt"
@@ -565,6 +683,14 @@ def evaluate_official(args: argparse.Namespace) -> dict:
             candidate_score_thr=query_candidate_score_thr,
             candidate_short_min_points=query_candidate_short_min_points,
             candidate_short_max_points=query_candidate_short_max_points,
+            segment_decode=query_segment_decode,
+            segment_score_thr=query_segment_score_thr,
+            segment_short_min_points=query_segment_short_min_points,
+            segment_short_max_points=query_segment_short_max_points,
+            segment_pred_valid_overlap_min=query_segment_pred_valid_overlap_min,
+            segment_score_as_lane_score=query_segment_score_as_lane_score,
+            segment_rescue_base_miss_only=query_segment_rescue_base_miss_only,
+            full_lane_decode=query_full_lane_decode,
             decode_mode=args.decode_mode,
             decode_yaml_cfg=decode_yaml_cfg,
             gcs_min_lanes=int(getattr(args, "gcs_min_lanes", 2)),
@@ -599,6 +725,14 @@ def evaluate_official(args: argparse.Namespace) -> dict:
     query_candidate_score_thr = float(getattr(args, "candidate_score_thr", 0.05))
     query_candidate_short_min_points = int(getattr(args, "candidate_short_min_points", 2))
     query_candidate_short_max_points = int(getattr(args, "candidate_short_max_points", 10))
+    query_segment_decode = bool(getattr(args, "segment_decode", False))
+    query_segment_score_thr = float(getattr(args, "segment_score_thr", 0.5))
+    query_segment_short_min_points = int(getattr(args, "segment_short_min_points", 3))
+    query_segment_short_max_points = int(getattr(args, "segment_short_max_points", 10))
+    query_segment_pred_valid_overlap_min = int(getattr(args, "segment_pred_valid_overlap_min", 0))
+    query_segment_score_as_lane_score = bool(getattr(args, "segment_score_as_lane_score", False))
+    query_segment_rescue_base_miss_only = bool(getattr(args, "segment_rescue_base_miss_only", False))
+    query_full_lane_decode = bool(getattr(args, "full_lane_decode", False))
     if query_oracle_count:
         query_count_aware_topk = True
         query_count_mode = "oracle_gt"
@@ -616,6 +750,10 @@ def evaluate_official(args: argparse.Namespace) -> dict:
         count_aware_topk=query_count_aware_topk,
         valid_before_maxdet=query_valid_before_maxdet,
         oracle_count=query_oracle_count,
+        segment_decode=query_segment_decode,
+        segment_score_as_lane_score=query_segment_score_as_lane_score,
+        segment_rescue_base_miss_only=query_segment_rescue_base_miss_only,
+        full_lane_decode=query_full_lane_decode,
         decode_mode=active_decode_mode,
     )
     save_dir.mkdir(parents=True, exist_ok=True)
@@ -714,6 +852,14 @@ def evaluate_official(args: argparse.Namespace) -> dict:
                 "candidate_score_thr": query_candidate_score_thr,
                 "candidate_short_min_points": query_candidate_short_min_points,
                 "candidate_short_max_points": query_candidate_short_max_points,
+                "segment_decode": query_segment_decode,
+                "segment_score_thr": query_segment_score_thr,
+                "segment_short_min_points": query_segment_short_min_points,
+                "segment_short_max_points": query_segment_short_max_points,
+                "segment_pred_valid_overlap_min": query_segment_pred_valid_overlap_min,
+                "segment_score_as_lane_score": query_segment_score_as_lane_score,
+                "segment_rescue_base_miss_only": query_segment_rescue_base_miss_only,
+                "full_lane_decode": query_full_lane_decode,
                 "oracle_count": query_oracle_count,
                 "uses_gt_count_for_decode": query_oracle_count,
                 "diagnostic_only": query_oracle_count,

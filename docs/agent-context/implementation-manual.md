@@ -159,6 +159,32 @@ It is enabled only by
 `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-local-segment-proposal-v8.yaml`.
 Default decode does not consume the v8 tensor.
 
+The optional local short-segment base-choice selector v9 YAML preserves the
+v6/v7/v8 proposal geometry and proposal-local candidate-quality score, but
+disables both per-candidate replace logits and query-level replace logits. It
+adds no new public prediction tensor beyond the v4 short-segment proposal
+contract and is enabled only by
+`ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-local-segment-proposal-v9.yaml`.
+The v9 loss/diagnostic treats the frozen env30 base as a zero-logit option
+against the 404 segment proposals.
+
+The v10 local-segment tensors have a separate prediction-only,
+default-off official evaluation path:
+
+```text
+tools/sweep_tusimple_official.py --segment-decode
+tools/eval_tusimple_official.py --segment-decode
+```
+
+This path is not consumed by the default query decode or training-time
+validation. It requires `pred_short_segment_points`,
+`pred_short_segment_logits`, and `pred_short_segment_window_mask`, treats
+base as a fixed zero-logit choice, applies the selected segment window mask
+to point-valid filtering, and is mutually exclusive with
+`candidate_decode` and count-aware top-k. The older `candidate_decode` path
+continues to require `pred_short_candidate_points/logits`; do not use it as
+an alias for local-segment outputs.
+
 Legacy post-env30 record: the rejected query extent probe added:
 
 ```text
@@ -245,3 +271,93 @@ ultralytics/cfg/__init__.py
 ## Agent Tooling
 
 Agent/Skill configuration is local Codex workspace context, not part of the server-side algorithm payload for this branch. Do not require agent setup checks on the remote training server. These workflow rules do not change the 5-25-3 algorithm body or activate later mainline Count/Quality/Boundary behavior.
+
+## Independent Full-Lane Proposal Set Decoder
+
+The full-lane proposal decoder is an explicit default-off experiment. It must
+not be added to `gcs-yolo-lane-s.yaml`. The dedicated YAML creates an
+image-conditioned Transformer proposal bank with complete K56 geometry,
+per-point visibility, visible start/end interval, existence, and geometry
+quality outputs.
+
+Training uses one Hungarian set over the concatenated base and full proposals.
+The full proposal loss supervises complete GT-visible geometry and assigns
+unmatched proposals negative existence/visibility targets. Matching and both
+decode paths use the same existence-quality-visibility score helper.
+
+Before any remote run, execute:
+
+```text
+python tools/check_gcs_full_lane_proposal.py
+python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml --imgsz 544 960 --batch 1 --device cpu
+python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-full-lane-proposal.yaml --imgsz 544 960 --batch 1 --device cpu
+```
+
+The strict proposal upper-bound diagnostic is:
+
+```text
+python tools/diagnose_gcs_full_lane_oracle.py --weights <full-lane-checkpoint.pt> --split val --imgsz 544 960
+```
+
+It counts a full-lane oracle hit only when the proposal visibility mask covers
+every visible GT `h_sample` and the full-span APE is within the configured
+pixel gate. Partial overlap is reported as auxiliary information only.
+
+Do not interpret local shape/gradient checks as accuracy evidence. Full-lane
+promotion still requires a complete-visible-span oracle and official-val
+selection; TEST remains closed until that gate is passed.
+
+The v2 aux-warmup path is enabled only by:
+
+```text
+gcs_full_lane_aux_assignment = true
+gcs_full_lane_unified_matching = false
+gcs_full_lane_unmatched_weight = 0
+gcs_full_lane_unmatched_valid_weight = 0
+gcs_full_lane_freeze_base = true
+```
+
+It trains only `full_lane_*` parameters and uses proposal-only Hungarian
+assignment so the mature env30 base queries cannot starve the new proposals.
+The required first validation is training closure:
+
+```text
+full_lane_match_count > 0
+full_lane_point_loss > 0
+full_lane_interval_loss > 0
+```
+
+Only after that should strict full-visible-span oracle diagnostics be used,
+and only after nonzero full-proposal oracle hits should official-val
+`--full-lane-decode` sweeps be considered. TEST remains closed.
+
+## Dense Instance/Keypoint Evidence Probe
+
+The image-conditioned replacement direction starts with dense evidence rather
+than another query-local selector. Use the dedicated default-off YAML:
+
+```text
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-dense-instance-proposal.yaml
+```
+
+The head keeps the env30 query outputs and adds centerline logits, two endpoint
+logits, and per-pixel instance embeddings from P2. Dense targets are built
+from normalized fixed-y lane labels, with no GT passed through model forward
+or inference decode. The embedding push loss compares lanes only within each
+image; cross-image lane indices have no identity relationship. The dedicated
+probe script enables `gcs_dense_freeze_base` by default, so only
+`dense_instance_*` parameters train and all other modules, including frozen
+BatchNorm statistics, remain fixed.
+
+Required local checks:
+
+```bash
+python tools/check_gcs_dense_instance.py
+python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml --imgsz 544 960 --batch 1 --device cpu
+python tools/check_model.py --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-dense-instance-proposal.yaml --imgsz 544 960 --batch 1 --device cpu
+```
+
+The dense output is evidence only. Do not add a selector, component assembler,
+formal decode, or TEST path until the strict diagnostic demonstrates
+complete-visible-span evidence on frozen env30 base-miss GT5 for both
+official-val and train0601. Default env30 behavior must remain unchanged.

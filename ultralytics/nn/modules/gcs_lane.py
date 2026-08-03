@@ -5,6 +5,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from ultralytics.utils.gcs_full_lane import full_lane_proposal_score_probability, probability_to_logit
+
 __all__ = (
     "CoordReweight",
     "LineStripAttention",
@@ -224,6 +226,12 @@ class GCSLaneHead(nn.Module):
         short_segment_replace_head: bool = False,
         short_segment_local_evidence: bool = False,
         short_segment_query_replace_head: bool = False,
+        short_segment_unified_choice_head: bool = False,
+        full_lane_proposal_head: bool = False,
+        full_lane_proposal_count: int = 8,
+        full_lane_proposal_decoder_layers: int = 2,
+        dense_instance_head: bool = False,
+        dense_instance_embed_dim: int = 8,
     ):
         """Initialize the GCS lane query decoder and training-only auxiliary heads."""
         super().__init__()
@@ -386,6 +394,7 @@ class GCSLaneHead(nn.Module):
             self.short_segment_replace_head = bool(short_segment_replace_head)
             self.short_segment_local_evidence = bool(short_segment_local_evidence)
             self.short_segment_query_replace_head = bool(short_segment_query_replace_head)
+            self.short_segment_unified_choice_head = bool(short_segment_unified_choice_head)
             if self.short_segment_max_delta_px <= 0.0:
                 raise ValueError(
                     "GCSLaneHead short_segment_max_delta_px must be > 0 when short_segment_head=True, "
@@ -428,6 +437,83 @@ class GCSLaneHead(nn.Module):
                     nn.ReLU(inplace=True),
                     nn.Linear(c1 // 2, 1),
                 )
+            if self.short_segment_unified_choice_head:
+                self.short_segment_unified_choice_mlp = nn.Sequential(
+                    nn.Linear(c1, c1 // 2),
+                    nn.ReLU(inplace=True),
+                    nn.Linear(c1 // 2, 1),
+                )
+        self.full_lane_proposal_head = self.gcs_mode == "query" and bool(full_lane_proposal_head)
+        if self.full_lane_proposal_head:
+            self.full_lane_proposal_count = int(full_lane_proposal_count)
+            self.full_lane_proposal_decoder_layers = int(full_lane_proposal_decoder_layers)
+            if self.full_lane_proposal_count <= 0:
+                raise ValueError(
+                    "GCSLaneHead full_lane_proposal_count must be positive, "
+                    f"got {full_lane_proposal_count}."
+                )
+            if self.full_lane_proposal_decoder_layers <= 0:
+                raise ValueError(
+                    "GCSLaneHead full_lane_proposal_decoder_layers must be positive, "
+                    f"got {full_lane_proposal_decoder_layers}."
+                )
+            self.full_lane_query_embed = nn.Embedding(self.full_lane_proposal_count, c1)
+            full_decoder_layer = nn.TransformerDecoderLayer(
+                d_model=c1,
+                nhead=nhead,
+                dim_feedforward=c1 * 4,
+                dropout=0.0,
+                batch_first=True,
+                activation="gelu",
+            )
+            self.full_lane_decoder = nn.TransformerDecoder(
+                full_decoder_layer,
+                num_layers=self.full_lane_proposal_decoder_layers,
+            )
+            self.full_lane_point_mlp = nn.Sequential(
+                nn.Linear(c1, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, num_points * self.point_dims),
+            )
+            self.full_lane_valid_mlp = nn.Sequential(
+                nn.Linear(c1, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, num_points),
+            )
+            self.full_lane_exist_mlp = nn.Sequential(
+                nn.Linear(c1, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, 1),
+            )
+            self.full_lane_quality_mlp = nn.Sequential(
+                nn.Linear(c1, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, 1),
+            )
+            self.full_lane_start_mlp = nn.Sequential(
+                nn.Linear(c1, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, num_points),
+            )
+            self.full_lane_end_mlp = nn.Sequential(
+                nn.Linear(c1, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, num_points),
+            )
+        self.dense_instance_head = self.gcs_mode == "query" and bool(dense_instance_head)
+        if self.dense_instance_head:
+            self.dense_instance_embed_dim = int(dense_instance_embed_dim)
+            if self.dense_instance_embed_dim < 2:
+                raise ValueError(
+                    "GCSLaneHead dense_instance_embed_dim must be >= 2, "
+                    f"got {dense_instance_embed_dim}."
+                )
+            self.dense_instance_stem = ConvBNAct(c1, c1, k=3)
+            self.dense_instance_centerline = nn.Conv2d(c1, 1, kernel_size=1)
+            self.dense_instance_endpoint = nn.Conv2d(c1, 2, kernel_size=1)
+            self.dense_instance_embed = nn.Conv2d(c1, self.dense_instance_embed_dim, kernel_size=1)
         if self.gcs_mode == "ordered_slot":
             self.start_mlp = nn.Sequential(
                 nn.Linear(c1, c1),
@@ -467,6 +553,10 @@ class GCSLaneHead(nn.Module):
             self._init_short_candidate_head()
         if self.short_segment_head:
             self._init_short_segment_head()
+        if self.full_lane_proposal_head:
+            self._init_full_lane_proposal_head()
+        if self.dense_instance_head:
+            self._init_dense_instance_head()
 
     def _build_short_segment_windows(self, lengths, stride: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Build contiguous short-window anchors over the fixed-y K dimension."""
@@ -598,13 +688,44 @@ class GCSLaneHead(nn.Module):
             query_replace_final = self.short_segment_query_replace_mlp[-1]
             nn.init.normal_(query_replace_final.weight, mean=0.0, std=1e-3)
             nn.init.constant_(query_replace_final.bias, -4.0)
+        if getattr(self, "short_segment_unified_choice_head", False):
+            choice_final = self.short_segment_unified_choice_mlp[-1]
+            nn.init.normal_(choice_final.weight, mean=0.0, std=1e-3)
+            nn.init.zeros_(choice_final.bias)
         if getattr(self, "short_segment_local_evidence", False):
             nn.init.normal_(self.short_segment_local_image_proj.weight, mean=0.0, std=1e-3)
             nn.init.zeros_(self.short_segment_local_image_proj.bias)
             for module in self.short_segment_geometry_mlp:
-                if isinstance(module, nn.Linear):
-                    nn.init.normal_(module.weight, mean=0.0, std=1e-3)
-                    nn.init.zeros_(module.bias)
+                    if isinstance(module, nn.Linear):
+                        nn.init.normal_(module.weight, mean=0.0, std=1e-3)
+                        nn.init.zeros_(module.bias)
+
+    def _init_full_lane_proposal_head(self):
+        """Initialize independent full-lane proposals with conservative scores."""
+        nn.init.normal_(self.full_lane_query_embed.weight, mean=0.0, std=0.02)
+        for mlp in (
+            self.full_lane_point_mlp,
+            self.full_lane_valid_mlp,
+            self.full_lane_exist_mlp,
+            self.full_lane_quality_mlp,
+            self.full_lane_start_mlp,
+            self.full_lane_end_mlp,
+        ):
+            final = mlp[-1]
+            nn.init.normal_(final.weight, mean=0.0, std=1e-3)
+            nn.init.zeros_(final.bias)
+        nn.init.constant_(self.full_lane_exist_mlp[-1].bias, -4.0)
+        nn.init.constant_(self.full_lane_quality_mlp[-1].bias, -2.0)
+        nn.init.constant_(self.full_lane_valid_mlp[-1].bias, -1.0)
+
+    def _init_dense_instance_head(self):
+        """Initialize dense evidence logits conservatively while preserving image features."""
+        nn.init.normal_(self.dense_instance_centerline.weight, mean=0.0, std=1e-3)
+        nn.init.constant_(self.dense_instance_centerline.bias, -2.0)
+        nn.init.normal_(self.dense_instance_endpoint.weight, mean=0.0, std=1e-3)
+        nn.init.constant_(self.dense_instance_endpoint.bias, -3.0)
+        nn.init.normal_(self.dense_instance_embed.weight, mean=0.0, std=1e-2)
+        nn.init.zeros_(self.dense_instance_embed.bias)
 
     def _short_segment_local_tokens(
         self,
@@ -817,7 +938,76 @@ class GCSLaneHead(nn.Module):
         if getattr(self, "short_segment_query_replace_head", False):
             query_tokens_for_replace = score_tokens.max(dim=2).values
             query_replace_logits = self.short_segment_query_replace_mlp(query_tokens_for_replace).squeeze(-1)
-        return segment_points, segment_logits, segment_x, replace_logits, query_replace_logits
+        unified_choice_logits = None
+        if getattr(self, "short_segment_unified_choice_head", False):
+            base_choice_logits = self.short_segment_unified_choice_mlp(hs).squeeze(-1)
+            unified_choice_logits = torch.cat((base_choice_logits.unsqueeze(-1), segment_logits), dim=-1)
+        return (
+            segment_points,
+            segment_logits,
+            segment_x,
+            replace_logits,
+            query_replace_logits,
+            unified_choice_logits,
+        )
+
+    def _full_lane_proposal_outputs(self, memory, batch_size: int) -> dict[str, torch.Tensor]:
+        """Decode independent image-conditioned full-lane proposal queries."""
+        proposal_query = self.full_lane_query_embed.weight.unsqueeze(0).expand(batch_size, -1, -1)
+        proposal_hs = self.full_lane_decoder(tgt=proposal_query, memory=memory)
+        proposal_count = int(self.full_lane_proposal_count)
+        point_dims = int(getattr(self, "point_dims", 2))
+        point_raw = self.full_lane_point_mlp(proposal_hs).view(
+            batch_size,
+            proposal_count,
+            self.num_points,
+            point_dims,
+        )
+        if getattr(self, "point_mode", "free") == "fixed_y":
+            pred_x = torch.sigmoid(point_raw.squeeze(-1))
+            fixed_y = self.fixed_y_anchors.to(device=pred_x.device, dtype=pred_x.dtype).view(
+                1, 1, self.num_points
+            )
+            pred_points = torch.stack(
+                (pred_x, fixed_y.expand(batch_size, proposal_count, -1)),
+                dim=-1,
+            )
+        else:
+            pred_points = torch.sigmoid(point_raw)
+
+        valid_logits = self.full_lane_valid_mlp(proposal_hs).view(
+            batch_size,
+            proposal_count,
+            self.num_points,
+        )
+        exist_logits = self.full_lane_exist_mlp(proposal_hs).squeeze(-1)
+        quality_logits = self.full_lane_quality_mlp(proposal_hs).squeeze(-1)
+        start_logits = self.full_lane_start_mlp(proposal_hs).view(
+            batch_size,
+            proposal_count,
+            self.num_points,
+        )
+        end_logits = self.full_lane_end_mlp(proposal_hs).view(
+            batch_size,
+            proposal_count,
+            self.num_points,
+        )
+        score_probability = full_lane_proposal_score_probability(
+            exist_logits,
+            quality_logits,
+            valid_logits,
+            start_logits,
+            end_logits,
+        )
+        return {
+            "pred_full_lane_points": pred_points,
+            "pred_full_lane_valid_logits": valid_logits,
+            "pred_full_lane_exist_logits": exist_logits,
+            "pred_full_lane_quality_logits": quality_logits,
+            "pred_full_lane_start_logits": start_logits,
+            "pred_full_lane_end_logits": end_logits,
+            "pred_full_lane_score_logits": probability_to_logit(score_probability),
+        }
 
     def aux_output_size(self, orig_size=None):
         """Return auxiliary supervision size from the explicit original input image size."""
@@ -966,9 +1156,14 @@ class GCSLaneHead(nn.Module):
                 device=pred_points.device, dtype=pred_points.dtype
             )
         if getattr(self, "short_segment_head", False):
-            segment_points, segment_logits, segment_x, replace_logits, query_replace_logits = self._short_segment_outputs(
-                xs, hs, pred_points, orig_size
-            )
+            (
+                segment_points,
+                segment_logits,
+                segment_x,
+                replace_logits,
+                query_replace_logits,
+                unified_choice_logits,
+            ) = self._short_segment_outputs(xs, hs, pred_points, orig_size)
             out["pred_short_segment_points"] = segment_points
             out["pred_short_segment_logits"] = segment_logits
             out["pred_short_segment_x"] = segment_x
@@ -979,6 +1174,15 @@ class GCSLaneHead(nn.Module):
                 out["pred_short_segment_replace_logits"] = replace_logits
             if query_replace_logits is not None:
                 out["pred_short_segment_query_replace_logits"] = query_replace_logits
+            if unified_choice_logits is not None:
+                out["pred_short_segment_choice_logits"] = unified_choice_logits
+        if getattr(self, "full_lane_proposal_head", False):
+            out.update(self._full_lane_proposal_outputs(memory, batch_size=b))
+        if getattr(self, "dense_instance_head", False):
+            dense_features = self.dense_instance_stem(p2)
+            out["pred_dense_centerline_logits"] = self.dense_instance_centerline(dense_features)
+            out["pred_dense_endpoint_logits"] = self.dense_instance_endpoint(dense_features)
+            out["pred_dense_instance_embed"] = self.dense_instance_embed(dense_features)
         if self.gcs_mode == "ordered_slot":
             out["pred_exist_logits"] = pred_logits
             out["pred_start_logits"] = self.start_mlp(hs).view(b, self.num_queries, self.num_points)
