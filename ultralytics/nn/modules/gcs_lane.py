@@ -1,11 +1,13 @@
 # Ultralytics AGPL-3.0 License - https://ultralytics.com/license
 """GCS-YOLO-Lane neural network modules."""
 
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from ultralytics.utils.gcs_full_lane import full_lane_proposal_score_probability, probability_to_logit
+from ultralytics.utils.gcs_lane_instance_set import interval_valid_logits_from_start_end
 
 __all__ = (
     "CoordReweight",
@@ -217,21 +219,22 @@ class GCSLaneHead(nn.Module):
         max_lanes=5,
         count_classes=None,
         query_count_head: bool = False,
-        short_candidate_head: bool = False,
-        short_candidate_offsets_px=(0, -20, 20, -40, 40, -60, 60),
-        short_segment_head: bool = False,
-        short_segment_lengths=(3, 4, 5, 6, 7, 8, 9, 10),
-        short_segment_stride: int = 1,
-        short_segment_max_delta_px: float = 480.0,
-        short_segment_replace_head: bool = False,
-        short_segment_local_evidence: bool = False,
-        short_segment_query_replace_head: bool = False,
-        short_segment_unified_choice_head: bool = False,
-        full_lane_proposal_head: bool = False,
-        full_lane_proposal_count: int = 8,
-        full_lane_proposal_decoder_layers: int = 2,
         dense_instance_head: bool = False,
         dense_instance_embed_dim: int = 8,
+        dense_candidate_head: bool = False,
+        dense_endpoint_offset_head: bool = False,
+        residual_proposal_head: bool = False,
+        residual_proposal_count: int = 8,
+        query_survival_head: bool = False,
+        query_survival_geometry_adapter: bool = False,
+        residual_replace_listwise_head: bool = False,
+        query_valid_local_adapter: bool = False,
+        query_valid_interval_adapter: bool = False,
+        query_valid_interval_base_thr: float = 0.6,
+        query_valid_interval_max_shift: float = 8.0,
+        lane_instance_set_decoder_head: bool = False,
+        lane_instance_identity_dim: int = 16,
+        lane_instance_interval_sharpness: float = 4.0,
     ):
         """Initialize the GCS lane query decoder and training-only auxiliary heads."""
         super().__init__()
@@ -252,6 +255,7 @@ class GCSLaneHead(nn.Module):
             self.gcs_mode = "ordered_slot"
         if self.gcs_mode not in {"query", "ordered_slot"}:
             raise ValueError(f"GCSLaneHead gcs_mode must be 'query' or 'ordered_slot', got {gcs_mode!r}.")
+        self.lane_instance_set_decoder_head = self.gcs_mode == "query" and bool(lane_instance_set_decoder_head)
         if self.gcs_mode == "ordered_slot":
             self.num_slots = int(num_slots)
             if self.num_slots <= 0:
@@ -300,165 +304,12 @@ class GCSLaneHead(nn.Module):
         self.min_spatial_tokens = 1024
         self._last_spatial_debug = None
 
-        self.query_embed = nn.Embedding(num_queries, c1)
-        self.level_embed = nn.Parameter(torch.empty(4, c1))
-        nn.init.normal_(self.level_embed)
+        if not self.lane_instance_set_decoder_head:
+            self.query_embed = nn.Embedding(num_queries, c1)
+            self.level_embed = nn.Parameter(torch.empty(4, c1))
+            nn.init.normal_(self.level_embed)
 
-        decoder_layer = nn.TransformerDecoderLayer(
-            d_model=c1,
-            nhead=nhead,
-            dim_feedforward=c1 * 4,
-            dropout=0.0,
-            batch_first=True,
-            activation="gelu",
-        )
-        self.decoder = nn.TransformerDecoder(decoder_layer, num_layers=num_decoder_layers)
-
-        self.point_mlp = nn.Sequential(
-            nn.Linear(c1, c1),
-            nn.ReLU(inplace=True),
-            nn.Linear(c1, c1),
-            nn.ReLU(inplace=True),
-            nn.Linear(c1, num_points * self.point_dims),
-        )
-        self.point_valid_mlp = nn.Sequential(
-            nn.Linear(c1, c1),
-            nn.ReLU(inplace=True),
-            nn.Linear(c1, num_points),
-        )
-        self.point_embed = nn.Embedding(num_points, c1)
-        self.point_coord_mlp = nn.Sequential(
-            nn.Linear(2, c1),
-            nn.ReLU(inplace=True),
-            nn.Linear(c1, c1),
-        )
-        self.point_refine_norm = nn.LayerNorm(c1)
-        self.point_image_norm = nn.LayerNorm(c1)
-        self.point_refine_mlp = nn.Sequential(
-            nn.Linear(c1 * 2, c1),
-            nn.ReLU(inplace=True),
-            nn.Linear(c1, 1),
-        )
-        self.point_valid_refine_mlp = nn.Sequential(
-            nn.Linear(c1 * 2, c1),
-            nn.ReLU(inplace=True),
-            nn.Linear(c1, 1),
-        )
-        self.exist_mlp = nn.Sequential(
-            nn.Linear(c1, c1),
-            nn.ReLU(inplace=True),
-            nn.Linear(c1, 1),
-        )
-        self.query_count_head = self.gcs_mode == "query" and bool(query_count_head)
-        if self.query_count_head:
-            self.query_count_mlp = nn.Sequential(
-                nn.Linear(c1, c1),
-                nn.ReLU(inplace=True),
-                nn.Linear(c1, self.count_classes),
-            )
-        self.short_candidate_head = self.gcs_mode == "query" and bool(short_candidate_head)
-        if self.short_candidate_head:
-            if isinstance(short_candidate_offsets_px, (int, float)):
-                offsets = [float(short_candidate_offsets_px)]
-            else:
-                offsets = [float(x) for x in short_candidate_offsets_px]
-            if not offsets:
-                raise ValueError("GCSLaneHead short_candidate_offsets_px must not be empty when short_candidate_head=True.")
-            if len(offsets) > 32:
-                raise ValueError(
-                    f"GCSLaneHead short_candidate_offsets_px supports at most 32 offsets, got {len(offsets)}."
-                )
-            self.short_candidate_count = len(offsets)
-            self.register_buffer(
-                "short_candidate_offsets_px",
-                torch.tensor(offsets, dtype=torch.float32),
-                persistent=True,
-            )
-            self.short_candidate_offset_embed = nn.Embedding(self.short_candidate_count, c1)
-            self.short_candidate_score_mlp = nn.Sequential(
-                nn.Linear(c1 * 3, c1),
-                nn.ReLU(inplace=True),
-                nn.Linear(c1, c1 // 2),
-                nn.ReLU(inplace=True),
-                nn.Linear(c1 // 2, 1),
-            )
-        self.short_segment_head = self.gcs_mode == "query" and bool(short_segment_head)
-        if self.short_segment_head:
-            starts, ends, window_mask = self._build_short_segment_windows(
-                short_segment_lengths,
-                short_segment_stride,
-            )
-            self.short_segment_count = int(starts.numel())
-            self.short_segment_stride = int(short_segment_stride)
-            self.short_segment_max_delta_px = float(short_segment_max_delta_px)
-            self.short_segment_replace_head = bool(short_segment_replace_head)
-            self.short_segment_local_evidence = bool(short_segment_local_evidence)
-            self.short_segment_query_replace_head = bool(short_segment_query_replace_head)
-            self.short_segment_unified_choice_head = bool(short_segment_unified_choice_head)
-            if self.short_segment_max_delta_px <= 0.0:
-                raise ValueError(
-                    "GCSLaneHead short_segment_max_delta_px must be > 0 when short_segment_head=True, "
-                    f"got {short_segment_max_delta_px}."
-                )
-            self.register_buffer("short_segment_starts", starts, persistent=True)
-            self.register_buffer("short_segment_ends", ends, persistent=True)
-            self.register_buffer("short_segment_window_mask", window_mask, persistent=True)
-            self.short_segment_embed = nn.Embedding(self.short_segment_count, c1)
-            self.short_segment_query_proj = nn.Linear(c1, c1)
-            self.short_segment_window_proj = nn.Linear(c1, c1)
-            self.short_segment_fuse_norm = nn.LayerNorm(c1)
-            self.short_segment_score_mlp = nn.Sequential(
-                nn.Linear(c1, c1 // 2),
-                nn.ReLU(inplace=True),
-                nn.Linear(c1 // 2, 1),
-            )
-            self.short_segment_x_mlp = nn.Sequential(
-                nn.Linear(c1, c1 // 2),
-                nn.ReLU(inplace=True),
-                nn.Linear(c1 // 2, 2),
-            )
-            if self.short_segment_local_evidence:
-                self.short_segment_local_image_proj = nn.Linear(c1, c1)
-                self.short_segment_geometry_mlp = nn.Sequential(
-                    nn.Linear(12, c1),
-                    nn.ReLU(inplace=True),
-                    nn.Linear(c1, c1),
-                )
-                self.short_segment_local_fuse_norm = nn.LayerNorm(c1)
-            if self.short_segment_replace_head:
-                self.short_segment_replace_mlp = nn.Sequential(
-                    nn.Linear(c1, c1 // 2),
-                    nn.ReLU(inplace=True),
-                    nn.Linear(c1 // 2, 1),
-                )
-            if self.short_segment_query_replace_head:
-                self.short_segment_query_replace_mlp = nn.Sequential(
-                    nn.Linear(c1, c1 // 2),
-                    nn.ReLU(inplace=True),
-                    nn.Linear(c1 // 2, 1),
-                )
-            if self.short_segment_unified_choice_head:
-                self.short_segment_unified_choice_mlp = nn.Sequential(
-                    nn.Linear(c1, c1 // 2),
-                    nn.ReLU(inplace=True),
-                    nn.Linear(c1 // 2, 1),
-                )
-        self.full_lane_proposal_head = self.gcs_mode == "query" and bool(full_lane_proposal_head)
-        if self.full_lane_proposal_head:
-            self.full_lane_proposal_count = int(full_lane_proposal_count)
-            self.full_lane_proposal_decoder_layers = int(full_lane_proposal_decoder_layers)
-            if self.full_lane_proposal_count <= 0:
-                raise ValueError(
-                    "GCSLaneHead full_lane_proposal_count must be positive, "
-                    f"got {full_lane_proposal_count}."
-                )
-            if self.full_lane_proposal_decoder_layers <= 0:
-                raise ValueError(
-                    "GCSLaneHead full_lane_proposal_decoder_layers must be positive, "
-                    f"got {full_lane_proposal_decoder_layers}."
-                )
-            self.full_lane_query_embed = nn.Embedding(self.full_lane_proposal_count, c1)
-            full_decoder_layer = nn.TransformerDecoderLayer(
+            decoder_layer = nn.TransformerDecoderLayer(
                 d_model=c1,
                 nhead=nhead,
                 dim_feedforward=c1 * 4,
@@ -466,43 +317,53 @@ class GCSLaneHead(nn.Module):
                 batch_first=True,
                 activation="gelu",
             )
-            self.full_lane_decoder = nn.TransformerDecoder(
-                full_decoder_layer,
-                num_layers=self.full_lane_proposal_decoder_layers,
-            )
-            self.full_lane_point_mlp = nn.Sequential(
+            self.decoder = nn.TransformerDecoder(decoder_layer, num_layers=num_decoder_layers)
+
+            self.point_mlp = nn.Sequential(
                 nn.Linear(c1, c1),
                 nn.ReLU(inplace=True),
                 nn.Linear(c1, c1),
                 nn.ReLU(inplace=True),
                 nn.Linear(c1, num_points * self.point_dims),
             )
-            self.full_lane_valid_mlp = nn.Sequential(
+            self.point_valid_mlp = nn.Sequential(
                 nn.Linear(c1, c1),
                 nn.ReLU(inplace=True),
                 nn.Linear(c1, num_points),
             )
-            self.full_lane_exist_mlp = nn.Sequential(
+            self.point_embed = nn.Embedding(num_points, c1)
+            self.point_coord_mlp = nn.Sequential(
+                nn.Linear(2, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, c1),
+            )
+            self.point_refine_norm = nn.LayerNorm(c1)
+            self.point_image_norm = nn.LayerNorm(c1)
+            self.point_refine_mlp = nn.Sequential(
+                nn.Linear(c1 * 2, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, 1),
+            )
+            self.point_valid_refine_mlp = nn.Sequential(
+                nn.Linear(c1 * 2, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, 1),
+            )
+            self.exist_mlp = nn.Sequential(
                 nn.Linear(c1, c1),
                 nn.ReLU(inplace=True),
                 nn.Linear(c1, 1),
             )
-            self.full_lane_quality_mlp = nn.Sequential(
+        self.query_count_head = self.gcs_mode == "query" and bool(query_count_head)
+        if self.query_count_head:
+            self.query_count_mlp = nn.Sequential(
                 nn.Linear(c1, c1),
                 nn.ReLU(inplace=True),
-                nn.Linear(c1, 1),
-            )
-            self.full_lane_start_mlp = nn.Sequential(
-                nn.Linear(c1, c1),
-                nn.ReLU(inplace=True),
-                nn.Linear(c1, num_points),
-            )
-            self.full_lane_end_mlp = nn.Sequential(
-                nn.Linear(c1, c1),
-                nn.ReLU(inplace=True),
-                nn.Linear(c1, num_points),
+                nn.Linear(c1, self.count_classes),
             )
         self.dense_instance_head = self.gcs_mode == "query" and bool(dense_instance_head)
+        self.dense_candidate_head = self.dense_instance_head and bool(dense_candidate_head)
+        self.dense_endpoint_offset_head = self.dense_instance_head and bool(dense_endpoint_offset_head)
         if self.dense_instance_head:
             self.dense_instance_embed_dim = int(dense_instance_embed_dim)
             if self.dense_instance_embed_dim < 2:
@@ -514,6 +375,263 @@ class GCSLaneHead(nn.Module):
             self.dense_instance_centerline = nn.Conv2d(c1, 1, kernel_size=1)
             self.dense_instance_endpoint = nn.Conv2d(c1, 2, kernel_size=1)
             self.dense_instance_embed = nn.Conv2d(c1, self.dense_instance_embed_dim, kernel_size=1)
+            if self.dense_endpoint_offset_head:
+                self.dense_instance_endpoint_offset = nn.Conv2d(c1, 4, kernel_size=1)
+            if self.dense_candidate_head:
+                self.dense_instance_candidate_quality = nn.Conv2d(c1, 1, kernel_size=1)
+                self.dense_instance_candidate_replace = nn.Conv2d(c1, 1, kernel_size=1)
+        self.residual_proposal_head = self.gcs_mode == "query" and bool(residual_proposal_head)
+        self.residual_proposal_count = int(residual_proposal_count)
+        self.residual_replace_listwise_head = self.residual_proposal_head and bool(residual_replace_listwise_head)
+        if self.residual_proposal_head:
+            if self.point_mode != "fixed_y":
+                raise ValueError("GCSLaneHead residual proposals require point_mode=fixed_y.")
+            if self.residual_proposal_count <= 0:
+                raise ValueError("GCSLaneHead residual_proposal_count must be positive.")
+            self.residual_proposal_stem = ConvBNAct(c1, c1, k=3)
+            self.residual_proposal_mask = nn.Conv2d(c1, self.residual_proposal_count, kernel_size=1)
+            self.residual_proposal_valid_mlp = nn.Sequential(
+                nn.Linear(self.num_points, self.num_points),
+                nn.ReLU(inplace=True),
+                nn.Linear(self.num_points, self.num_points),
+            )
+            self.residual_proposal_start_mlp = nn.Linear(self.num_points, self.num_points)
+            self.residual_proposal_end_mlp = nn.Linear(self.num_points, self.num_points)
+            self.residual_proposal_exist_mlp = nn.Sequential(
+                nn.Linear(self.num_points, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, 1),
+            )
+            self.residual_relation_dim = 64
+            self.residual_relation_proposal_mlp = nn.Sequential(
+                nn.Linear(self.num_points * 2, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, self.residual_relation_dim),
+            )
+            self.residual_relation_base_mlp = nn.Sequential(
+                nn.Linear(self.num_points * 2 + 1, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, self.residual_relation_dim),
+            )
+            self.residual_relation_base_pair_mlp = nn.Sequential(
+                nn.Linear(self.num_points * 3 + 1, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, self.residual_relation_dim),
+            )
+            self.residual_relation_proposal_pair_mlp = nn.Sequential(
+                nn.Linear(self.num_points * 3, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, self.residual_relation_dim),
+            )
+            self.residual_relation_norm = nn.LayerNorm(self.residual_relation_dim)
+            self.residual_topology_base_pair_mlp = nn.Sequential(
+                nn.Linear(self.num_points * 3 + 1, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, self.residual_relation_dim),
+            )
+            self.residual_topology_proposal_pair_mlp = nn.Sequential(
+                nn.Linear(self.num_points * 3, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, self.residual_relation_dim),
+            )
+            self.residual_topology_norm = nn.LayerNorm(self.residual_relation_dim)
+            self.residual_proposal_identity_mlp = nn.Sequential(
+                nn.Linear(self.residual_relation_dim, self.residual_relation_dim),
+                nn.ReLU(inplace=True),
+                nn.Linear(self.residual_relation_dim, 16),
+            )
+            self.residual_proposal_quality_mlp = nn.Sequential(
+                nn.Linear(self.residual_relation_dim * 3 + 1, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, 1),
+            )
+            self.residual_topology_quality_mlp = nn.Sequential(
+                nn.Linear(self.residual_relation_dim * 3 + 1, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, 1),
+            )
+            self.residual_replace_pair_mlp = nn.Sequential(
+                nn.Linear(self.residual_relation_dim * 2 + c1, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, 1),
+            )
+            self.residual_visual_token_mlp = nn.Sequential(
+                nn.Linear(c1, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, self.residual_relation_dim),
+            )
+            self.residual_replace_visual_pair_mlp = nn.Sequential(
+                nn.Linear(self.residual_relation_dim * 3 + c1, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, 1),
+            )
+            if self.residual_replace_listwise_head:
+                self.residual_noop_mlp = nn.Sequential(
+                    nn.Linear(c1 + self.residual_relation_dim * 2 + 6, c1),
+                    nn.ReLU(inplace=True),
+                    nn.Linear(c1, 1),
+                )
+            nn.init.zeros_(self.residual_topology_quality_mlp[-1].weight)
+            nn.init.zeros_(self.residual_topology_quality_mlp[-1].bias)
+            nn.init.zeros_(self.residual_replace_pair_mlp[-1].weight)
+            nn.init.zeros_(self.residual_replace_pair_mlp[-1].bias)
+            nn.init.zeros_(self.residual_replace_visual_pair_mlp[-1].weight)
+            nn.init.zeros_(self.residual_replace_visual_pair_mlp[-1].bias)
+            if self.residual_replace_listwise_head:
+                nn.init.zeros_(self.residual_noop_mlp[-1].weight)
+                nn.init.zeros_(self.residual_noop_mlp[-1].bias)
+        self.query_survival_head = self.gcs_mode == "query" and bool(query_survival_head)
+        self.query_survival_geometry_adapter = self.query_survival_head and bool(query_survival_geometry_adapter)
+        self.query_valid_local_adapter = self.gcs_mode == "query" and bool(query_valid_local_adapter)
+        self.query_valid_interval_adapter = self.gcs_mode == "query" and bool(query_valid_interval_adapter)
+        self.query_valid_interval_base_thr = float(query_valid_interval_base_thr)
+        self.query_valid_interval_max_shift = float(query_valid_interval_max_shift)
+        self.lane_instance_identity_dim = int(lane_instance_identity_dim)
+        self.lane_instance_interval_sharpness = float(lane_instance_interval_sharpness)
+        if self.query_valid_local_adapter and self.query_valid_interval_adapter:
+            raise ValueError("query_valid_local_adapter and query_valid_interval_adapter are mutually exclusive.")
+        if not 0.0 < self.query_valid_interval_base_thr < 1.0:
+            raise ValueError(
+                "query_valid_interval_base_thr must be in (0, 1), "
+                f"got {self.query_valid_interval_base_thr}."
+            )
+        if self.query_valid_interval_max_shift <= 0.0:
+            raise ValueError(
+                "query_valid_interval_max_shift must be > 0, "
+                f"got {self.query_valid_interval_max_shift}."
+            )
+        if self.query_survival_head:
+            survival_input_dim = c1 + self.num_points * 2 + 1
+            self.query_survival_state_mlp = nn.Sequential(
+                nn.Linear(survival_input_dim, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, c1),
+            )
+            self.query_survival_attention = nn.MultiheadAttention(c1, nhead, batch_first=True)
+            self.query_survival_norm = nn.LayerNorm(c1)
+            self.query_survival_delta_mlp = nn.Sequential(
+                nn.Linear(c1, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, 1),
+            )
+            nn.init.zeros_(self.query_survival_delta_mlp[-1].weight)
+            nn.init.zeros_(self.query_survival_delta_mlp[-1].bias)
+            if self.query_survival_geometry_adapter:
+                self.query_survival_point_delta_mlp = nn.Sequential(
+                    nn.Linear(c1, c1),
+                    nn.ReLU(inplace=True),
+                    nn.Linear(c1, self.num_points),
+                )
+                self.query_survival_valid_delta_mlp = nn.Sequential(
+                    nn.Linear(c1, c1),
+                    nn.ReLU(inplace=True),
+                    nn.Linear(c1, self.num_points),
+                )
+                nn.init.zeros_(self.query_survival_point_delta_mlp[-1].weight)
+                nn.init.zeros_(self.query_survival_point_delta_mlp[-1].bias)
+                nn.init.zeros_(self.query_survival_valid_delta_mlp[-1].weight)
+                nn.init.zeros_(self.query_survival_valid_delta_mlp[-1].bias)
+        if self.query_valid_local_adapter:
+            self.query_valid_local_delta_mlp = nn.Sequential(
+                nn.Linear(c1 * 2, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, 1),
+            )
+            nn.init.zeros_(self.query_valid_local_delta_mlp[-1].weight)
+            nn.init.zeros_(self.query_valid_local_delta_mlp[-1].bias)
+        if self.query_valid_interval_adapter:
+            self.query_valid_interval_offset_mlp = nn.Sequential(
+                nn.Linear(c1 * 4, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, 2),
+            )
+            nn.init.zeros_(self.query_valid_interval_offset_mlp[-1].weight)
+            nn.init.zeros_(self.query_valid_interval_offset_mlp[-1].bias)
+        if self.lane_instance_set_decoder_head:
+            if self.point_mode != "fixed_y":
+                raise ValueError("GCSLaneHead lane-instance-set decoder requires point_mode=fixed_y.")
+            if self.lane_instance_identity_dim <= 0:
+                raise ValueError(
+                    "lane_instance_identity_dim must be positive, "
+                    f"got {self.lane_instance_identity_dim}."
+                )
+            if self.lane_instance_interval_sharpness <= 0.0:
+                raise ValueError(
+                    "lane_instance_interval_sharpness must be positive, "
+                    f"got {self.lane_instance_interval_sharpness}."
+                )
+            self.lane_instance_p2_stem = ConvBNAct(c1, c1, k=3)
+            self.lane_instance_p3_stem = ConvBNAct(c1, c1, k=3)
+            self.lane_instance_fuse = ConvBNAct(c1 * 2, c1, k=1, p=0)
+            self.lane_instance_query_embed = nn.Embedding(self.num_queries, c1)
+            self.lane_instance_row_embed = nn.Embedding(self.num_points, c1)
+            self.lane_instance_row_kernel_mlp = nn.Sequential(
+                nn.Linear(c1, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, c1),
+            )
+            self.lane_instance_point_norm = nn.LayerNorm(c1)
+            self.lane_instance_candidate_norm = nn.LayerNorm(c1)
+            self.lane_instance_x_refine_mlp = nn.Sequential(
+                nn.Linear(c1 * 2, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, 1),
+            )
+            self.lane_instance_start_mlp = nn.Sequential(
+                nn.Linear(c1, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, 1),
+            )
+            self.lane_instance_end_mlp = nn.Sequential(
+                nn.Linear(c1, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, 1),
+            )
+            self.lane_instance_survival_mlp = nn.Sequential(
+                nn.Linear(c1 + 2 + self.lane_instance_identity_dim + 2 + 5, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, 1),
+            )
+            self.lane_instance_quality_mlp = nn.Sequential(
+                nn.Linear(c1 + 2, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, 1),
+            )
+            self.lane_instance_novelty_mlp = nn.Sequential(
+                nn.Linear(c1 + 1 + self.lane_instance_identity_dim + 2, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, 1),
+            )
+            self.lane_instance_identity_mlp = nn.Sequential(
+                nn.Linear(c1 + 2, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, self.lane_instance_identity_dim),
+            )
+            self.lane_instance_pair_duplicate_mlp = nn.Sequential(
+                nn.Linear(c1 * 3 + 2, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, 1),
+            )
+            self.lane_instance_topology_mlp = nn.Sequential(
+                nn.Linear(c1 * 3 + 1 + self.lane_instance_identity_dim + 1, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, 2),
+            )
+            self.lane_instance_empty_mlp = nn.Sequential(
+                nn.Linear(c1, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, 1),
+            )
+            self.register_buffer(
+                "lane_instance_start_prior",
+                self._build_lane_instance_endpoint_prior(start=True),
+                persistent=False,
+            )
+            self.register_buffer(
+                "lane_instance_end_prior",
+                self._build_lane_instance_endpoint_prior(start=False),
+                persistent=False,
+            )
         if self.gcs_mode == "ordered_slot":
             self.start_mlp = nn.Sequential(
                 nn.Linear(c1, c1),
@@ -541,53 +659,19 @@ class GCSLaneHead(nn.Module):
         )
         self.register_buffer("point_reference_logits", self._build_point_references(), persistent=False)
         self.register_buffer("fixed_y_anchors", self._build_fixed_y_anchors(), persistent=False)
-        self._init_point_delta_head()
-        self._init_point_valid_head()
-        self._init_point_refine_head()
-        self._init_point_valid_refine_head()
+        if not self.lane_instance_set_decoder_head:
+            self._init_point_delta_head()
+            self._init_point_valid_head()
+            self._init_point_refine_head()
+            self._init_point_valid_refine_head()
         if self.gcs_mode == "ordered_slot":
             self._init_interval_heads()
         if self.query_count_head:
             self._init_query_count_head()
-        if self.short_candidate_head:
-            self._init_short_candidate_head()
-        if self.short_segment_head:
-            self._init_short_segment_head()
-        if self.full_lane_proposal_head:
-            self._init_full_lane_proposal_head()
         if self.dense_instance_head:
             self._init_dense_instance_head()
-
-    def _build_short_segment_windows(self, lengths, stride: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Build contiguous short-window anchors over the fixed-y K dimension."""
-        stride = int(stride)
-        if stride < 1:
-            raise ValueError(f"GCSLaneHead short_segment_stride must be >= 1, got {stride}.")
-        if isinstance(lengths, (int, float)):
-            length_values = [int(lengths)]
-        else:
-            length_values = [int(x) for x in lengths]
-        length_values = sorted(set(length_values))
-        if not length_values:
-            raise ValueError("GCSLaneHead short_segment_lengths must not be empty when short_segment_head=True.")
-
-        windows: list[tuple[int, int]] = []
-        for length in length_values:
-            if length < 1 or length > int(self.num_points):
-                raise ValueError(
-                    "GCSLaneHead short_segment_lengths entries must be in [1, num_points], "
-                    f"got length={length}, num_points={self.num_points}."
-                )
-            for start in range(0, int(self.num_points) - length + 1, stride):
-                windows.append((int(start), int(start + length - 1)))
-        if not windows:
-            raise ValueError("GCSLaneHead short_segment window construction produced no windows.")
-
-        starts = torch.tensor([x[0] for x in windows], dtype=torch.long)
-        ends = torch.tensor([x[1] for x in windows], dtype=torch.long)
-        point_idx = torch.arange(int(self.num_points), dtype=torch.long).view(1, -1)
-        mask = (point_idx >= starts.view(-1, 1)) & (point_idx <= ends.view(-1, 1))
-        return starts, ends, mask
+        if self.lane_instance_set_decoder_head:
+            self._init_lane_instance_set_head()
 
     def _build_fixed_y_anchors(self):
         """Build shared bottom-to-top y anchors for fixed-y x-only prediction."""
@@ -622,6 +706,12 @@ class GCSLaneHead(nn.Module):
             return torch.logit(x.clamp(1e-4, 1.0 - 1e-4))
         points = torch.stack((x, y[None].expand(self.num_queries, -1)), dim=-1)
         return torch.logit(points.clamp(1e-4, 1.0 - 1e-4))
+
+    def _build_lane_instance_endpoint_prior(self, start: bool) -> torch.Tensor:
+        """Build a fixed endpoint prior for bottom-to-top interval logits."""
+        index = torch.arange(self.num_points, dtype=torch.float32)
+        target = 0.0 if bool(start) else float(self.num_points - 1)
+        return -0.25 * (index - target).abs()
 
     def _init_point_delta_head(self):
         """Initialize point deltas near zero while keeping point gradients live."""
@@ -661,126 +751,45 @@ class GCSLaneHead(nn.Module):
         nn.init.normal_(final.weight, mean=0.0, std=1e-3)
         nn.init.zeros_(final.bias)
 
-    def _init_short_candidate_head(self):
-        """Initialize lateral candidate scores conservatively below the decode threshold."""
-        nn.init.normal_(self.short_candidate_offset_embed.weight, mean=0.0, std=1e-3)
-        final = self.short_candidate_score_mlp[-1]
-        nn.init.normal_(final.weight, mean=0.0, std=1e-3)
-        nn.init.constant_(final.bias, -4.0)
-
-    def _init_short_segment_head(self):
-        """Initialize local short-segment proposals near the frozen base geometry."""
-        nn.init.normal_(self.short_segment_embed.weight, mean=0.0, std=1e-3)
-        for module in (self.short_segment_query_proj, self.short_segment_window_proj):
-            nn.init.normal_(module.weight, mean=0.0, std=1e-3)
-            nn.init.zeros_(module.bias)
-        score_final = self.short_segment_score_mlp[-1]
-        nn.init.normal_(score_final.weight, mean=0.0, std=1e-3)
-        nn.init.constant_(score_final.bias, -4.0)
-        x_final = self.short_segment_x_mlp[-1]
-        nn.init.normal_(x_final.weight, mean=0.0, std=1e-3)
-        nn.init.zeros_(x_final.bias)
-        if getattr(self, "short_segment_replace_head", False):
-            replace_final = self.short_segment_replace_mlp[-1]
-            nn.init.normal_(replace_final.weight, mean=0.0, std=1e-3)
-            nn.init.constant_(replace_final.bias, -4.0)
-        if getattr(self, "short_segment_query_replace_head", False):
-            query_replace_final = self.short_segment_query_replace_mlp[-1]
-            nn.init.normal_(query_replace_final.weight, mean=0.0, std=1e-3)
-            nn.init.constant_(query_replace_final.bias, -4.0)
-        if getattr(self, "short_segment_unified_choice_head", False):
-            choice_final = self.short_segment_unified_choice_mlp[-1]
-            nn.init.normal_(choice_final.weight, mean=0.0, std=1e-3)
-            nn.init.zeros_(choice_final.bias)
-        if getattr(self, "short_segment_local_evidence", False):
-            nn.init.normal_(self.short_segment_local_image_proj.weight, mean=0.0, std=1e-3)
-            nn.init.zeros_(self.short_segment_local_image_proj.bias)
-            for module in self.short_segment_geometry_mlp:
-                    if isinstance(module, nn.Linear):
-                        nn.init.normal_(module.weight, mean=0.0, std=1e-3)
-                        nn.init.zeros_(module.bias)
-
-    def _init_full_lane_proposal_head(self):
-        """Initialize independent full-lane proposals with conservative scores."""
-        nn.init.normal_(self.full_lane_query_embed.weight, mean=0.0, std=0.02)
-        for mlp in (
-            self.full_lane_point_mlp,
-            self.full_lane_valid_mlp,
-            self.full_lane_exist_mlp,
-            self.full_lane_quality_mlp,
-            self.full_lane_start_mlp,
-            self.full_lane_end_mlp,
-        ):
-            final = mlp[-1]
-            nn.init.normal_(final.weight, mean=0.0, std=1e-3)
-            nn.init.zeros_(final.bias)
-        nn.init.constant_(self.full_lane_exist_mlp[-1].bias, -4.0)
-        nn.init.constant_(self.full_lane_quality_mlp[-1].bias, -2.0)
-        nn.init.constant_(self.full_lane_valid_mlp[-1].bias, -1.0)
-
     def _init_dense_instance_head(self):
-        """Initialize dense evidence logits conservatively while preserving image features."""
+        """Initialize dense evidence logits with conservative sparse-foreground priors."""
         nn.init.normal_(self.dense_instance_centerline.weight, mean=0.0, std=1e-3)
         nn.init.constant_(self.dense_instance_centerline.bias, -2.0)
         nn.init.normal_(self.dense_instance_endpoint.weight, mean=0.0, std=1e-3)
         nn.init.constant_(self.dense_instance_endpoint.bias, -3.0)
         nn.init.normal_(self.dense_instance_embed.weight, mean=0.0, std=1e-2)
         nn.init.zeros_(self.dense_instance_embed.bias)
+        if getattr(self, "dense_endpoint_offset_head", False):
+            nn.init.normal_(self.dense_instance_endpoint_offset.weight, mean=0.0, std=1e-3)
+            nn.init.zeros_(self.dense_instance_endpoint_offset.bias)
+        if getattr(self, "dense_candidate_head", False):
+            nn.init.normal_(self.dense_instance_candidate_quality.weight, mean=0.0, std=1e-3)
+            nn.init.constant_(self.dense_instance_candidate_quality.bias, -2.0)
+            nn.init.normal_(self.dense_instance_candidate_replace.weight, mean=0.0, std=1e-3)
+            nn.init.constant_(self.dense_instance_candidate_replace.bias, -3.0)
 
-    def _short_segment_local_tokens(
-        self,
-        xs,
-        segment_tokens,
-        segment_points,
-        base_start_x,
-        base_end_x,
-        endpoint_delta,
-        starts,
-        ends,
-        width: float,
-    ):
-        """Add proposal-local image and geometry evidence for short-segment selection."""
-        b, q, s, k, _ = segment_points.shape
-        start_points = segment_points.gather(
-            3,
-            starts.view(1, 1, s, 1, 1).expand(b, q, s, 1, 2),
-        ).squeeze(3)
-        end_points = segment_points.gather(
-            3,
-            ends.view(1, 1, s, 1, 1).expand(b, q, s, 1, 2),
-        ).squeeze(3)
-        mid_points = (start_points + end_points) * 0.5
-        evidence_points = torch.stack((start_points, mid_points, end_points), dim=3).detach()
-        local_image = self._sample_point_features(xs, evidence_points.reshape(b, q * s, 3, 2))
-        local_image = local_image.mean(dim=2).view(b, q, s, self.c1)
-        local_image = self.short_segment_local_image_proj(local_image)
-
-        length = (ends - starts + 1).to(device=segment_points.device, dtype=segment_points.dtype)
-        denom = max(float(k - 1), 1.0)
-        start_norm = starts.to(device=segment_points.device, dtype=segment_points.dtype) / denom
-        end_norm = ends.to(device=segment_points.device, dtype=segment_points.dtype) / denom
-        length_norm = length / float(k)
-        delta_scale = max(float(self.short_segment_max_delta_px), 1.0) / max(float(width), 1.0)
-        delta_norm = endpoint_delta / float(delta_scale)
-        geom = torch.stack(
-            (
-                start_norm.view(1, 1, s).expand(b, q, s),
-                end_norm.view(1, 1, s).expand(b, q, s),
-                length_norm.view(1, 1, s).expand(b, q, s),
-                base_start_x,
-                base_end_x,
-                base_end_x - base_start_x,
-                start_points[..., 0],
-                end_points[..., 0],
-                end_points[..., 0] - start_points[..., 0],
-                delta_norm[..., 0],
-                delta_norm[..., 1],
-                (delta_norm[..., 1] - delta_norm[..., 0]),
-            ),
-            dim=-1,
-        )
-        geom_tokens = self.short_segment_geometry_mlp(geom.to(dtype=segment_tokens.dtype))
-        return self.short_segment_local_fuse_norm(segment_tokens + local_image + geom_tokens)
+    def _init_lane_instance_set_head(self):
+        """Initialize the lane-instance-set branch with conservative finite logits."""
+        nn.init.normal_(self.lane_instance_query_embed.weight, mean=0.0, std=0.02)
+        nn.init.normal_(self.lane_instance_row_embed.weight, mean=0.0, std=0.02)
+        for mlp in (
+            self.lane_instance_row_kernel_mlp,
+            self.lane_instance_x_refine_mlp,
+            self.lane_instance_start_mlp,
+            self.lane_instance_end_mlp,
+            self.lane_instance_survival_mlp,
+            self.lane_instance_quality_mlp,
+            self.lane_instance_novelty_mlp,
+            self.lane_instance_identity_mlp,
+            self.lane_instance_pair_duplicate_mlp,
+            self.lane_instance_topology_mlp,
+            self.lane_instance_empty_mlp,
+        ):
+            final = mlp[-1]
+            nn.init.normal_(final.weight, mean=0.0, std=1e-3)
+            nn.init.zeros_(final.bias)
+        nn.init.constant_(self.lane_instance_survival_mlp[-1].bias, -2.0)
+        nn.init.constant_(self.lane_instance_pair_duplicate_mlp[-1].bias, -3.0)
 
     def _sample_point_features(self, xs, points):
         """Sample high-resolution image features at normalized point coordinates.
@@ -841,179 +850,436 @@ class GCSLaneHead(nn.Module):
         valid_delta = self.point_valid_refine_mlp(refine_tokens).squeeze(-1)
         return coarse_valid + valid_delta
 
-    def _short_candidate_outputs(self, xs, hs, pred_points, pred_valid_logits, orig_size):
-        """Generate fixed lateral candidates and visibility-aware geometry-selector logits."""
-        if orig_size is None:
-            raise ValueError("short_candidate_head requires orig_size=(H, W) to convert px offsets to normalized x.")
-        if pred_points.ndim != 4 or pred_points.shape[-1] != 2:
-            raise ValueError(f"pred_points must have shape B x Q x K x 2, got {tuple(pred_points.shape)}.")
-        b, q, k, _ = pred_points.shape
-        offsets_px = self.short_candidate_offsets_px.to(device=pred_points.device, dtype=pred_points.dtype)
-        width = float(orig_size[1])
-        if width <= 0.0:
-            raise ValueError(f"short_candidate_head received invalid orig_size={orig_size}.")
-        offsets_norm = offsets_px.view(1, 1, -1, 1) / width
+    def _query_valid_interval_delta(self, base_valid_logits, point_tokens):
+        """Return a contiguous valid-logit residual from zero-initialized start/end boundary offsets."""
+        b, q, k = base_valid_logits.shape
+        probability = base_valid_logits.detach().sigmoid()
+        base_mask = probability >= self.query_valid_interval_base_thr
+        anchor_index = torch.arange(k, device=base_valid_logits.device)
+        first = torch.where(base_mask, anchor_index.view(1, 1, k), k).amin(dim=-1)
+        last = torch.where(base_mask, anchor_index.view(1, 1, k), -1).amax(dim=-1)
+        peak = probability.argmax(dim=-1)
+        has_valid = base_mask.any(dim=-1)
+        first = torch.where(has_valid, first, peak)
+        last = torch.where(has_valid, last, peak)
 
-        candidate_points = pred_points.unsqueeze(2).expand(-1, -1, self.short_candidate_count, -1, -1).clone()
-        candidate_points[..., 0] = (candidate_points[..., 0] + offsets_norm).clamp(0.0, 1.0)
-
-        flat_points = candidate_points.detach().reshape(b, q * self.short_candidate_count, k, 2)
-        image_tokens = self._sample_point_features(xs, flat_points).view(
-            b, q, self.short_candidate_count, k, self.c1
-        )
-        if pred_valid_logits is None:
-            valid_weight = torch.ones((b, q, 1, k, 1), device=hs.device, dtype=hs.dtype)
-        else:
-            valid_weight = pred_valid_logits.detach().sigmoid().to(device=hs.device, dtype=hs.dtype).view(b, q, 1, k, 1)
-        pooled = (image_tokens * valid_weight).sum(dim=3) / valid_weight.sum(dim=3).clamp_min(1e-6)
-        query_tokens = hs.unsqueeze(2).expand(-1, -1, self.short_candidate_count, -1)
-        offset_tokens = self.short_candidate_offset_embed.weight.to(device=hs.device, dtype=hs.dtype).view(
-            1, 1, self.short_candidate_count, self.c1
-        )
-        score_input = torch.cat((query_tokens, pooled, offset_tokens.expand(b, q, -1, -1)), dim=-1)
-        candidate_logits = self.short_candidate_score_mlp(score_input).squeeze(-1)
-        return candidate_points, candidate_logits
-
-    def _short_segment_outputs(self, xs, hs, pred_points, orig_size):
-        """Generate local short-window segment proposals with learned endpoint x offsets."""
-        if orig_size is None:
-            raise ValueError("short_segment_head requires orig_size=(H, W) to convert px offsets to normalized x.")
-        if pred_points.ndim != 4 or pred_points.shape[-1] != 2:
-            raise ValueError(f"pred_points must have shape B x Q x K x 2, got {tuple(pred_points.shape)}.")
-        b, q, k, _ = pred_points.shape
-        if k != int(self.num_points):
-            raise ValueError(f"short_segment_head expected K={self.num_points}, got K={k}.")
-        width = float(orig_size[1])
-        if width <= 0.0:
-            raise ValueError(f"short_segment_head received invalid orig_size={orig_size}.")
-
-        starts = self.short_segment_starts.to(device=pred_points.device)
-        ends = self.short_segment_ends.to(device=pred_points.device)
-        s = int(starts.numel())
-
-        query_tokens = self.short_segment_query_proj(hs).unsqueeze(2)
-        window_tokens = self.short_segment_window_proj(
-            self.short_segment_embed.weight.to(device=hs.device, dtype=hs.dtype)
-        ).view(1, 1, s, self.c1)
-        segment_tokens = self.short_segment_fuse_norm(query_tokens + window_tokens)
-
-        max_delta = float(self.short_segment_max_delta_px) / width
-        endpoint_delta = torch.tanh(self.short_segment_x_mlp(segment_tokens)) * max_delta
-        base_x = pred_points[..., 0]
-        base_start_x = base_x.index_select(2, starts)
-        base_end_x = base_x.index_select(2, ends)
-        x0 = (base_start_x + endpoint_delta[..., 0]).clamp(0.0, 1.0)
-        x1 = (base_end_x + endpoint_delta[..., 1]).clamp(0.0, 1.0)
-
-        point_idx = torch.arange(k, device=pred_points.device, dtype=pred_points.dtype).view(1, 1, 1, k)
-        start_f = starts.to(dtype=pred_points.dtype).view(1, 1, s, 1)
-        end_f = ends.to(dtype=pred_points.dtype).view(1, 1, s, 1)
-        t = ((point_idx - start_f) / (end_f - start_f).clamp_min(1.0)).clamp(0.0, 1.0)
-        x = x0.unsqueeze(-1) * (1.0 - t) + x1.unsqueeze(-1) * t
-
-        fixed_y = getattr(self, "fixed_y_anchors", None)
-        if fixed_y is None:
-            fixed_y = self._build_fixed_y_anchors()
-        y = fixed_y.to(device=pred_points.device, dtype=pred_points.dtype).view(1, 1, 1, k).expand(b, q, s, k)
-        segment_points = torch.stack((x, y), dim=-1)
-        segment_x = torch.stack((x0, x1), dim=-1)
-        score_tokens = segment_tokens
-        if getattr(self, "short_segment_local_evidence", False):
-            score_tokens = self._short_segment_local_tokens(
-                xs,
-                segment_tokens,
-                segment_points,
-                base_start_x,
-                base_end_x,
-                endpoint_delta,
-                starts,
-                ends,
-                width,
-            )
-        segment_logits = self.short_segment_score_mlp(score_tokens).squeeze(-1)
-        replace_logits = None
-        if getattr(self, "short_segment_replace_head", False):
-            replace_logits = self.short_segment_replace_mlp(score_tokens).squeeze(-1)
-        query_replace_logits = None
-        if getattr(self, "short_segment_query_replace_head", False):
-            query_tokens_for_replace = score_tokens.max(dim=2).values
-            query_replace_logits = self.short_segment_query_replace_mlp(query_tokens_for_replace).squeeze(-1)
-        unified_choice_logits = None
-        if getattr(self, "short_segment_unified_choice_head", False):
-            base_choice_logits = self.short_segment_unified_choice_mlp(hs).squeeze(-1)
-            unified_choice_logits = torch.cat((base_choice_logits.unsqueeze(-1), segment_logits), dim=-1)
-        return (
-            segment_points,
-            segment_logits,
-            segment_x,
-            replace_logits,
-            query_replace_logits,
-            unified_choice_logits,
+        token_dim = point_tokens.shape[-1]
+        first_token = point_tokens.gather(
+            2, first[..., None, None].expand(b, q, 1, token_dim)
+        ).squeeze(2)
+        last_token = point_tokens.gather(
+            2, last[..., None, None].expand(b, q, 1, token_dim)
+        ).squeeze(2)
+        offsets = self.query_valid_interval_max_shift * torch.tanh(
+            self.query_valid_interval_offset_mlp(torch.cat((first_token, last_token), dim=-1))
         )
 
-    def _full_lane_proposal_outputs(self, memory, batch_size: int) -> dict[str, torch.Tensor]:
-        """Decode independent image-conditioned full-lane proposal queries."""
-        proposal_query = self.full_lane_query_embed.weight.unsqueeze(0).expand(batch_size, -1, -1)
-        proposal_hs = self.full_lane_decoder(tgt=proposal_query, memory=memory)
-        proposal_count = int(self.full_lane_proposal_count)
-        point_dims = int(getattr(self, "point_dims", 2))
-        point_raw = self.full_lane_point_mlp(proposal_hs).view(
-            batch_size,
-            proposal_count,
-            self.num_points,
-            point_dims,
-        )
-        if getattr(self, "point_mode", "free") == "fixed_y":
-            pred_x = torch.sigmoid(point_raw.squeeze(-1))
-            fixed_y = self.fixed_y_anchors.to(device=pred_x.device, dtype=pred_x.dtype).view(
-                1, 1, self.num_points
-            )
-            pred_points = torch.stack(
-                (pred_x, fixed_y.expand(batch_size, proposal_count, -1)),
-                dim=-1,
-            )
-        else:
-            pred_points = torch.sigmoid(point_raw)
+        base_start = first.to(dtype=base_valid_logits.dtype)
+        base_end = last.to(dtype=base_valid_logits.dtype)
+        endpoint_a = (base_start + offsets[..., 0]).clamp(0.0, float(k - 1))
+        endpoint_b = (base_end + offsets[..., 1]).clamp(0.0, float(k - 1))
+        corrected_start = torch.minimum(endpoint_a, endpoint_b)
+        corrected_end = torch.maximum(endpoint_a, endpoint_b)
 
-        valid_logits = self.full_lane_valid_mlp(proposal_hs).view(
-            batch_size,
-            proposal_count,
-            self.num_points,
+        position = anchor_index.to(dtype=base_valid_logits.dtype).view(1, 1, k)
+        base_field = torch.minimum(position - base_start[..., None] + 0.5, base_end[..., None] - position + 0.5)
+        corrected_field = torch.minimum(
+            position - corrected_start[..., None] + 0.5,
+            corrected_end[..., None] - position + 0.5,
         )
-        exist_logits = self.full_lane_exist_mlp(proposal_hs).squeeze(-1)
-        quality_logits = self.full_lane_quality_mlp(proposal_hs).squeeze(-1)
-        start_logits = self.full_lane_start_mlp(proposal_hs).view(
-            batch_size,
-            proposal_count,
-            self.num_points,
+        delta = corrected_field - base_field
+        base_bounds = torch.stack((base_start, base_end), dim=-1)
+        corrected_bounds = torch.stack((corrected_start, corrected_end), dim=-1)
+        return delta, offsets, base_bounds, corrected_bounds
+
+    def _lane_instance_set_outputs(
+        self,
+        xs: list[torch.Tensor],
+    ) -> dict[str, torch.Tensor]:
+        """Build image-local Q x K lane-instance candidates from fused P2/P3 evidence."""
+        p2, p3, _, _ = xs
+        p2_features = self.lane_instance_p2_stem(p2)
+        p3_features = self.lane_instance_p3_stem(p3)
+        p3_features = F.interpolate(p3_features, size=p2_features.shape[-2:], mode="bilinear", align_corners=False)
+        features = self.lane_instance_fuse(torch.cat((p2_features, p3_features), dim=1))
+        b, _, _, width = features.shape
+
+        fixed_y = self.fixed_y_anchors.to(device=features.device, dtype=features.dtype)
+        grid_x = torch.linspace(-1.0, 1.0, width, device=features.device, dtype=features.dtype)
+        row_grid = torch.stack(
+            (
+                grid_x.view(1, 1, width).expand(b, self.num_points, -1),
+                fixed_y.mul(2.0).sub(1.0).view(1, self.num_points, 1).expand(b, -1, width),
+            ),
+            dim=-1,
         )
-        end_logits = self.full_lane_end_mlp(proposal_hs).view(
-            batch_size,
-            proposal_count,
-            self.num_points,
+        row_features = F.grid_sample(
+            features,
+            row_grid,
+            mode="bilinear",
+            padding_mode="border",
+            align_corners=True,
         )
-        score_probability = full_lane_proposal_score_probability(
-            exist_logits,
-            quality_logits,
-            valid_logits,
+        row_features = row_features.permute(0, 2, 3, 1).contiguous()
+
+        query_token = self.lane_instance_query_embed.weight.to(device=features.device, dtype=features.dtype)
+        row_token = self.lane_instance_row_embed.weight.to(device=features.device, dtype=features.dtype)
+        query_row_token = query_token[:, None, :] + row_token[None, :, :]
+        row_kernel = F.normalize(self.lane_instance_row_kernel_mlp(query_row_token), dim=-1)
+        normalized_row_features = F.normalize(row_features, dim=-1)
+        row_logits = torch.einsum("qkc,bkwc->bqkw", row_kernel, normalized_row_features)
+        row_logits = row_logits * math.sqrt(float(self.c1))
+
+        x_axis = torch.linspace(0.0, 1.0, width, device=features.device, dtype=features.dtype)
+        row_probability = torch.softmax(row_logits, dim=-1)
+        seed_x = (row_probability * x_axis.view(1, 1, 1, width)).sum(dim=-1)
+        row_context = (row_probability.unsqueeze(-1) * row_features[:, None, :, :, :]).sum(dim=3)
+        query_row_context = query_row_token.view(1, self.num_queries, self.num_points, self.c1).expand(b, -1, -1, -1)
+        point_token = self.lane_instance_point_norm(row_context + query_row_context)
+
+        x_refine = 0.05 * torch.tanh(
+            self.lane_instance_x_refine_mlp(torch.cat((point_token, row_context), dim=-1)).squeeze(-1)
+        )
+        pred_x = (seed_x + x_refine).clamp(0.0, 1.0)
+        pred_y = fixed_y.view(1, 1, self.num_points).expand(b, self.num_queries, -1)
+        pred_points = torch.stack((pred_x, pred_y), dim=-1)
+
+        start_prior = self.lane_instance_start_prior.to(device=features.device, dtype=features.dtype).view(1, 1, -1)
+        end_prior = self.lane_instance_end_prior.to(device=features.device, dtype=features.dtype).view(1, 1, -1)
+        start_logits = self.lane_instance_start_mlp(point_token).squeeze(-1) + start_prior
+        end_logits = self.lane_instance_end_mlp(point_token).squeeze(-1) + end_prior
+        valid_logits, interval_start, interval_end = interval_valid_logits_from_start_end(
             start_logits,
             end_logits,
+            sharpness=self.lane_instance_interval_sharpness,
         )
+        valid_prob = valid_logits.sigmoid()
+        interval_weight = valid_prob / valid_prob.sum(dim=-1, keepdim=True).clamp_min(1e-6)
+        candidate_token = self.lane_instance_candidate_norm((point_token * interval_weight.unsqueeze(-1)).sum(dim=2))
+
+        candidate_valid_detached = valid_prob.detach()
+        visible_len = valid_prob.mean(dim=-1)
+        geometry_span = (interval_end - interval_start).clamp_min(0.0) / max(float(self.num_points - 1), 1.0)
+        scalar_features = torch.stack((visible_len, geometry_span), dim=-1)
+        identity = F.normalize(
+            self.lane_instance_identity_mlp(torch.cat((candidate_token, scalar_features), dim=-1)),
+            dim=-1,
+        )
+        identity_cos = (identity[:, :, None, :] * identity[:, None, :, :]).sum(dim=-1)
+        identity_diagonal = torch.eye(self.num_queries, device=features.device, dtype=torch.bool).view(
+            1, self.num_queries, self.num_queries
+        )
+        identity_neighbor = identity_cos.masked_fill(identity_diagonal, -1.0)
+        identity_stats = torch.stack(
+            (
+                identity_neighbor.amax(dim=-1),
+                identity_neighbor.sum(dim=-1) / max(float(self.num_queries - 1), 1.0),
+            ),
+            dim=-1,
+        )
+        pair_diff = (pred_x[:, :, None, :] - pred_x[:, None, :, :]).abs()
+        pair_weight = candidate_valid_detached[:, :, None, :] * candidate_valid_detached[:, None, :, :]
+        pair_dist = (pair_diff * pair_weight).sum(dim=-1) / pair_weight.sum(dim=-1).clamp_min(1e-6)
+        nearest_candidate_dist = pair_dist.masked_fill(identity_diagonal, 1.0).amin(dim=-1)
+        quality_logits = self.lane_instance_quality_mlp(
+            torch.cat((candidate_token, scalar_features), dim=-1)
+        ).squeeze(-1)
+        novelty_logits = self.lane_instance_novelty_mlp(
+            torch.cat((candidate_token, nearest_candidate_dist.unsqueeze(-1), identity, identity_stats), dim=-1)
+        ).squeeze(-1)
+
+        left_token = candidate_token[:, :, None, :].expand(-1, -1, self.num_queries, -1)
+        right_token = candidate_token[:, None, :, :].expand(-1, self.num_queries, -1, -1)
+        pair_features = torch.cat(
+            (
+                left_token,
+                right_token,
+                (left_token - right_token).abs(),
+                pair_dist.unsqueeze(-1),
+                identity_cos.unsqueeze(-1),
+            ),
+            dim=-1,
+        )
+        pair_duplicate_logits = self.lane_instance_pair_duplicate_mlp(pair_features).squeeze(-1)
+        pair_duplicate_logits = 0.5 * (pair_duplicate_logits + pair_duplicate_logits.transpose(1, 2))
+        diagonal = identity_diagonal
+        pair_duplicate_logits = pair_duplicate_logits.masked_fill(diagonal, 20.0)
+
+        mean_x = (pred_x * interval_weight).sum(dim=-1)
+        signed_mean_diff = mean_x[:, :, None] - mean_x[:, None, :]
+        topology_features = torch.cat(
+            (
+                left_token,
+                right_token,
+                left_token - right_token,
+                signed_mean_diff.unsqueeze(-1),
+                (identity[:, :, None, :] - identity[:, None, :, :]).abs(),
+                identity_cos.unsqueeze(-1),
+            ),
+            dim=-1,
+        )
+        topology_logits = self.lane_instance_topology_mlp(topology_features)
+        left_logits = topology_logits[..., 0] - 12.0 * signed_mean_diff
+        right_logits = topology_logits[..., 1] + 12.0 * signed_mean_diff
+        left_logits = left_logits.masked_fill(diagonal, -20.0)
+        right_logits = right_logits.masked_fill(diagonal, -20.0)
+
+        duplicate_risk = pair_duplicate_logits.sigmoid().masked_fill(diagonal, 0.0).amax(dim=-1)
+        left_probability = left_logits.sigmoid()
+        right_probability = right_logits.sigmoid()
+        topology_pair_confidence = torch.maximum(left_probability, right_probability) * (
+            left_probability - right_probability
+        ).abs()
+        topology_confidence = topology_pair_confidence.masked_fill(diagonal, 0.0).sum(dim=-1) / max(
+            float(self.num_queries - 1), 1.0
+        )
+        visibility_quality = torch.sqrt((visible_len * geometry_span).clamp_min(1e-6))
+        utility_components = torch.stack(
+            (
+                quality_logits.sigmoid(),
+                novelty_logits.sigmoid(),
+                visibility_quality,
+                duplicate_risk,
+                topology_confidence,
+            ),
+            dim=-1,
+        )
+        survival_logits = self.lane_instance_survival_mlp(
+            torch.cat((candidate_token, scalar_features, identity, identity_stats, utility_components), dim=-1)
+        ).squeeze(-1)
+
+        image_token = F.adaptive_avg_pool2d(features, 1).flatten(1)
+        empty_logit = self.lane_instance_empty_mlp(image_token).squeeze(-1)
         return {
-            "pred_full_lane_points": pred_points,
-            "pred_full_lane_valid_logits": valid_logits,
-            "pred_full_lane_exist_logits": exist_logits,
-            "pred_full_lane_quality_logits": quality_logits,
-            "pred_full_lane_start_logits": start_logits,
-            "pred_full_lane_end_logits": end_logits,
-            "pred_full_lane_score_logits": probability_to_logit(score_probability),
+            "pred_lane_instance_points": pred_points,
+            "pred_lane_instance_start_logits": start_logits,
+            "pred_lane_instance_end_logits": end_logits,
+            "pred_lane_instance_valid_logits": valid_logits,
+            "pred_lane_instance_interval_start": interval_start,
+            "pred_lane_instance_interval_end": interval_end,
+            "pred_lane_instance_identity": identity,
+            "pred_lane_instance_pair_duplicate_logits": pair_duplicate_logits,
+            "pred_lane_instance_novelty_logits": novelty_logits,
+            "pred_lane_instance_left_logits": left_logits,
+            "pred_lane_instance_right_logits": right_logits,
+            "pred_lane_instance_geometry_quality_logits": quality_logits,
+            "pred_lane_instance_survival_logits": survival_logits,
+            "pred_lane_instance_empty_logit": empty_logit,
         }
+
+    def _residual_proposal_outputs(
+        self,
+        p2: torch.Tensor,
+        base_points: torch.Tensor,
+        base_logits: torch.Tensor,
+        base_valid_logits: torch.Tensor,
+        base_query_token: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        """Build differentiable full-K56 proposals from proposal-specific dense instance responses."""
+        features = self.residual_proposal_stem(p2)
+        mask_logits = self.residual_proposal_mask(features)
+        b, proposal_count, _, width = mask_logits.shape
+        fixed_y = self.fixed_y_anchors.to(device=mask_logits.device, dtype=mask_logits.dtype)
+        grid_x = torch.linspace(-1.0, 1.0, width, device=mask_logits.device, dtype=mask_logits.dtype)
+        grid = torch.stack(
+            (
+                grid_x.view(1, 1, width).expand(b, self.num_points, -1),
+                fixed_y.mul(2.0).sub(1.0).view(1, self.num_points, 1).expand(b, -1, width),
+            ),
+            dim=-1,
+        )
+        row_logits = F.grid_sample(mask_logits, grid, mode="bilinear", padding_mode="border", align_corners=True)
+        x_axis = torch.linspace(0.0, 1.0, width, device=mask_logits.device, dtype=mask_logits.dtype)
+        row_probability = torch.softmax(row_logits / 0.1, dim=-1)
+        pred_x = (row_probability * x_axis.view(1, 1, 1, width)).sum(dim=-1)
+        pred_y = fixed_y.view(1, 1, self.num_points).expand(b, proposal_count, -1)
+        pred_points = torch.stack((pred_x, pred_y), dim=-1)
+        row_evidence = torch.logsumexp(row_logits, dim=-1) - math.log(float(width))
+        valid_logits = row_evidence + self.residual_proposal_valid_mlp(row_evidence)
+        residual_valid_prob = valid_logits.detach().sigmoid()
+        base_x = base_points[:, :, :, 0].detach()
+        base_valid_prob = base_valid_logits.detach().sigmoid()
+        base_score = base_logits.detach().sigmoid()
+        proposal_token = self.residual_relation_proposal_mlp(torch.cat((row_evidence, residual_valid_prob), dim=-1))
+        base_token = self.residual_relation_base_mlp(
+            torch.cat((base_x, base_valid_prob, base_score.unsqueeze(-1)), dim=-1)
+        )
+
+        residual_base_diff = (pred_x[:, :, None, :] - base_x[:, None, :, :]).abs()
+        residual_valid_pair = residual_valid_prob[:, :, None, :].expand(-1, -1, base_x.shape[1], -1)
+        base_valid_pair = base_valid_prob[:, None, :, :].expand(-1, proposal_count, -1, -1)
+        base_score_pair = base_score[:, None, :, None].expand(-1, proposal_count, -1, -1)
+        residual_base_pair = self.residual_relation_base_pair_mlp(
+            torch.cat((residual_base_diff, residual_valid_pair, base_valid_pair, base_score_pair), dim=-1)
+        )
+        victim_pair_token = residual_base_pair
+        base_attention = torch.softmax(base_score[:, None, :] - 10.0 * residual_base_diff.mean(dim=-1), dim=-1)
+        base_context = (
+            base_attention.unsqueeze(-1) * (base_token[:, None, :, :] + residual_base_pair)
+        ).sum(dim=2)
+
+        residual_pair_diff = (pred_x[:, :, None, :] - pred_x[:, None, :, :]).abs()
+        residual_valid_left = residual_valid_prob[:, :, None, :].expand(-1, -1, proposal_count, -1)
+        residual_valid_right = residual_valid_prob[:, None, :, :].expand(-1, proposal_count, -1, -1)
+        residual_pair = self.residual_relation_proposal_pair_mlp(
+            torch.cat((residual_pair_diff, residual_valid_left, residual_valid_right), dim=-1)
+        )
+        residual_attention_logits = -10.0 * residual_pair_diff.mean(dim=-1)
+        diagonal = torch.eye(proposal_count, device=pred_x.device, dtype=torch.bool).unsqueeze(0)
+        residual_attention = torch.softmax(residual_attention_logits.masked_fill(diagonal, -1e4), dim=-1)
+        proposal_context = (
+            residual_attention.unsqueeze(-1) * (proposal_token[:, None, :, :] + residual_pair)
+        ).sum(dim=2)
+
+        relation_token = self.residual_relation_norm(proposal_token + base_context + proposal_context)
+        identity = F.normalize(self.residual_proposal_identity_mlp(relation_token), dim=-1)
+        base_novelty = residual_base_diff.mean(dim=-1).min(dim=-1).values
+        quality_features = torch.cat(
+            (relation_token, base_context, proposal_context, base_novelty.unsqueeze(-1)),
+            dim=-1,
+        )
+        quality_logits = self.residual_proposal_quality_mlp(quality_features).squeeze(-1)
+        topology_token = relation_token
+        if hasattr(self, "residual_topology_base_pair_mlp"):
+            signed_residual_base_diff = pred_x[:, :, None, :] - base_x[:, None, :, :]
+            topology_base_pair = self.residual_topology_base_pair_mlp(
+                torch.cat((signed_residual_base_diff, residual_valid_pair, base_valid_pair, base_score_pair), dim=-1)
+            )
+            victim_pair_token = topology_base_pair
+            topology_base_context = (
+                base_attention.unsqueeze(-1) * (base_token[:, None, :, :] + topology_base_pair)
+            ).sum(dim=2)
+            signed_residual_pair_diff = pred_x[:, :, None, :] - pred_x[:, None, :, :]
+            topology_proposal_pair = self.residual_topology_proposal_pair_mlp(
+                torch.cat((signed_residual_pair_diff, residual_valid_left, residual_valid_right), dim=-1)
+            )
+            topology_proposal_context = (
+                residual_attention.unsqueeze(-1) * (proposal_token[:, None, :, :] + topology_proposal_pair)
+            ).sum(dim=2)
+            topology_token = self.residual_topology_norm(
+                proposal_token + topology_base_context + topology_proposal_context
+            )
+            topology_quality_features = torch.cat(
+                (topology_token, topology_base_context, topology_proposal_context, base_novelty.unsqueeze(-1)),
+                dim=-1,
+            )
+            quality_logits = quality_logits + self.residual_topology_quality_mlp(topology_quality_features).squeeze(-1)
+        replace_pair_features = torch.cat(
+            (
+                topology_token[:, :, None, :].expand(-1, -1, base_x.shape[1], -1),
+                victim_pair_token,
+                base_query_token[:, None, :, :].expand(-1, proposal_count, -1, -1),
+            ),
+            dim=-1,
+        )
+        replace_logits = self.residual_replace_pair_mlp(replace_pair_features).squeeze(-1)
+        proposal_grid = torch.stack((pred_x.mul(2.0).sub(1.0), pred_y.mul(2.0).sub(1.0)), dim=-1)
+        sampled_visual = F.grid_sample(
+            features,
+            proposal_grid.reshape(b, proposal_count * self.num_points, 1, 2),
+            mode="bilinear",
+            padding_mode="border",
+            align_corners=True,
+        )
+        sampled_visual = sampled_visual.squeeze(-1).transpose(1, 2).reshape(
+            b, proposal_count, self.num_points, self.c1
+        )
+        visual_weight = residual_valid_prob.unsqueeze(-1)
+        visual_pool = (sampled_visual * visual_weight).sum(dim=2) / visual_weight.sum(dim=2).clamp_min(1.0)
+        visual_token = self.residual_visual_token_mlp(visual_pool)
+        visual_pair_features = torch.cat(
+            (
+                topology_token[:, :, None, :].expand(-1, -1, base_x.shape[1], -1),
+                visual_token[:, :, None, :].expand(-1, -1, base_x.shape[1], -1),
+                victim_pair_token,
+                base_query_token[:, None, :, :].expand(-1, proposal_count, -1, -1),
+            ),
+            dim=-1,
+        )
+        replace_logits = replace_logits + self.residual_replace_visual_pair_mlp(visual_pair_features).squeeze(-1)
+        outputs = {
+            "pred_residual_points": pred_points,
+            "pred_residual_valid_logits": valid_logits,
+            "pred_residual_exist_logits": self.residual_proposal_exist_mlp(row_evidence).squeeze(-1),
+            "pred_residual_start_logits": self.residual_proposal_start_mlp(row_evidence),
+            "pred_residual_end_logits": self.residual_proposal_end_mlp(row_evidence),
+            "pred_residual_row_logits": row_logits,
+            "pred_residual_mask_logits": mask_logits,
+            "pred_residual_identity": identity,
+            "pred_residual_quality_logits": quality_logits,
+            "pred_residual_base_novelty": base_novelty,
+            "pred_residual_relation_token": relation_token,
+            "pred_residual_topology_token": topology_token,
+            "pred_residual_base_token": base_token,
+            "pred_residual_base_visual_token": base_query_token,
+            "pred_residual_victim_pair_token": victim_pair_token,
+            "pred_residual_replace_logits": replace_logits,
+            "pred_residual_visual_token": visual_token,
+        }
+        if self.residual_replace_listwise_head:
+            selected_count = min(5, int(base_score.shape[1]))
+            selected_score, selected_index = base_score.topk(selected_count, dim=1)
+            selected_query_token = base_query_token.gather(
+                1,
+                selected_index.unsqueeze(-1).expand(-1, -1, base_query_token.shape[-1]),
+            )
+            selected_valid = base_valid_prob.gather(
+                1,
+                selected_index.unsqueeze(-1).expand(-1, -1, base_valid_prob.shape[-1]),
+            )
+            sorted_score = base_score.sort(dim=1, descending=True).values
+            boundary_gap = (
+                sorted_score[:, selected_count - 1] - sorted_score[:, selected_count]
+                if int(sorted_score.shape[1]) > selected_count
+                else sorted_score[:, selected_count - 1]
+            )
+            noop_stats = torch.stack(
+                (
+                    selected_score.mean(dim=1),
+                    selected_score.amin(dim=1),
+                    selected_score.amax(dim=1),
+                    boundary_gap,
+                    selected_valid.mean(dim=(1, 2)),
+                    residual_valid_prob.mean(dim=(1, 2)),
+                ),
+                dim=-1,
+            )
+            noop_features = torch.cat(
+                (
+                    selected_query_token.mean(dim=1),
+                    topology_token.mean(dim=1),
+                    visual_token.mean(dim=1),
+                    noop_stats,
+                ),
+                dim=-1,
+            )
+            outputs["pred_residual_noop_logit"] = self.residual_noop_mlp(noop_features).squeeze(-1)
+        return outputs
 
     def aux_output_size(self, orig_size=None):
         """Return auxiliary supervision size from the explicit original input image size."""
         if orig_size is not None:
             return tuple(int(v) for v in orig_size)
         raise ValueError("GCSLaneHead requires orig_size=(H, W) for auxiliary mask/edge outputs.")
+
+    def _attach_aux_outputs(self, out, p2, orig_size=None):
+        """Attach auxiliary mask and edge outputs when requested."""
+        if not (self.aux and (self.training or self.return_aux)):
+            return out
+        aux_size = self.aux_output_size(orig_size=orig_size)
+        out["aux_mask_logits"] = F.interpolate(
+            self.aux_mask(p2),
+            size=aux_size,
+            mode="bilinear",
+            align_corners=False,
+        )
+        out["aux_edge_logits"] = F.interpolate(
+            self.aux_edge(p2),
+            size=aux_size,
+            mode="bilinear",
+            align_corners=False,
+        )
+        return out
 
     def profile_flops(self, xs):
         """Estimate inference GFLOPs for the query decoder and prediction MLPs."""
@@ -1102,6 +1368,16 @@ class GCSLaneHead(nn.Module):
         p2, _, _, _ = xs
         b = p2.shape[0]
 
+        if self.lane_instance_set_decoder_head:
+            lane_instance_outputs = self._lane_instance_set_outputs(xs)
+            out = {
+                "pred_points": lane_instance_outputs["pred_lane_instance_points"],
+                "pred_logits": lane_instance_outputs["pred_lane_instance_survival_logits"],
+                "pred_valid_logits": lane_instance_outputs["pred_lane_instance_valid_logits"],
+            }
+            out.update(lane_instance_outputs)
+            return self._attach_aux_outputs(out, p2, orig_size=orig_size)
+
         memory = self.flatten_features(xs)
         query = self.query_embed.weight.unsqueeze(0).expand(b, -1, -1)
         hs = self.decoder(tgt=query, memory=memory)
@@ -1130,87 +1406,99 @@ class GCSLaneHead(nn.Module):
         else:
             point_ref = point_ref.to(device=point_delta.device, dtype=point_delta.dtype).unsqueeze(0)
             pred_points = torch.sigmoid(point_delta + point_ref)
-        pred_logits = self.exist_mlp(hs).squeeze(-1)
+        base_logits = self.exist_mlp(hs).squeeze(-1)
         if hasattr(self, "point_valid_mlp"):
             if point_mode == "fixed_y" and hasattr(self, "point_valid_refine_mlp"):
                 pred_valid_logits = self._refine_fixed_y_valid_logits(xs, hs, pred_points)
             else:
                 pred_valid_logits = self.point_valid_mlp(hs).view(b, self.num_queries, self.num_points)
         else:
-            pred_valid_logits = pred_logits.new_full((b, self.num_queries, self.num_points), 20.0)
+            pred_valid_logits = base_logits.new_full((b, self.num_queries, self.num_points), 20.0)
 
+        pred_logits = base_logits
+        survival_delta_logits = None
+        survival_point_delta = None
+        survival_valid_delta = None
+        interval_offsets = None
+        interval_base_bounds = None
+        interval_bounds = None
+        base_points = pred_points
+        base_valid_logits = pred_valid_logits
+        if getattr(self, "query_survival_head", False):
+            survival_features = torch.cat(
+                (
+                    hs,
+                    pred_points[..., 0],
+                    pred_valid_logits.sigmoid(),
+                    base_logits.sigmoid().unsqueeze(-1),
+                ),
+                dim=-1,
+            )
+            survival_tokens = self.query_survival_state_mlp(survival_features)
+            survival_context, _ = self.query_survival_attention(
+                survival_tokens,
+                survival_tokens,
+                survival_tokens,
+                need_weights=False,
+            )
+            survival_tokens = self.query_survival_norm(survival_tokens + survival_context)
+            survival_delta_logits = self.query_survival_delta_mlp(survival_tokens).squeeze(-1)
+            pred_logits = base_logits + survival_delta_logits
+            if getattr(self, "query_survival_geometry_adapter", False):
+                survival_point_delta = 0.1 * torch.tanh(self.query_survival_point_delta_mlp(survival_tokens))
+                survival_valid_delta = self.query_survival_valid_delta_mlp(survival_tokens)
+                pred_x = (base_points[..., 0] + survival_point_delta).clamp(0.0, 1.0)
+                pred_points = torch.stack((pred_x, base_points[..., 1]), dim=-1)
+                pred_valid_logits = base_valid_logits + survival_valid_delta
+        if getattr(self, "query_valid_local_adapter", False):
+            local_valid_tokens = self._point_refine_tokens(xs, hs, pred_points.detach())
+            survival_valid_delta = self.query_valid_local_delta_mlp(local_valid_tokens).squeeze(-1)
+            pred_valid_logits = base_valid_logits + survival_valid_delta
+        if getattr(self, "query_valid_interval_adapter", False):
+            interval_tokens = self._point_refine_tokens(xs, hs, pred_points.detach())
+            survival_valid_delta, interval_offsets, interval_base_bounds, interval_bounds = (
+                self._query_valid_interval_delta(base_valid_logits, interval_tokens)
+            )
+            pred_valid_logits = base_valid_logits + survival_valid_delta
         out = {
             "pred_points": pred_points,
             "pred_logits": pred_logits,
             "pred_valid_logits": pred_valid_logits,
         }
+        if survival_delta_logits is not None:
+            out["pred_base_logits"] = base_logits
+            out["pred_survival_delta_logits"] = survival_delta_logits
+        if survival_point_delta is not None or survival_valid_delta is not None:
+            out["pred_base_valid_logits"] = base_valid_logits
+            out["pred_survival_valid_delta"] = survival_valid_delta
+        if survival_point_delta is not None:
+            out["pred_base_points"] = base_points
+            out["pred_survival_point_delta"] = survival_point_delta
+        if interval_offsets is not None:
+            out["pred_valid_interval_offsets"] = interval_offsets
+            out["pred_valid_interval_base_bounds"] = interval_base_bounds
+            out["pred_valid_interval_bounds"] = interval_bounds
         if getattr(self, "query_count_head", False):
             out["pred_count_logits"] = self.query_count_mlp(hs.mean(dim=1))
-        if getattr(self, "short_candidate_head", False):
-            candidate_points, candidate_logits = self._short_candidate_outputs(
-                xs, hs, pred_points, pred_valid_logits, orig_size
-            )
-            out["pred_short_candidate_points"] = candidate_points
-            out["pred_short_candidate_logits"] = candidate_logits
-            out["pred_short_candidate_offsets_px"] = self.short_candidate_offsets_px.to(
-                device=pred_points.device, dtype=pred_points.dtype
-            )
-        if getattr(self, "short_segment_head", False):
-            (
-                segment_points,
-                segment_logits,
-                segment_x,
-                replace_logits,
-                query_replace_logits,
-                unified_choice_logits,
-            ) = self._short_segment_outputs(xs, hs, pred_points, orig_size)
-            out["pred_short_segment_points"] = segment_points
-            out["pred_short_segment_logits"] = segment_logits
-            out["pred_short_segment_x"] = segment_x
-            out["pred_short_segment_starts"] = self.short_segment_starts.to(device=pred_points.device)
-            out["pred_short_segment_ends"] = self.short_segment_ends.to(device=pred_points.device)
-            out["pred_short_segment_window_mask"] = self.short_segment_window_mask.to(device=pred_points.device)
-            if replace_logits is not None:
-                out["pred_short_segment_replace_logits"] = replace_logits
-            if query_replace_logits is not None:
-                out["pred_short_segment_query_replace_logits"] = query_replace_logits
-            if unified_choice_logits is not None:
-                out["pred_short_segment_choice_logits"] = unified_choice_logits
-        if getattr(self, "full_lane_proposal_head", False):
-            out.update(self._full_lane_proposal_outputs(memory, batch_size=b))
         if getattr(self, "dense_instance_head", False):
             dense_features = self.dense_instance_stem(p2)
             out["pred_dense_centerline_logits"] = self.dense_instance_centerline(dense_features)
             out["pred_dense_endpoint_logits"] = self.dense_instance_endpoint(dense_features)
             out["pred_dense_instance_embed"] = self.dense_instance_embed(dense_features)
+            if getattr(self, "dense_endpoint_offset_head", False):
+                out["pred_dense_endpoint_offsets"] = self.dense_instance_endpoint_offset(dense_features)
+            if getattr(self, "dense_candidate_head", False):
+                out["pred_dense_candidate_quality_logits"] = self.dense_instance_candidate_quality(dense_features)
+                out["pred_dense_candidate_replace_logits"] = self.dense_instance_candidate_replace(dense_features)
+        if getattr(self, "residual_proposal_head", False):
+            out.update(self._residual_proposal_outputs(p2, pred_points, pred_logits, pred_valid_logits, hs))
         if self.gcs_mode == "ordered_slot":
             out["pred_exist_logits"] = pred_logits
             out["pred_start_logits"] = self.start_mlp(hs).view(b, self.num_queries, self.num_points)
             out["pred_end_logits"] = self.end_mlp(hs).view(b, self.num_queries, self.num_points)
             out["pred_count_logits"] = self.count_mlp(hs.mean(dim=1))
 
-        if self.aux and (self.training or self.return_aux):
-            aux_size = self.aux_output_size(orig_size=orig_size)
-            aux_mask_logits = self.aux_mask(p2)
-            aux_mask_logits = F.interpolate(
-                aux_mask_logits,
-                size=aux_size,
-                mode="bilinear",
-                align_corners=False,
-            )
-
-            aux_edge_logits = self.aux_edge(p2)
-            aux_edge_logits = F.interpolate(
-                aux_edge_logits,
-                size=aux_size,
-                mode="bilinear",
-                align_corners=False,
-            )
-
-            out["aux_mask_logits"] = aux_mask_logits
-            out["aux_edge_logits"] = aux_edge_logits
-
-        return out
+        return self._attach_aux_outputs(out, p2, orig_size=orig_size)
 
 
 class LaneBiFPN(nn.Module):

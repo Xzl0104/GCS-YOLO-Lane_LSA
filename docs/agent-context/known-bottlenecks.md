@@ -1,6 +1,946 @@
-﻿# Known Bottlenecks
+# Known Bottlenecks
+
+## 2026-08-11: Lane-instance-set addresses the right class of problem, but has no measured coverage yet
+
+The lane-instance-set candidate is a structural response to the current
+base-query bottleneck: hard short/outer GT4 and GT5 lanes need complete K56
+instance hypotheses whose geometry, visibility, duplicate identity, topology,
+and survivor score are learned as a set. This is closer to the remaining
+problem than another scalar query threshold or residual replacement threshold.
+
+However, the current evidence is only contractual. Shape checks and synthetic
+decode/cache/loss tests prove that the code path is finite, prediction-only,
+survivor-counted, default-off, and separated from the active env30 baseline.
+They do not prove that the candidate learns useful lane instances or covers
+the hard GT4/GT5 misses.
+
+The unverified bottlenecks are:
+
+```text
+training convergence of the lane-instance-set heads
+candidate coverage on canonical official-val and clean-val
+train0313/train0601 cross-session hard-lane transfer
+set-survival calibration against harmful unmatched survivors
+duplicate/topology reliability for adjacent real lanes
+multi-seed stability
+official-val promotion-gate pass/fail
+TEST behavior
+```
+
+The old rejected paths remain closed. Residual replacement/listwise, dense
+ranker/assembler, full-lane proposal, local-segment/candidate, and
+query-only survival/valid-residual routes are still negative evidence and must
+not be cited as active lane-instance-set gains. The next useful evidence is a
+short training smoke followed by non-test candidate coverage and clean-val
+official-val gates. TEST remains closed.
+
+## 2026-08-11: Point-valid ceiling is real, but free-form logits are unstable
+
+The matched-query oracle proves that GT-correct visibility can raise
+official-val ACC by roughly `+0.0106..+0.0176`, while score protection is a
+no-op. This identifies point-valid survival as the largest measured ceiling,
+but it does not prove that an unconstrained 56-logit residual is learnable.
+
+The global and anchor-local residual heads both fail. The local head already
+uses the strongest available point-local image evidence, and an unmatched
+identity trust region reduces but does not remove the regression. Replacing
+the fixed-20px visible-only assignment with TuSimple angle-adjusted
+`line_accuracy` also fails. At `LR=1e-4`, the main failure is GT4 survival:
+canonical `count_acc_4` falls from `0.969697` to `0.954545` and FN rises.
+
+The root mismatch is structural. TuSimple fixed-y lane visibility is one
+contiguous start/end interval, but the query head and residual optimize 56
+independent binary logits. Small shared-logit changes cross the discrete
+`point_valid_thr=0.60`, `min_points=4`, `valid_before_maxdet`, and top-5
+boundaries, changing lane count and official matching discontinuously. BCE and
+Dice on anchors therefore do not provide a count-safe surrogate for official
+set utility.
+
+Do not continue global/local valid-delta heads or loss-weight tuning. The next
+smallest credible route is a default-off contiguous visibility-boundary head:
+predict start/end, enforce order and interval contiguity, preserve an explicit
+base/no-change action, and train only on official-line-accuracy-qualified base
+queries. Gate it on canonical, clean, and train0601 before TEST.
+
+## 2026-08-11: Residual retrieval is not official set utility
+
+The Stage-2d..2g sequence identifies a deeper objective mismatch. A proposal
+can be a strict full-span APE20 hit while having zero TuSimple official value,
+because official line accuracy uses angle-adjusted per-anchor agreement,
+invalid-anchor agreement, an `0.85` matched-line threshold, and special GT5
+handling that drops the worst lane from accuracy and forgives one FN. The
+clean GT5 candidate at `clips/0601/1495485009641442407/20.jpg` is the clearest
+case: diagnostic base-miss APE exceeds 20 px, but the baseline prediction set
+already scores `Accuracy=0.995536, FP=0, FN=0` on that image.
+
+The proposal pool is nevertheless useful. Exhaustive GT-assisted official
+set-update analysis finds positive replacement ceilings on 11/363 canonical,
+11/363 clean, and 21/410 train0601 images. Canonical oracle replacement would
+move ACC `0.973346 -> 0.973904` while reducing both FP and FN. The current
+bottleneck is therefore not only geometry recall; it is prediction-only action
+identity and no-op calibration.
+
+Stage-2g trains the existing proposal-victim head on exact positive
+TuSimple-official-score deltas, but sparse independent BCE/ranking collapses
+to unsafe calibration. After 12 epochs, canonical threshold `0.5` gives
+`0.972641 / 0.016437 / 0.011019`; threshold `0.25` gives
+`0.972735 / 0.015060 / 0.010331`; thresholds `>=0.7` are no-ops. Clean and
+train0601 show the same pattern. More epochs or another scalar threshold are
+not justified.
+
+The smallest credible next route is a listwise image-level action selector
+with an explicit no-op class, trained on official utility deltas and audited
+leave-session-out. It must distinguish which victim is safe, not merely whether
+a proposal resembles a missing lane.
 
 This file applies to branch `codex/5-25-3-k56`.
+
+## 2026-08-11: Existing-query geometry adapters cannot recover missing instances
+
+The frozen-env30 query-survival sequence now rejects both harder sampling and
+the zero-initialized geometry adapter. Hard sampling plus pairwise ranking in
+`query_survival_rank_hardsampling_env30_probe10_seed0_v5` leaves the
+train0601 final-hit result unchanged from env30, while `10/19` GT4-short and
+`41/183` GT5-short targets have no raw Q12 geometry within 20 px. Reweighting
+or reranking cannot select a lane that is absent from the query pool.
+
+The geometry adapter in
+`query_survival_geometry_hardsampling_env30_probe10_seed0_v6` can change x and
+point-valid outputs, but both clean-val checkpoints regress:
+
+```text
+env30 clean-val:
+  ACC/FP/FN = 0.966132 / 0.034527 / 0.019743
+  count_acc_4/count_acc_5 = 0.958333 / 1.000000
+
+v6 epoch005:
+  ACC/FP/FN = 0.965310 / 0.035399 / 0.022727
+  count_acc_4/count_acc_5 = 0.937500 / 1.000000
+
+v6 epoch010:
+  ACC/FP/FN = 0.965162 / 0.031589 / 0.020432
+  count_acc_4/count_acc_5 = 0.941667 / 1.000000
+```
+
+The adapter receives only the frozen query token, its existing curve,
+point-valid probabilities, and existence score. It can deform an existing
+hypothesis but does not introduce new spatial instance evidence. The failure
+therefore strengthens the representation diagnosis: the next candidate must
+create a missing-lane proposal from image-local evidence, then learn explicit
+proposal-to-base identity and replacement utility. Do not continue with larger
+query deltas, longer adapter training, more hard-sampling weight, seed repeats,
+or TEST.
+
+## 2026-08-10: Explicit pair relations still lack clean GT5 ranking signal
+
+Stage-2b encodes the full K56 residual-to-base and residual-to-residual
+differences, valid probabilities, base scores, learned pair tokens, and
+attention-weighted contexts. This is stronger than the rejected independent
+per-proposal Stage-2 representation, but it still leaves the only clean-val
+GT5 short base-miss strict candidate outside top5 (`oracle=1/6`, quality
+top5=`0/6`).
+
+The failure is not caused by geometry drift, visibility drift, checkpoint
+selection, or incomplete freezing: all 527 Stage-1b state keys are unchanged,
+`best.pt` and `last.pt` give identical retrieval counts, and env30 remains
+`TP/FP/FN=1317/54/41`. Canonical ranking improves, while ordinary train0601
+GT5 quality top3 drops from existence `67/1194` to `62/1194`. The relation
+features therefore learn split-specific ranking rather than a stable notion of
+lane novelty and replacement value.
+
+Do not add a set selector on these scores. The next representation must obtain
+stronger supervised relational evidence, such as explicit assignment to the
+nearest competing base lane plus topology/order and candidate-to-GT utility
+targets, while remaining diagnostic-only until clean GT5 top5 is nonzero and
+ordinary GT5 top3 is preserved.
+
+## 2026-08-10: Per-proposal identity/quality cannot identify clean GT5 novelty
+
+Stage-2 v1, fix2, and fix3 all fail the joint retrieval gate. Adding strict
+quality targets, pairwise ranking, stronger identity negatives, diversity
+selection, and distances to high-score base queries improved canonical and
+ordinary train-side GT5 top3 retrieval, but never moved the only clean-val GT5
+strict candidate into top5. Train0601 critical short retrieval also remained
+below the frozen existence ranking.
+
+The core remaining issue is relational: a proposal cannot be judged safely
+from its own row evidence, visibility, embedding, scalar quality, and summary
+distance-to-base features. The next admissible research step is not a set
+selector trained on these failed scores. It must first build explicit
+proposal-to-each-base and proposal-to-proposal relational tokens, then prove
+safe retrieval on canonical, clean GT5, and train0601 while replacement stays
+closed.
+
+## 2026-08-10: Visibility is repaired; proposal identity/ranking is now limiting
+
+`residual_proposal_visibility_stage1b_probe10_v1_fix2` closes the Stage-1
+point-valid collapse without changing geometry or env30 metrics. Strict
+full-span hit20 rose from `1/17` to `8/17` on canonical, `0/13` to `3/13` on
+clean-val, and `5/49` to `25/49` on train0601. GT5 rose to `6/12`, `1/6`, and
+`21/38`, respectively. These results meet every registered Stage-1b gate.
+
+The remaining gap is candidate identity and ranking rather than visible-span
+capacity. Strict any-proposal versus current top1 retrieval is `8 vs 5` on
+canonical, `3 vs 1` on clean-val, and `25 vs 17` on train0601. Clean-val GT5
+has one valid complete proposal but current top1 remains `0/6`. Do not respond
+with more visibility tuning, longer Stage-1b training, replacement, or decode
+thresholds. The next experiment should add identity/quality supervision and
+measure safe top-k retrieval while keeping all accepted geometry and
+visibility heads frozen.
+
+## 2026-08-10: Residual proposal finds geometry but point-valid destroys complete-span recall
+
+The default-off frozen-env30 probe `residual_proposal_env30_probe20_v1_fix1`
+completed 20 epochs with TEST and official decode closed. The base query metrics
+remained exactly frozen (`val TP/FP/FN=1317/54/41` for every epoch).
+
+The segmentation-first proposal representation learned real new geometry:
+
+```text
+canonical short base-miss geometry hit20 = 9/17
+  GT4 short base-miss = 2/4
+  GT5 short base-miss = 6/12
+clean-val short base-miss geometry hit20 = 4/13
+  GT4 short base-miss = 3/6
+  GT5 short base-miss = 1/6
+train0601 short base-miss geometry hit20 = 27/49
+  GT4 short base-miss = 4/10
+  GT5 short base-miss = 22/38
+```
+
+Strict point-valid full-span coverage collapses to `1/17`, `0/13`, and
+`5/49`, while the separately supervised interval head retains `6/17`, `2/13`,
+and `17/49` on the same canonical, clean-val, and train0601 short base-miss
+groups.
+
+Interpretation: the new representation creates useful missing-lane geometry,
+but residual visible-span calibration destroys most complete proposals,
+especially leakage-free clean-val GT5. Do not add identity or replacement yet.
+First make point-valid and interval retain the already-present geometry.
+
+## 2026-08-10: Dense hard-short weighting improves oracle pool slightly but fails selection
+
+The clean converted-val hard-short follow-up
+`dense_endpoint_offset_hardshort_w4_probe20_v2_cleanval` completed with TEST
+closed. It trained the dense branch, but official query decode still did not
+consume dense outputs, so the clean-val promotion gate failed:
+
+```text
+env30 clean-val ACC/score/FP/FN = 0.966132 / 0.965047 / 0.034527 / 0.019743
+hard-short v2 official_best    = 0.966146 / 0.965061 / 0.034527 / 0.019743
+ACC delta = +0.000014, below the +0.000500 gate
+count_acc_4/count_acc_5 unchanged = 0.958333 / 1.000000
+```
+
+The dense branch converged numerically, but this did not alter the frozen Q12
+query path:
+
+```text
+train/dense_instance_loss = 1.12297 -> 0.45465
+val/dense_instance_loss   = 0.69145 -> 0.50340
+val TP/FP/FN              = 1317/54/41 unchanged
+```
+
+The corrected clean-val pairing/ranking audit shows the remaining bottleneck:
+
+```text
+base-miss lanes:                 dense_full_hit20 = 15/57
+GT5 base-miss:                   dense_full_hit20 = 4/11
+GT5 vis6-10 base-miss:           dense_full_hit20 = 1/4
+GT5 base-miss top5 full-hit:     0/11
+GT5 vis6-10 base-miss top5:      0/4
+GT4/GT5 short base-miss top5:    0/12
+all-lane top5 full-hit:          398/1358
+```
+
+Compared with the earlier dense clean-val reference, the candidate pool gained
+only small GT5 base-miss oracle capacity (`3/11 -> 4/11`) and finally produced
+one GT5 vis6-10 base-miss oracle candidate (`0/4 -> 1/4`), but top-k selection
+remained zero for the critical hard lanes and all-lane top5 ranking regressed
+(`428/1358 -> 398/1358`). Useful hard-lane candidates remain low-ranked
+(`GT5 base-miss best-rank p50=68`, p90=179).
+
+Decision:
+
+```text
+Do not continue dense hard-short weighting, top-k replacement, threshold
+tuning, or longer training. The next credible route must change the lane
+instance/proposal representation so hard GT4/GT5 short lanes are generated and
+ranked as complete K56 lanes before decode is reopened.
+```
+
+## 2026-08-10: Clean-val dense pool has oracle headroom but no safe learned selector yet
+
+The clean converted-val dense endpoint-offset diagnostic was run with TEST
+closed:
+
+```text
+run = dense_endpoint_offset_env30_probe20_v1_fix1_offset_gate_cleanval_all_v1
+gt = runs/gcs_lane/clean_selection_val_from_converted_split/labels.json
+weights = dense_endpoint_offset_env30_probe20_v1_fix1/weights/last.pt
+assembly = offset_rowdp, p128, row_topk=10, interval_topk=24, pool=1024
+```
+
+It confirms that the dense pool contains some non-test rescue capacity, but
+not enough prediction-ranked capacity for promotion:
+
+```text
+clean-val base_miss lanes = 57
+dense_full_hit20 = 13/57
+forced_full_hit20 = 20/57
+endpoint_support_both = 47/57
+
+clean-val GT5 base_miss lanes = 11
+dense_full_hit20 = 3/11
+forced_full_hit20 = 5/11
+endpoint_near_both = 0/11
+
+clean-val GT5 vis_6_10 base_miss lanes = 4
+dense_full_hit20 = 0/4
+forced_full_hit20 = 1/4
+endpoint_near_both = 0/4
+```
+
+The replacement/set oracle audit shows why add-only or top-k promotion is not
+sufficient:
+
+```text
+run = dense_endpoint_offset_env30_probe20_v1_fix1_replacement_audit_cleanval_v1
+base_nohit = 57
+replacement_oracle = 25/57
+current_top5_replacement_oracle = 2/57
+strict_add_oracle_rescue = 18/57
+
+GT5 base_nohit = 11
+replacement_oracle = 4/11
+current_top5_replacement_oracle = 0/11
+```
+
+An offline non-test ranker trained on train0601 GT5 hard rows plus train0313
+GT4 hard rows did not solve the critical clean-val groups:
+
+```text
+run = dense_ranker_train0601_0313_to_cleanval_local_mlp_v1
+train/eval overlap handling = --drop-overlap
+feature_set = local
+
+all lanes top5_full_hit20: current 428/1358 -> supervised 405/1358
+base_nohit top5_full_hit20: current 2/57 -> supervised 7/57
+GT5 base_nohit top5_full_hit20: current 0/11 -> supervised 0/11
+GT5 vis_6_10 base_nohit top5_full_hit20: current 0/4 -> supervised 0/4
+```
+
+Interpretation:
+
+Dense evidence has useful oracle capacity on clean-val, but the current
+prediction-only candidate representation and local-feature ranker still cannot
+rank the GT5 hard lanes that are most aligned with the raw20 TEST gap. A
+ranker-only implementation would improve some mixed base-miss lanes while
+regressing ordinary lane ranking and leaving GT5 base-miss unresolved.
+
+Decision:
+
+```text
+Do not implement a dense ranker or dense replacement decoder from the current
+candidate rows.
+Do not continue dense endpoint/row-DP/maxdet/top-k threshold work.
+The next candidate must change the proposal representation or training target
+so GT4/GT5 short base-miss lanes become high-quality complete K56 proposals
+before ranking/decode is reopened.
+```
+
+## 2026-08-10: Canonical official-val is not sufficient for promotion
+
+Future candidates must not be promoted from canonical official-val alone. The
+clean converted-val GT is a leakage-free 363-image validation surface:
+
+```text
+runs/gcs_lane/clean_selection_val_from_converted_split/labels.json
+converted_train_overlap = 0
+official_val_overlap = 36
+official_val_train_overlap = 327
+gt_contract = noncanonical
+```
+
+On this trusted clean-val surface, the previously attractive canonical gains do
+not hold:
+
+```text
+env30 clean-val sweep:
+  ACC/score/FP/FN = 0.966132 / 0.965047 / 0.034527 / 0.019743
+  count_acc_4/count_acc_5 = 0.958333 / 1.000000
+
+dense_endpoint_offset_env30_probe20_v1_fix1 clean-val frozen decode:
+  ACC/score/FP/FN = 0.965437 / 0.964361 / 0.034068 / 0.019743
+  count_acc_4/count_acc_5 = 0.937500 / 1.000000
+
+query_env30_lineiou_w05_clean40_v1 clean-val sweep:
+  ACC/score/FP/FN = 0.965375 / 0.964369 / 0.029614 / 0.020661
+  count_acc_4/count_acc_5 = 0.983333 / 0.800000
+```
+
+The active bottleneck is therefore not "find a better canonical-val row"; it is
+leakage-free GT4/GT5 short-lane survival and complete-lane proposal identity
+under clean converted-val plus train-side hard gates.
+
+## 2026-08-10: Dense candidate reranking has no canonical GT5 headroom
+
+The full canonical official-val replacement audit closes the current dense
+endpoint/candidate reranking route:
+
+```text
+run = dense_canonical_allval_replacement_audit_v1
+lanes/images = 1303 / 363
+base_nohit = 33
+replacement_oracle = 6
+current_top5_replacement_oracle = 0
+GT4 base_nohit = 12, replacement_oracle = 2
+GT5 base_nohit = 15, replacement_oracle = 0
+```
+
+Candidate ordering confirms there is no safe scalar score:
+
+```text
+current_score top5: all = 370/1303, base_nohit = 0/33
+endpoint_margin_desc top5: all = 282/1303, base_nohit = 1/33
+far_from_base_desc top5: all = 85/1303, base_nohit = 1/33
+short_visible_asc top5: all = 23/1303, base_nohit = 1/33
+```
+
+A same-checkpoint, same-val-subset row-DP widening diagnostic also failed to
+produce GT5 base-nohit candidates:
+
+```text
+run = dense_gt5_base_nohit_rowdp_wide_beam8_p4096_v1
+GT5 base_nohit = 15
+row_topk/interval_topk/state_beam/pool = 10 / 24 / 8 / 4096
+dense_full_hit20 = 0/15
+replacement_oracle = 0/15
+forced_GT_endpoint_full_hit20 = 6/15
+endpoint_support_both = 12/15
+endpoint_near_both = 0/15
+```
+
+A new train-side GT4 hard diagnostic, using only `label_data_0313` images where
+env30 already missed under the fixed `20px` gate, shows the same structural
+shape for the GT4 failure class:
+
+```text
+run = dense_endpoint_peak_train0313_gt4_missing_candidate_diag_v1
+audit = dense_endpoint_peak_train0313_gt4_missing_replacement_audit_v1
+images = 91
+GT4 base_nohit = 95
+dense_full_hit20 = 10/95
+forced_GT_endpoint_full_hit20 = 52/95
+endpoint_support_both = 77/95
+endpoint_near_both = 21/95
+replacement_oracle = 11/95
+current_top5_replacement_oracle = 1/95
+```
+
+Interpretation:
+
+The main blocker is not only ranking. On canonical all-val, the current dense
+candidate generator has `0/15` full replacement oracle on GT5 base-miss lanes.
+No selector, MLP ranker, threshold, NMS, add-only decode, or wider row-DP pool
+can recover lanes that are absent from the candidate pool. The forced-endpoint
+oracle indicates some dense image evidence exists, but the prediction-only
+endpoint/identity carrier fails to localize and associate it. Future work must
+first create new GT4/GT5 short-lane proposals while preserving env30 solved
+lanes.
+
+## 2026-08-10: GT5-short rescue requires set-level replacement, not add-only
+
+Dense/proposal diagnostics now show that GT5-short base-miss rescue is blocked
+by set selection, not by the mere absence of candidates.
+
+Non-TEST train-side GT5-short excluding canonical official-val:
+
+```text
+run = dense_train_gt5short_excl_canonical_add_set_oracle_v1
+base_nohit_lanes = 33
+oracle_candidate_matching = 19
+set_oracle_rescue = 19
+strict_add_oracle_rescue = 0
+current_topk_base_nohit = 0
+```
+
+Canonical official-val GT5 base-nohit and train0601 hard diagnostics agree:
+
+```text
+canonical base_nohit = 15, set_oracle_rescue = 7, strict_add_oracle_rescue = 0
+train0601 base_nohit = 16, set_oracle_rescue = 12, current_topk_base_nohit = 0
+```
+
+The larger train-side scalar supervised ranker diagnostic does not provide a
+safe ranking solution:
+
+```text
+run = dense_ranker_train_gt5short_scalar_to_canonical_gt5nohit_v1
+canonical base_nohit top5 full-hit: current 0/15, supervised 2/15
+canonical all-GT5 top5 full-hit: current 19/70, supervised 7/70
+```
+
+Interpretation:
+
+The next bottleneck is prediction-only set-level replacement/ranking. The
+candidate pool can sometimes contain the missing lane, but current scores rank
+those candidates far below safe top-k, add-only cannot help when the base
+decode already emits the maximum lane count, and a simple supervised scalar
+ranker trades hard-case rescue for ordinary GT5 regression. Do not continue
+with dense threshold, add-only decode, or simple top-k candidate promotion.
+
+## 2026-08-10: LineIoU-only gains are seed-unstable and damage GT5 survival
+
+The repeat run `query_env30_lineiou_w05_clean100_retention_seed1_v2` was
+stopped after epoch 40 with TEST closed. It did not reproduce the seed0
+clean100 official-val improvement:
+
+```text
+env30 official-val ACC/FP/FN = 0.973330 / 0.015748 / 0.009642
+seed1 epoch040 official_best ACC/FP/FN = 0.971654 / 0.012672 / 0.008724
+seed1 count_acc_4/count_acc_5 = 0.909091 / 0.864865
+```
+
+The raw-Q12 diagnostic shows the mixed mechanism:
+
+```text
+GT4-short raw20: env30 1/8 -> seed1 3/8
+GT4-short final missing: env30 7/8 -> seed1 5/8
+GT5-short raw20: env30 40/53 -> seed1 38/53
+GT5-short final missing: env30 13/53 -> seed1 15/53
+GT5-normal raw20: env30 316/317 -> seed1 311/317
+GT5-normal final missing: env30 2/317 -> seed1 7/317
+```
+
+Interpretation:
+
+LineIoU-only supervision can move short-lane geometry, but it is not an
+env30-preserving fix. The main bottleneck is now more precise: any useful next
+route must rescue GT4/GT5 short raw-miss lanes without degrading GT5-normal
+geometry, GT5-short survival, or GT4/GT5 lane count. Repeating the same
+LineIoU-only recipe or extending it to 100/220 epochs is not supported by the
+seed1 evidence.
+
+## 2026-08-10: Ordered-slot count succeeds but geometry/identity collapses
+
+`ordered_slot_env30_probe40_v1` is rejected as a promotion route. It completed
+40 epochs and reached high diagnostic official-val count accuracy, but its
+lane geometry/visibility quality remained far below env30:
+
+```text
+env30 official-val ACC/FP/FN = 0.973330 / 0.015748 / 0.009642
+ordered-slot epoch040 ACC/FP/FN = 0.889913 / 0.262810 / 0.240358
+ordered-slot epoch040 count_acc/count_acc_4/count_acc_5 =
+  0.983471 / 0.984848 / 0.986486
+strict_order_valid = false, ordered_slot_order_violations = 13
+```
+
+The diagnostic official-val run with order checking downgraded to `warn`
+showed the main failure is not lane count. Count-correct images still averaged
+`ACC=0.893006`, `FP=0.256256`, and `FN=0.234127`, and paired comparison with
+env30 regressed `334/363` images while improving only `18/363`.
+
+Interpretation:
+
+The current ordered-slot path resets too much of the mature env30 query head:
+only `404/519` tensors transfer from env30, and the slot geometry/interval/
+visibility/identity heads must learn a new representation from scratch. The
+count head can learn quickly, but the lane geometry and slot identity do not
+approach env30 within the probe. Do not continue this route by adding epochs,
+weakening strict order checks, runtime sorting, or running TEST.
+
+Current target bottleneck remains the env30 TEST gap:
+
+```text
+valid raw20 TEST env30 ACC/FP/FN = 0.966784 / 0.028732 / 0.023544
+count_acc_4/count_acc_5 = 0.598291 / 0.891037
+test dates = 0530, 0531, 0601
+train dates = 0313-1, 0313-2, 0531, 0601
+GT4 short lanes: 116, raw has20 = 0.396552
+GT5 short lanes: 478, raw has20 = 0.642259
+GT4 official count confusion: 4->3 = 98, 4->5 = 90, 4->4 = 280
+GT5 official count confusion: 5->3 = 19, 5->4 = 43, 5->5 = 507
+```
+
+The existing TEST diagnostic is for post-hoc root-cause analysis only, not
+threshold or checkpoint selection. The next credible non-test route must
+preserve env30 behavior on solved lanes and apply any geometry/proposal change
+only to train-side hard GT4/GT5 short base-miss cases, with leave-date/session-
+out and frozen hard-set gates before any final TEST.
+
+## 2026-08-09: LineIoU raw geometry gain is blocked by GT4 count survival
+
+The count-safe clean100 seed0 run completed but produced no promotable
+official-val candidate:
+
+```text
+run = query_env30_lineiou_w05_countsafe_select_clean100_seed0_v1
+eligible rows = 0 / 17280
+official_best artifacts = missing by design
+TEST = closed
+```
+
+The raw-Q12 diagnostic confirms that LineIoU improves geometry:
+
+```text
+env30 overall has20 = 0.976209
+epoch100 overall has20 = 0.983883
+env30 GT4-short has20 = 0.125000
+epoch100 GT4-short has20 = 0.500000
+env30 GT5-short has20 = 0.754717
+epoch100 GT5-short has20 = 0.849057
+```
+
+The same run fails promotion because high-ACC rows repeatedly break GT4 lane
+count survival:
+
+```text
+epoch080 natural:
+  ACC/FP/FN = 0.974099 / 0.013223 / 0.009642
+  count_acc_4 = 0.954545
+  failure = GT4 4->5 overcount
+
+epoch100 natural:
+  ACC/FP/FN = 0.974249 / 0.013085 / 0.010331
+  count_acc_4 = 0.924242
+  failure = GT4 4->3 undercount and GT4 4->5 overcount
+```
+
+This is not a simple decode-threshold fix: every official-val sweep row failed
+the pre-registered count-safe gates. The next allowed diagnostic is the
+default-off `gcs_line_iou_geometry_only` probe, which freezes existence,
+point-valid, decoder, backbone, auxiliary, dense, and query-count parameters
+and trains only `point_mlp` plus `point_refine_mlp`. It must pass a 4-seed
+count-safe 40-epoch official-val gate before any 100-epoch run, and TEST stays
+closed.
+
+## 2026-08-08: Dense replacement is blocked by candidate selection, not FP removal
+
+`tools/analyze_gcs_dense_replacement_audit.py` was added as a diagnostic-only
+audit for dense candidate replacement. It reads non-test candidate rows and,
+when available, raw-Q12 query diagnostics to reconstruct whether a base FP can
+be removed while a dense candidate rescues a base-miss GT lane. It does not
+modify training, inference, official decode, or TEST status.
+
+New evidence on canonical GT5 base-nohit hard cases:
+
+```text
+strict base-nohit lanes = 15
+oracle full-hit candidate = 7/15
+oracle-removable base FP = 14/15
+replacement oracle = 7/15
+current top1/top5/top128 full-hit = 0/15 / 0/15 / 0/15
+current top1024 full-hit = 7/15
+lowest_exist / lowest_valid_count / lowest_valid_len removal = 7/15 when an oracle candidate exists
+```
+
+Candidate-only train0601 hard evidence is consistent:
+
+```text
+strict base-nohit lanes = 16
+oracle full-hit candidate = 12/16
+current top1/top5/top128 full-hit = 0/16 / 0/16 / 0/16
+current top1024 full-hit = 12/16
+```
+
+Simple prediction-only candidate heuristics expose the tradeoff rather than a
+solution:
+
+```text
+canonical far_from_base_desc top5:
+  GT5 base-nohit = 5/15
+  all GT5        = 6/70
+
+canonical short_visible_asc / short_y_span_asc top5:
+  GT5 base-nohit = 4/15
+  all GT5        = 5/70
+
+train0601 hard far_from_base_desc top5 = 4/16
+train0601 hard short_visible_asc / short_y_span_asc top5 = 5/16
+```
+
+Interpretation:
+
+Removing the wrong base lane is not the main bottleneck for the canonical
+base-miss GT5 cases. The limiting problem is selecting short, far-from-base,
+lower-score dense candidates without damaging ordinary GT5 lanes. Do not
+implement a small replacement decoder, tune dense thresholds, or run TEST from
+this trace. A future dense/full-lane route must first solve prediction-only
+proposal ranking under a pre-registered official-val gate.
+
+## 2026-08-08: Dense local features do not solve safe candidate selection
+
+The candidate-local ranker diagnostic adds prediction-only local path,
+endpoint, embedding, span, slope, and nearest-base features to dense trace
+candidate rows. It does not change training, inference, official decode, or
+TEST status.
+
+New non-test evidence:
+
+```text
+canonical GT5 base-nohit localfeat v2:
+  current top1/top5 full-hit = 0/15 and 0/15
+  any full-hit candidate = 7/15
+
+local MLP train0601->canonical:
+  GT5 base-nohit top1/top5 full-hit = 1/15 and 1/15
+  all-GT5 top5 full-hit = 13/70
+
+local linear train0601->canonical:
+  GT5 base-nohit top1/top5 full-hit = 1/15 and 1/15
+  all-GT5 top5 full-hit = 10/70
+
+current all-GT5 top5 full-hit baseline on the same rows = 19/70
+pre-registered base-nohit gate = top5 full-hit >= 4/15
+```
+
+The feature analysis is internally consistent but unfavorable for promotion:
+
+```text
+canonical base-nohit top wrong candidates:
+  median visible anchors = 45
+  median nearest-base distance = 3.59 px
+  median score = 0.9646
+
+canonical base-nohit first full-hit candidates:
+  median visible anchors = 11
+  median nearest-base distance = 34.13 px
+  median score = 0.8207
+```
+
+Interpretation:
+
+Useful base-miss candidates exist, but they look like short, lower-score,
+far-from-base alternatives. A global reranker that favors them damages the
+dominant ordinary GT5 lanes. This is a structural selection problem, not just
+a missing local-feature problem. Do not continue by tuning ranker weights,
+thresholds, NMS, `max_det`, or `min_points` on this dense trace path.
+
+Recommended direction:
+
+Stop dense trace/ranker promotion. A credible next route needs set-level
+lane-instance prediction or another structured representation that can add
+short outer lanes while preserving ordinary correct lanes under official-val
+selection.
+
+## 2026-08-07: Dense endpoint-peak improves pool capacity but not promotion gates
+
+`dense_instance_endpoint_peak_probe20_v1` completed `20/20` epochs with
+`gcs_dense_freeze_base=true`, `gcs_dense_endpoint_peak_weight=0.05`,
+canonical official-val selection, and `RUN_TESTS=0`.
+
+The endpoint/centerline/instance losses decreased, but official-val is still
+the frozen Q12 query decode path:
+
+```text
+official_best epoch = 10
+ACC/score/FP/FN = 0.973365 / 0.972857 / 0.015748 / 0.009642
+count_acc_4/count_acc_5 = 0.969697 / 0.986486
+decode = conf 0.001, point_valid_thr 0.6, nms 0, max_det 5, min_points 4
+```
+
+Dense tensors are not consumed by official decode, so this is not an official
+ACC gain. The meaningful diagnostic evidence is mixed:
+
+```text
+canonical GT5 base no-hit p128/e1:
+  endpoint-mass dense_full_hit20 = 4/15
+  endpoint-peak dense_full_hit20 = 7/15
+  forced_full_hit20 = 8/15
+  endpoint_support_both = 12/15
+  endpoint_near_both = 0/15
+  current top1/top5 full-hit = 0/15 and 0/15
+
+train0601 hard GT5 base no-hit p128/e1:
+  endpoint-mass dense_full_hit20 = 0/16
+  endpoint-peak dense_full_hit20 = 11/16
+  forced_full_hit20 = 6/16
+  endpoint_support_both = 15/16
+  endpoint_near_both = 1/16
+  current top1/top5 full-hit = 0/16 and 0/16
+```
+
+On canonical GT5 base no-hit lanes with any full-hit candidate, useful
+candidates are still ranked far below long wrong/neighbor candidates:
+
+```text
+median first-full rank = 969
+median first-full visible anchors = 11
+median top-ranked wrong visible anchors = 45
+median first-full nearest-base distance = 34.13 px
+median top-ranked wrong nearest-base distance = 3.59 px
+```
+
+The larger train-side scalar-feature ranker diagnostic also failed promotion:
+the best MLP fit improved train hard cases but reached only `3/15` canonical
+GT5 base no-hit top5 full-hit and reduced ordinary all-GT5 top5 full-hit from
+`13/70` to `12/70`.
+
+Interpretation:
+
+Endpoint-peak supervision creates more oracle candidates, but current
+prediction-only endpoint peak localization, same-lane association, and ranking
+are still not sufficient. Do not solve this by adding epochs, tuning official
+decode thresholds, increasing `max_det`, or directly enabling dense decode.
+The next dense route needs richer candidate-local representation or a stronger
+same-lane association/fitting objective before a learned ranker or official
+decode can be credible.
+
+## 2026-08-07: Supervised dense ranker features are not enough yet
+
+The existing default-off `gcs_dense_candidate` implementation is not a true
+candidate-level ranker. It adds two dense pixel maps,
+`pred_dense_candidate_quality_logits` and
+`pred_dense_candidate_replace_logits`, and `GCSLoss._dense_candidate_targets`
+rasterizes quality/replace targets only at GT bottom endpoints. It does not
+score the traced K56 dense candidates that failed the p128/e1 hard gate.
+
+A diagnostic-only supervised ranker tool was added:
+
+```text
+tools/analyze_gcs_dense_candidate_supervised_ranker.py
+```
+
+The tool reads non-test `dense_candidate_ranking_rows.csv`, trains a small
+offline classifier on prediction-only candidate factors, and evaluates rank
+metrics using GT labels only after inference. It refuses TEST rows and blocks
+train/eval raw-file overlap unless explicitly told to drop overlapping train
+rows.
+
+Protocol findings:
+
+```text
+canonical p128/e1 hard-list official-parity recheck:
+  base_valid_before_maxdet=false
+  GT5 base no-hit top1/top5 full-hit = 0/15 and 0/15
+  first full-hit rank mean = 801.0
+  same as the previous base_valid_before_maxdet=true hard-list result
+
+larger train-side GT5-short bank:
+  run = dense_ranking_candidates_train_gt5short_excl_canonical_p128e1_officialdecode_v2
+  processed_images = 106/106
+  lane rows = 530
+  candidate rows = 542,720
+  TEST = closed
+
+train-side GT5 base no-hit evidence:
+  dense_full_hit20 = 16/33
+  forced_full_hit20 = 18/33
+  endpoint_support_both = 28/33
+  correct_channel_both = 30/33
+  endpoint_near_both = 3/33
+```
+
+Supervised ranker results:
+
+```text
+linear, target=candidate_full_hit20:
+  eval GT5 base no-hit top5 full-hit = 1/15
+  eval all GT5 top5 full-hit = 7/70, below current 13/70
+
+linear, target=candidate_hit20:
+  eval GT5 base no-hit top5 full-hit = 1/15
+  eval all GT5 top5 full-hit = 6/70, below current 13/70
+
+MLP hidden=32, target=candidate_full_hit20:
+  train GT5 base no-hit top5 full-hit = 14/33
+  eval GT5 base no-hit top5 full-hit = 3/15
+  eval all GT5 top5 full-hit = 12/70, below current 13/70
+```
+
+Interpretation:
+
+The failure is not just that the hand-written score formula is bad. A small
+supervised model can partially fit the larger train-side hard subset, but the
+best canonical official-val hard result is still only `3/15`, below the
+pre-registered `>=4/15` gate, and it still hurts ordinary GT5 ranking
+(`13/70 -> 12/70`). The available scalar candidate factors do not yet provide
+a stable prediction-only ranking signal for the exact outer short-lane misses.
+
+Decision:
+
+Do not implement or train a model-level dense candidate rank head from these
+features yet, do not enable dense decode, and do not run TEST. The next useful
+dense action is not another decoder patch or scalar-ranker sweep. The
+completed larger bank strengthens the diagnosis that the blocker is richer
+candidate-local representation: endpoint peak localization, same-lane
+association, and complete K56 fitting must be improved before a learned rank
+or replace gate can be a credible official-val candidate.
+
+## 2026-08-07: Dense candidate ranking needs supervised novelty-aware calibration
+
+The dense endpoint mass run is complete but remains diagnostic-only. Its loss
+curves show that dense evidence training works, but the evidence is not yet a
+reliable complete-lane proposal system:
+
+```text
+run = dense_instance_endpoint_mass_probe20_v3_canonical
+epochs = 20/20
+TEST = closed
+official_best = epoch 10
+official-val ACC/FP/FN = 0.973365 / 0.015748 / 0.009642
+env30 reference ACC/FP/FN = 0.973330 / 0.015748 / 0.009642
+```
+
+The small official-val delta is not a dense decode gain because official query
+decode does not consume dense tensors. The meaningful diagnostic evidence is:
+
+```text
+default trace, canonical GT5 base no-hit:
+  dense_full_hit20 = 0/15
+  forced_full_hit20 = 5/15
+  endpoint_support_both = 13/15
+  endpoint_near_both = 0/15
+
+p128/e1 trace, canonical GT5 base no-hit:
+  dense_full_hit20 = 4/15
+  forced_full_hit20 = 7/15
+  current top5_full_hit20 = 0/15
+```
+
+The new `candidate_min_base_dist_px` diagnostic explains part of the ranking
+failure. On GT5 base no-hit lanes, current top-ranked wrong candidates are
+usually near existing Q12/base lanes, while full-hit candidates are farther
+from every base lane:
+
+```text
+current top median nearest-base distance ~= 5.02 px
+first full-hit median nearest-base distance ~= 34.80 px
+```
+
+Adding bounded novelty plus short-visible preference can rescue the hard
+subset offline:
+
+```text
+short_visible_x_novelty:
+  GT5 base no-hit top1/top5 full-hit20 = 4/15
+  GT5 visible 6..10 base no-hit = 3/10
+```
+
+But the same unsupervised rerank damages ordinary GT5 ranking:
+
+```text
+current all top5 full-hit20 = 13/70
+short_visible_x_novelty all top5 full-hit20 = 5/70
+```
+
+Therefore base-distance novelty is a useful feature, not a safe decoder rule.
+The next credible dense route is a supervised/calibrated candidate ranker and
+replace gate with base-preserve constraints. Do not run TEST, do not extend the
+same dense training, and do not promote a `p128/e1` decoder directly.
+
+## 2026-08-03 Final Env30 Conclusion
+
+The active implementation is restored to `86c8fb31c`, the env30 baseline.
+All later experiments are rejected as active paths, including every candidate,
+local-segment, full-lane, dense-instance, selector, decode, and diagnostic
+follow-up through the pre-rollback HEAD `70d9ef0c`.
+
+All lower post-env30 bottleneck sections are historical evidence only. Their
+next-action, ready, or reopen wording is cancelled and must not be used to
+schedule training, official-val sweeps, or TEST. A future route requires a
+new explicit user decision starting from the env30 payload.
 
 ## 2026-08-01 v10 Formal Segment Decode Check
 
@@ -4982,3 +5922,405 @@ summary as an ACC claim, and do not tune a dense threshold on TEST. The
 dense probe script must use `gcs_dense_freeze_base=1`; otherwise shared P2 and
 query features can drift and the evidence result is not isolated from base
 regression.
+
+## 2026-08-06: Dense endpoint mass evidence does not yield full K56 proposals
+
+The completed mass-balanced dense endpoint probe
+`dense_instance_endpoint_mass_probe20_v3_canonical` is diagnostic-only and did
+not open TEST. It kept `gcs_dense_freeze_base=true`, trained for `20/20`
+epochs, and selected epoch `10` by canonical official-val:
+
+```text
+official-val ACC/FP/FN = 0.973365 / 0.015748 / 0.009642
+count_acc_4/count_acc_5 = 0.969697 / 0.986486
+decode = conf 0.001, point_valid_thr 0.6, nms 0, max_det 5, min_points 4
+```
+
+This is effectively the frozen env30 base path, because dense evidence is not
+used by the official decoder. It is not an official ACC gain.
+
+The dense evidence head learned useful support at GT coordinates:
+
+```text
+official-val base-miss dense_full_evidence = 324/351
+official-val GT5 base-miss dense_full_evidence = 88/94
+official-val GT5 visible 6..10 base-miss dense_full_evidence = 14/15
+train0601 base-miss dense_full_evidence = 509/551
+train0601 GT5 base-miss dense_full_evidence = 354/382
+train0601 GT5 visible 6..10 base-miss dense_full_evidence = 72/78
+```
+
+However, prediction-only dense candidate assembly did not convert that support
+into complete K56 proposals. The canonical official-val trace gate found:
+
+```text
+all base-miss lanes: candidate_oracle_full_hit20 = 5/32
+GT4 base-miss:       candidate_oracle_full_hit20 = 3/12
+GT5 base-miss:       candidate_oracle_full_hit20 = 0/15
+GT5 visible 6..10 base-miss: candidate_oracle_full_hit20 = 0/13
+score top1/top5 on GT5 base-miss = 0/15 and 0/15
+```
+
+The hard GT5 official-val failures are concentrated in `clips/0601` outer
+lanes (`lane_index` 0 or 4). Their best trace candidates remain far outside
+the 20px gate, commonly `33..267px` APE, and one visible-1 lane is
+unmeasurable under the normal full-hit gate.
+
+Row-DP and beam diagnostics on the representative hard sample
+`clips/0601/1494452397586667021/20.jpg` improved partial local APE but still
+failed complete visible geometry:
+
+```text
+rowdp top32/pool50000: partial APE 10.7964, full-visible APE 89.7510
+beam2048:              partial APE 3.1688,  full-visible APE 44.0607
+candidate_oracle_full_hit20 = 0
+score top1/top5 full-hit20 = 0
+```
+
+## 2026-08-07: LineIoU improves short geometry but breaks count calibration
+
+`query_env30_lineiou_w1_clean40_v1` completed its 40-epoch canonical
+official-val probe with TEST closed. It produced a small selected official-val
+ACC increase over env30 (`0.973565` vs `0.973330`) and lower FP/FN
+(`0.013820/0.009412` vs `0.015748/0.009642`), but the gain is not promotable:
+`count_acc_4` fell from `0.969697` to `0.939394`, `count_acc_5` fell from
+`0.986486` to `0.972973`, and no row in the `6912`-row official-val sweep
+passed the combined ACC/FP/FN/count4/count5 promotion gate.
+
+The same-decode comparison preserves the diagnosis:
+
+```text
+env30 fixed decode:   ACC/FP/FN/count4 = 0.973330 / 0.015748 / 0.009642 / 0.969697
+clean40 fixed decode: ACC/FP/FN/count4 = 0.973527 / 0.014601 / 0.009412 / 0.939394
+```
+
+Paired bootstrap CIs include zero for both fixed-decode and selected-decode
+comparisons, so the small official-val ACC delta is not stable enough to
+freeze for TEST.
+
+The useful part of the signal is localized: the GT4-short hard set improved
+from `F1=0.897959` to `0.949807` (`tp/fp/fn` `462/49/56 -> 492/26/26`).
+The harmful part is official-val GT4/GT5 count calibration, especially
+single-point or extremely short fourth lanes where slight valid/score changes
+turn `4 -> 3`.
+
+Implication:
+
+Do not continue this checkpoint to long training and do not tune decode to
+hide the count regression. If LineIoU is reopened, the next experiment must be
+a single-variable `LineIoU + short valid/count preserve` probe with a
+pre-registered gate requiring GT4/GT5 count retention, not another broad
+geometry-only probe.
+
+## 2026-08-07: Dense hard GT5 blocker is peak localization plus association
+
+`tools/diagnose_gcs_dense_pairing_fitting.py` separates dense endpoint
+support, endpoint peak localization, channel assignment, embedding
+separability, forced GT-endpoint tracing, and complete K56 fitting. It is
+diagnostic-only and uses GT only after inference.
+
+Canonical official-val run:
+
+```text
+runs/gcs_lane/dense_pairing_fitting_canonical_val_v1
+```
+
+Key canonical GT5 base no-hit evidence:
+
+```text
+GT5 base no-hit20 lanes = 15
+dense prediction-only full-hit20 = 0/15
+forced GT-endpoint full-hit20 = 5/15
+endpoint support both = 13/15
+correct endpoint channel = 13/15
+near endpoint peaks = 0/15
+```
+
+Train0601 hard-40 run:
+
+```text
+runs/gcs_lane/dense_pairing_fitting_train0601_hard40_v1
+```
+
+The same pattern held:
+
+```text
+GT5 base no-hit20 lanes = 16
+dense prediction-only full-hit20 = 0/16
+forced GT-endpoint full-hit20 = 4/16
+endpoint support both = 15/16
+correct endpoint channel = 16/16
+near endpoint peaks = 0/16
+```
+
+Implication:
+
+The dense endpoint mass probe learned broad endpoint evidence, but the hard
+outer GT5 lanes fail because the peak selected by prediction-only decoding is
+spatially displaced and because forced tracing still fails on most lanes.
+Small same-lane embedding margins (`~0.008` canonical GT5 base no-hit,
+`~0.016` train0601 hard GT5 base no-hit) indicate association ambiguity.
+
+Do not spend more runs on dense threshold, maxdet, NMS, or long training.
+Reopen dense only with a single-variable mechanism that directly improves
+endpoint peak localization/sharpness or same-lane association, and require
+prediction-only canonical GT5 base no-hit full-hit20 to improve from `0/15`
+to at least `4/15` before any official-val promotion discussion.
+
+Additional canonical GT5 no-hit ablations confirm that oracle coverage alone
+is not enough. Expanding dense endpoint peaks and increasing embedding weight
+created some oracle candidates but left score ranking unusable:
+
+```text
+p64/e0.35: dense_full = 0/15
+p64/e1.0:  dense_full = 2/15
+p128/e1.0: dense_full = 4/15
+top1 full-hit = 0/15
+top5 hit = 0/15
+hit ranks for the four p128/e1 hits = 865, 920, 932, 965 of 1024
+```
+
+This closes pure decode-parameter promotion. The dense path would need a
+separate candidate-ranking mechanism or ranking diagnostic before it can be a
+credible official-val candidate.
+
+The ranking-factor audit in
+`runs/gcs_lane/dense_ranking_audit_canonical_gt5_nohit_p128e1_v1` explains the
+ranking failure. On canonical GT5 base no-hit lanes, first-full candidates
+have lower score factors than top1 wrong candidates across several weak
+dimensions, especially length:
+
+```text
+top1 median score / first-full median score = 0.983674 / 0.846281
+endpoint factor = 0.991813 / 0.973963
+centerline factor = 0.993723 / 0.978699
+embedding factor = 0.999072 / 0.987544
+length factor = 1.000000 / 0.916667
+visible count = 45 / 11
+```
+
+Because these factors are multiplicative, the current score systematically
+prefers long high-confidence wrong/neighbor candidates over short outer
+GT5 full-hit candidates. The immediate dense target is therefore not more
+candidate generation; it is short-lane-aware candidate ranking with a gate of
+canonical GT5 base no-hit top5 full-hit `0/15 -> >= 4/15` before any official
+decode discussion.
+
+Interpretation:
+
+The endpoint mass fix addresses the earlier endpoint-target imbalance and
+proves dense evidence is present, but the current trace/row-DP assembler cannot
+turn that evidence into full-lane K56 geometry for the exact GT5 base-miss
+lanes that limit TuSimple ACC. This is a representation/association/fitting
+failure, not a reason to add epochs or tune official decode thresholds.
+
+Decision:
+
+Do not continue this dense assembler route to `100/220` epochs, do not run
+official TEST, and do not tune `conf`, NMS, `max_det`, or `min_points` from
+this result. The next dense experiment must first add a diagnostic that
+separates endpoint localization, endpoint pairing, embedding clustering, and
+complete K56 fitting on the 15 official-val GT5 base-miss lanes. Only if an
+oracle endpoint/pairing diagnostic produces nonzero full-hit20 headroom should
+a new supervised dense-to-K56 proposal head or prediction-only decoder be
+implemented.
+
+### Canonical repeat and frozen-EMA audit
+
+The canonical official-val comparison was repeated twice per frozen checkpoint
+with the selected decode fixed at `conf=0.001`, `point_valid_thr=0.6`,
+`nms_dist_px=0`, `max_det=5`, and `min_points=4`:
+
+```text
+env30 repeats: ACC/score/FP/FN = 0.973330 / 0.972822 / 0.015748 / 0.009642
+dense repeats: ACC/score/FP/FN = 0.973365 / 0.972857 / 0.015748 / 0.009642
+count confusion: identical
+```
+
+The `+0.000035` dense-checkpoint delta is reproducible but is not dense
+evidence being decoded. A checkpoint-state audit found that all shared FP16
+and integer tensors match the env30 checkpoint exactly; the only differences
+are all `264` shared FP32 normalization tensors. Applying the current
+`ModelEMA` recurrence to the unchanged env30 FP32 state for exactly `1020`
+optimizer updates (the epoch-10 checkpoint) reproduces every one of those
+candidate FP32 tensors exactly. The observed official-val delta is therefore
+an EMA numerical drift of a frozen base state, not a promotable dense-model
+gain.
+
+Any future frozen-base diagnostic must pin non-trainable state in both the
+live model and `ModelEMA.ema`, assert that its optimizer contains only the
+declared trainable branch, and record before/after hashes for all frozen
+parameters and buffers. Until that protocol exists, do not use a frozen-head
+checkpoint's base-only official metric to claim an algorithm improvement.
+
+## 2026-08-06: Visibility-only probe does not improve official accuracy
+
+`query_env30_visibility_only_probe20_v2` trained only the point-valid heads
+for `20/20` epochs. Under the fixed post-hoc decode
+`conf=0.001`, `point_valid_thr=0.6`, `nms=0`, `max_det=5`,
+`min_points=4`, `valid_before_maxdet=false`, it fell below env30:
+
+```text
+ACC/score/FP/FN: 0.973330/0.972822/0.015748/0.009642
+             -> 0.972924/0.972402/0.015060/0.011019
+count_acc/count_acc_4: 0.972452/0.969697 -> 0.969697/0.939394
+```
+
+The point-valid loss decreased, but raw geometry and candidate capacity
+remained unchanged. Lane-level recall at the official `0.6` threshold fell
+from `0.979776` to `0.978830` overall, from `0.977048` to `0.974974` on GT5,
+and from `0.957233` to `0.951572` on 53 GT5-short lanes. This is a
+loss/metric-contract mismatch: the head calibrates masks but does not create
+new lane geometry, while `min_points=4` can remove the only query that earns
+official credit for a one-point GT lane.
+
+The route is closed for promotion. A corrected frozen-state implementation
+is protocol hygiene only; it is not evidence that longer visibility training
+will improve TuSimple TEST.
+
+## 2026-08-08: Current remaining bottleneck after LineIoU w0.5 clean40
+
+The `query_env30_lineiou_w05_clean40_v1` probe gives the first clean
+official-val gain over env30 among the reopened LineIoU variants:
+
+```text
+ACC +0.000402
+FP  -0.002617
+FN  -0.000230
+count_acc_4 +0.015151
+raw has20 +0.006140
+```
+
+Confirmed bottlenecks that remain:
+
+- **Short GT4/GT5 raw geometry is still weak.** GT4-short has20 improved
+  from `0.1250` to `0.3750`, but remains low; GT5-short improved from
+  `0.7547` to `0.8491`, still far below non-short GT5 `0.9968`.
+- **One- or two-point GT lanes are not reliably modeled by Q12/K56 query
+  output.** Two final undercount images have missing GT lanes with one visible
+  official point and raw APE `inf`, so no query candidate represents them.
+- **Some residual FN are true geometry misses, not decode filtering.** The
+  remaining canonical missing rows include long lanes with raw APE above
+  20 px, e.g. visible-point counts `46`, `43`, and `25`.
+- **Existence calibration trades recall for precision.** converted-val shows
+  active bad queries decreased (`146 -> 117`) but inactive good geometry
+  increased (`165 -> 381`), so w0.5 creates more geometric candidates than the
+  existence head activates.
+- **Official-val gain is small.** The run is promotable only to a 100-epoch
+  probe, not to TEST or a 220-epoch formal run, until the gain survives longer
+  training and the non-test diagnostics remain stable.
+
+Current rejected directions remain rejected: dense endpoint/assembler decode,
+dense p128/e1 decode-parameter promotion, visibility-only training, TEST-side
+threshold tuning, and arbitrary NMS/maxdet/min_points search.
+
+## 2026-08-10 Residual Set Selection Bottleneck
+
+Residual geometry is no longer the only bottleneck. Horizontal-flip
+consistency retrieves every known Stage-1b strict oracle candidate by top5 on
+canonical, clean, and train0601, and improves ordinary train0601 GT5 top3
+retrieval from `67/1194` to `76/1194`.
+
+The remaining failure is prediction-only victim identity and set utility.
+Top3 set oracle gains are `+15` canonical, `+15` clean, and `+43` train0601,
+with FP proxy reductions, so replacement headroom is real. Learned selectors
+recover only `0..+2` safe hits per split and remain far below oracle.
+
+Selector v2 with set-context features and ternary ranking eliminated hit
+harms but selected mostly add actions, increasing count error on all three
+evaluation splits. A count-safe target then selected replacements but caused
+`-3` canonical and `-9` train0601 hit regressions at the calibration-selected
+threshold. Higher thresholds remove those harms only by collapsing canonical
+and train0601 gain to zero.
+
+Do not continue threshold tuning or connect the selector to decode. The next
+root-cause experiment must learn a model-internal base-query
+unique-contribution/victim-identity representation, while keeping env30 and
+the validated residual proposal head frozen.
+
+## 2026-08-10 Final Residual Selector Limitation
+
+Training utility directly from official per-image metrics fixed the hit20 vs
+official-ACC target mismatch. The four-selector ensemble improves both
+canonical official-val and clean-val while reducing FP/FN, but it activates
+only a few images:
+
+```text
+canonical: 2 actions, ACC 0.973346 -> 0.973494
+clean:     3 actions, ACC 0.965470 -> 0.965692
+```
+
+The corrected final TEST reaches `0.966646`, which rounds to approximately
+`0.97`, but the selector changes only one of 2782 images. Reconstructed frozen
+base TEST ACC is `0.96664279`; selector gain is only `+0.00000321`.
+
+The remaining dominant TEST bottleneck is not residual replacement coverage.
+Count accuracy is weak for GT4/GT5 (`0.602564` and `0.885764`), with substantial
+`4->3`, `4->5`, `5->3`, and `5->4` confusion. Future work must target the base
+model's cross-session count/instance survival using train/official-val only;
+the completed TEST must not be used for further tuning.
+
+## 2026-08-11 Frozen query-survival probes expose a distribution-coverage bottleneck
+
+Strictly frozen env30 query-survival probes changed existence logits without
+changing `pred_points` or `pred_valid_logits`, but did not change clean-val
+official metrics. Standard quality-aware BCE, targeted duplicate-negative BCE,
+and weakest-matched versus strongest-unmatched pairwise ranking all produced
+the same clean-val result:
+
+```text
+ACC/score/FP/FN = 0.966146 / 0.965061 / 0.034527 / 0.019743
+count_acc_4/5 = 0.958333 / 1.000000
+```
+
+The pairwise probe is especially diagnostic: on GT4/GT5 training images, the
+average accurate-matched minus strongest-unmatched base-logit margin is already
+approximately `13`. Therefore the training distribution already satisfies the
+generic survival ordering that the new loss requests.
+
+The remaining failure is cross-session representation and hard-example
+coverage for short/outer GT4/GT5 lanes. Do not spend more runs on existence
+loss gain, spurious-negative group weights, pairwise margin, threshold, maxdet,
+or count-aware top-k. A credible next route must target train0313/train0601
+hard-session failures explicitly and transfer to clean-val before TEST remains
+eligible for discussion.
+
+## 2026-08-11 Residual listwise selectors expose the current structural bottleneck
+
+The residual proposal path no longer lacks a better binary threshold. Three
+different action formulations fail in complementary ways:
+
+```text
+flat listwise:          all no-op
+positive-weighted flat: frequent harmful replacements
+hierarchical listwise:  early over-trigger and FP regression
+```
+
+This is a sparse-action and representation problem, not a calibration knob.
+Only `11/363` canonical and clean images and `21/410` train0601 images contain
+a positive replacement action, while most visually plausible replacements
+have zero or negative official utility. Presence and victim identity are not
+separable enough in the current residual features to generalize across
+sessions.
+
+More importantly, the residual replacement oracle ceiling is too small:
+
+```text
+canonical +0.000557
+clean     +0.000859
+train0601 +0.000308
+```
+
+The remaining root problem is in the base query set. Hard short/outer GT4 and
+GT5 lanes are often absent geometrically from the raw Q12 pool; when geometry
+training does recover them, shared query features and coordinate-conditioned
+point-valid refinement can disturb existence, visibility, and top-5 count
+survival. The current Hungarian per-query losses do not directly optimize the
+decoded set property that every geometrically correct matched lane must outrank
+harmful unmatched queries while remaining point-valid.
+
+Next evidence gate: calculate a train/official-val-only matched-query
+set-survival oracle, split by GT4 `4->3`, GT4 `4->5`, and GT5 `5->4`. If the
+ceiling is insufficient, return to short-lane geometry with explicit
+score/valid preservation instead of adding another selector. TEST stays closed
+for all selection and tuning.

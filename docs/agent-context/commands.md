@@ -1,5 +1,544 @@
 # Commands
 
+## Lane-Instance-Set Controlled Candidate Commands
+
+These commands apply to the 2026-08-11 controlled lane-instance-set candidate.
+They do not change the active env30 baseline. Use `--imgsz 544 960` for every
+TuSimple helper command. Keep `RUN_TESTS=0`; TEST is closed and no TEST command
+is authorized by this section.
+
+Current candidate YAML:
+
+```text
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-lane-instance-set-decoder.yaml
+```
+
+### Local contract checks
+
+Run from the local `lsa_yolo` environment:
+
+```bash
+python -m py_compile \
+  ultralytics/utils/gcs_lane_instance_set.py \
+  tools/check_gcs_lane_instance_set_decoder.py \
+  tools/eval_tusimple_official.py \
+  tools/sweep_tusimple_official.py \
+  tools/sweep_tusimple_official_cached.py \
+  tools/infer_gcs.py \
+  ultralytics/nn/modules/gcs_lane.py \
+  ultralytics/utils/gcs_loss.py
+
+python tools/check_gcs_lane_instance_set_decoder.py
+
+python tools/check_model.py \
+  --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml \
+  --imgsz 544 960 \
+  --batch 1 \
+  --device cpu
+
+python tools/check_model.py \
+  --cfg ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-lane-instance-set-decoder.yaml \
+  --imgsz 544 960 \
+  --batch 1 \
+  --device cpu
+```
+
+Passing these checks is only code/shape/synthetic/loss/decode/cache evidence.
+It is not official-val, clean-val, promotion, or TEST evidence.
+
+### Remote stage 3 short smoke
+
+Use the remote `ssh_lane` environment. `tools/train_gcs.py` currently does not
+expose `--gcs-lane-instance-*` flags, so do not invent wrapper flags. Use
+existing Ultralytics CLI config keys from `ultralytics/cfg/default.yaml`.
+Training-time `official_best` should stay disabled for this candidate until it
+supports `lane_instance_set` decode; select official rows after training with
+the cached sweep below.
+
+```bash
+ssh gcs-ebcloud-lane
+cd /root/GCS-YOLO-Lane_env30_next
+source /root/miniconda3/etc/profile.d/conda.sh
+conda activate ssh_lane
+
+RUN_TESTS=0 yolo task=gcs_lane mode=train \
+  model=ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-lane-instance-set-decoder.yaml \
+  data=data/tusimple_gcs_fixed_y_960x544.yaml \
+  pretrained=<env30-official-best.pt> \
+  imgsz=[544,960] \
+  gcs_imgsz=[544,960] \
+  epochs=1 \
+  batch=4 \
+  workers=0 \
+  device=0 \
+  project=runs/gcs_lane \
+  name=lane_instance_set_stage3_smoke_b4w0_e1_v1 \
+  val=True \
+  exist_ok=False \
+  gcs_lane_instance_set=1.0 \
+  gcs_official_best=False
+```
+
+Smoke gate:
+
+```text
+results.csv exists
+train/lane_instance_set_loss is finite
+train/lane_instance_match_count is nonzero on normal batches
+no NaN/Inf
+TEST remains closed
+```
+
+### Remote stage 4 candidate coverage and official-val sweep
+
+Use the cached official helper. The lane-instance-set decode parameters
+currently supported by the cached sweep are:
+
+```text
+--decode-mode lane_instance_set
+--lane-instance-duplicate-thrs
+--lane-instance-max-dets
+--lane-instance-allow-empty
+--lane-instance-empty-thr
+--lane-instance-min-survivors
+```
+
+It also uses the standard sweep parameters `--confs`,
+`--point-valid-thrs`, and `--min-points`. Do not add `--valid-before-maxdet`
+to lane-instance-set decode templates.
+
+Canonical official-val template:
+
+```bash
+RUN_TESTS=0 python tools/sweep_tusimple_official_cached.py \
+  --weights runs/gcs_lane/lane_instance_set_stage3_smoke_b4w0_e1_v1/weights/last.pt \
+  --archive-root archive/TUSimple \
+  --split val \
+  --gt-json runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
+  --imgsz 544 960 \
+  --decode-mode lane_instance_set \
+  --confs 0.05 0.10 0.25 \
+  --point-valid-thrs 0.40 0.50 0.60 \
+  --min-points 2 3 4 \
+  --lane-instance-max-dets 5 \
+  --lane-instance-duplicate-thrs 0.50 0.65 0.80 \
+  --lane-instance-min-survivors 2 \
+  --rebuild-cache \
+  --save-dir runs/gcs_lane/lane_instance_set_stage4_canonical_sweep_v1
+```
+
+Clean-val template:
+
+```bash
+RUN_TESTS=0 python tools/sweep_tusimple_official_cached.py \
+  --weights runs/gcs_lane/lane_instance_set_stage3_smoke_b4w0_e1_v1/weights/last.pt \
+  --archive-root archive/TUSimple \
+  --split val \
+  --gt-json runs/gcs_lane/clean_selection_val_from_converted_split/labels.json \
+  --allow-noncanonical-gt \
+  --imgsz 544 960 \
+  --decode-mode lane_instance_set \
+  --confs 0.05 0.10 0.25 \
+  --point-valid-thrs 0.40 0.50 0.60 \
+  --min-points 2 3 4 \
+  --lane-instance-max-dets 5 \
+  --lane-instance-duplicate-thrs 0.50 0.65 0.80 \
+  --lane-instance-min-survivors 2 \
+  --rebuild-cache \
+  --save-dir runs/gcs_lane/lane_instance_set_stage4_clean_sweep_v1
+```
+
+Train0601 hard-session template:
+
+```bash
+RUN_TESTS=0 python tools/sweep_tusimple_official_cached.py \
+  --weights runs/gcs_lane/lane_instance_set_stage3_smoke_b4w0_e1_v1/weights/last.pt \
+  --archive-root archive/TUSimple \
+  --split train \
+  --gt-json archive/TUSimple/train_set/label_data_0601.json \
+  --imgsz 544 960 \
+  --decode-mode lane_instance_set \
+  --confs 0.05 0.10 0.25 \
+  --point-valid-thrs 0.40 0.50 0.60 \
+  --min-points 2 3 4 \
+  --lane-instance-max-dets 5 \
+  --lane-instance-duplicate-thrs 0.50 0.65 0.80 \
+  --lane-instance-min-survivors 2 \
+  --rebuild-cache \
+  --save-dir runs/gcs_lane/lane_instance_set_stage4_train0601_sweep_v1
+```
+
+Run the clean-val promotion gate before any longer run:
+
+```bash
+python tools/check_tusimple_promotion_gate.py \
+  --baseline-official-json runs/gcs_lane/env30_clean_val_baseline_v1/tusimple_official_sweep_summary.json \
+  --candidate-official-json runs/gcs_lane/lane_instance_set_stage4_clean_sweep_v1/tusimple_official_sweep_summary.json \
+  --save-json runs/gcs_lane/lane_instance_set_stage4_clean_sweep_v1/promotion_gate.json
+```
+
+### Remote stage 5 set-survival and official-val templates
+
+The existing matched-query set-survival oracle is train/official-val only and
+refuses TEST:
+
+```bash
+RUN_TESTS=0 bash scripts/run_tusimple_matched_query_set_survival_oracle_env30_v1.sh
+```
+
+For a longer lane-instance-set candidate, training-time `official_best` now
+detects the enabled lane-instance head and runs the prediction-only cached
+`lane_instance_set` sweep with its dedicated decode contract:
+
+```bash
+RUN_TESTS=0 yolo task=gcs_lane mode=train \
+  model=ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-lane-instance-set-decoder.yaml \
+  data=data/tusimple_gcs_fixed_y_960x544.yaml \
+  pretrained=<env30-official-best.pt> \
+  imgsz=[544,960] \
+  gcs_imgsz=[544,960] \
+  epochs=20 \
+  batch=32 \
+  workers=4 \
+  device=0 \
+  project=runs/gcs_lane \
+  name=lane_instance_set_stage5_probe20_v1 \
+  val=True \
+  exist_ok=False \
+  gcs_lane_instance_set=1.0 \
+  gcs_lane_instance_set_noop_weight=0.5 \
+  gcs_lane_instance_set_margin=0.5 \
+  gcs_official_best=True
+```
+
+Official-val selection template for the stage-5 checkpoint:
+
+```bash
+RUN_TESTS=0 python tools/sweep_tusimple_official_cached.py \
+  --weights runs/gcs_lane/lane_instance_set_stage5_probe20_v1/weights/last.pt \
+  --archive-root archive/TUSimple \
+  --split val \
+  --gt-json runs/gcs_lane/clean_selection_val_from_converted_split/labels.json \
+  --allow-noncanonical-gt \
+  --imgsz 544 960 \
+  --decode-mode lane_instance_set \
+  --confs 0.03 0.05 0.10 0.15 0.25 \
+  --point-valid-thrs 0.35 0.40 0.45 0.50 0.60 \
+  --min-points 2 3 4 \
+  --lane-instance-max-dets 5 \
+  --lane-instance-duplicate-thrs 0.50 0.65 0.80 \
+  --lane-instance-min-survivors 2 \
+  --rebuild-cache \
+  --save-dir runs/gcs_lane/lane_instance_set_stage5_probe20_v1_clean_sweep
+```
+
+A single-row official-val reproduction uses the singular eval parameters:
+
+```bash
+RUN_TESTS=0 python tools/eval_tusimple_official.py \
+  --weights runs/gcs_lane/lane_instance_set_stage5_probe20_v1/weights/last.pt \
+  --archive-root archive/TUSimple \
+  --split val \
+  --gt-json runs/gcs_lane/clean_selection_val_from_converted_split/labels.json \
+  --allow-noncanonical-gt \
+  --imgsz 544 960 \
+  --decode-mode lane_instance_set \
+  --conf <selected-conf> \
+  --point-valid-thr <selected-point-valid-thr> \
+  --min-points <selected-min-points> \
+  --max-det <selected-max-det> \
+  --lane-instance-duplicate-thr <selected-duplicate-thr> \
+  --lane-instance-min-survivors 2 \
+  --save-dir runs/gcs_lane/lane_instance_set_stage5_probe20_v1_clean_eval_selected
+```
+
+Do not run `--split test` from lane-instance-set unless a future task
+explicitly opens TEST after official-val and clean-val promotion gates pass.
+
+## Residual Proposal Stage-2b Relational Retrieval Diagnostic
+
+Historical reproduction command for the rejected Stage-2b relation probe:
+
+```bash
+RUN_NAME=residual_proposal_relational_stage2b_probe12_v1 \
+EPOCHS=12 BATCH=32 WORKERS=4 \
+bash scripts/run_residual_proposal_relational_stage2b_probe12_v1.sh
+```
+
+The wrapper initializes from
+`residual_proposal_visibility_stage1b_probe10_v1_fix2/weights/last.pt`, trains
+only `residual_relation_*`, `residual_proposal_identity_mlp`, and
+`residual_proposal_quality_mlp`, then runs canonical, clean-val, and train0601
+retrieval diagnostics. Replacement, residual decode, and TEST remain closed.
+The completed run is rejected and must not be used as Stage-3 input.
+
+## Residual Proposal Stage-2 Identity Diagnostic
+
+Historical reproduction command for the rejected Stage-2 family:
+
+```bash
+RUN_NAME=residual_proposal_identity_stage2_probe10_v1_fix3 \
+EPOCHS=10 BATCH=32 WORKERS=4 RUN_TESTS=0 \
+bash scripts/run_residual_proposal_identity_stage2_probe10_v1.sh
+```
+
+The command trains only `residual_proposal_identity_mlp` and
+`residual_proposal_quality_mlp`. Replacement, residual decode, and TEST remain
+closed. The final fix3 is rejected and must not be used as input to Stage-3 or
+Stage-4 without a newly registered relational-retrieval hypothesis and gate.
+
+## Residual Proposal Stage-1b Visibility Diagnostic
+
+```bash
+RUN_NAME=residual_proposal_visibility_stage1b_probe10_v1_fix2 \
+EPOCHS=10 BATCH=32 WORKERS=4 RUN_TESTS=0 \
+bash scripts/run_residual_proposal_visibility_stage1b_probe10_v1.sh
+```
+
+This initializes from the completed Stage-1 `last.pt`, trains only
+`residual_proposal_valid_mlp`, `residual_proposal_start_mlp`, and
+`residual_proposal_end_mlp`, excludes every frozen state key from EMA updates,
+and automatically runs canonical, clean-val, and train0601 diagnostics. It
+does not run official decode or TEST. The authoritative completed run is
+`residual_proposal_visibility_stage1b_probe10_v1_fix2`.
+
+## Residual Proposal Stage-1 Diagnostic
+
+```bash
+RUN_NAME=residual_proposal_env30_probe20_v1_fix1 \
+EPOCHS=20 BATCH=32 WORKERS=4 RUN_TESTS=0 \
+bash scripts/run_residual_proposal_env30_probe20_v1.sh
+```
+
+This trains only `residual_proposal_*` parameters and keeps official decode and
+TEST closed. The completed v1 fix1 checkpoint is diagnostic-only.
+
+## Current Promotion Gate
+
+As of 2026-08-10, do not promote candidates from canonical official-val alone.
+Use the leakage-free clean converted-val surface plus non-test hard gates before
+any long training or final TEST discussion.
+
+The current clean-val baseline is:
+
+```text
+runs/gcs_lane/env30_clean_val_baseline_v1/tusimple_official_sweep_summary.json
+```
+
+Run the gate on every candidate:
+
+```bash
+python tools/check_tusimple_promotion_gate.py \
+  --baseline-official-json runs/gcs_lane/env30_clean_val_baseline_v1/tusimple_official_sweep_summary.json \
+  --candidate-official-json <candidate-clean-val-summary-or-sweep.json> \
+  --save-json <candidate-run-or-eval-dir>/promotion_gate.json
+```
+
+If raw-Q12 diagnostics are available, include them:
+
+```bash
+python tools/check_tusimple_promotion_gate.py \
+  --baseline-official-json runs/gcs_lane/env30_clean_val_baseline_v1/tusimple_official_sweep_summary.json \
+  --candidate-official-json <candidate-clean-val-summary-or-sweep.json> \
+  --baseline-raw-summary <env30-clean-or-train-side-raw-summary.json> \
+  --candidate-raw-summary <candidate-clean-or-train-side-raw-summary.json> \
+  --save-json <candidate-run-or-eval-dir>/promotion_gate.json
+```
+
+The tool refuses TEST payloads and requires the clean converted-val GT by
+default:
+
+```text
+runs/gcs_lane/clean_selection_val_from_converted_split/labels.json
+```
+
+Default pass conditions:
+
+```text
+candidate clean-val ACC delta >= +0.0005
+official_score must not decrease
+FP and FN must not increase
+count_acc_4 and count_acc_5 must not decrease
+no output6 unless explicitly allowed
+optional GT4/GT5-short raw20 improves and missing decreases
+optional hard-set F1 improves without FP/FN regression
+```
+
+Known negative controls that must fail this gate:
+
+```bash
+python tools/check_tusimple_promotion_gate.py \
+  --baseline-official-json runs/gcs_lane/env30_clean_val_baseline_v1/tusimple_official_sweep_summary.json \
+  --candidate-official-json runs/gcs_lane/dense_endpoint_offset_env30_probe20_v1_fix1_cleanval_frozen_decode_v1/tusimple_official_summary.json
+
+python tools/check_tusimple_promotion_gate.py \
+  --baseline-official-json runs/gcs_lane/env30_clean_val_baseline_v1/tusimple_official_sweep_summary.json \
+  --candidate-official-json runs/gcs_lane/query_env30_lineiou_w05_clean40_v1_cleanval_sweep_v1/tusimple_official_sweep_summary.json
+```
+
+## Active Env30 LineIoU Diagnostic
+
+Historical section below is retained for reproducibility. Do not launch these
+LineIoU commands as the next route unless a new clean-val promotion gate and
+single-variable hypothesis are explicitly registered first.
+
+Build deterministic folds over all original train-side TuSimple JSON and the
+frozen GT4-short hard set from original GT only. The canonical official-val
+JSON remains in the diagnostic folds but is excluded from the hard set; test
+statistics are not inputs:
+
+```bash
+python tools/build_tusimple_stratified_folds.py \
+  --train-json <original-train-jsonl...> \
+  --official-val-json <canonical-official-val-jsonl> \
+  --out-dir runs/gcs_lane/tusimple_train_stratified_folds_v1
+```
+
+Run the first 40-epoch probe only from a clean env30-derived worktree. It
+inherits the accepted env30 recipe and changes only the default-off LineIoU
+flags. `RUN_TESTS` must remain `0`:
+
+```bash
+ENV30_WEIGHTS=<env30-official-best.pt> \
+RUN_TESTS=0 \
+bash scripts/run_query_env30_lineiou_probe40_v1.sh
+```
+
+Do not run TEST unless the official-val and frozen train-side hard-set gates
+show a reproducible gain without FP/FN or count regression.
+
+The narrow existence-survival rescue probe is rejected after seed1 failed its
+canonical official-val gate. Do not run seed3, 100/220 epochs, or TEST for
+`gcs_line_iou_exist_survival=0.2`.
+
+The next allowed single-variable LineIoU follow-up is the geometry-only
+count-safe probe. It keeps LineIoU `w0.5`, freezes every non-geometry
+parameter, trains only `point_mlp` and `point_refine_mlp`, uses the
+pre-registered count-safe official-val selection policy, saves official epoch
+checkpoints, and keeps TEST closed:
+
+```bash
+ENV30_WEIGHTS=<env30-official-best.pt> \
+RUN_TESTS=0 \
+BATCH=32 WORKERS=4 DEVICE=0 \
+EPOCHS=40 SEED=0 \
+bash scripts/run_query_env30_lineiou_geometry_only_countsafe_probe40_v1.sh
+```
+
+Repeat the 40-epoch gate with `SEED=1`, `SEED=2`, and `SEED=3`. Promotion to
+100 epochs requires at least `3/4` seeds to produce a valid
+`weights/official_best.pt` under count-safe selection, no GT4/GT5 count
+regression versus env30, and persistent raw-Q12 short GT4/GT5 geometry gain.
+Do not run TEST from any single passing seed.
+
+If and only if the 40-epoch multi-seed gate passes, run the 100-epoch gate
+from the env30 checkpoint, not from a 40-epoch checkpoint:
+
+```bash
+ENV30_WEIGHTS=<env30-official-best.pt> \
+RUN_TESTS=0 \
+BATCH=32 WORKERS=4 DEVICE=0 \
+EPOCHS=100 SEED=0 \
+bash scripts/run_query_env30_lineiou_geometry_only_countsafe_probe100_v1.sh
+```
+
+The previous LineIoU follow-up was an evidence-only reproduction of the
+historical `w0.5 clean100` epoch-75 official-val signal with per-epoch
+checkpoint retention. It kept the same 100-epoch schedule, env30
+initialization, canonical official-val grid, and TEST closed; the only intended
+difference from the historical run is saving each official-sweep checkpoint:
+
+```bash
+ENV30_WEIGHTS=<env30-official-best.pt> \
+RUN_TESTS=0 \
+BATCH=32 WORKERS=4 DEVICE=0 \
+EPOCHS=100 SEED=0 \
+bash scripts/run_query_env30_lineiou_probe100_v1.sh
+```
+
+The wrapper hard-locks:
+
+```text
+LINE_IOU_GAIN=0.5
+SAVE_OFFICIAL_EPOCH_CHECKPOINTS=1
+VALID_BEFORE_MAXDET=1
+OFFICIAL_ALLOW_NONCANONICAL_GT=0
+canonical official-val conf/point-valid/NMS/max-det/min-points grid
+```
+
+The expected saved artifacts include:
+
+```text
+weights/official_epoch075.pt
+weights/official_epoch075_decode.yaml
+weights/official_epoch075_sweep.json
+```
+
+Gate for the saved epoch-75 reproduction:
+
+```text
+saved epoch075 checkpoint exists
+official_acc > 0.973330
+official_FP <= 0.015748
+official_FN <= 0.009642
+count_acc_4 >= 0.969697
+count_acc_5 >= 0.986486
+GT4 4->3 <= 1
+GT4 4->5 == 0
+GT5 5->4 <= 1
+no output6
+predicted 5-lane rate remains close to GT5 level
+short GT4/GT5 raw geometry does not regress from the historical clean100 epoch75 direction
+TEST remains closed
+```
+
+If the saved epoch-75 reproduction fails any gate, stop the clean100 epoch-75
+route. Do not continue with survival, valid-preserve, count-boundary,
+`min_points`/NMS patches, 220 epochs, or TEST.
+
+For historical clean LineIoU 100-epoch probes not intended to reproduce
+epoch-75, explicitly set a different `RUN_NAME` and `LINE_IOU_GAIN` and record a
+new pre-registration first. Do not use the default wrapper for an unregistered
+algorithm change.
+
+After the initial 40-epoch mechanism gates pass for a separately registered
+LineIoU recipe, launch its 100-epoch gate from the same env30 checkpoint, not
+from the 40-epoch checkpoint:
+
+```bash
+ENV30_WEIGHTS=<env30-official-best.pt> \
+RUN_TESTS=0 \
+LINE_IOU_GAIN=<registered-line-iou-gain> \
+SAVE_OFFICIAL_EPOCH_CHECKPOINTS=<registered-retention-policy> \
+RUN_NAME=<registered-run-name> \
+bash scripts/run_query_env30_lineiou_probe100_v1.sh
+```
+
+## Active Env30 Visibility-Only Diagnostic
+
+Before a remote probe, verify that the frozen-state protocol and fixed env30
+decode are active:
+
+```bash
+python tools/check_gcs_visibility_only.py
+bash -n scripts/run_query_env30_visibility_only_probe40_v1.sh
+```
+
+The script fixes `valid_before_maxdet=false` and keeps TEST closed. Run exactly
+one 40-epoch official-val-only probe from the mature env30 checkpoint:
+
+```bash
+ENV30_WEIGHTS=<env30-official-best.pt> \
+RUN_NAME=query_env30_visibility_only_probe40_v2 \
+BATCH=32 WORKERS=4 DEVICE=0 EPOCHS=40 RUN_TESTS=0 \
+bash scripts/run_query_env30_visibility_only_probe40_v1.sh
+```
+
+Promotion requires `frozen_state_audit.json` to pass at every recorded event,
+official-val `ACC >= 0.973330`, `FP <= 0.017748`, lower FN, improved
+GT4/GT5-short point-valid recall, and no undercount regression. Do not run
+TEST or a longer continuation if any gate fails.
+
 This file records commands for branch `codex/5-25-3-k56`, which imports the historical `5-25-3.zip` algorithm and changes only the TuSimple K56 fixed-y contract.
 
 All TuSimple commands must use:
@@ -10,10 +549,20 @@ All TuSimple commands must use:
 
 This is H,W order.
 
-## Valid v10 Matched-Assignment Probe
+## 2026-08-03 Final Env30 Command Boundary
 
-Run only on the remote CUDA server. Use a new run name and verify the saved
-`args.yaml` before interpreting the result:
+The active code/config is commit `86c8fb31c` content. Do not run any command
+that depends on files or flags introduced after that commit. All post-env30
+commands retained below are historical rejection records only, including
+staticref/near20, Q20/Q24, dual-head, query extent, short local-refine,
+lateral/gated candidate, local-segment, full-lane proposal, and dense-instance
+proposal commands. Any lower wording that recommends running, reopening, or
+continuing these experiments is cancelled by this boundary.
+
+## Rejected Historical v10 Matched-Assignment Probe
+
+Do not relaunch this post-env30 probe. The command is retained only to preserve
+the provenance of the rejected result:
 
 ```bash
 RUN_NAME=query_local_segment_env30_frozen_probe20_v10_matched_b4w0s1 \
@@ -100,9 +649,10 @@ new official-val/train-side gates.
 
 Rejected post-env30 families include env30 staticref/valid-neg/near20
 follow-ups, Q20/Q24 protected-static or dual-head routes, Q12 dual-head, query
-extent, short local-refine, lateral candidate, gated candidate, Q24 role/event
-containment, and candidate gate fixes. Do not relaunch them, run TEST for
-them, tune thresholds from them, or treat their code paths as active.
+extent, short local-refine, lateral/gated candidates, local-segment proposals,
+full-lane proposals, dense-instance proposals, Q24 role/event containment,
+and associated selector/decode fixes. Do not relaunch them, run TEST for them,
+tune thresholds from them, or treat their code paths as active.
 
 ## Rejected Q12 Env30 Windowed Short Local X-Refine v3 Probe
 
@@ -3106,7 +3656,7 @@ Only consider valid-loss follow-up when raw geometry clearly improves and
 `geometry_bad` clearly drops, but point-valid survival remains low. Otherwise,
 keep valid weights unchanged and move to data-driven reference clustering.
 
-## TuSimple Final Test
+## TuSimple Post-Training TEST ACC
 
 ## Q12 Env30 Gated Candidate v2 Probe
 
@@ -3808,7 +4358,9 @@ GT4/GT5 gates have been inspected.
 
 ## TuSimple Final Test
 
-Run test only once for a candidate already selected on official-val:
+After every completed training run, evaluate TEST ACC using the candidate and
+decode selected on official-val. TEST results are verification/reporting only
+and must not be used for selection or tuning:
 
 ```bash
 python tools/eval_tusimple_official.py \
@@ -4222,3 +4774,170 @@ runs/gcs_lane/<RUN_NAME>_dense_diag_train0601_last/dense_instance_oracle_summary
 Do not start dense lane assembly or official decode unless complete-span
 evidence on base-miss GT5 is nontrivial on both splits and the default env30
 official path remains unchanged.
+
+### Dense Endpoint-Peak Localization Probe
+
+The endpoint-mass/ranker diagnostics show endpoint support at GT coordinates
+but displaced prediction peaks on the target hard lanes. The next single
+variable probe keeps the dense route diagnostic-only and adds only
+`gcs_dense_endpoint_peak_weight`:
+
+```bash
+ssh gcs-ebcloud-lane
+cd /root/GCS-YOLO-Lane_env30_next
+source /root/miniconda3/etc/profile.d/conda.sh
+conda activate ssh_lane
+
+RUN_NAME=dense_instance_endpoint_peak_probe20_v1 \
+PRETRAINED=/root/GCS-YOLO-Lane_LSA_5-25-3-k56/runs/gcs_lane/query_alpha05_gt5short_geom_w2_bneg002_env30_nocount_v1/weights/official_best.pt \
+BATCH=32 WORKERS=4 DEVICE=0 EPOCHS=20 RUN_TESTS=0 \
+DENSE_ENDPOINT_BALANCE_MODE=1 \
+DENSE_ENDPOINT_PEAK_WEIGHT=0.05 \
+DENSE_ENDPOINT_PEAK_RADIUS_PX=16.0 \
+bash scripts/run_dense_instance_endpoint_peak_probe20_v1.sh
+```
+
+The wrapper uses canonical official-val by default and then runs
+`tools/diagnose_gcs_dense_pairing_fitting.py` with official-parity base decode
+and p128/e1 dense candidate settings. It writes:
+
+```text
+runs/gcs_lane/dense_instance_endpoint_peak_probe20_v1_pairing_val_last_p128e1_officialdecode/dense_pairing_fitting_summary.json
+runs/gcs_lane/dense_instance_endpoint_peak_probe20_v1_pairing_train0601_hard_last_p128e1_officialdecode/dense_pairing_fitting_summary.json
+```
+
+Gate before any dense decode/ranker work:
+
+```text
+TEST used = false
+canonical GT5 base_miss endpoint_near_both: 0/15 -> >=5/15
+canonical GT5 base_miss dense_full_hit20: 0/15 -> >=4/15
+train0601 hard GT5 base_miss dense_full_hit20: 0/16 -> >=4/16
+canonical all GT5 dense_full_hit20 must not drop below the p128/e1 reference
+official-val query decode must not regress beyond frozen-base numerical drift
+```
+
+If endpoint_near improves but dense_full does not, the next bottleneck is
+same-lane association/K56 fitting rather than endpoint peak localization. If
+endpoint_near does not improve, stop this route and do not increase epochs or
+tune decode thresholds.
+
+### Dense Endpoint-Offset Hard-Short Target-Weight Probe
+
+This is a single-variable follow-up to
+`dense_endpoint_offset_env30_probe20_v1_fix1`. It keeps dense decode off,
+keeps the env30 Q12/K56 path frozen, uses clean converted-val for selection,
+and changes only dense loss-map weighting for GT4/GT5 short lanes:
+
+```bash
+ssh gcs-ebcloud-lane
+cd /root/GCS-YOLO-Lane_env30_next
+source /root/miniconda3/etc/profile.d/conda.sh
+conda activate ssh_lane
+
+RUN_NAME=dense_endpoint_offset_hardshort_w4_probe20_v1_cleanval \
+PRETRAINED=/root/GCS-YOLO-Lane_LSA_5-25-3-k56/runs/gcs_lane/query_alpha05_gt5short_geom_w2_bneg002_env30_nocount_v1/weights/official_best.pt \
+GT_JSON=runs/gcs_lane/clean_selection_val_from_converted_split/labels.json \
+OFFICIAL_ALLOW_NONCANONICAL_GT=1 \
+DENSE_HARD_SHORT_WEIGHT=4.0 \
+DENSE_HARD_SHORT_MIN_VISIBLE=3 \
+DENSE_HARD_SHORT_VISIBLE_MAX=10 \
+DENSE_HARD_SHORT_GT4_WEIGHT=1.0 \
+DENSE_HARD_SHORT_GT5_WEIGHT=1.0 \
+BATCH=32 WORKERS=4 DEVICE=0 EPOCHS=20 RUN_TESTS=0 \
+bash scripts/run_dense_endpoint_offset_hardshort_probe20_v1.sh
+```
+
+Gate before any longer run or decode work:
+
+```text
+TEST remains closed
+clean-val ACC >= env30 clean-val + 0.0005
+official_score, FP, FN, count_acc_4, and count_acc_5 must not regress
+no output6
+clean-val GT5 base_nohit top5 full-hit improves from 0/11
+clean-val GT5 vis_6_10 base_nohit becomes nonzero or the route stops
+all-lane top5 full-hit does not materially regress from 428/1358
+train0601 GT5 hard and train0313 GT4 hard diagnostics do not regress
+```
+
+## Residual Stage-3 Selector v2 Diagnostic
+
+Run only on the remote CUDA server with TEST closed:
+
+```bash
+cd /root/GCS-YOLO-Lane_env30_next
+source /root/miniconda3/etc/profile.d/conda.sh
+conda activate ssh_lane
+
+python tools/train_gcs_residual_set_selector.py \
+  --weights runs/gcs_lane/residual_proposal_topology_stage2d_hard4_probe12_v1/weights/last.pt \
+  --archive-root archive/TUSimple \
+  --train-gt archive/TUSimple/train_set/label_data_0313.json \
+  --calibration-gt archive/TUSimple/train_set/label_data_0531.json \
+  --canonical-gt runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json \
+  --clean-gt runs/gcs_lane/converted_val363_no_official_train_overlap.json \
+  --train0601-gt archive/TUSimple/train_set/label_data_0601.json \
+  --imgsz 544 960 --device 0 --half --topk 3 \
+  --flip-consistency-scale-px 20 --epochs 40 \
+  --harm-weight 4 --pairwise-weight 0.5 --pairwise-margin 0.5 \
+  --save-dir runs/gcs_lane/residual_stage3_selector_v2_countsafe_0313train_0531cal_flip20_v1
+```
+
+This is a rejected offline diagnostic, not a decode recipe. Do not run it
+against TuSimple TEST ground truth and do not use its selector in official
+inference.
+
+## Final Residual Official-Utility Evaluation
+
+The selected evaluator is:
+
+```text
+tools/eval_gcs_residual_token_selector_official.py
+```
+
+Canonical and clean validation use their native image coordinate surface. The
+converted TEST archive requires the original official output coordinate shape:
+
+```bash
+python tools/eval_gcs_residual_token_selector_official.py \
+  --weights runs/gcs_lane/residual_proposal_topology_stage2d_hard4_probe12_v1/weights/last.pt \
+  --selector \
+    runs/gcs_lane/residual_stage9b_official_utility_calibrated_alltrain_seed0_v1/selector.pt \
+    runs/gcs_lane/residual_stage9_officialutility_safety025_fixed095_seed1_v1/selector.pt \
+    runs/gcs_lane/residual_stage9_officialutility_safety025_fixed095_seed2_v1/selector.pt \
+    runs/gcs_lane/residual_stage9_officialutility_safety025_fixed095_seed3_v1/selector.pt \
+  --archive-root archive/TUSimple --split val \
+  --gt-json archive/TUSimple/test_label.json \
+  --imgsz 544 960 --device 0 --half --topk 3 \
+  --flip-consistency-scale-px 20 --threshold 0.95 \
+  --max-unique-probability 0.25 --unique-override-threshold 1.1 \
+  --official-image-shape 720 1280 --allow-final-test \
+  --save-dir runs/gcs_lane/residual_stage13_final_test_officialutility_ensemble4_protocolfix_v1
+```
+
+This command has already been used for the final TEST. Do not rerun it or tune
+any selector/model parameter from its result.
+
+## Query-Survival Pairwise Diagnostic
+
+Run the default-off frozen-env30 pairwise survival probe only on the trusted
+clean validation surface:
+
+```bash
+RUN_TESTS=0 bash scripts/run_query_survival_rank_env30_probe10_v4.sh
+```
+
+The script owns these training arguments:
+
+```text
+--gcs-query-survival-freeze-base
+--gcs-query-survival-rank 0.5
+--gcs-query-survival-rank-margin 0.5
+--gcs-query-survival-rank-max-ape-px 20
+--gcs-query-survival-rank-min-lanes 4
+```
+
+The seed0 v4 probe has already been rejected because epoch5 and epoch10 match
+the frozen clean-val metrics. Do not run TEST, long training, or additional
+seeds for this recipe. The command is retained for reproducibility only.

@@ -10,8 +10,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 os.chdir(ROOT)
 
-from ultralytics.models.yolo.gcs_lane.train import GCSLaneTrainer
 from ultralytics.models.gcs.mode_utils import assert_ordered_slot_scale_contract
+from ultralytics.models.yolo.gcs_lane.train import GCSLaneTrainer
 from ultralytics.utils.gcs_shape import DATASET_IMAGE_SHAPES, normalize_imgsz, shape_str, trainer_imgsz
 
 
@@ -19,7 +19,6 @@ DEFAULT_MODEL = "ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml"
 DEFAULT_DATA = "data/tusimple_gcs_fixed_y_960x544.yaml"
 ORDERED_SLOT_DEFAULT_MODEL = "ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q5-slot-k56.yaml"
 ORDERED_SLOT_MODEL = ROOT / ORDERED_SLOT_DEFAULT_MODEL
-
 
 def str2bool(value: str | bool) -> bool:
     """Parse shell-friendly boolean values for argparse options that may take True/False."""
@@ -95,6 +94,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="GCS input shape as H W. Defaults: TuSimple 544 960, CULane 384 960.",
     )
     parser.add_argument("--epochs", type=int, default=220)
+    parser.add_argument("--save-period", type=int, default=-1)
     parser.add_argument("--batch", type=int, default=4)
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--device", default="0")
@@ -175,8 +175,144 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--gcs-exist", type=float, default=2.0)
     parser.add_argument("--gcs-point", type=float, default=15.0)
     parser.add_argument("--gcs-point-valid", type=float, default=1.0)
+    parser.add_argument(
+        "--gcs-visibility-only",
+        action="store_true",
+        help="Freeze the mature query/fixed-y model and train only point-valid visibility heads.",
+    )
     parser.add_argument("--gcs-smooth", type=float, default=0.05)
     parser.add_argument("--gcs-curve", type=float, default=0.1)
+    parser.add_argument("--gcs-line-iou", type=float, default=0.0)
+    parser.add_argument("--gcs-line-iou-half-width-px", type=float, default=15.0)
+    parser.add_argument("--gcs-line-iou-short-min-points", type=int, default=3)
+    parser.add_argument(
+        "--gcs-line-iou-geometry-only",
+        action="store_true",
+        help="Freeze env30/base parameters and train only fixed-y geometry point heads for LineIoU probes.",
+    )
+    parser.add_argument("--gcs-line-iou-valid-preserve", type=float, default=0.0)
+    parser.add_argument("--gcs-line-iou-exist-survival", type=float, default=0.0)
+    parser.add_argument("--gcs-line-iou-valid-visible-thr", type=int, default=10)
+    parser.add_argument("--gcs-line-iou-valid-min-visible", type=int, default=3)
+    parser.add_argument("--gcs-line-iou-valid-max-ape-px", type=float, default=30.0)
+    parser.add_argument("--gcs-line-iou-valid-gt4-weight", type=float, default=1.0)
+    parser.add_argument("--gcs-line-iou-valid-gt5-weight", type=float, default=1.0)
+    parser.add_argument(
+        "--gcs-dense-instance",
+        type=float,
+        default=0.0,
+        help="Dense centerline/endpoint/instance-evidence loss gain. 0 disables.",
+    )
+    parser.add_argument("--gcs-dense-centerline-weight", type=float, default=1.0)
+    parser.add_argument("--gcs-dense-endpoint-weight", type=float, default=1.0)
+    parser.add_argument("--gcs-dense-embed-pull-weight", type=float, default=0.25)
+    parser.add_argument("--gcs-dense-embed-push-weight", type=float, default=0.25)
+    parser.add_argument("--gcs-dense-embed-margin", type=float, default=0.5)
+    parser.add_argument("--gcs-dense-sigma-px", type=float, default=3.0)
+    parser.add_argument("--gcs-dense-pos-weight-max", type=float, default=50.0)
+    parser.add_argument("--gcs-dense-endpoint-pos-weight-max", type=float, default=500.0)
+    parser.add_argument("--gcs-dense-hard-short-weight", type=float, default=1.0)
+    parser.add_argument("--gcs-dense-hard-short-min-visible", type=int, default=3)
+    parser.add_argument("--gcs-dense-hard-short-visible-max", type=int, default=10)
+    parser.add_argument("--gcs-dense-hard-short-gt4-weight", type=float, default=1.0)
+    parser.add_argument("--gcs-dense-hard-short-gt5-weight", type=float, default=1.0)
+    parser.add_argument("--gcs-dense-endpoint-peak-weight", type=float, default=0.0)
+    parser.add_argument("--gcs-dense-endpoint-peak-radius-px", type=float, default=16.0)
+    parser.add_argument("--gcs-dense-endpoint-offset-weight", type=float, default=0.0)
+    parser.add_argument("--gcs-dense-endpoint-offset-radius-px", type=float, default=8.0)
+    parser.add_argument(
+        "--gcs-dense-endpoint-balance-mode",
+        type=int,
+        choices=(0, 1),
+        default=0,
+        help="Endpoint BCE balance mode: 0=support pixels, 1=Gaussian target mass.",
+    )
+    parser.add_argument("--gcs-dense-candidate", type=float, default=0.0)
+    parser.add_argument("--gcs-dense-candidate-quality-weight", type=float, default=1.0)
+    parser.add_argument("--gcs-dense-candidate-replace-weight", type=float, default=1.0)
+    parser.add_argument("--gcs-dense-candidate-quality-pos-weight-max", type=float, default=50.0)
+    parser.add_argument("--gcs-dense-candidate-replace-pos-weight-max", type=float, default=100.0)
+    parser.add_argument(
+        "--gcs-dense-freeze-base",
+        action="store_true",
+        help="Freeze env30/base parameters and train only dense_instance_* parameters.",
+    )
+    parser.add_argument("--gcs-residual-proposal", type=float, default=0.0)
+    parser.add_argument("--gcs-residual-point-weight", type=float, default=5.0)
+    parser.add_argument("--gcs-residual-row-weight", type=float, default=1.0)
+    parser.add_argument("--gcs-residual-valid-weight", type=float, default=1.0)
+    parser.add_argument("--gcs-residual-interval-weight", type=float, default=0.5)
+    parser.add_argument("--gcs-residual-interval-valid-consistency", type=float, default=0.0)
+    parser.add_argument("--gcs-residual-positive-span", type=float, default=0.0)
+    parser.add_argument("--gcs-residual-identity-pull-weight", type=float, default=0.0)
+    parser.add_argument("--gcs-residual-identity-push-weight", type=float, default=0.0)
+    parser.add_argument("--gcs-residual-quality-weight", type=float, default=0.0)
+    parser.add_argument("--gcs-residual-quality-rank-weight", type=float, default=0.0)
+    parser.add_argument("--gcs-residual-quality-rank-margin", type=float, default=0.5)
+    parser.add_argument("--gcs-residual-quality-soft-px", type=float, default=0.0)
+    parser.add_argument("--gcs-residual-quality-rank-target-gap", type=float, default=0.0)
+    parser.add_argument("--gcs-residual-quality-hard-weight", type=float, default=1.0)
+    parser.add_argument("--gcs-residual-identity-margin", type=float, default=0.2)
+    parser.add_argument("--gcs-residual-identity-assign-px", type=float, default=30.0)
+    parser.add_argument("--gcs-residual-quality-pos-weight-max", type=float, default=20.0)
+    parser.add_argument("--gcs-residual-replace-weight", type=float, default=0.0)
+    parser.add_argument("--gcs-residual-replace-pos-weight-max", type=float, default=50.0)
+    parser.add_argument("--gcs-residual-replace-hit-px", type=float, default=20.0)
+    parser.add_argument("--gcs-residual-replace-soft-px", type=float, default=0.0)
+    parser.add_argument("--gcs-residual-replace-official-delta-scale", type=float, default=0.0)
+    parser.add_argument("--gcs-residual-replace-official-min-delta", type=float, default=0.001)
+    parser.add_argument("--gcs-residual-replace-official-pixel-thr", type=float, default=20.0)
+    parser.add_argument("--gcs-residual-replace-official-pt-thr", type=float, default=0.85)
+    parser.add_argument("--gcs-residual-replace-official-fp-weight", type=float, default=0.02)
+    parser.add_argument("--gcs-residual-replace-official-fn-weight", type=float, default=0.02)
+    parser.add_argument("--gcs-residual-replace-rank-weight", type=float, default=0.0)
+    parser.add_argument("--gcs-residual-replace-listwise-weight", type=float, default=0.0)
+    parser.add_argument("--gcs-residual-replace-listwise-positive-weight", type=float, default=1.0)
+    parser.add_argument(
+        "--gcs-residual-replace-listwise-mode",
+        choices=("flat", "hierarchical"),
+        default="flat",
+    )
+    parser.add_argument("--gcs-residual-replace-rank-margin", type=float, default=0.5)
+    parser.add_argument("--gcs-residual-replace-rank-target-gap", type=float, default=0.0)
+    parser.add_argument("--gcs-residual-replace-valid-thr", type=float, default=0.5)
+    parser.add_argument("--gcs-residual-replace-min-points", type=int, default=4)
+    parser.add_argument("--gcs-residual-replace-max-det", type=int, default=5)
+    parser.add_argument("--gcs-residual-exist-weight", type=float, default=1.0)
+    parser.add_argument("--gcs-residual-unmatched-weight", type=float, default=0.05)
+    parser.add_argument("--gcs-residual-min-lanes", type=int, default=4)
+    parser.add_argument("--gcs-residual-min-visible", type=int, default=3)
+    parser.add_argument("--gcs-residual-max-visible", type=int, default=10)
+    parser.add_argument("--gcs-residual-base-miss-px", type=float, default=20.0)
+    parser.add_argument("--gcs-residual-freeze-base", action="store_true")
+    parser.add_argument("--gcs-residual-visibility-only", action="store_true")
+    parser.add_argument("--gcs-residual-identity-only", action="store_true")
+    parser.add_argument("--gcs-residual-topology-only", action="store_true")
+    parser.add_argument("--gcs-residual-replacement-only", action="store_true")
+    parser.add_argument("--gcs-residual-visual-replacement-only", action="store_true")
+    parser.add_argument("--gcs-residual-listwise-replacement-only", action="store_true")
+    parser.add_argument(
+        "--gcs-query-survival-freeze-base",
+        action="store_true",
+        help="Freeze env30 and train only the model-internal query-survival relation head.",
+    )
+    parser.add_argument("--gcs-query-survival-rank", type=float, default=0.0)
+    parser.add_argument("--gcs-query-survival-rank-margin", type=float, default=0.5)
+    parser.add_argument("--gcs-query-survival-rank-max-ape-px", type=float, default=20.0)
+    parser.add_argument("--gcs-query-survival-rank-min-lanes", type=int, default=4)
+    parser.add_argument("--gcs-query-valid-survival-only", action="store_true")
+    parser.add_argument("--gcs-query-valid-local-only", action="store_true")
+    parser.add_argument("--gcs-query-valid-interval-only", action="store_true")
+    parser.add_argument("--gcs-query-count-freeze-base", action="store_true")
+    parser.add_argument("--gcs-query-valid-survival", type=float, default=0.0)
+    parser.add_argument("--gcs-query-valid-survival-hit-px", type=float, default=20.0)
+    parser.add_argument("--gcs-query-valid-survival-min-hit-ratio", type=float, default=0.85)
+    parser.add_argument("--gcs-query-valid-survival-boundary-weight", type=float, default=4.0)
+    parser.add_argument("--gcs-query-valid-survival-dice-weight", type=float, default=1.0)
+    parser.add_argument("--gcs-query-valid-survival-identity-weight", type=float, default=0.0)
+    parser.add_argument("--gcs-query-valid-survival-anchor-weight", type=float, default=1.0)
+    parser.add_argument("--gcs-query-valid-interval-boundary-weight", type=float, default=0.0)
+    parser.add_argument("--gcs-query-valid-interval-min-span", type=float, default=4.0)
     parser.add_argument("--gcs-mask", type=float, default=0.2)
     parser.add_argument("--gcs-edge", type=float, default=0.2)
     parser.add_argument(
@@ -236,6 +372,33 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--gcs-query-count-ce", type=float, default=0.0)
     parser.add_argument("--gcs-query-count-min-lanes", type=int, default=2)
     parser.add_argument("--gcs-query-count-max-lanes", type=int, default=5)
+    lane_instance_float_defaults = {
+        "gcs_lane_instance_set": 0.0,
+        "gcs_lane_instance_visibility_weight": 1.0,
+        "gcs_lane_instance_endpoint_weight": 1.0,
+        "gcs_lane_instance_order_weight": 0.25,
+        "gcs_lane_instance_contiguity_weight": 1.0,
+        "gcs_lane_instance_positive_span_weight": 0.25,
+        "gcs_lane_instance_empty_weight": 1.0,
+        "gcs_lane_instance_geometry_quality_weight": 1.0,
+        "gcs_lane_instance_survival_weight": 1.0,
+        "gcs_lane_instance_duplicate_weight": 0.5,
+        "gcs_lane_instance_novelty_weight": 0.5,
+        "gcs_lane_instance_topology_weight": 0.5,
+        "gcs_lane_instance_identity_weight": 0.5,
+        "gcs_lane_instance_set_noop_weight": 0.5,
+        "gcs_lane_instance_min_span": 2.0,
+        "gcs_lane_instance_duplicate_px": 20.0,
+        "gcs_lane_instance_quality_tau_px": 20.0,
+        "gcs_lane_instance_identity_temperature": 0.2,
+        "gcs_lane_instance_set_margin": 0.5,
+        "gcs_lane_instance_decode_duplicate_thr": 0.65,
+        "gcs_lane_instance_decode_empty_thr": 0.75,
+    }
+    for dest, default in lane_instance_float_defaults.items():
+        parser.add_argument(f"--{dest.replace('_', '-')}", dest=dest, type=float, default=default)
+    parser.add_argument("--gcs-lane-instance-decode-min-survivors", type=int, default=2)
+    parser.add_argument("--gcs-lane-instance-decode-allow-empty", action="store_true")
     parser.add_argument(
         "--gcs-count-ce",
         nargs="?",
@@ -455,179 +618,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--gcs-short-geom-gt5-weight", type=float, default=2.0)
     parser.add_argument("--gcs-short-geom-max-weight", type=float, default=3.0)
     parser.add_argument("--gcs-short-geom-curve", type=float, default=1.0)
-    parser.add_argument("--gcs-short-candidate", type=float, default=0.0)
-    parser.add_argument("--gcs-short-candidate-topk", type=int, default=4)
-    parser.add_argument("--gcs-short-candidate-visible-thr", type=int, default=10)
-    parser.add_argument("--gcs-short-candidate-min-visible", type=int, default=2)
-    parser.add_argument("--gcs-short-candidate-pos-px", type=float, default=20.0)
-    parser.add_argument("--gcs-short-candidate-soft-px", type=float, default=40.0)
-    parser.add_argument("--gcs-short-candidate-tau", type=float, default=25.0)
-    parser.add_argument("--gcs-short-candidate-pull-weight", type=float, default=0.05)
-    parser.add_argument("--gcs-short-candidate-gt4-weight", type=float, default=1.0)
-    parser.add_argument("--gcs-short-candidate-gt5-weight", type=float, default=1.5)
-    parser.add_argument("--gcs-short-candidate-neg-score-thr", type=float, default=0.6)
-    parser.add_argument(
-        "--gcs-short-candidate-freeze-base",
-        action="store_true",
-        help="Freeze all non-short-candidate parameters for env30 selector-only probing.",
-    )
-    parser.add_argument("--gcs-short-segment", type=float, default=0.0)
-    parser.add_argument("--gcs-short-segment-topk", type=int, default=8)
-    parser.add_argument("--gcs-short-segment-visible-thr", type=int, default=10)
-    parser.add_argument("--gcs-short-segment-min-visible", type=int, default=3)
-    parser.add_argument("--gcs-short-segment-min-overlap", type=int, default=3)
-    parser.add_argument("--gcs-short-segment-pos-px", type=float, default=20.0)
-    parser.add_argument("--gcs-short-segment-soft-px", type=float, default=40.0)
-    parser.add_argument("--gcs-short-segment-tau", type=float, default=25.0)
-    parser.add_argument("--gcs-short-segment-point-weight", type=float, default=0.05)
-    parser.add_argument("--gcs-short-segment-gt4-weight", type=float, default=1.0)
-    parser.add_argument("--gcs-short-segment-gt5-weight", type=float, default=1.5)
-    parser.add_argument("--gcs-short-segment-neg-score-thr", type=float, default=0.6)
-    parser.add_argument("--gcs-short-segment-bce-weight", type=float, default=1.0)
-    parser.add_argument("--gcs-short-segment-listwise-weight", type=float, default=0.0)
-    parser.add_argument("--gcs-short-segment-query-rank-weight", type=float, default=0.0)
-    parser.add_argument("--gcs-short-segment-base-choice-weight", type=float, default=0.0)
-    parser.add_argument("--gcs-short-segment-replace-weight", type=float, default=0.0)
-    parser.add_argument("--gcs-short-segment-query-replace-weight", type=float, default=0.0)
-    parser.add_argument("--gcs-short-segment-query-replace-neg-weight", type=float, default=0.25)
-    parser.add_argument("--gcs-short-segment-replace-margin-px", type=float, default=5.0)
-    parser.add_argument("--gcs-short-segment-dense-quality-weight", type=float, default=0.0)
-    parser.add_argument("--gcs-short-segment-dense-neg-weight", type=float, default=0.05)
-    parser.add_argument("--gcs-short-segment-replace-dense-neg-weight", type=float, default=0.0)
-    parser.add_argument("--gcs-short-segment-unified-choice-weight", type=float, default=0.0)
-    parser.add_argument("--gcs-short-segment-unified-choice-temperature", type=float, default=0.25)
-    parser.add_argument("--gcs-short-segment-unified-choice-base-neg-weight", type=float, default=0.25)
-    parser.add_argument(
-        "--gcs-short-segment-candidate-aware-assignment",
-        action="store_true",
-        help="Use best useful segment geometry to choose the unified-choice query target for short GT4/GT5 lanes.",
-    )
-    parser.add_argument(
-        "--gcs-short-segment-listwise-all-candidates",
-        action="store_true",
-        help="For short-segment listwise loss, include all QxS candidates in the softmax denominator.",
-    )
-    parser.add_argument(
-        "--gcs-short-segment-base-preserve",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Train replace logits to preserve base-hit lanes when a short segment would miss the 20px gate.",
-    )
-    parser.add_argument(
-        "--gcs-short-segment-matched-assignment",
-        action="store_true",
-        help="Use Hungarian matched query-lane pairs for per-query short-segment base-choice targets.",
-    )
-    parser.add_argument(
-        "--gcs-short-segment-official-quality-target",
-        action="store_true",
-        help="Use TuSimple official-style per-point hit-ratio targets for local short-segment selector training.",
-    )
-    parser.add_argument("--gcs-short-segment-official-pt-thresh", type=float, default=0.85)
-    parser.add_argument("--gcs-short-segment-base-valid-thr", type=float, default=0.6)
-    parser.add_argument(
-        "--gcs-short-segment-base-choice-all-queries",
-        action="store_true",
-        help="Train the explicit base/no-replace choice for every query on short GT4/GT5 images.",
-    )
-    parser.add_argument("--gcs-short-segment-base-choice-neg-weight", type=float, default=0.25)
-    parser.add_argument(
-        "--gcs-short-segment-freeze-base",
-        action="store_true",
-        help="Freeze all non-short-segment parameters for env30 local-segment proposal probing.",
-    )
-    parser.add_argument(
-        "--gcs-full-lane-proposal",
-        type=float,
-        default=0.0,
-        help="Independent image-conditioned full-lane proposal set loss gain. 0 disables.",
-    )
-    parser.add_argument(
-        "--gcs-full-lane-quality-tau",
-        type=float,
-        default=25.0,
-        help="APE decay scale in pixels for full-lane geometry-quality targets.",
-    )
-    parser.add_argument(
-        "--gcs-full-lane-unmatched-valid-weight",
-        type=float,
-        default=0.1,
-        help="Visibility-negative weight for unmatched full-lane proposals.",
-    )
-    parser.add_argument(
-        "--gcs-full-lane-unmatched-weight",
-        type=float,
-        default=1.0,
-        help="Existence/quality unmatched-negative weight for full-lane proposals.",
-    )
-    parser.add_argument(
-        "--gcs-full-lane-aux-assignment",
-        action="store_true",
-        help="Train full-lane proposals from proposal-only GT assignment so base queries cannot starve them.",
-    )
-    parser.add_argument(
-        "--gcs-full-lane-unified-matching",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Allow full-lane proposals to compete with base queries in unified Hungarian matching.",
-    )
-    parser.add_argument("--gcs-full-lane-aux-match-min-overlap", type=int, default=2)
-    parser.add_argument(
-        "--gcs-full-lane-aux-match-gate-px",
-        type=float,
-        default=0.0,
-        help="Optional APE gate in pixels for proposal-only full-lane assignment. 0 disables.",
-    )
-    parser.add_argument(
-        "--gcs-full-lane-hard-focus",
-        action="store_true",
-        help="Weight full-lane warmup targets toward base-miss short GT4/GT5 lanes.",
-    )
-    parser.add_argument("--gcs-full-lane-focus-hit-px", type=float, default=20.0)
-    parser.add_argument("--gcs-full-lane-focus-base-valid-thr", type=float, default=0.6)
-    parser.add_argument("--gcs-full-lane-focus-base-min-coverage", type=float, default=1.0)
-    parser.add_argument("--gcs-full-lane-base-hit-weight", type=float, default=1.0)
-    parser.add_argument("--gcs-full-lane-base-miss-weight", type=float, default=1.0)
-    parser.add_argument("--gcs-full-lane-gt4-weight", type=float, default=1.0)
-    parser.add_argument("--gcs-full-lane-gt5-weight", type=float, default=1.0)
-    parser.add_argument("--gcs-full-lane-short-visible-thr", type=int, default=10)
-    parser.add_argument("--gcs-full-lane-short-visible-weight", type=float, default=1.0)
-    parser.add_argument(
-        "--gcs-full-lane-freeze-base",
-        action="store_true",
-        help="Freeze all non-full-lane parameters for full-proposal warmup/probing.",
-    )
-    parser.add_argument(
-        "--gcs-full-lane-decode",
-        action="store_true",
-        help="Enable prediction-only joint decode of base queries and independent full-lane proposals.",
-    )
-    parser.add_argument(
-        "--gcs-dense-instance",
-        type=float,
-        default=0.0,
-        help="Dense centerline/endpoint/instance-evidence loss gain. 0 disables.",
-    )
-    parser.add_argument("--gcs-dense-centerline-weight", type=float, default=1.0)
-    parser.add_argument("--gcs-dense-endpoint-weight", type=float, default=1.0)
-    parser.add_argument("--gcs-dense-embed-pull-weight", type=float, default=0.25)
-    parser.add_argument("--gcs-dense-embed-push-weight", type=float, default=0.25)
-    parser.add_argument("--gcs-dense-embed-margin", type=float, default=0.5)
-    parser.add_argument("--gcs-dense-sigma-px", type=float, default=3.0)
-    parser.add_argument("--gcs-dense-pos-weight-max", type=float, default=50.0)
-    parser.add_argument(
-        "--gcs-dense-freeze-base",
-        action="store_true",
-        help="Freeze env30/base parameters and train only dense_instance_* parameters.",
-    )
-    parser.add_argument(
-        "--gcs-candidate-decode",
-        action="store_true",
-        help="Enable prediction-only gated lateral candidate decode for query models. Off by default.",
-    )
-    parser.add_argument("--gcs-candidate-score-thr", type=float, default=0.05)
-    parser.add_argument("--gcs-candidate-short-min-points", type=int, default=2)
-    parser.add_argument("--gcs-candidate-short-max-points", type=int, default=10)
     parser.add_argument("--gcs-boundary-pseudo-neg", type=float, default=0.0)
     parser.add_argument("--gcs-boundary-pseudo-visible-thr", type=int, default=10)
     parser.add_argument("--gcs-boundary-pseudo-dist-thr", type=float, default=60.0)
@@ -749,6 +739,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=["score_sum"],
         help="Count source modes for training-time query official-val sweeps.",
     )
+    parser.add_argument("--gcs-official-count-aware-topk", action="store_true")
     official_valid_group = parser.add_mutually_exclusive_group()
     official_valid_group.add_argument(
         "--gcs-official-valid-before-maxdet",
@@ -766,6 +757,29 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--gcs-official-score-fp-weight", type=float, default=0.02)
     parser.add_argument("--gcs-official-score-fn-weight", type=float, default=0.02)
+    parser.add_argument(
+        "--gcs-official-save-epoch-checkpoints",
+        action="store_true",
+        help="When --gcs-official-best runs, save the exact current checkpoint and decode YAML for each official sweep epoch.",
+    )
+    parser.add_argument(
+        "--gcs-official-count-safe-selection",
+        action="store_true",
+        help="Prefilter training-time official-val sweep rows by count/FN safety gates before official_best selection.",
+    )
+    parser.add_argument("--gcs-official-count-safe-acc-min-exclusive", type=float, default=0.973330)
+    parser.add_argument("--gcs-official-count-safe-fp-max", type=float, default=0.015748)
+    parser.add_argument("--gcs-official-count-safe-fn-max", type=float, default=0.009642)
+    parser.add_argument("--gcs-official-count-safe-count-acc4-min", type=float, default=0.969697)
+    parser.add_argument("--gcs-official-count-safe-count-acc5-min", type=float, default=0.986486)
+    parser.add_argument("--gcs-official-count-safe-gt4-to3-max", type=int, default=1)
+    parser.add_argument("--gcs-official-count-safe-gt4-to5-max", type=int, default=0)
+    parser.add_argument("--gcs-official-count-safe-gt5-to4-max", type=int, default=1)
+    parser.add_argument(
+        "--gcs-official-count-safe-allow-output6",
+        action="store_true",
+        help="Allow predicted lane-count 6+ rows in count-safe official selection. Keep disabled for env30 TuSimple.",
+    )
     parser.add_argument(
         "--gcs-official-half",
         action="store_true",
@@ -864,6 +878,16 @@ def resolve_project(value: str) -> str:
 
 def main() -> None:
     args = maybe_switch_ordered_slot_model(parse_args())
+    if args.gcs_line_iou_exist_survival != 0.0 and args.gcs_line_iou == 0.0:
+        raise SystemExit("--gcs-line-iou-exist-survival requires nonzero --gcs-line-iou.")
+    if args.gcs_line_iou_geometry_only:
+        if args.gcs_line_iou == 0.0:
+            raise SystemExit("--gcs-line-iou-geometry-only requires nonzero --gcs-line-iou.")
+        if args.gcs_line_iou_valid_preserve != 0.0 or args.gcs_line_iou_exist_survival != 0.0:
+            raise SystemExit(
+                "--gcs-line-iou-geometry-only is mutually exclusive with "
+                "--gcs-line-iou-valid-preserve and --gcs-line-iou-exist-survival."
+            )
     defaults = dataset_defaults(args.dataset)
     gcs_imgsz = normalize_imgsz(args.imgsz, dataset=args.dataset)
     model_path = args.model
@@ -876,6 +900,7 @@ def main() -> None:
         "imgsz": trainer_imgsz(gcs_imgsz),
         "gcs_imgsz": list(gcs_imgsz),
         "epochs": args.epochs,
+        "save_period": args.save_period,
         "batch": args.batch,
         "nbs": args.nbs if args.nbs > 0 else args.batch,
         "workers": args.workers,
@@ -913,8 +938,113 @@ def main() -> None:
         "gcs_exist": args.gcs_exist,
         "gcs_point": args.gcs_point,
         "gcs_point_valid": args.gcs_point_valid,
+        "gcs_visibility_only": args.gcs_visibility_only,
         "gcs_smooth": args.gcs_smooth,
         "gcs_curve": args.gcs_curve,
+        "gcs_line_iou": args.gcs_line_iou,
+        "gcs_line_iou_half_width_px": args.gcs_line_iou_half_width_px,
+        "gcs_line_iou_short_min_points": args.gcs_line_iou_short_min_points,
+        "gcs_line_iou_geometry_only": args.gcs_line_iou_geometry_only,
+        "gcs_line_iou_valid_preserve": args.gcs_line_iou_valid_preserve,
+        "gcs_line_iou_exist_survival": args.gcs_line_iou_exist_survival,
+        "gcs_line_iou_valid_visible_thr": args.gcs_line_iou_valid_visible_thr,
+        "gcs_line_iou_valid_min_visible": args.gcs_line_iou_valid_min_visible,
+        "gcs_line_iou_valid_max_ape_px": args.gcs_line_iou_valid_max_ape_px,
+        "gcs_line_iou_valid_gt4_weight": args.gcs_line_iou_valid_gt4_weight,
+        "gcs_line_iou_valid_gt5_weight": args.gcs_line_iou_valid_gt5_weight,
+        "gcs_dense_instance": args.gcs_dense_instance,
+        "gcs_dense_centerline_weight": args.gcs_dense_centerline_weight,
+        "gcs_dense_endpoint_weight": args.gcs_dense_endpoint_weight,
+        "gcs_dense_embed_pull_weight": args.gcs_dense_embed_pull_weight,
+        "gcs_dense_embed_push_weight": args.gcs_dense_embed_push_weight,
+        "gcs_dense_embed_margin": args.gcs_dense_embed_margin,
+        "gcs_dense_sigma_px": args.gcs_dense_sigma_px,
+        "gcs_dense_pos_weight_max": args.gcs_dense_pos_weight_max,
+        "gcs_dense_endpoint_pos_weight_max": args.gcs_dense_endpoint_pos_weight_max,
+        "gcs_dense_hard_short_weight": args.gcs_dense_hard_short_weight,
+        "gcs_dense_hard_short_min_visible": args.gcs_dense_hard_short_min_visible,
+        "gcs_dense_hard_short_visible_max": args.gcs_dense_hard_short_visible_max,
+        "gcs_dense_hard_short_gt4_weight": args.gcs_dense_hard_short_gt4_weight,
+        "gcs_dense_hard_short_gt5_weight": args.gcs_dense_hard_short_gt5_weight,
+        "gcs_dense_endpoint_peak_weight": args.gcs_dense_endpoint_peak_weight,
+        "gcs_dense_endpoint_peak_radius_px": args.gcs_dense_endpoint_peak_radius_px,
+        "gcs_dense_endpoint_offset_weight": args.gcs_dense_endpoint_offset_weight,
+        "gcs_dense_endpoint_offset_radius_px": args.gcs_dense_endpoint_offset_radius_px,
+        "gcs_dense_endpoint_balance_mode": args.gcs_dense_endpoint_balance_mode,
+        "gcs_dense_candidate": args.gcs_dense_candidate,
+        "gcs_dense_candidate_quality_weight": args.gcs_dense_candidate_quality_weight,
+        "gcs_dense_candidate_replace_weight": args.gcs_dense_candidate_replace_weight,
+        "gcs_dense_candidate_quality_pos_weight_max": args.gcs_dense_candidate_quality_pos_weight_max,
+        "gcs_dense_candidate_replace_pos_weight_max": args.gcs_dense_candidate_replace_pos_weight_max,
+        "gcs_dense_freeze_base": args.gcs_dense_freeze_base,
+        "gcs_residual_proposal": args.gcs_residual_proposal,
+        "gcs_residual_point_weight": args.gcs_residual_point_weight,
+        "gcs_residual_row_weight": args.gcs_residual_row_weight,
+        "gcs_residual_valid_weight": args.gcs_residual_valid_weight,
+        "gcs_residual_interval_weight": args.gcs_residual_interval_weight,
+        "gcs_residual_interval_valid_consistency": args.gcs_residual_interval_valid_consistency,
+        "gcs_residual_positive_span": args.gcs_residual_positive_span,
+        "gcs_residual_identity_pull_weight": args.gcs_residual_identity_pull_weight,
+        "gcs_residual_identity_push_weight": args.gcs_residual_identity_push_weight,
+        "gcs_residual_quality_weight": args.gcs_residual_quality_weight,
+        "gcs_residual_quality_rank_weight": args.gcs_residual_quality_rank_weight,
+        "gcs_residual_quality_rank_margin": args.gcs_residual_quality_rank_margin,
+        "gcs_residual_quality_soft_px": args.gcs_residual_quality_soft_px,
+        "gcs_residual_quality_rank_target_gap": args.gcs_residual_quality_rank_target_gap,
+        "gcs_residual_quality_hard_weight": args.gcs_residual_quality_hard_weight,
+        "gcs_residual_identity_margin": args.gcs_residual_identity_margin,
+        "gcs_residual_identity_assign_px": args.gcs_residual_identity_assign_px,
+        "gcs_residual_quality_pos_weight_max": args.gcs_residual_quality_pos_weight_max,
+        "gcs_residual_replace_weight": args.gcs_residual_replace_weight,
+        "gcs_residual_replace_pos_weight_max": args.gcs_residual_replace_pos_weight_max,
+        "gcs_residual_replace_hit_px": args.gcs_residual_replace_hit_px,
+        "gcs_residual_replace_soft_px": args.gcs_residual_replace_soft_px,
+        "gcs_residual_replace_official_delta_scale": args.gcs_residual_replace_official_delta_scale,
+        "gcs_residual_replace_official_min_delta": args.gcs_residual_replace_official_min_delta,
+        "gcs_residual_replace_official_pixel_thr": args.gcs_residual_replace_official_pixel_thr,
+        "gcs_residual_replace_official_pt_thr": args.gcs_residual_replace_official_pt_thr,
+        "gcs_residual_replace_official_fp_weight": args.gcs_residual_replace_official_fp_weight,
+        "gcs_residual_replace_official_fn_weight": args.gcs_residual_replace_official_fn_weight,
+        "gcs_residual_replace_rank_weight": args.gcs_residual_replace_rank_weight,
+        "gcs_residual_replace_listwise_weight": args.gcs_residual_replace_listwise_weight,
+        "gcs_residual_replace_listwise_positive_weight": args.gcs_residual_replace_listwise_positive_weight,
+        "gcs_residual_replace_listwise_mode": args.gcs_residual_replace_listwise_mode,
+        "gcs_residual_replace_rank_margin": args.gcs_residual_replace_rank_margin,
+        "gcs_residual_replace_rank_target_gap": args.gcs_residual_replace_rank_target_gap,
+        "gcs_residual_replace_valid_thr": args.gcs_residual_replace_valid_thr,
+        "gcs_residual_replace_min_points": args.gcs_residual_replace_min_points,
+        "gcs_residual_replace_max_det": args.gcs_residual_replace_max_det,
+        "gcs_residual_exist_weight": args.gcs_residual_exist_weight,
+        "gcs_residual_unmatched_weight": args.gcs_residual_unmatched_weight,
+        "gcs_residual_min_lanes": args.gcs_residual_min_lanes,
+        "gcs_residual_min_visible": args.gcs_residual_min_visible,
+        "gcs_residual_max_visible": args.gcs_residual_max_visible,
+        "gcs_residual_base_miss_px": args.gcs_residual_base_miss_px,
+        "gcs_residual_freeze_base": args.gcs_residual_freeze_base,
+        "gcs_residual_visibility_only": args.gcs_residual_visibility_only,
+        "gcs_residual_identity_only": args.gcs_residual_identity_only,
+        "gcs_residual_topology_only": args.gcs_residual_topology_only,
+        "gcs_residual_replacement_only": args.gcs_residual_replacement_only,
+        "gcs_residual_visual_replacement_only": args.gcs_residual_visual_replacement_only,
+        "gcs_residual_listwise_replacement_only": args.gcs_residual_listwise_replacement_only,
+        "gcs_query_survival_freeze_base": args.gcs_query_survival_freeze_base,
+        "gcs_query_survival_rank": args.gcs_query_survival_rank,
+        "gcs_query_survival_rank_margin": args.gcs_query_survival_rank_margin,
+        "gcs_query_survival_rank_max_ape_px": args.gcs_query_survival_rank_max_ape_px,
+        "gcs_query_survival_rank_min_lanes": args.gcs_query_survival_rank_min_lanes,
+        "gcs_query_valid_survival_only": args.gcs_query_valid_survival_only,
+        "gcs_query_valid_local_only": args.gcs_query_valid_local_only,
+        "gcs_query_valid_interval_only": args.gcs_query_valid_interval_only,
+        "gcs_query_count_freeze_base": args.gcs_query_count_freeze_base,
+        "gcs_query_valid_survival": args.gcs_query_valid_survival,
+        "gcs_query_valid_survival_hit_px": args.gcs_query_valid_survival_hit_px,
+        "gcs_query_valid_survival_min_hit_ratio": args.gcs_query_valid_survival_min_hit_ratio,
+        "gcs_query_valid_survival_boundary_weight": args.gcs_query_valid_survival_boundary_weight,
+        "gcs_query_valid_survival_dice_weight": args.gcs_query_valid_survival_dice_weight,
+        "gcs_query_valid_survival_identity_weight": args.gcs_query_valid_survival_identity_weight,
+        "gcs_query_valid_survival_anchor_weight": args.gcs_query_valid_survival_anchor_weight,
+        "gcs_query_valid_interval_boundary_weight": args.gcs_query_valid_interval_boundary_weight,
+        "gcs_query_valid_interval_min_span": args.gcs_query_valid_interval_min_span,
         "gcs_mask": args.gcs_mask,
         "gcs_edge": args.gcs_edge,
         "gcs_count": args.gcs_count,
@@ -974,87 +1104,6 @@ def main() -> None:
         "gcs_short_geom_gt5_weight": args.gcs_short_geom_gt5_weight,
         "gcs_short_geom_max_weight": args.gcs_short_geom_max_weight,
         "gcs_short_geom_curve": args.gcs_short_geom_curve,
-        "gcs_short_candidate": args.gcs_short_candidate,
-        "gcs_short_candidate_topk": args.gcs_short_candidate_topk,
-        "gcs_short_candidate_visible_thr": args.gcs_short_candidate_visible_thr,
-        "gcs_short_candidate_min_visible": args.gcs_short_candidate_min_visible,
-        "gcs_short_candidate_pos_px": args.gcs_short_candidate_pos_px,
-        "gcs_short_candidate_soft_px": args.gcs_short_candidate_soft_px,
-        "gcs_short_candidate_tau": args.gcs_short_candidate_tau,
-        "gcs_short_candidate_pull_weight": args.gcs_short_candidate_pull_weight,
-        "gcs_short_candidate_gt4_weight": args.gcs_short_candidate_gt4_weight,
-        "gcs_short_candidate_gt5_weight": args.gcs_short_candidate_gt5_weight,
-        "gcs_short_candidate_neg_score_thr": args.gcs_short_candidate_neg_score_thr,
-        "gcs_short_candidate_freeze_base": args.gcs_short_candidate_freeze_base,
-        "gcs_short_segment": args.gcs_short_segment,
-        "gcs_short_segment_topk": args.gcs_short_segment_topk,
-        "gcs_short_segment_visible_thr": args.gcs_short_segment_visible_thr,
-        "gcs_short_segment_min_visible": args.gcs_short_segment_min_visible,
-        "gcs_short_segment_min_overlap": args.gcs_short_segment_min_overlap,
-        "gcs_short_segment_pos_px": args.gcs_short_segment_pos_px,
-        "gcs_short_segment_soft_px": args.gcs_short_segment_soft_px,
-        "gcs_short_segment_tau": args.gcs_short_segment_tau,
-        "gcs_short_segment_point_weight": args.gcs_short_segment_point_weight,
-        "gcs_short_segment_gt4_weight": args.gcs_short_segment_gt4_weight,
-        "gcs_short_segment_gt5_weight": args.gcs_short_segment_gt5_weight,
-        "gcs_short_segment_neg_score_thr": args.gcs_short_segment_neg_score_thr,
-        "gcs_short_segment_bce_weight": args.gcs_short_segment_bce_weight,
-        "gcs_short_segment_listwise_weight": args.gcs_short_segment_listwise_weight,
-        "gcs_short_segment_query_rank_weight": args.gcs_short_segment_query_rank_weight,
-        "gcs_short_segment_base_choice_weight": args.gcs_short_segment_base_choice_weight,
-        "gcs_short_segment_replace_weight": args.gcs_short_segment_replace_weight,
-        "gcs_short_segment_query_replace_weight": args.gcs_short_segment_query_replace_weight,
-        "gcs_short_segment_query_replace_neg_weight": args.gcs_short_segment_query_replace_neg_weight,
-        "gcs_short_segment_replace_margin_px": args.gcs_short_segment_replace_margin_px,
-        "gcs_short_segment_dense_quality_weight": args.gcs_short_segment_dense_quality_weight,
-        "gcs_short_segment_dense_neg_weight": args.gcs_short_segment_dense_neg_weight,
-        "gcs_short_segment_replace_dense_neg_weight": args.gcs_short_segment_replace_dense_neg_weight,
-        "gcs_short_segment_unified_choice_weight": args.gcs_short_segment_unified_choice_weight,
-        "gcs_short_segment_unified_choice_temperature": args.gcs_short_segment_unified_choice_temperature,
-        "gcs_short_segment_unified_choice_base_neg_weight": args.gcs_short_segment_unified_choice_base_neg_weight,
-        "gcs_short_segment_candidate_aware_assignment": args.gcs_short_segment_candidate_aware_assignment,
-        "gcs_short_segment_listwise_all_candidates": args.gcs_short_segment_listwise_all_candidates,
-        "gcs_short_segment_base_preserve": args.gcs_short_segment_base_preserve,
-        "gcs_short_segment_matched_assignment": args.gcs_short_segment_matched_assignment,
-        "gcs_short_segment_official_quality_target": args.gcs_short_segment_official_quality_target,
-        "gcs_short_segment_official_pt_thresh": args.gcs_short_segment_official_pt_thresh,
-        "gcs_short_segment_base_valid_thr": args.gcs_short_segment_base_valid_thr,
-        "gcs_short_segment_base_choice_all_queries": args.gcs_short_segment_base_choice_all_queries,
-        "gcs_short_segment_base_choice_neg_weight": args.gcs_short_segment_base_choice_neg_weight,
-        "gcs_short_segment_freeze_base": args.gcs_short_segment_freeze_base,
-        "gcs_full_lane_proposal": args.gcs_full_lane_proposal,
-        "gcs_full_lane_quality_tau": args.gcs_full_lane_quality_tau,
-        "gcs_full_lane_unmatched_valid_weight": args.gcs_full_lane_unmatched_valid_weight,
-        "gcs_full_lane_unmatched_weight": args.gcs_full_lane_unmatched_weight,
-        "gcs_full_lane_aux_assignment": args.gcs_full_lane_aux_assignment,
-        "gcs_full_lane_unified_matching": args.gcs_full_lane_unified_matching,
-        "gcs_full_lane_aux_match_min_overlap": args.gcs_full_lane_aux_match_min_overlap,
-        "gcs_full_lane_aux_match_gate_px": args.gcs_full_lane_aux_match_gate_px,
-        "gcs_full_lane_hard_focus": args.gcs_full_lane_hard_focus,
-        "gcs_full_lane_focus_hit_px": args.gcs_full_lane_focus_hit_px,
-        "gcs_full_lane_focus_base_valid_thr": args.gcs_full_lane_focus_base_valid_thr,
-        "gcs_full_lane_focus_base_min_coverage": args.gcs_full_lane_focus_base_min_coverage,
-        "gcs_full_lane_base_hit_weight": args.gcs_full_lane_base_hit_weight,
-        "gcs_full_lane_base_miss_weight": args.gcs_full_lane_base_miss_weight,
-        "gcs_full_lane_gt4_weight": args.gcs_full_lane_gt4_weight,
-        "gcs_full_lane_gt5_weight": args.gcs_full_lane_gt5_weight,
-        "gcs_full_lane_short_visible_thr": args.gcs_full_lane_short_visible_thr,
-        "gcs_full_lane_short_visible_weight": args.gcs_full_lane_short_visible_weight,
-        "gcs_full_lane_freeze_base": args.gcs_full_lane_freeze_base,
-        "gcs_full_lane_decode": args.gcs_full_lane_decode,
-        "gcs_dense_instance": args.gcs_dense_instance,
-        "gcs_dense_centerline_weight": args.gcs_dense_centerline_weight,
-        "gcs_dense_endpoint_weight": args.gcs_dense_endpoint_weight,
-        "gcs_dense_embed_pull_weight": args.gcs_dense_embed_pull_weight,
-        "gcs_dense_embed_push_weight": args.gcs_dense_embed_push_weight,
-        "gcs_dense_embed_margin": args.gcs_dense_embed_margin,
-        "gcs_dense_sigma_px": args.gcs_dense_sigma_px,
-        "gcs_dense_pos_weight_max": args.gcs_dense_pos_weight_max,
-        "gcs_dense_freeze_base": args.gcs_dense_freeze_base,
-        "gcs_candidate_decode": args.gcs_candidate_decode,
-        "gcs_candidate_score_thr": args.gcs_candidate_score_thr,
-        "gcs_candidate_short_min_points": args.gcs_candidate_short_min_points,
-        "gcs_candidate_short_max_points": args.gcs_candidate_short_max_points,
         "gcs_boundary_pseudo_neg": args.gcs_boundary_pseudo_neg,
         "gcs_boundary_pseudo_visible_thr": args.gcs_boundary_pseudo_visible_thr,
         "gcs_boundary_pseudo_dist_thr": args.gcs_boundary_pseudo_dist_thr,
@@ -1105,8 +1154,20 @@ def main() -> None:
         "gcs_official_max_dets": args.gcs_official_max_dets,
         "gcs_official_min_points": args.gcs_official_min_points,
         "gcs_official_count_modes": args.gcs_official_count_modes,
+        "gcs_official_count_aware_topk": args.gcs_official_count_aware_topk,
         "gcs_official_score_fp_weight": args.gcs_official_score_fp_weight,
         "gcs_official_score_fn_weight": args.gcs_official_score_fn_weight,
+        "gcs_official_save_epoch_checkpoints": args.gcs_official_save_epoch_checkpoints,
+        "gcs_official_count_safe_selection": args.gcs_official_count_safe_selection,
+        "gcs_official_count_safe_acc_min_exclusive": args.gcs_official_count_safe_acc_min_exclusive,
+        "gcs_official_count_safe_fp_max": args.gcs_official_count_safe_fp_max,
+        "gcs_official_count_safe_fn_max": args.gcs_official_count_safe_fn_max,
+        "gcs_official_count_safe_count_acc4_min": args.gcs_official_count_safe_count_acc4_min,
+        "gcs_official_count_safe_count_acc5_min": args.gcs_official_count_safe_count_acc5_min,
+        "gcs_official_count_safe_gt4_to3_max": args.gcs_official_count_safe_gt4_to3_max,
+        "gcs_official_count_safe_gt4_to5_max": args.gcs_official_count_safe_gt4_to5_max,
+        "gcs_official_count_safe_gt5_to4_max": args.gcs_official_count_safe_gt5_to4_max,
+        "gcs_official_count_safe_allow_output6": args.gcs_official_count_safe_allow_output6,
         "gcs_official_half": args.gcs_official_half,
         "gcs_lane_count_balanced": args.gcs_lane_count_balanced,
         "gcs_lane_count_balance_power": args.gcs_lane_count_balance_power,
@@ -1120,6 +1181,7 @@ def main() -> None:
         "gcs_hard_visible_thr": args.gcs_hard_visible_thr,
         "gcs_hard_gt3_visible_thr": args.gcs_hard_gt3_visible_thr,
     }
+    overrides.update({key: value for key, value in vars(args).items() if key.startswith("gcs_lane_instance_")})
     if args.gcs_official_valid_before_maxdet is not None:
         overrides["gcs_official_valid_before_maxdet"] = args.gcs_official_valid_before_maxdet
 

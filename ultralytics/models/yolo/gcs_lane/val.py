@@ -18,6 +18,7 @@ from ultralytics.models.gcs.loss_ordered_slot import OrderedSlotGCSLoss
 from ultralytics.nn.modules import GCSLaneHead
 from ultralytics.nn.tasks import load_checkpoint
 from ultralytics.utils import ROOT
+from ultralytics.utils.gcs_loss import GCSLoss
 from ultralytics.utils.gcs_shape import assert_gcs_image_tensor, assert_gcs_shape, normalize_imgsz
 from ultralytics.utils.gcs_postprocess import decode_gcs_predictions
 from ultralytics.utils.torch_utils import select_device
@@ -29,6 +30,12 @@ LOSS_NAMES = (
     "point_valid_loss",
     "smooth_loss",
     "curve_loss",
+    "line_iou_loss",
+    "line_iou_valid_preserve_loss",
+    "line_iou_valid_preserve_count",
+    "line_iou_valid_preserve_anchor_count",
+    "line_iou_exist_survival_loss",
+    "line_iou_exist_survival_count",
     "mask_loss",
     "edge_loss",
     "count_loss",
@@ -36,6 +43,13 @@ LOSS_NAMES = (
     "count_boundary_loss",
     "spurious_neg_loss",
     "spurious_negative_count",
+    "query_survival_rank_loss",
+    "query_survival_rank_pair_count",
+    "query_survival_rank_margin_mean",
+    "query_valid_survival_loss",
+    "query_valid_survival_count",
+    "query_valid_survival_anchor_count",
+    "query_valid_survival_dice_loss",
     "spur_cand",
     "spur_prot",
     "spur_final",
@@ -55,35 +69,45 @@ LOSS_NAMES = (
     "boundary_pseudo_neg_loss",
     "boundary_pseudo_count",
     "boundary_pseudo_score_mean",
-    "short_candidate_loss",
-    "short_candidate_score_loss",
-    "short_candidate_pull_loss",
-    "short_candidate_pos_count",
-    "short_candidate_soft_count",
-    "short_candidate_neg_count",
-    "short_segment_loss",
-    "short_segment_score_loss",
-    "short_segment_point_loss",
-    "short_segment_pos_count",
-    "short_segment_soft_count",
-    "short_segment_neg_count",
     "query_count_ce_loss",
     "query_count_acc",
     "query_count_pred_mean",
-    "full_lane_proposal_loss",
-    "full_lane_point_loss",
-    "full_lane_valid_loss",
-    "full_lane_interval_loss",
-    "full_lane_exist_loss",
-    "full_lane_quality_loss",
-    "full_lane_match_count",
-    "full_lane_unmatched_count",
     "dense_instance_loss",
     "dense_centerline_loss",
     "dense_endpoint_loss",
+    "dense_endpoint_peak_loss",
+    "dense_endpoint_offset_loss",
     "dense_embed_pull_loss",
     "dense_embed_push_loss",
     "dense_centerline_pos",
+    "dense_candidate_loss",
+    "dense_candidate_quality_loss",
+    "dense_candidate_replace_loss",
+    "dense_candidate_quality_pos",
+    "dense_candidate_replace_pos",
+    "residual_proposal_loss",
+    "residual_point_loss",
+    "residual_row_loss",
+    "residual_valid_loss",
+    "residual_interval_loss",
+    "residual_consistency_loss",
+    "residual_positive_span_loss",
+    "residual_identity_pull_loss",
+    "residual_identity_push_loss",
+    "residual_quality_loss",
+    "residual_quality_rank_loss",
+    "residual_quality_pos",
+    "residual_identity_pair_count",
+    "residual_exist_loss",
+    "residual_target_count",
+    "residual_match_count",
+    "residual_full_hit20",
+    "residual_replace_loss",
+    "residual_replace_pos",
+    "residual_replace_rank_loss",
+    "residual_replace_listwise_loss",
+    "residual_replace_action_pos",
+    "residual_replace_action_acc",
 )
 LOSS_GAIN_ARGS = (
     "gcs_exist",
@@ -91,12 +115,26 @@ LOSS_GAIN_ARGS = (
     "gcs_point_valid",
     "gcs_smooth",
     "gcs_curve",
+    "gcs_line_iou",
+    "gcs_line_iou_valid_preserve",
+    None,
+    None,
+    None,
+    "gcs_line_iou_exist_survival",
+    None,
     "gcs_mask",
     "gcs_edge",
     "gcs_count",
     "gcs_count_under5",
     "gcs_count_boundary",
     (("gcs_spurious_neg", 0.0), ("gcs_spurious_neg_weight", 1.0)),
+    None,
+    "gcs_query_survival_rank",
+    None,
+    None,
+    "gcs_query_valid_survival",
+    None,
+    None,
     None,
     None,
     None,
@@ -117,30 +155,39 @@ LOSS_GAIN_ARGS = (
     "gcs_boundary_pseudo_neg",
     None,
     None,
-    "gcs_short_candidate",
-    None,
-    None,
-    None,
-    None,
-    None,
-    "gcs_short_segment",
-    None,
-    None,
-    None,
-    None,
-    None,
     "gcs_query_count_ce",
     None,
     None,
-    "gcs_full_lane_proposal",
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
     "gcs_dense_instance",
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    "gcs_dense_candidate",
+    None,
+    None,
+    None,
+    None,
+    "gcs_residual_proposal",
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
     None,
     None,
     None,
@@ -153,8 +200,24 @@ DEFAULT_LOSS_GAINS = (
     1.0,
     0.05,
     0.1,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
     0.2,
     0.2,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
     0.0,
     0.0,
     0.0,
@@ -209,6 +272,23 @@ DEFAULT_LOSS_GAINS = (
     0.0,
     0.0,
 )
+DEFAULT_LOSS_GAINS = tuple(
+    {
+        "exist_loss": 2.0,
+        "point_loss": 15.0,
+        "point_valid_loss": 1.0,
+        "smooth_loss": 0.05,
+        "curve_loss": 0.1,
+        "mask_loss": 0.2,
+        "edge_loss": 0.2,
+    }.get(name, 0.0)
+    for name in LOSS_NAMES
+)
+if not len(LOSS_NAMES) == len(LOSS_GAIN_ARGS) == len(DEFAULT_LOSS_GAINS):
+    raise RuntimeError(
+        "GCS validation loss contract mismatch: "
+        f"names={len(LOSS_NAMES)}, gain_args={len(LOSS_GAIN_ARGS)}, defaults={len(DEFAULT_LOSS_GAINS)}."
+    )
 METRIC_NAMES = (
     "precision",
     "recall",
@@ -433,7 +513,7 @@ class GCSLaneValidator:
 
     def _loss_names(self) -> tuple[str, ...]:
         """Return loss item names for the active mode."""
-        return OrderedSlotGCSLoss.loss_names if self._gcs_mode() == "ordered_slot" else LOSS_NAMES
+        return OrderedSlotGCSLoss.loss_names if self._gcs_mode() == "ordered_slot" else GCSLoss.active_loss_names(self.args)
 
     def _label_loss_items(self, loss_items: torch.Tensor, prefix: str = "val") -> dict[str, float]:
         """Return named GCS loss items for validation logging."""
@@ -474,6 +554,11 @@ class GCSLaneValidator:
             else:
                 value = self._arg(self.args, name, default)
             gains.append(float(value))
+        if GCSLoss.lane_instance_enabled(self.args):
+            gains.extend(
+                [float(self._arg(self.args, "gcs_lane_instance_set", 0.0))]
+                + [0.0] * (len(GCSLoss.lane_instance_loss_names) - 1)
+            )
         return torch.tensor(gains, device=device, dtype=torch.float32)
 
     def _eval_conf(self) -> float:
@@ -690,57 +775,11 @@ class GCSLaneValidator:
                     pred_points[i],
                     pred_logits[i],
                     pred_valid_logits=pred_valid_logits[i] if pred_valid_logits is not None else None,
-                    pred_short_candidate_points=preds.get("pred_short_candidate_points", None)[i]
-                    if preds.get("pred_short_candidate_points", None) is not None
-                    else None,
-                    pred_short_candidate_logits=preds.get("pred_short_candidate_logits", None)[i]
-                    if preds.get("pred_short_candidate_logits", None) is not None
-                    else None,
-                    pred_short_segment_points=preds.get("pred_short_segment_points", None)[i]
-                    if preds.get("pred_short_segment_points", None) is not None
-                    else None,
-                    pred_short_segment_logits=preds.get("pred_short_segment_logits", None)[i]
-                    if preds.get("pred_short_segment_logits", None) is not None
-                    else None,
-                    pred_short_segment_window_mask=preds.get("pred_short_segment_window_mask", None),
-                    pred_short_segment_choice_logits=preds.get("pred_short_segment_choice_logits", None)[i]
-                    if preds.get("pred_short_segment_choice_logits", None) is not None
-                    else None,
-                    full_lane_decode=bool(self._arg(self.args, "gcs_full_lane_decode", False)),
-                    pred_full_lane_points=preds.get("pred_full_lane_points", None)[i]
-                    if preds.get("pred_full_lane_points", None) is not None
-                    else None,
-                    pred_full_lane_valid_logits=preds.get("pred_full_lane_valid_logits", None)[i]
-                    if preds.get("pred_full_lane_valid_logits", None) is not None
-                    else None,
-                    pred_full_lane_exist_logits=preds.get("pred_full_lane_exist_logits", None)[i]
-                    if preds.get("pred_full_lane_exist_logits", None) is not None
-                    else None,
-                    pred_full_lane_quality_logits=preds.get("pred_full_lane_quality_logits", None)[i]
-                    if preds.get("pred_full_lane_quality_logits", None) is not None
-                    else None,
-                    pred_full_lane_start_logits=preds.get("pred_full_lane_start_logits", None)[i]
-                    if preds.get("pred_full_lane_start_logits", None) is not None
-                    else None,
-                    pred_full_lane_end_logits=preds.get("pred_full_lane_end_logits", None)[i]
-                    if preds.get("pred_full_lane_end_logits", None) is not None
-                    else None,
                     image_shape=(h, w),
                     score_thr=conf,
                     point_valid_thr=point_valid_thr,
                     max_det=max_det,
                     nms_dist_px=nms_dist_px,
-                    candidate_decode=bool(self._arg(self.args, "gcs_candidate_decode", False)),
-                    candidate_score_thr=float(self._arg(self.args, "gcs_candidate_score_thr", 0.05)),
-                    candidate_short_min_points=int(self._arg(self.args, "gcs_candidate_short_min_points", 2)),
-                    candidate_short_max_points=int(self._arg(self.args, "gcs_candidate_short_max_points", 10)),
-                    segment_decode=bool(self._arg(self.args, "gcs_segment_decode", False)),
-                    segment_score_thr=float(self._arg(self.args, "gcs_segment_score_thr", 0.5)),
-                    segment_short_min_points=int(self._arg(self.args, "gcs_segment_short_min_points", 3)),
-                    segment_short_max_points=int(self._arg(self.args, "gcs_segment_short_max_points", 10)),
-                    segment_pred_valid_overlap_min=int(
-                        self._arg(self.args, "gcs_segment_pred_valid_overlap_min", 0)
-                    ),
                 )
             gt_lanes, gt_valid = self._valid_gt_lanes(gt_lanes_t, gt_valid_t)
             tp, fp, fn, apes_tp, apes_all, apes_fp = self._match_lanes(

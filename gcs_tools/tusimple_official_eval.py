@@ -312,6 +312,131 @@ def find_tusimple_archive_root(path: str | Path) -> Path:
     raise FileNotFoundError(f"Cannot find TuSimple train_set/test_set under {root}")
 
 
+def _file_sha256(path: Path) -> str:
+    """Return the SHA256 of a local file without loading it all at once."""
+    digest = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _resolve_tusimple_image_path_unchecked(archive_root: str | Path, raw_file: str, split: str = "test") -> Path:
+    """Resolve a TuSimple image path without running archive-safety guards."""
+    root = find_tusimple_archive_root(archive_root)
+    rel = raw_file.lstrip("/").replace("\\", "/")
+    direct = root / rel
+    if direct.exists():
+        return direct
+    preferred = root / ("test_set" if split.lower() == "test" else "train_set") / rel
+    if preferred.exists():
+        return preferred
+    for split_dir in ("test_set", "train_set"):
+        candidate = root / split_dir / rel
+        if candidate.exists():
+            return candidate
+    raise FileNotFoundError(f"Cannot find TuSimple image for raw_file={raw_file!r} under {root}")
+
+
+def _invalid_test_archive_marker(root: Path) -> Path | None:
+    """Return the marker file when a local TuSimple test archive is known invalid."""
+    for marker in (root / "INVALID_DO_NOT_USE.txt", root / "test_set" / "INVALID_DO_NOT_USE.txt"):
+        if marker.exists():
+            return marker
+    return None
+
+
+def _sample_raw_files_for_archive_check(gt_records: list[dict], sample_count: int) -> list[str]:
+    """Return a deterministic raw_file sample for cheap image-byte checks."""
+    raw_files = sorted({str(record["raw_file"]).replace("\\", "/") for record in gt_records})
+    if not raw_files:
+        return []
+    if sample_count <= 0 or len(raw_files) <= sample_count:
+        return raw_files
+    if sample_count == 1:
+        return [raw_files[0]]
+    positions = np.linspace(0, len(raw_files) - 1, num=sample_count, dtype=int)
+    return [raw_files[int(i)] for i in np.unique(positions)]
+
+
+def validate_tusimple_test_archive_root(
+    archive_root: str | Path,
+    gt_records: list[dict],
+    *,
+    gt_json: str | Path | None = None,
+    sample_count: int = 17,
+) -> dict[str, object]:
+    """Fail closed when split=test points at the known stale local TuSimple archive.
+
+    This guard is intentionally narrow. It only makes a hard decision when the
+    current archive is explicitly marked invalid, or when a sibling
+    ``TUSimple_official_raw20`` archive has the same test-label content but
+    different image bytes for the same raw_file sample.
+    """
+    root = find_tusimple_archive_root(archive_root)
+    marker = _invalid_test_archive_marker(root)
+    raw20_root = root.parent / "TUSimple_official_raw20"
+    summary: dict[str, object] = {
+        "test_archive_guard": "checked",
+        "test_archive_root": str(root.resolve()),
+        "test_archive_reference_root": str(raw20_root.resolve()) if raw20_root.exists() else None,
+        "test_archive_image_sample_count": 0,
+        "test_archive_image_mismatches": 0,
+    }
+
+    if marker is not None:
+        raise RuntimeError(
+            "Refusing split=test evaluation from a TuSimple archive marked INVALID_DO_NOT_USE. "
+            f"archive_root={root.resolve()}, marker={marker.resolve()}. "
+            "Use --archive-root archive/TUSimple_official_raw20 for valid raw20 official TEST evaluation."
+        )
+
+    if root.resolve() == raw20_root.resolve() or not (raw20_root / "train_set").exists() or not (raw20_root / "test_set").exists():
+        summary["test_archive_guard"] = "no_sibling_raw20_reference"
+        return summary
+
+    raw20_gt = raw20_root / "test_label.json"
+    if not raw20_gt.exists():
+        summary["test_archive_guard"] = "sibling_raw20_without_test_label"
+        return summary
+
+    reference_records = read_tusimple_json_lines(raw20_gt)
+    if stable_gt_content_hash(gt_records) != stable_gt_content_hash(reference_records):
+        summary["test_archive_guard"] = "sibling_raw20_gt_differs"
+        return summary
+
+    mismatches: list[dict[str, str]] = []
+    checked = 0
+    for raw_file in _sample_raw_files_for_archive_check(gt_records, sample_count):
+        image_path = _resolve_tusimple_image_path_unchecked(root, raw_file, split="test")
+        reference_path = _resolve_tusimple_image_path_unchecked(raw20_root, raw_file, split="test")
+        checked += 1
+        if _file_sha256(image_path) != _file_sha256(reference_path):
+            mismatches.append(
+                {
+                    "raw_file": raw_file,
+                    "archive_image": str(image_path.resolve()),
+                    "raw20_image": str(reference_path.resolve()),
+                }
+            )
+
+    summary["test_archive_image_sample_count"] = checked
+    summary["test_archive_image_mismatches"] = len(mismatches)
+    if mismatches:
+        first = mismatches[0]
+        raise RuntimeError(
+            "Refusing split=test evaluation from an archive whose test_label.json matches "
+            "TUSimple_official_raw20 but whose image bytes differ. This is the known stale/invalid "
+            f"test archive. archive_root={root.resolve()}, reference={raw20_root.resolve()}, "
+            f"first_mismatch={first}. Use --archive-root {raw20_root}."
+        )
+
+    summary["test_archive_guard"] = "sibling_raw20_same_images"
+    summary["test_archive_reference_gt_json"] = str(raw20_gt.resolve())
+    summary["test_gt_json"] = str(Path(gt_json).resolve()) if gt_json is not None else None
+    return summary
+
+
 def default_tusimple_gt_json(archive_root: str | Path, split: str = "test") -> Path:
     """Return a conventional TuSimple GT json path inside the local archive."""
     root = find_tusimple_archive_root(archive_root)
@@ -386,18 +511,15 @@ def official_gt_contract_summary(
 def tusimple_image_path(archive_root: str | Path, raw_file: str, split: str = "test") -> Path:
     """Resolve a TuSimple raw_file to a frame path in archive/TUSimple."""
     root = find_tusimple_archive_root(archive_root)
-    rel = raw_file.lstrip("/").replace("\\", "/")
-    direct = root / rel
-    if direct.exists():
-        return direct
-    preferred = root / ("test_set" if split.lower() == "test" else "train_set") / rel
-    if preferred.exists():
-        return preferred
-    for split_dir in ("test_set", "train_set"):
-        candidate = root / split_dir / rel
-        if candidate.exists():
-            return candidate
-    raise FileNotFoundError(f"Cannot find TuSimple image for raw_file={raw_file!r} under {root}")
+    if split.lower() == "test":
+        marker = _invalid_test_archive_marker(root)
+        if marker is not None:
+            raise RuntimeError(
+                "Refusing split=test image lookup from a TuSimple archive marked INVALID_DO_NOT_USE. "
+                f"archive_root={root.resolve()}, marker={marker.resolve()}. "
+                "Use --archive-root archive/TUSimple_official_raw20 for valid raw20 official TEST evaluation."
+            )
+    return _resolve_tusimple_image_path_unchecked(root, raw_file, split=split)
 
 
 def _lane_points_for_official(lane: dict, image_shape: tuple[int, int]) -> tuple[np.ndarray, np.ndarray]:

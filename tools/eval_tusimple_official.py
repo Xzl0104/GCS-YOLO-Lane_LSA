@@ -27,13 +27,22 @@ from gcs_tools.tusimple_official_eval import (  # noqa: E402
     read_tusimple_json_lines,
     resolve_tusimple_gt_json,
     tusimple_image_path,
+    validate_tusimple_test_archive_root,
     write_tusimple_predictions,
 )
-from tools.infer_gcs import load_gcs_model, preprocess_image, warn_max_det_mismatch  # noqa: E402
+from tools.infer_gcs import (  # noqa: E402
+    load_gcs_model,
+    merge_query_score_valid_predictions,
+    preprocess_image,
+    score_valid_weights_tag,
+    warn_max_det_mismatch,
+)
 from ultralytics.models.gcs.decode_summary import (  # noqa: E402
+    LANE_INSTANCE_SET_DECODE_SCHEMA,
     ORDERED_SLOT_QUERY_DECODE_DEFAULTS,
     build_ordered_slot_decode_summary,
     guard_no_query_decode_args_for_ordered_slot,
+    lane_instance_set_decode_params,
     load_decode_yaml,
     ordered_slot_decode_params,
     ordered_slot_decode_runtime_config,
@@ -43,6 +52,8 @@ from ultralytics.models.gcs.decode_summary import (  # noqa: E402
 from ultralytics.models.gcs.decode_ordered_slot import decode_ordered_slot_predictions  # noqa: E402
 from ultralytics.models.gcs.mode_utils import resolve_decode_mode  # noqa: E402
 from ultralytics.utils.gcs_postprocess import decode_gcs_predictions  # noqa: E402
+from ultralytics.utils.gcs_lane_instance_set import decode_lane_instance_set_predictions, resolve_lane_instance_decode_mode  # noqa: E402
+from ultralytics.utils.gcs_residual_hybrid import apply_residual_hybrid_replacement  # noqa: E402
 from ultralytics.utils.gcs_shape import DATASET_IMAGE_SHAPES, normalize_imgsz, shape_str  # noqa: E402
 from ultralytics.utils.torch_utils import select_device  # noqa: E402
 
@@ -65,7 +76,16 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--pred-json", default=None, help="Evaluate an existing TuSimple-format prediction json-lines file.")
     parser.add_argument("--weights", default=str(DEFAULT_WEIGHTS), help="GCS checkpoint .pt used when --pred-json is not set.")
-    parser.add_argument("--decode-mode", choices=("auto", "query", "ordered_slot"), default="auto", help="Decode path for official eval.")
+    parser.add_argument(
+        "--score-valid-weights",
+        default=None,
+        help="Default-off query decode: use this checkpoint's pred_logits/pred_valid_logits while keeping --weights pred_points.",
+    )
+    parser.add_argument("--decode-mode", choices=("auto", "query", "ordered_slot", "lane_instance_set"), default="auto", help="Decode path for official eval.")
+    parser.add_argument("--lane-instance-duplicate-thr", type=float, default=0.65)
+    parser.add_argument("--lane-instance-allow-empty", action="store_true")
+    parser.add_argument("--lane-instance-empty-thr", type=float, default=0.75)
+    parser.add_argument("--lane-instance-min-survivors", type=int, default=2)
     parser.add_argument("--decode-yaml", default=None, help="Schema-validated official_best_decode.yaml to use for final eval.")
     parser.add_argument("--gcs-min-lanes", type=int, default=2, help="ordered_slot minimum supported lane count.")
     parser.add_argument("--gcs-max-lanes", type=int, default=5, help="ordered_slot maximum supported lane count.")
@@ -121,44 +141,17 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Diagnostic only: force query count-aware top-k k_hat to the GT lane count for each image.",
     )
-    parser.add_argument("--candidate-decode", action="store_true", help="Enable gated query lateral candidate decode.")
-    parser.add_argument("--candidate-score-thr", type=float, default=0.05)
-    parser.add_argument("--candidate-short-min-points", type=int, default=2)
-    parser.add_argument("--candidate-short-max-points", type=int, default=10)
     parser.add_argument(
-        "--segment-decode",
+        "--residual-hybrid-replacement",
         action="store_true",
-        help="Enable default-off local short-segment base-choice decode for pred_short_segment_* outputs.",
+        help="Diagnostic only: replace one selected base query with a prediction-only gated residual proposal.",
     )
-    parser.add_argument(
-        "--segment-score-thr",
-        type=float,
-        default=0.5,
-        help="Minimum local short-segment selector probability required to replace the base query.",
-    )
-    parser.add_argument("--segment-short-min-points", type=int, default=3)
-    parser.add_argument("--segment-short-max-points", type=int, default=10)
-    parser.add_argument(
-        "--segment-pred-valid-overlap-min",
-        type=int,
-        default=0,
-        help="Optional minimum overlap between a segment window and base predicted-valid anchors.",
-    )
-    parser.add_argument(
-        "--segment-score-as-lane-score",
-        action="store_true",
-        help="When segment decode applies, let segment probability raise the final lane score.",
-    )
-    parser.add_argument(
-        "--segment-rescue-base-miss-only",
-        action="store_true",
-        help="Apply segment replacement only to queries below the base existence threshold.",
-    )
-    parser.add_argument(
-        "--full-lane-decode",
-        action="store_true",
-        help="Enable default-off joint decode of base queries and independent full-lane proposals.",
-    )
+    parser.add_argument("--residual-hybrid-promote-rank", type=int, default=5)
+    parser.add_argument("--residual-hybrid-max-top-gap", type=float, default=0.09)
+    parser.add_argument("--residual-hybrid-max-boundary-gap", type=float, default=0.04)
+    parser.add_argument("--residual-hybrid-min-row-margin", type=float, default=0.18)
+    parser.add_argument("--residual-hybrid-max-row-evidence", type=float, default=3.0)
+    parser.add_argument("--residual-hybrid-min-row-advantage", type=float, default=0.01)
     parser.add_argument("--max-images", type=int, default=0, help="Limit number of GT records. 0 means all.")
     parser.add_argument("--warmup", type=int, default=20, help="Number of untimed warmup forwards.")
     parser.add_argument("--device", default="0", help="Inference device, e.g. 0 or cpu.")
@@ -216,11 +209,8 @@ def resolve_save_dir(
     count_aware_topk: bool = False,
     valid_before_maxdet: bool = False,
     oracle_count: bool = False,
-    segment_decode: bool = False,
-    segment_score_as_lane_score: bool = False,
-    segment_rescue_base_miss_only: bool = False,
-    full_lane_decode: bool = False,
     decode_mode: str = "auto",
+    score_valid_weights: str | Path | None = None,
 ) -> Path:
     if save_dir is not None and str(save_dir).strip():
         return Path(save_dir)
@@ -232,15 +222,13 @@ def resolve_save_dir(
             count_tag += f"_extra{int(count_aware_extra_margin)}"
         oracle_tag = "_oraclecount" if oracle_count else ""
         valid_tag = "_validbeforemaxdet" if valid_before_maxdet else ""
-        segment_tag = "_segment_decode" if segment_decode else ""
-        segment_score_tag = "_segment_score_lane" if segment_score_as_lane_score else ""
-        segment_rescue_tag = "_segment_base_miss" if segment_rescue_base_miss_only else ""
-        full_lane_tag = "_full_lane_decode" if full_lane_decode else ""
         tag = (
             f"official_{split}_conf{float(conf):.4g}_pvalid{float(point_valid_thr):.4g}_"
-            f"nms{float(nms_dist_px):.4g}_maxdet{int(max_det)}_minp{int(min_points)}"
-            f"{count_tag}{oracle_tag}{valid_tag}{segment_tag}{segment_score_tag}{segment_rescue_tag}{full_lane_tag}"
+            f"nms{float(nms_dist_px):.4g}_maxdet{int(max_det)}_minp{int(min_points)}{count_tag}{oracle_tag}{valid_tag}"
         ).replace(".", "p")
+        teacher_tag = score_valid_weights_tag(score_valid_weights)
+        if teacher_tag:
+            tag = f"{tag}_scorevalid_{teacher_tag}"
     run_dir = _weight_run_dir(weights)
     if run_dir is not None:
         return run_dir / tag
@@ -283,12 +271,12 @@ def resolve_pred_json_decode_contract(args: argparse.Namespace) -> tuple[str, di
     if getattr(args, "decode_yaml", None):
         _, decode_yaml_cfg = load_decode_yaml(args.decode_yaml)
         yaml_decode_mode = _normalize_decode_mode_name(decode_yaml_cfg.get("decode_mode"))
-        if yaml_decode_mode not in {"query", "ordered_slot"}:
+        if yaml_decode_mode not in {"query", "ordered_slot", "lane_instance_set"}:
             raise RuntimeError(
-                f"Invalid decode_yaml decode_mode={yaml_decode_mode!r}; expected query or ordered_slot."
+                f"Invalid decode_yaml decode_mode={yaml_decode_mode!r}; expected query, ordered_slot, or lane_instance_set."
             )
         requested_decode_mode = _normalize_decode_mode_name(getattr(args, "decode_mode", "auto"))
-        if requested_decode_mode not in {"auto", "query", "ordered_slot"}:
+        if requested_decode_mode not in {"auto", "query", "ordered_slot", "lane_instance_set"}:
             raise RuntimeError(f"Invalid --decode-mode {requested_decode_mode!r} for --pred-json.")
         active_decode_mode = yaml_decode_mode if requested_decode_mode == "auto" else requested_decode_mode
         validate_decode_yaml_for_model(decode_yaml_cfg, model_mode=active_decode_mode)
@@ -300,9 +288,10 @@ def resolve_pred_json_decode_contract(args: argparse.Namespace) -> tuple[str, di
     if decode_mode == "auto":
         raise RuntimeError(
             "--pred-json mode cannot use --decode-mode auto because no model is loaded. "
-            "Please pass --decode-mode query, --decode-mode ordered_slot, or --decode-yaml official_best_decode.yaml."
+            "Please pass --decode-mode query, --decode-mode ordered_slot, --decode-mode lane_instance_set, "
+            "or --decode-yaml official_best_decode.yaml."
         )
-    if decode_mode not in {"query", "ordered_slot"}:
+    if decode_mode not in {"query", "ordered_slot", "lane_instance_set"}:
         raise RuntimeError(f"Invalid --decode-mode {decode_mode!r} for --pred-json.")
     if decode_mode == "ordered_slot":
         guard_no_query_decode_args_for_ordered_slot(args, context="TuSimple official eval --pred-json")
@@ -338,6 +327,7 @@ def _gt_lane_count(record: dict) -> int:
 @torch.inference_mode()
 def generate_predictions(
     weights: str | Path,
+    score_valid_weights: str | Path | None,
     archive_root: str | Path,
     split: str,
     gt_records: list[dict],
@@ -359,18 +349,6 @@ def generate_predictions(
     count_aware_extra_margin: int = 0,
     count_mode: str = "score_sum",
     oracle_count: bool = False,
-    candidate_decode: bool = False,
-    candidate_score_thr: float = 0.05,
-    candidate_short_min_points: int = 2,
-    candidate_short_max_points: int = 10,
-    segment_decode: bool = False,
-    segment_score_thr: float = 0.5,
-    segment_short_min_points: int = 3,
-    segment_short_max_points: int = 10,
-    segment_pred_valid_overlap_min: int = 0,
-    segment_score_as_lane_score: bool = False,
-    segment_rescue_base_miss_only: bool = False,
-    full_lane_decode: bool = False,
     valid_before_maxdet: bool = False,
     decode_mode: str = "auto",
     decode_yaml_cfg: dict | None = None,
@@ -380,11 +358,22 @@ def generate_predictions(
     gcs_min_interval_points: int = 2,
     gcs_bottom_order_margin_px: float = 2.0,
     query_decode_defaults: dict | None = None,
+    residual_hybrid_replacement: bool = False,
+    residual_hybrid_promote_rank: int = 5,
+    residual_hybrid_max_top_gap: float = 0.09,
+    residual_hybrid_max_boundary_gap: float = 0.04,
+    residual_hybrid_min_row_margin: float = 0.18,
+    residual_hybrid_max_row_evidence: float = 3.0,
+    residual_hybrid_min_row_advantage: float = 0.01,
+    lane_instance_duplicate_thr: float = 0.65,
+    lane_instance_allow_empty: bool = False,
+    lane_instance_empty_thr: float = 0.75,
+    lane_instance_min_survivors: int = 2,
 ) -> tuple[list[dict], dict, str, dict]:
     device_obj = select_device(device)
     model = load_gcs_model(weights, device=device_obj, half=half, gcs_imgsz=imgsz)
     if decode_yaml_cfg is not None:
-        decode_mode = resolve_decode_mode(decode_yaml_cfg.get("decode_mode"), model)
+        decode_mode = resolve_lane_instance_decode_mode(decode_yaml_cfg.get("decode_mode"), model)
         validate_decode_yaml_for_model(decode_yaml_cfg, model_mode=decode_mode)
         if decode_mode == "query":
             conf = float(decode_yaml_cfg["conf"])
@@ -399,36 +388,29 @@ def generate_predictions(
             count_aware_length_norm = float(decode_yaml_cfg["count_aware_length_norm"])
             count_aware_extra_margin = int(decode_yaml_cfg.get("count_aware_extra_margin", 0))
             count_mode = str(decode_yaml_cfg.get("count_mode", "score_sum"))
+        elif decode_mode == "lane_instance_set":
+            params = lane_instance_set_decode_params(decode_cfg=decode_yaml_cfg)
+            conf, point_valid_thr = params["conf"], params["point_valid_thr"]
+            max_det, min_points = params["max_det"], params["min_points"]
+            lane_instance_duplicate_thr = params["duplicate_thr"]
+            lane_instance_allow_empty = params["allow_empty"]
+            lane_instance_empty_thr = params["empty_thr"]
+            lane_instance_min_survivors = params["min_survivors"]
     else:
-        decode_mode = resolve_decode_mode(decode_mode, model)
+        decode_mode = resolve_lane_instance_decode_mode(decode_mode, model)
+    score_valid_model = None
+    if score_valid_weights is not None and str(score_valid_weights).strip():
+        if str(decode_mode) != "query":
+            raise RuntimeError("--score-valid-weights is only valid for query decode.")
+        score_valid_model = load_gcs_model(score_valid_weights, device=device_obj, half=half, gcs_imgsz=imgsz)
+        resolve_decode_mode("query", score_valid_model)
     if oracle_count:
+        if str(decode_mode) == "lane_instance_set":
+            raise RuntimeError("--oracle-count is forbidden for lane_instance_set prediction-only decode.")
         if str(decode_mode) == "ordered_slot":
             raise RuntimeError("--oracle-count is query-decode diagnostic only and is not valid for ordered_slot.")
         count_aware_topk = True
         count_mode = "oracle_gt"
-    if (candidate_decode or segment_decode) and str(decode_mode) == "ordered_slot":
-        raise RuntimeError("candidate/segment decode is query-decode only and is not valid for ordered_slot.")
-    if candidate_decode and segment_decode:
-        raise RuntimeError("--candidate-decode and --segment-decode are mutually exclusive.")
-    if full_lane_decode and (candidate_decode or segment_decode):
-        raise RuntimeError("--full-lane-decode is mutually exclusive with candidate/segment decode.")
-    if (candidate_decode or segment_decode) and count_aware_topk:
-        raise RuntimeError("candidate/segment decode is mutually exclusive with --count-aware-topk.")
-    if full_lane_decode and count_aware_topk:
-        raise RuntimeError("--full-lane-decode is mutually exclusive with --count-aware-topk.")
-    if full_lane_decode and str(decode_mode) == "ordered_slot":
-        raise RuntimeError("--full-lane-decode is query-decode only and is not valid for ordered_slot.")
-    if not 0.0 <= float(segment_score_thr) <= 1.0:
-        raise ValueError(f"segment-score-thr must be in [0, 1], got {segment_score_thr}.")
-    if int(segment_short_min_points) < 1 or int(segment_short_max_points) < int(segment_short_min_points):
-        raise ValueError(
-            "segment short point bounds must satisfy 1 <= min <= max, "
-            f"got {segment_short_min_points}/{segment_short_max_points}."
-        )
-    if int(segment_pred_valid_overlap_min) < 0:
-        raise ValueError(
-            f"segment-pred-valid-overlap-min must be >= 0, got {segment_pred_valid_overlap_min}."
-        )
     if str(decode_mode) == "ordered_slot" and query_decode_defaults is not None:
         guard_no_query_decode_args_for_ordered_slot(
             {
@@ -448,6 +430,8 @@ def generate_predictions(
             context="TuSimple official eval",
             defaults=query_decode_defaults,
         )
+    if residual_hybrid_replacement and str(decode_mode) != "query":
+        raise RuntimeError("--residual-hybrid-replacement is only valid for query decode.")
 
     if warmup > 0 and gt_records:
         warm_path = tusimple_image_path(archive_root, str(gt_records[0]["raw_file"]), split=split)
@@ -457,6 +441,8 @@ def generate_predictions(
         warm_tensor = preprocess_image(warm_img, imgsz, device=device_obj, half=half)
         for _ in range(int(warmup)):
             _ = model(warm_tensor)
+            if score_valid_model is not None:
+                _ = score_valid_model(warm_tensor)
         _sync_if_cuda(device_obj)
 
     pred_records: list[dict] = []
@@ -464,6 +450,12 @@ def generate_predictions(
     ordered_slot_order_stats = {
         "ordered_slot_order_violations": 0,
         "ordered_slot_order_violation_images": 0,
+    }
+    residual_hybrid_stats = {
+        "enabled": bool(residual_hybrid_replacement),
+        "fired_images": 0,
+        "reason_counts": {},
+        "events": [],
     }
     infer_time_s = 0.0
     post_time_s = 0.0
@@ -479,10 +471,49 @@ def generate_predictions(
         _sync_if_cuda(device_obj)
         t0 = time.perf_counter()
         preds = model(tensor)
+        if score_valid_model is not None:
+            score_valid_preds = score_valid_model(tensor)
+            preds = merge_query_score_valid_predictions(
+                preds,
+                score_valid_preds,
+                context=f"two-source query decode for {raw_file}",
+            )
         _sync_if_cuda(device_obj)
         t1 = time.perf_counter()
 
-        if str(decode_mode) == "ordered_slot":
+        if residual_hybrid_replacement:
+            preds, hybrid_diagnostics = apply_residual_hybrid_replacement(
+                preds,
+                point_valid_thr=point_valid_thr,
+                min_points=min_points,
+                max_det=max_det,
+                promote_rank=residual_hybrid_promote_rank,
+                max_top_replace_gap=residual_hybrid_max_top_gap,
+                max_boundary_replace_gap=residual_hybrid_max_boundary_gap,
+                min_row_margin=residual_hybrid_min_row_margin,
+                max_row_evidence=residual_hybrid_max_row_evidence,
+                min_row_support_advantage=residual_hybrid_min_row_advantage,
+            )
+            reason = str(hybrid_diagnostics["reason"])
+            residual_hybrid_stats["reason_counts"][reason] = (
+                int(residual_hybrid_stats["reason_counts"].get(reason, 0)) + 1
+            )
+            if hybrid_diagnostics["fired"]:
+                residual_hybrid_stats["fired_images"] += 1
+                residual_hybrid_stats["events"].append({"raw_file": raw_file, **hybrid_diagnostics})
+
+        if str(decode_mode) == "lane_instance_set":
+            lanes, lane_diag = decode_lane_instance_set_predictions(
+                preds, batch_index=0, image_shape=original_shape, score_thr=conf,
+                point_valid_thr=point_valid_thr, min_points=min_points, max_det=max_det,
+                duplicate_thr=lane_instance_duplicate_thr, min_survivors=lane_instance_min_survivors,
+                allow_empty=lane_instance_allow_empty, empty_thr=lane_instance_empty_thr,
+                return_diagnostics=True,
+            )
+            ordered_slot_order_stats["lane_instance_under_min_images"] = int(
+                ordered_slot_order_stats.get("lane_instance_under_min_images", 0)
+            ) + int(lane_diag["under_min"])
+        elif str(decode_mode) == "ordered_slot":
             ordered_params = ordered_slot_decode_params(
                 {
                     "gcs_min_lanes": gcs_min_lanes,
@@ -511,25 +542,11 @@ def generate_predictions(
         else:
             pred_valid = preds.get("pred_valid_logits")
             pred_count_logits = preds.get("pred_count_logits")
-            pred_candidate_points = preds.get("pred_short_candidate_points")
-            pred_candidate_logits = preds.get("pred_short_candidate_logits")
-            pred_segment_points = preds.get("pred_short_segment_points")
-            pred_segment_logits = preds.get("pred_short_segment_logits")
-            pred_segment_window_mask = preds.get("pred_short_segment_window_mask")
-            pred_segment_choice_logits = preds.get("pred_short_segment_choice_logits")
             lanes = decode_gcs_predictions(
                 preds["pred_points"][0],
                 preds["pred_logits"][0],
                 pred_valid_logits=pred_valid[0] if pred_valid is not None else None,
                 pred_count_logits=pred_count_logits[0] if pred_count_logits is not None else None,
-                pred_short_candidate_points=pred_candidate_points[0] if pred_candidate_points is not None else None,
-                pred_short_candidate_logits=pred_candidate_logits[0] if pred_candidate_logits is not None else None,
-                pred_short_segment_points=pred_segment_points[0] if pred_segment_points is not None else None,
-                pred_short_segment_logits=pred_segment_logits[0] if pred_segment_logits is not None else None,
-                pred_short_segment_window_mask=pred_segment_window_mask,
-                pred_short_segment_choice_logits=(
-                    pred_segment_choice_logits[0] if pred_segment_choice_logits is not None else None
-                ),
                 oracle_count=_gt_lane_count(record) if oracle_count else None,
                 image_shape=original_shape,
                 score_thr=conf,
@@ -544,36 +561,6 @@ def generate_predictions(
                 count_aware_length_norm=count_aware_length_norm,
                 count_aware_extra_margin=count_aware_extra_margin,
                 count_mode=count_mode,
-                candidate_decode=candidate_decode,
-                candidate_score_thr=candidate_score_thr,
-                candidate_short_min_points=candidate_short_min_points,
-                candidate_short_max_points=candidate_short_max_points,
-                segment_decode=segment_decode,
-                segment_score_thr=segment_score_thr,
-                segment_short_min_points=segment_short_min_points,
-                segment_short_max_points=segment_short_max_points,
-                segment_pred_valid_overlap_min=segment_pred_valid_overlap_min,
-                segment_score_as_lane_score=segment_score_as_lane_score,
-                segment_rescue_base_miss_only=segment_rescue_base_miss_only,
-                full_lane_decode=full_lane_decode,
-                pred_full_lane_points=preds.get("pred_full_lane_points", None)[0]
-                if preds.get("pred_full_lane_points", None) is not None
-                else None,
-                pred_full_lane_valid_logits=preds.get("pred_full_lane_valid_logits", None)[0]
-                if preds.get("pred_full_lane_valid_logits", None) is not None
-                else None,
-                pred_full_lane_exist_logits=preds.get("pred_full_lane_exist_logits", None)[0]
-                if preds.get("pred_full_lane_exist_logits", None) is not None
-                else None,
-                pred_full_lane_quality_logits=preds.get("pred_full_lane_quality_logits", None)[0]
-                if preds.get("pred_full_lane_quality_logits", None) is not None
-                else None,
-                pred_full_lane_start_logits=preds.get("pred_full_lane_start_logits", None)[0]
-                if preds.get("pred_full_lane_start_logits", None) is not None
-                else None,
-                pred_full_lane_end_logits=preds.get("pred_full_lane_end_logits", None)[0]
-                if preds.get("pred_full_lane_end_logits", None) is not None
-                else None,
             )
         tusimple_lanes = gcs_lanes_to_tusimple_lanes(lanes, record["h_samples"], image_shape=original_shape)
         t2 = time.perf_counter()
@@ -588,6 +575,7 @@ def generate_predictions(
         "avg_postprocess_ms": round(post_time_s * 1000.0 / n, 4),
         "avg_total_ms": round((infer_time_s + post_time_s) * 1000.0 / n, 4),
     }
+    ordered_slot_order_stats["residual_hybrid_replacement"] = residual_hybrid_stats
     return pred_records, timing, decode_mode, ordered_slot_order_stats
 
 
@@ -597,6 +585,13 @@ def evaluate_official(args: argparse.Namespace) -> dict:
     gt_records = _limit_records(read_tusimple_json_lines(gt_path), args.max_images)
     if not gt_records:
         raise ValueError(f"No TuSimple GT records found in {gt_path}")
+    test_archive_contract = {}
+    if str(args.split).strip().lower() == "test":
+        test_archive_contract = validate_tusimple_test_archive_root(
+            archive_root,
+            gt_records,
+            gt_json=gt_path,
+        )
     gt_contract = official_gt_contract_summary(
         split=args.split,
         gt_json=gt_path,
@@ -616,19 +611,35 @@ def evaluate_official(args: argparse.Namespace) -> dict:
         active_decode_mode, decode_yaml_cfg = resolved
         if decode_yaml_cfg is not None and active_decode_mode == "query":
             _apply_query_decode_yaml(args, decode_yaml_cfg)
+        elif decode_yaml_cfg is not None and active_decode_mode == "lane_instance_set":
+            params = lane_instance_set_decode_params(decode_cfg=decode_yaml_cfg)
+            args.conf, args.point_valid_thr = params["conf"], params["point_valid_thr"]
+            args.max_det, args.min_points = params["max_det"], params["min_points"]
+            args.lane_instance_duplicate_thr = params["duplicate_thr"]
+            args.lane_instance_allow_empty = params["allow_empty"]
+            args.lane_instance_empty_thr = params["empty_thr"]
+            args.lane_instance_min_survivors = params["min_survivors"]
     elif getattr(args, "decode_yaml", None):
         _, decode_yaml_cfg = load_decode_yaml(args.decode_yaml)
         yaml_decode_mode = str(decode_yaml_cfg.get("decode_mode", ""))
         args.decode_mode = yaml_decode_mode
         if yaml_decode_mode == "query":
             _apply_query_decode_yaml(args, decode_yaml_cfg)
+        elif yaml_decode_mode == "lane_instance_set":
+            params = lane_instance_set_decode_params(decode_cfg=decode_yaml_cfg)
+            args.conf, args.point_valid_thr = params["conf"], params["point_valid_thr"]
+            args.max_det, args.min_points = params["max_det"], params["min_points"]
+            args.lane_instance_duplicate_thr = params["duplicate_thr"]
+            args.lane_instance_allow_empty = params["allow_empty"]
+            args.lane_instance_empty_thr = params["empty_thr"]
+            args.lane_instance_min_survivors = params["min_survivors"]
     if pred_json:
+        if getattr(args, "score_valid_weights", None):
+            raise RuntimeError("--score-valid-weights requires model inference and cannot be used with --pred-json.")
+        if bool(getattr(args, "residual_hybrid_replacement", False)):
+            raise RuntimeError("--residual-hybrid-replacement requires model inference and cannot be used with --pred-json.")
         if bool(getattr(args, "oracle_count", False)):
             raise RuntimeError("--oracle-count requires model inference and cannot be used with --pred-json.")
-        if bool(getattr(args, "candidate_decode", False)):
-            raise RuntimeError("--candidate-decode requires model inference and cannot be used with --pred-json.")
-        if bool(getattr(args, "segment_decode", False)):
-            raise RuntimeError("--segment-decode requires model inference and cannot be used with --pred-json.")
         pred_path = Path(pred_json)
         pred_records = _limit_records(read_tusimple_json_lines(pred_path), args.max_images)
     else:
@@ -645,23 +656,12 @@ def evaluate_official(args: argparse.Namespace) -> dict:
         query_count_aware_extra_margin = int(getattr(args, "count_aware_extra_margin", 0))
         query_count_mode = str(getattr(args, "count_mode", "score_sum"))
         query_oracle_count = bool(getattr(args, "oracle_count", False))
-        query_candidate_decode = bool(getattr(args, "candidate_decode", False))
-        query_candidate_score_thr = float(getattr(args, "candidate_score_thr", 0.05))
-        query_candidate_short_min_points = int(getattr(args, "candidate_short_min_points", 2))
-        query_candidate_short_max_points = int(getattr(args, "candidate_short_max_points", 10))
-        query_segment_decode = bool(getattr(args, "segment_decode", False))
-        query_segment_score_thr = float(getattr(args, "segment_score_thr", 0.5))
-        query_segment_short_min_points = int(getattr(args, "segment_short_min_points", 3))
-        query_segment_short_max_points = int(getattr(args, "segment_short_max_points", 10))
-        query_segment_pred_valid_overlap_min = int(getattr(args, "segment_pred_valid_overlap_min", 0))
-        query_segment_score_as_lane_score = bool(getattr(args, "segment_score_as_lane_score", False))
-        query_segment_rescue_base_miss_only = bool(getattr(args, "segment_rescue_base_miss_only", False))
-        query_full_lane_decode = bool(getattr(args, "full_lane_decode", False))
         if query_oracle_count:
             query_count_aware_topk = True
             query_count_mode = "oracle_gt"
         pred_records, timing, active_decode_mode, ordered_slot_order_stats = generate_predictions(
             weights=args.weights,
+            score_valid_weights=getattr(args, "score_valid_weights", None),
             archive_root=archive_root,
             split=args.split,
             gt_records=gt_records,
@@ -679,18 +679,6 @@ def evaluate_official(args: argparse.Namespace) -> dict:
             count_aware_extra_margin=query_count_aware_extra_margin,
             count_mode=query_count_mode,
             oracle_count=query_oracle_count,
-            candidate_decode=query_candidate_decode,
-            candidate_score_thr=query_candidate_score_thr,
-            candidate_short_min_points=query_candidate_short_min_points,
-            candidate_short_max_points=query_candidate_short_max_points,
-            segment_decode=query_segment_decode,
-            segment_score_thr=query_segment_score_thr,
-            segment_short_min_points=query_segment_short_min_points,
-            segment_short_max_points=query_segment_short_max_points,
-            segment_pred_valid_overlap_min=query_segment_pred_valid_overlap_min,
-            segment_score_as_lane_score=query_segment_score_as_lane_score,
-            segment_rescue_base_miss_only=query_segment_rescue_base_miss_only,
-            full_lane_decode=query_full_lane_decode,
             decode_mode=args.decode_mode,
             decode_yaml_cfg=decode_yaml_cfg,
             gcs_min_lanes=int(getattr(args, "gcs_min_lanes", 2)),
@@ -704,9 +692,22 @@ def evaluate_official(args: argparse.Namespace) -> dict:
             device=args.device,
             half=args.half,
             query_decode_defaults=ORDERED_SLOT_QUERY_ONLY_DEFAULTS,
+            residual_hybrid_replacement=bool(getattr(args, "residual_hybrid_replacement", False)),
+            residual_hybrid_promote_rank=int(getattr(args, "residual_hybrid_promote_rank", 5)),
+            residual_hybrid_max_top_gap=float(getattr(args, "residual_hybrid_max_top_gap", 0.09)),
+            residual_hybrid_max_boundary_gap=float(getattr(args, "residual_hybrid_max_boundary_gap", 0.04)),
+            residual_hybrid_min_row_margin=float(getattr(args, "residual_hybrid_min_row_margin", 0.18)),
+            residual_hybrid_max_row_evidence=float(getattr(args, "residual_hybrid_max_row_evidence", 3.0)),
+            residual_hybrid_min_row_advantage=float(getattr(args, "residual_hybrid_min_row_advantage", 0.01)),
+            lane_instance_duplicate_thr=float(getattr(args, "lane_instance_duplicate_thr", 0.65)),
+            lane_instance_allow_empty=bool(getattr(args, "lane_instance_allow_empty", False)),
+            lane_instance_empty_thr=float(getattr(args, "lane_instance_empty_thr", 0.75)),
+            lane_instance_min_survivors=int(getattr(args, "lane_instance_min_survivors", 2)),
         )
         if active_decode_mode != "ordered_slot":
             warn_max_det_mismatch(args.weights, max_det=query_max_det, context="TuSimple official eval")
+            if getattr(args, "score_valid_weights", None):
+                warn_max_det_mismatch(args.score_valid_weights, max_det=query_max_det, context="TuSimple official eval score/valid")
 
     query_conf = float(getattr(args, "conf", 0.25))
     query_point_valid_thr = float(getattr(args, "point_valid_thr", 0.5))
@@ -721,18 +722,6 @@ def evaluate_official(args: argparse.Namespace) -> dict:
     query_count_aware_extra_margin = int(getattr(args, "count_aware_extra_margin", 0))
     query_count_mode = str(getattr(args, "count_mode", "score_sum"))
     query_oracle_count = bool(getattr(args, "oracle_count", False))
-    query_candidate_decode = bool(getattr(args, "candidate_decode", False))
-    query_candidate_score_thr = float(getattr(args, "candidate_score_thr", 0.05))
-    query_candidate_short_min_points = int(getattr(args, "candidate_short_min_points", 2))
-    query_candidate_short_max_points = int(getattr(args, "candidate_short_max_points", 10))
-    query_segment_decode = bool(getattr(args, "segment_decode", False))
-    query_segment_score_thr = float(getattr(args, "segment_score_thr", 0.5))
-    query_segment_short_min_points = int(getattr(args, "segment_short_min_points", 3))
-    query_segment_short_max_points = int(getattr(args, "segment_short_max_points", 10))
-    query_segment_pred_valid_overlap_min = int(getattr(args, "segment_pred_valid_overlap_min", 0))
-    query_segment_score_as_lane_score = bool(getattr(args, "segment_score_as_lane_score", False))
-    query_segment_rescue_base_miss_only = bool(getattr(args, "segment_rescue_base_miss_only", False))
-    query_full_lane_decode = bool(getattr(args, "full_lane_decode", False))
     if query_oracle_count:
         query_count_aware_topk = True
         query_count_mode = "oracle_gt"
@@ -750,11 +739,8 @@ def evaluate_official(args: argparse.Namespace) -> dict:
         count_aware_topk=query_count_aware_topk,
         valid_before_maxdet=query_valid_before_maxdet,
         oracle_count=query_oracle_count,
-        segment_decode=query_segment_decode,
-        segment_score_as_lane_score=query_segment_score_as_lane_score,
-        segment_rescue_base_miss_only=query_segment_rescue_base_miss_only,
-        full_lane_decode=query_full_lane_decode,
         decode_mode=active_decode_mode,
+        score_valid_weights=getattr(args, "score_valid_weights", None) if not pred_json else None,
     )
     save_dir.mkdir(parents=True, exist_ok=True)
     if not pred_json:
@@ -785,6 +771,14 @@ def evaluate_official(args: argparse.Namespace) -> dict:
 
     config = {
         "weights": None if pred_json else str(Path(args.weights).resolve()),
+        "point_weights": None if pred_json else str(Path(args.weights).resolve()),
+        "score_valid_weights": (
+            str(Path(args.score_valid_weights).resolve())
+            if (not pred_json and getattr(args, "score_valid_weights", None))
+            else None
+        ),
+        "two_source_query_decode": bool(not pred_json and getattr(args, "score_valid_weights", None)),
+        "uses_gt_for_inference": False,
         "pred_json": str(Path(pred_json).resolve()) if pred_json else str((save_dir / "tusimple_predictions.json").resolve()),
         "archive_root": str(archive_root.resolve()),
         "split": args.split,
@@ -799,6 +793,7 @@ def evaluate_official(args: argparse.Namespace) -> dict:
         "save_dir": str(save_dir.resolve()),
         "score_fp_weight": float(args.score_fp_weight),
         "score_fn_weight": float(args.score_fn_weight),
+        **test_archive_contract,
         **gt_contract,
     }
     if str(active_decode_mode) == "ordered_slot":
@@ -832,6 +827,9 @@ def evaluate_official(args: argparse.Namespace) -> dict:
                 "query_decode_args": effective_decode["query_decode_args"],
             }
         )
+    elif str(active_decode_mode) == "lane_instance_set":
+        params = lane_instance_set_decode_params(args, decode_yaml_cfg)
+        config.update({"schema": LANE_INSTANCE_SET_DECODE_SCHEMA, **params, "uses_gt_for_inference": False})
     else:
         config.update(
             {
@@ -848,21 +846,16 @@ def evaluate_official(args: argparse.Namespace) -> dict:
                 "count_aware_length_norm": query_count_aware_length_norm,
                 "count_aware_extra_margin": query_count_aware_extra_margin,
                 "count_mode": query_count_mode,
-                "candidate_decode": query_candidate_decode,
-                "candidate_score_thr": query_candidate_score_thr,
-                "candidate_short_min_points": query_candidate_short_min_points,
-                "candidate_short_max_points": query_candidate_short_max_points,
-                "segment_decode": query_segment_decode,
-                "segment_score_thr": query_segment_score_thr,
-                "segment_short_min_points": query_segment_short_min_points,
-                "segment_short_max_points": query_segment_short_max_points,
-                "segment_pred_valid_overlap_min": query_segment_pred_valid_overlap_min,
-                "segment_score_as_lane_score": query_segment_score_as_lane_score,
-                "segment_rescue_base_miss_only": query_segment_rescue_base_miss_only,
-                "full_lane_decode": query_full_lane_decode,
                 "oracle_count": query_oracle_count,
                 "uses_gt_count_for_decode": query_oracle_count,
-                "diagnostic_only": query_oracle_count,
+                "diagnostic_only": query_oracle_count or bool(getattr(args, "residual_hybrid_replacement", False)),
+                "residual_hybrid_replacement": bool(getattr(args, "residual_hybrid_replacement", False)),
+                "residual_hybrid_promote_rank": int(getattr(args, "residual_hybrid_promote_rank", 5)),
+                "residual_hybrid_max_top_gap": float(getattr(args, "residual_hybrid_max_top_gap", 0.09)),
+                "residual_hybrid_max_boundary_gap": float(getattr(args, "residual_hybrid_max_boundary_gap", 0.04)),
+                "residual_hybrid_min_row_margin": float(getattr(args, "residual_hybrid_min_row_margin", 0.18)),
+                "residual_hybrid_max_row_evidence": float(getattr(args, "residual_hybrid_max_row_evidence", 3.0)),
+                "residual_hybrid_min_row_advantage": float(getattr(args, "residual_hybrid_min_row_advantage", 0.01)),
             }
         )
 
@@ -881,6 +874,10 @@ def evaluate_official(args: argparse.Namespace) -> dict:
                 decode_stats=ordered_slot_order_stats,
             )
         )
+    output["residual_hybrid_replacement_stats"] = ordered_slot_order_stats.get(
+        "residual_hybrid_replacement",
+        {"enabled": False, "fired_images": 0, "reason_counts": {}, "events": []},
+    )
     if args.save_records:
         output["records"] = per_image
 

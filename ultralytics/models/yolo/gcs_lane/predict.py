@@ -15,6 +15,10 @@ from ultralytics.engine.results import Results
 from ultralytics.models.gcs.decode_ordered_slot import decode_ordered_slot_predictions
 from ultralytics.models.gcs.decode_summary import ordered_slot_decode_params, ordered_slot_decode_runtime_config
 from ultralytics.utils import ops
+from ultralytics.utils.gcs_lane_instance_set import (
+    decode_lane_instance_set_predictions,
+    resolve_lane_instance_decode_mode,
+)
 from ultralytics.utils.gcs_shape import assert_gcs_image_tensor, assert_gcs_shape, normalize_imgsz
 from ultralytics.utils.gcs_postprocess import decode_gcs_predictions, draw_gcs_lanes, save_gcs_lanes_txt
 
@@ -144,7 +148,6 @@ class GCSLanePredictor(BasePredictor):
         valid_logits = preds.get("pred_valid_logits")
         if valid_logits is not None:
             valid_logits = valid_logits.detach()
-        full_lane_decode = bool(self._arg_value(self.args, "gcs_full_lane_decode") or False)
         conf = 0.25 if self.args.conf is None else float(self.args.conf)
         max_det = int(self.args.max_det) if getattr(self.args, "max_det", None) else None
         nms_dist_px = float(getattr(self.args, "gcs_eval_nms_dist_px", 0.0) or 0.0)
@@ -159,13 +162,29 @@ class GCSLanePredictor(BasePredictor):
         else:
             valid_iter = list(valid_logits)
 
-        ordered_slot = "pred_count_logits" in preds and "pred_start_logits" in preds and "pred_end_logits" in preds
+        decode_mode = resolve_lane_instance_decode_mode(getattr(self.args, "decode_mode", "auto"), self.model)
+        ordered_slot = decode_mode == "ordered_slot"
         ordered_slot_runtime_cfg = ordered_slot_decode_runtime_config(context="predict") if ordered_slot else None
         ordered_slot_params = ordered_slot_decode_params(self.args) if ordered_slot else None
         for batch_i, (lane_points, lane_logits, lane_valid_logits, orig_img, img_path) in enumerate(
             zip(points, logits, valid_iter, orig_imgs, self.batch[0])
         ):
-            if ordered_slot:
+            if decode_mode == "lane_instance_set":
+                lanes, lane_instance_diagnostics = decode_lane_instance_set_predictions(
+                    preds,
+                    batch_index=batch_i,
+                    image_shape=orig_img.shape[:2],
+                    score_thr=conf,
+                    point_valid_thr=point_valid_thr,
+                    min_points=int(getattr(self.args, "min_points", 2) or 2),
+                    max_det=int(max_det or 5),
+                    duplicate_thr=float(getattr(self.args, "gcs_lane_instance_decode_duplicate_thr", 0.65)),
+                    min_survivors=int(getattr(self.args, "gcs_lane_instance_decode_min_survivors", 2)),
+                    allow_empty=bool(getattr(self.args, "gcs_lane_instance_decode_allow_empty", False)),
+                    empty_thr=float(getattr(self.args, "gcs_lane_instance_decode_empty_thr", 0.75)),
+                    return_diagnostics=True,
+                )
+            elif ordered_slot:
                 lanes = decode_ordered_slot_predictions(
                     preds,
                     batch_index=batch_i,
@@ -183,25 +202,6 @@ class GCSLanePredictor(BasePredictor):
                     lane_points,
                     lane_logits,
                     pred_valid_logits=lane_valid_logits,
-                    full_lane_decode=full_lane_decode,
-                    pred_full_lane_points=preds.get("pred_full_lane_points", None)[batch_i]
-                    if preds.get("pred_full_lane_points", None) is not None
-                    else None,
-                    pred_full_lane_valid_logits=preds.get("pred_full_lane_valid_logits", None)[batch_i]
-                    if preds.get("pred_full_lane_valid_logits", None) is not None
-                    else None,
-                    pred_full_lane_exist_logits=preds.get("pred_full_lane_exist_logits", None)[batch_i]
-                    if preds.get("pred_full_lane_exist_logits", None) is not None
-                    else None,
-                    pred_full_lane_quality_logits=preds.get("pred_full_lane_quality_logits", None)[batch_i]
-                    if preds.get("pred_full_lane_quality_logits", None) is not None
-                    else None,
-                    pred_full_lane_start_logits=preds.get("pred_full_lane_start_logits", None)[batch_i]
-                    if preds.get("pred_full_lane_start_logits", None) is not None
-                    else None,
-                    pred_full_lane_end_logits=preds.get("pred_full_lane_end_logits", None)[batch_i]
-                    if preds.get("pred_full_lane_end_logits", None) is not None
-                    else None,
                     image_shape=orig_img.shape[:2],
                     score_thr=conf,
                     point_valid_thr=point_valid_thr,
@@ -209,6 +209,8 @@ class GCSLanePredictor(BasePredictor):
                     nms_dist_px=nms_dist_px,
                 )
             result = GCSLaneResults(orig_img, path=img_path, names=self.model.names, lanes=lanes)
+            if decode_mode == "lane_instance_set":
+                result.lane_instance_diagnostics = lane_instance_diagnostics
             if not lanes:
                 k = int(lane_points.shape[1])
                 result.lanes = torch.zeros((0, k, 2), dtype=torch.float32)

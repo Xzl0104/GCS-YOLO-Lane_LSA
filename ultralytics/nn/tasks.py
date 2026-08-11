@@ -1625,7 +1625,7 @@ def _assert_current_gcs_checkpoint_model(model: torch.nn.Module, weight) -> None
     missing_by_head = {
         name: [attr for attr in required if not hasattr(module, attr)]
         for name, module in model.named_modules()
-        if isinstance(module, GCSLaneHead)
+        if isinstance(module, GCSLaneHead) and not bool(getattr(module, "lane_instance_set_decoder_head", False))
     }
     missing_by_head = {name: missing for name, missing in missing_by_head.items() if missing}
     if missing_by_head:

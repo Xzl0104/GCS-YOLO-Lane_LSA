@@ -1,6 +1,545 @@
 # Current Contracts
 
+## 2026-08-11 Lane-Instance-Set Controlled Candidate Contract
+
+The active baseline remains env30 commit
+`86c8fb31cb4b48a53086be183478a95b0807753d`; the default model
+`ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml`, Q12/K56 fixed-y contract,
+5-25-3 algorithm body, aux mask/edge outputs, and official evaluation
+protocol are unchanged.
+
+The lane-instance-set work is a controlled, default-off candidate enabled only
+by the independent YAML:
+
+```text
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-lane-instance-set-decoder.yaml
+```
+
+This YAML keeps `gcs_mode=query` and `Q=12/K=56`, but enables the
+lane-instance-set decoder head. It switches that experiment model's main
+query outputs to the lane-instance branch:
+
+```text
+pred_points: B x 12 x 56 x 2
+pred_logits: B x 12
+pred_valid_logits: B x 12 x 56
+```
+
+The lane-instance branch is image-local and does not register, execute, or
+consume the legacy Transformer query decoder, `base_points`, `base_logits`,
+or independent `base_valid_logits`. Its Q=12 dimension is candidate capacity
+from image-local P2/P3 lane seeds, not the legacy coarse-query carrier path.
+Its compatibility `pred_valid_logits` is always the deterministic contiguous
+field derived from predicted start/end distributions; the old free-form
+point-valid head has no influence on lane-instance geometry, matching, loss,
+survival utility, or decode.
+
+and additionally emits:
+
+```text
+pred_lane_instance_points: B x 12 x 56 x 2
+pred_lane_instance_start_logits: B x 12 x 56
+pred_lane_instance_end_logits: B x 12 x 56
+pred_lane_instance_valid_logits: B x 12 x 56
+pred_lane_instance_interval_start: B x 12
+pred_lane_instance_interval_end: B x 12
+pred_lane_instance_identity: B x 12 x D  # D=16 in the current YAML
+pred_lane_instance_pair_duplicate_logits: B x 12 x 12
+pred_lane_instance_novelty_logits: B x 12
+pred_lane_instance_left_logits: B x 12 x 12
+pred_lane_instance_right_logits: B x 12 x 12
+pred_lane_instance_geometry_quality_logits: B x 12
+pred_lane_instance_survival_logits: B x 12
+pred_lane_instance_empty_logit: B
+aux_mask_logits: B x 2 x H x W
+aux_edge_logits: B x 1 x H x W
+```
+
+The default query YAML must not emit `pred_lane_instance_*` tensors and must
+not register lane-instance-set parameters. The lane-instance candidate must
+not emit `pred_count_logits`; its decoded lane count is derived from selected
+survivors only. Do not confuse `pred_lane_instance_survival_logits` with any
+later mainline Survival Head.
+
+For this candidate, `pred_lane_instance_survival_logits` is the single learned
+decode utility. Its model-side features include geometry quality, continuous
+visibility/span quality, candidate novelty, predicted duplicate risk, and
+topology confidence. Quality/novelty/topology tensors remain auxiliary
+training and diagnostic outputs; decode must not multiply, rerank, or make a
+parallel keep/count decision from them. Decode performs exact global subset
+optimization over the eligible Q=12 candidates, maximizing summed unified
+survival utility subject to predicted duplicate conflicts and the TuSimple
+five-lane safety cap, then derives count from the surviving lane list.
+
+The prediction-only decode path is selected by:
+
+```text
+--decode-mode lane_instance_set
+```
+
+or by `--decode-mode auto` only when the loaded model actually has
+`lane_instance_set_decoder_head=true`. Lane-instance-set decode uses only
+model predictions. It accepts `conf`/`point_valid_thr`/`min_points`/`max_det`
+plus the lane-instance parameters recorded in `commands.md`, suppresses
+duplicates by predicted duplicate probability, caps `max_det` at TuSimple's
+`5`, and never backfills or fabricates lanes when fewer than
+`min_survivors` survive. `min_survivors` is diagnostic-only. `allow_empty`
+defaults false for TuSimple experiment decode. `--oracle-count` and
+count-aware top-k are forbidden with `lane_instance_set`.
+
+The default-off composite loss is controlled by:
+
+```text
+gcs_lane_instance_set = 0.0
+```
+
+When enabled, it requires all `pred_lane_instance_*` tensors and logs only
+diagnostic/default-off lane-instance terms such as
+`lane_instance_set_loss`, visibility/start/end/contiguity/span/empty/quality/
+survival/duplicate/novelty/topology/identity losses, `lane_instance_set_noop_loss`,
+and `lane_instance_match_count`. Their presence is not official-val evidence.
+
+Accepted evidence as of this entry is limited to code, shape, synthetic,
+loss, decode, and cache contracts:
+
+```text
+tools/check_gcs_lane_instance_set_decoder.py = passed locally
+tools/check_model.py --cfg default YAML --imgsz 544 960 = passed locally
+tools/check_model.py --cfg lane-instance-set YAML --imgsz 544 960 = passed locally
+```
+
+This evidence verifies tensor shapes, fixed-y anchors, finite gradients,
+real `GCSLoss` participation when `gcs_lane_instance_set > 0`, contiguous
+start/end-derived validity, duplicate suppression, no low-score backfill,
+absence of legacy Transformer/query/point-valid parameters in the candidate,
+exact global unified-utility subset decode, cache replay key coverage, and
+default-YAML non-emission. It is not ACC,
+official-val, clean-val, cross-session, multi-seed, or TEST evidence.
+
+Rejected evidence remains rejected: old residual replacement/listwise routes,
+dense instance/ranker/assembler routes, full-lane proposal routes, local
+segment/candidate routes, and query-only survival/valid residual routes do not
+become active behavior because this YAML exists.
+
+Unverified hypotheses are training convergence, learned candidate coverage,
+set-survival calibration, clean-val transfer, train0313/train0601 or other
+cross-session behavior, multi-seed stability, promotion-gate pass/fail, and
+TEST. TEST is closed and this candidate has not reached any promotion gate.
+
+## 2026-08-11 Anchor-local Query Valid Residual Rejected
+
+The default-off query-valid-local ablation reuses the existing point-local
+token contract (`query state + point index + coordinate + sampled image
+feature`) and adds a zero-initialized `query_valid_local_delta_mlp`. With the
+env30 checkpoint loaded, `pred_points`, `pred_logits`, and
+`pred_valid_logits` remain bitwise unchanged. Frozen-base training exposes
+only `33,025` trainable parameters. The optional unmatched-query identity
+trust region and TuSimple-angle-adjusted `line_accuracy` assignment are also
+default-off and do not change env30 behavior.
+
+Four one-epoch fixed-decode official-val probes reject this representation:
+
+```text
+env30 baseline:
+  canonical  0.973330 / 0.015748 / 0.009642
+  clean      0.965456 / 0.034068 / 0.019743
+  train0601  0.978208 / 0.014878 / 0.004675
+
+local LR=1e-5:
+  canonical  0.973335 / 0.015748 / 0.009642
+  clean      0.965348 / 0.034757 / 0.020432
+  train0601  0.978067 / 0.014878 / 0.004675
+
+local LR=1e-4:
+  canonical  0.968849 / 0.012902 / 0.010101
+  clean      0.959131 / 0.029063 / 0.020432
+  train0601  0.974800 / 0.010650 / 0.004268
+
+local LR=1e-4, unmatched identity weight=4:
+  canonical  0.972207 / 0.015748 / 0.010331
+  clean      0.964482 / 0.034068 / 0.019743
+  train0601  0.977729 / 0.014390 / 0.004675
+
+official-line-accuracy match + identity weight=4:
+  canonical  0.971584 / 0.015748 / 0.010331
+  clean      0.963189 / 0.033517 / 0.019743
+  train0601  0.977080 / 0.012602 / 0.003252
+```
+
+Do not extend these runs, repeat seeds, tune LR/identity weights, or run TEST.
+The matched-query valid-protect oracle remains diagnostic evidence of a large
+GT-assisted ceiling, but a shared free-form 56-anchor residual does not turn
+that ceiling into stable prediction-only gains. The next admissible
+representation must predict a contiguous visibility interval (start/end) with
+an explicit no-change path, rather than independently perturbing all 56 valid
+logits.
+
+## 2026-08-11 Residual Stage-2h/2i/2j Listwise Sequence Rejected
+
+The default-off residual replacement selector now supports an image-level
+action space consisting of one no-op action plus every proposal-victim
+replacement. The listwise YAML additionally emits:
+
+```text
+pred_residual_noop_logit: B
+```
+
+Stage-2h uses flat cross-entropy with exact TuSimple official-score-delta
+oracle labels. The 12-epoch frozen run collapses to the majority no-op class:
+
+```text
+canonical: 363/363 no-op, 11/11 positive-action images missed
+clean:     363/363 no-op, 11/11 positive-action images missed
+train0601: 410/410 no-op, 21/21 positive-action images missed
+```
+
+Stage-2i sets the pre-registered positive-image weight to `32.0`. It removes
+the no-op collapse but over-triggers harmful actions:
+
+```text
+canonical: ACC 0.973330 -> 0.972996, 40 actions, 5 positive, 14 harmful
+clean:     ACC 0.965432 -> 0.963874, 33 actions, 3 positive, 13 harmful
+train0601: ACC 0.978198 -> 0.977588, 108 actions, 10 positive, 46 harmful
+```
+
+Stage-2j separates action presence from conditional action identity with a
+hierarchical presence BCE plus positive-image replacement CE. Its one-epoch
+canonical-64 smoke already over-triggers and regresses:
+
+```text
+baseline     ACC/FP/FN = 0.971211 / 0.028906 / 0.015625
+hierarchical ACC/FP/FN = 0.970443 / 0.032031 / 0.015625
+```
+
+Do not run the 12-epoch Stage-2j job, tune listwise positive weights or
+no-op/action margins, sweep thresholds, repeat seeds, or evaluate TEST. The
+residual replacement oracle ceiling is only `+0.000557` canonical,
+`+0.000859` clean, and `+0.000308` train0601, so even a perfect selector is
+not sufficient by itself to close the current TEST gap to `0.970000`.
+
+The next admissible route is base-query set survival, not residual set update.
+Before implementing another training head, measure a train/official-val-only
+oracle that preserves geometrically official-match GT4/GT5 queries through
+joint existence, point-valid/min-points, and top-5 competition against harmful
+unmatched queries. The default env30 model, decode, Q12/K56 contract, and TEST
+status remain unchanged.
+
+## 2026-08-11 Residual Stage-2d..2g Replacement Sequence Rejected
+
+The default-off residual replacement sequence is implemented without changing
+the active env30 query contract or official decode. Stage-2d adds
+`pred_residual_replace_logits: B x 8 x 12`; Stage-2f adds curve-sampled
+`pred_residual_visual_token: B x 8 x 64`. All new losses, heads, diagnostics,
+and decode experiments remain disabled by default.
+
+Stage-2d/2e/2f improve train-side proposal ranking but do not generalize to the
+clean GT5-short case. The prediction-only row-support score is the first signal
+to move the only recoverable clean GT5-short proposal from replacement rank 7
+to rank 1, but global row-support ordering regresses canonical and train0601
+GT5 retrieval. A fixed rank-5 hybrid gate preserves canonical base-miss top5
+`8/8`, raises clean base-miss top5 `3/4 -> 4/4`, and raises train0601
+`23/25 -> 25/25`, but this APE20 retrieval gate is not aligned with the
+TuSimple official metric.
+
+Real official-set A/B with the Stage-2f checkpoint shows:
+
+```text
+canonical baseline ACC/FP/FN = 0.973346 / 0.015748 / 0.009642
+fixed hybrid                  = 0.973346 / 0.016162 / 0.009642
+clean baseline                = 0.965470 / 0.034068 / 0.019743
+fixed hybrid                  = 0.965528 / 0.034894 / 0.019743
+train0601 baseline            = 0.978198 / 0.014878 / 0.004675
+fixed hybrid                  = 0.978187 / 0.016341 / 0.004675
+```
+
+The clean GT5 proposal previously treated as a strict APE20 rescue already has
+per-image official `Accuracy=0.995536, FP=0, FN=0` before replacement, so its
+replacement has zero official utility. Do not use strict APE20 retrieval as a
+proxy for set-update promotion.
+
+The diagnostic-only official-utility oracle evaluates every residual
+proposal-victim replacement using GT only for analysis. It proves a real
+prediction-set ceiling:
+
+```text
+canonical: ACC/FP/FN 0.973346/0.015748/0.009642
+        -> oracle    0.973904/0.012902/0.007576, 11 positive replacements
+clean:     0.965470/0.034068/0.019743
+        -> 0.966344/0.029522/0.016758, 10 positive replacements + 1 addition
+train0601: 0.978198/0.014878/0.004675
+        -> 0.978506/0.012439/0.004065, 21 positive replacements
+```
+
+Stage-2g adds default-off TuSimple official-set-utility replacement targets via
+`gcs_residual_replace_official_delta_scale` and related threshold/penalty
+fields. The 12-epoch frozen run
+`residual_proposal_replacement_stage2g_official_utility_probe12_v1` is rejected.
+Every prediction-only replacement-score threshold from `0.01` through `0.99`
+is at or below the no-replacement baseline on canonical, clean, and train0601;
+for example canonical threshold `0.25` gives
+`0.972735 / 0.015060 / 0.010331`. TEST was not run.
+
+Active env30 behavior remains unchanged. The official-utility code and tools
+are diagnostic/default-off evidence only and must not be connected to formal
+decode or TEST without a new cross-session selector gate.
+
 This file records the active contracts for branch `codex/5-25-3-k56`.
+
+## 2026-08-10 Residual Proposal Stage-2b Relational Retrieval Rejected
+
+The default-off Stage-2b implementation adds explicit residual-to-base and
+residual-to-residual relation encoding before the existing identity and quality
+heads. The added modules are `residual_relation_proposal_mlp`,
+`residual_relation_base_mlp`, `residual_relation_base_pair_mlp`,
+`residual_relation_proposal_pair_mlp`, and `residual_relation_norm`; the
+diagnostic output `pred_residual_relation_token` has shape `B x 8 x 64`.
+Official decode and the env30 Q12/K56 output contract remain unchanged.
+
+The authoritative run is:
+
+```text
+residual_proposal_relational_stage2b_probe12_v1
+```
+
+It initialized from the accepted Stage-1b `last.pt`, trained only 26 newly
+added relation/identity/quality tensors, and kept TEST, replacement, and
+residual decode closed. The checkpoint audit found all 527 Stage-1b keys
+bitwise unchanged, 26 added keys, no missing keys, and no freeze violations.
+Validation remained `TP/FP/FN=1317/54/41` for every epoch.
+
+The relational head improves canonical short base-miss quality top3 from
+`7/17` to `8/17`, but the joint gate still fails:
+
+```text
+canonical short base-miss: oracle/exist top3/quality top3 = 8/17, 6/17, 8/17
+clean GT5 short base-miss: oracle/exist top5/quality top5 = 1/6, 0/6, 0/6
+train0601 short base-miss:  oracle/exist top3/quality top3 = 25/49, 22/49, 22/49
+train0601 ordinary GT5:    exist top3/quality top3          = 67/1194, 62/1194
+```
+
+`best.pt` and `last.pt` produce identical registered retrieval results. Stage-2b
+is rejected because it still cannot rank the clean GT5 strict candidate into
+top5 and regresses ordinary train0601 GT5 quality top3. Stage-3 set replacement
+and Stage-4 experimental decode remain unauthorized. TEST remains closed.
+
+## 2026-08-10 Residual Proposal Stage-2 Identity/Quality Rejected
+
+The default-off Stage-2 implementation adds `pred_residual_identity`,
+`pred_residual_quality_logits`, and `pred_residual_base_novelty`, plus
+identity pull/push, strict-rescue quality BCE, pairwise quality ranking, and
+diagnostic diversity-aware top-k retrieval. It does not modify official decode
+or baseline outputs when the residual YAML and flags are disabled.
+
+Three 10-epoch probes were run from the accepted Stage-1b fix2 checkpoint:
+
+```text
+residual_proposal_identity_stage2_probe10_v1
+residual_proposal_identity_stage2_probe10_v1_fix2
+residual_proposal_identity_stage2_probe10_v1_fix3
+```
+
+All kept TEST, replacement, and official residual decode closed. The final
+fix3 freeze audit preserved all 527 Stage-1b state keys exactly and added only
+the eight identity/quality parameter tensors. Env30 validation remained
+`TP/FP/FN=1317/54/41` for every epoch.
+
+Stage-2 is rejected because the safe retrieval gate did not pass jointly.
+Fix3 canonical short base-miss quality top3/top5 reached `7/17` and `8/17`,
+but clean-val GT5 short base-miss stayed `0/6` even at top5, despite a strict
+oracle of `1/6`. Train0601 short base-miss quality top3/top5 was `21/49` and
+`22/49`, below the frozen existence ranking `22/49` and `23/49`. Identity
+separation was also split-dependent rather than stable.
+
+Therefore Stage-3 set replacement and Stage-4 experimental decode are not
+authorized from these checkpoints. Reopening requires a new proposal-to-base
+relational representation that places the clean GT5 strict candidate inside a
+safe top-k without regressing train0601 critical retrieval or ordinary GT5.
+
+## 2026-08-10 Env30 Residual Proposal Stage-1b Visibility Contract
+
+The completed authoritative run is
+`residual_proposal_visibility_stage1b_probe10_v1_fix2`, initialized from
+`residual_proposal_env30_probe20_v1_fix1/weights/last.pt`. It enables the
+default-off `gcs_residual_visibility_only` mode and trains exactly eight
+parameter tensors belonging to `residual_proposal_valid_mlp`,
+`residual_proposal_start_mlp`, and `residual_proposal_end_mlp`. Env30,
+residual instance masks, K56 geometry, and residual existence remain frozen;
+frozen state is excluded from EMA arithmetic updates. The final checkpoint
+audit changed exactly those eight tensors and no other state key.
+
+Stage-1b adds default-off matched-proposal losses controlled by
+`gcs_residual_interval_valid_consistency` and
+`gcs_residual_positive_span`. The consistency term aligns point-valid logits
+with the differentiable probability that `start <= k <= end` in both gradient
+directions. Positive-span preservation applies positive BCE only to matched
+GT-valid anchors. Official decode, Q12/K56 baseline outputs, identity,
+replacement, and TEST remain unchanged or disabled.
+
+The strict point-valid full-span hit20 gate passed on all registered surfaces:
+
+```text
+canonical short base-miss = 8/17, GT5 = 6/12
+clean-val short base-miss = 3/13, GT5 = 1/6
+train0601 short base-miss = 25/49, GT5 = 21/38
+```
+
+Geometry remained exactly `9/17`, `4/13`, and `27/49`, while env30 validation
+remained `TP/FP/FN=1317/54/41` for every epoch. This checkpoint passes the
+Stage-1b representation gate but is diagnostic-only and is not consumed by
+official decode. The next permitted phase is identity/quality-aware proposal
+retrieval with decode and replacement still closed.
+
+## 2026-08-10 Env30 Residual Proposal Stage-1 Diagnostic Reopen
+
+The user explicitly requested a new default-off env30-preserving stage-1
+diagnostic after reviewing the current root bottleneck. The only reopened
+mechanism is the segmentation-first residual proposal head configured by:
+
+```text
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-residual-proposal.yaml
+```
+
+It adds eight diagnostic proposals generated from proposal-specific P2 instance
+responses and differentiable fixed-y row soft-argmax fitting. The added outputs
+are `pred_residual_points`, `pred_residual_valid_logits`,
+`pred_residual_exist_logits`, `pred_residual_start_logits`,
+`pred_residual_end_logits`, `pred_residual_row_logits`, and
+`pred_residual_mask_logits`. The env30 Q12/K56 outputs and official decode stay
+unchanged. `gcs_residual_proposal=0.0` preserves baseline behavior.
+
+The frozen-base training target is limited to GT4/GT5 short lanes with 3..10
+visible anchors that the frozen env30 raw query set misses at 20px. GT is used
+only for training target construction and diagnostics, never at inference or
+decode. No residual proposal is consumed by official decode, and TEST remains
+closed.
+
+The completed probe `residual_proposal_env30_probe20_v1_fix1` proves partial
+geometry capacity but fails the strict complete-proposal gate because
+point-valid full-span prediction collapses. Do not proceed to identity,
+replacement, official decode, or TEST from this checkpoint. The next allowed
+step is a stage-1b visibility/interval-consistency probe that keeps the same
+frozen env30 geometry representation and changes only residual visible-span
+supervision.
+
+## 2026-08-03 Env30 LineIoU Diagnostic Reopen
+
+The user explicitly reopened one new env30-based diagnostic after the final
+rollback: a default-off matched fixed-y masked LineIoU loss. This exception is
+limited to `gcs_line_iou`, `gcs_line_iou_half_width_px`, and
+`gcs_line_iou_short_min_points`, the default-off
+`gcs_line_iou_valid_preserve` short GT4/GT5 point-valid preservation probe,
+the default-off `gcs_line_iou_exist_survival` short GT4/GT5 matched-existence
+survival probe, plus train-side stratified-fold and frozen GT4-short manifest
+tooling. It does not reopen any rejected post-env30 head, query-count,
+proposal, selector, refinement, or decode route.
+
+The baseline contract remains unchanged when `gcs_line_iou=0.0`. When enabled,
+LineIoU applies only to Hungarian-matched queries and GT-valid anchors, requires
+at least `gcs_line_iou_short_min_points` valid anchors, and does not change the
+matcher, existence targets, point-valid loss, Q12/K56 output contract, or
+decode. The first probe must use official-val selection, keep TEST closed, and
+must not be interpreted as an accepted gain before reproducible evidence.
+
+When `gcs_line_iou_valid_preserve > 0`, it is allowed only with nonzero
+`gcs_line_iou`. It adds positive-only point-valid BCE on Hungarian-matched
+GT4/GT5 short lanes selected by GT-visible anchor count and detached matched
+APE gates. It does not change the matcher, existence targets, normal
+point-valid loss targets, Q12/K56 output contract, decode, NMS, or official
+metrics. It is a mechanism probe to test whether LineIoU geometry gains can be
+kept without reducing short-lane visibility survival; it is not an accepted
+algorithm gain until official-val and train-side gates pass with TEST closed.
+
+When `gcs_line_iou_exist_survival > 0`, it is allowed only with nonzero
+`gcs_line_iou`. It reuses the same GT4/GT5 short-lane, GT-visible-count, and
+detached matched-APE gates as `gcs_line_iou_valid_preserve`, but applies only
+positive BCE to the Hungarian-matched query existence logit. It does not change
+the matcher, normal existence targets, point-valid targets, Q12/K56 output
+contract, decode, NMS, thresholds, or official metrics. It is a narrow
+mechanism probe for the LineIoU w0.5 seed1/seed3 count-survival instability
+and is not eligible for TEST or long training until the canonical seed rescue
+gates pass.
+
+When `gcs_line_iou_geometry_only=true`, it is allowed only with nonzero
+`gcs_line_iou` and only when both `gcs_line_iou_valid_preserve` and
+`gcs_line_iou_exist_survival` are disabled. It freezes every parameter except
+the fixed-y geometry point heads `point_mlp` and `point_refine_mlp`, keeps
+frozen modules in eval mode, excludes frozen state from EMA updates, and writes
+`line_iou_geometry_only_frozen_state_audit.json`. This probe is intended to
+test whether the confirmed LineIoU raw-geometry gain can be retained without
+directly updating existence, point-valid, decoder, backbone, auxiliary, dense,
+or query-count parameters. It does not change model outputs, labels, matcher,
+loss targets, decode, official metrics, or TEST status. Because fixed-y
+point-valid refinement is coordinate-conditioned, geometry changes may still
+indirectly alter point-valid logits; the probe is therefore not a guarantee of
+score invariance and must pass count-safe multi-seed official-val gates before
+any TEST discussion.
+
+## 2026-08-05 Env30 Visibility-Only Diagnostic Reopen
+
+The user explicitly reopened one additional default-off mechanism diagnostic:
+`gcs_visibility_only`. It is limited to query-mode fixed-y models initialized
+from the mature env30 checkpoint. When enabled, only
+`point_valid_mlp` and `point_valid_refine_mlp` parameters are trainable;
+geometry, existence, decoder, query embeddings, auxiliary heads, matcher,
+labels, Q12/K56 outputs, and decode remain unchanged. Frozen BatchNorm
+statistics remain in evaluation mode, and the optimizer excludes frozen
+parameters.
+
+This is a mechanism probe only. It must use canonical official-val selection,
+`RUN_TESTS=0`, and a fixed env30 decode. It is not promotable unless
+official-val ACC is at least the mature env30 reference, FP does not increase
+by more than `0.002`, FN decreases, GT4/GT5-short point-valid recall improves,
+and undercount does not increase. A failed probe closes this route; it does not
+authorize any rejected post-env30 proposal or decoder route.
+
+The visibility-only probe must lock every non-visibility parameter and buffer
+in both the live model and `ModelEMA.ema`. Its optimizer must contain only
+`point_valid_mlp` and `point_valid_refine_mlp` parameters, and
+`frozen_state_audit.json` must record identical live/EMA frozen-state SHA256
+values at setup, checkpoint save, and official-best update. Its script fixes
+the env30 decode to `conf=0.001`, `point_valid=0.60`, `nms=0`, `max_det=5`,
+`min_points=4`, and `valid_before_maxdet=false`; environment variables must
+not change these values.
+
+## 2026-08-07 Env30 Dense Endpoint-Peak Diagnostic Reopen
+
+The user explicitly reopened one default-off dense endpoint localization
+mechanism after the dense endpoint-mass/ranker rejection:
+`gcs_dense_endpoint_peak_weight` with
+`gcs_dense_endpoint_peak_radius_px`. This exception is limited to the existing
+dense instance/keypoint YAML and loss. It does not connect dense tensors to
+official decode, does not change Q12/K56 labels, does not change the default
+env30 query outputs, and does not reopen dense candidate/ranker/test
+promotion.
+
+When enabled, the loss adds local softmax supervision around each GT bottom and
+top endpoint in the corresponding dense endpoint channel. GT is used only for
+training targets. The loss is default-off (`0.0`) and is intended to test the
+confirmed bottleneck that canonical GT5 base-miss lanes have endpoint support
+but no near endpoint peaks. The first probe must keep `gcs_dense_freeze_base`
+enabled, keep `RUN_TESTS=0`, use canonical official-val for selection, and
+judge mechanism success by endpoint/pairing diagnostics before any official
+decode discussion.
+
+## 2026-08-03 Final Env30 Rollback
+
+The active source/config/script/tool/reference-bank payload is restored to
+commit `86c8fb31cb4b48a53086be183478a95b0807753d` (`Add GT4 GT5 weak geometry
+rescue run`), the original env30 baseline.
+
+Every pre-existing commit after `86c8fb31c` is rejected as an active
+experiment. The only later exception is the narrowly scoped default-off
+LineIoU diagnostic above. This rejection includes staticref and
+valid-neg variants, near20 geometry refine, Q20/Q24 routes, dual-head and
+query-extent work, short local-refine, lateral/gated candidates, local-segment
+v4-v13, full-lane proposals, dense-instance proposals, selector/decode
+changes, and their diagnostics.
+
+Precedence: this section overrides every lower section that describes a
+post-`86c8fb31c` mechanism as active, reopened, ready for a next experiment,
+or available for launch. Those sections remain only as historical rejection
+evidence. They do not define current CLI flags, YAMLs, model outputs, losses,
+decode behavior, launch commands, or recommended next actions.
 
 ## 2026-08-01 v10 Matched-Assignment Follow-up
 
@@ -149,13 +688,12 @@ this branch:    Q=12, K=56, fixed_y=[710/720, 160/720]
 
 Do not silently import later mainline mechanisms such as Count Head, Quality Head, Survival Head, or near-miss mining into this branch unless a future task explicitly asks for that algorithm change. The branch now includes the 2026-06-27 user-requested, default-off `count_boundary_loss` for adjacent GT3/GT4/GT5 count-score boundaries; this is not a Count Head or decode change.
 
-## 2026-07-28 Env30 Baseline Boundary
+## 2026-07-28 Env30 Baseline Boundary (Superseded Record)
 
 Active source/config is restored to env30 commit
 `86c8fb31cb4b48a53086be183478a95b0807753d` (`Add GT4 GT5 weak geometry rescue
-run`). Outside documentation and explicitly reopened default-off v2 candidate
-files, tracked code/config/script/tool/reference-bank content must match that
-env30 baseline.
+run`). Outside documentation, tracked code/config/script/tool/reference-bank
+content must match that env30 baseline.
 
 All commits after `86c8fb31c` are rejected experiment records unless a future
 task explicitly reopens one with new official-val/train-side gates. This
@@ -172,11 +710,11 @@ query-count YAML and emits `pred_count_logits: B x 4` for the fixed 2/3/4/5
 lane-count classes. The default query YAML still emits no `pred_count_logits`,
 and ordered-slot keeps its existing count/slot logic unchanged.
 
-## 2026-07-28 User-Reopened Q12/env30 Gated Candidate v2
+## 2026-07-28 Rejected Historical Q12/env30 Gated Candidate v2
 
-The user explicitly reopened the lateral candidate-generation route on
-2026-07-28 with new gates. This is a new default-off v2 implementation, not a
-promotion or relaunch of the rejected 2026-07-27 candidate probe.
+The user temporarily reopened the lateral candidate-generation route on
+2026-07-28 with new gates. The 2026-08-03 final env30 rollback cancels that
+reopening. Everything in this section is historical evidence only.
 
 The default query YAML and default decode remain unchanged. The v2 head is
 enabled only by:
@@ -1987,7 +2525,9 @@ only and is not present in the active rollback code. The branch still does not i
 `tools/diagnose_tusimple_count_confusion.py`, `tools/diagnose_gcs_gt5.py`, or
 later mainline Count/Quality/Boundary diagnostics unless a future task
 explicitly ports them. Use the canonical 363-image official-val GT for
-selection and test only once for final evaluation.
+selection. After every completed training run, evaluate TEST ACC using the
+official-val-selected checkpoint and decode. TEST results are verification or
+reporting evidence only and must not influence selection or tuning.
 
 Formal TuSimple checkpoint selection uses the `OFFICIAL_SELECTION_POLICY`
 defined in `gcs_tools/official_selection.py` (`official_best_v4`). The
@@ -2394,3 +2934,121 @@ complete lane proposal oracle. Before any dense lane assembly or decode is
 implemented, the evidence stage must show nontrivial complete-span support on
 official-val and train0601 base-miss GT5, with no change to the default env30
 path and `TEST` closed.
+
+The 2026-08-06 endpoint-mass and row-DP follow-up is also diagnostic-only.
+`dense_instance_endpoint_mass_probe20_v3_canonical` showed strong GT-coordinate
+dense evidence but failed to construct complete K56 candidates for official-val
+GT5 base-miss lanes (`candidate_oracle_full_hit20=0/15` under the trace gate;
+row-DP/beam still failed full-visible hit20 on the audited hard sample). It
+does not enable dense decode, does not alter default env30 behavior, and must
+not be promoted to official TEST or long training. A future dense route must
+first pass an endpoint/pairing/embedding/K56-fitting oracle gate on
+official-val plus train0601 with TEST closed.
+
+## 2026-08-10 Residual Proposal Stage-2/Stage-3 Contract
+
+The env30-preserving residual proposal path remains diagnostic-only and
+default-off. The frozen base decode, Q12/K56 outputs, and official metric path
+are unchanged. `TEST` has not been used.
+
+Stage-2 retrieval may use horizontal-flip consistency only inside diagnostic
+tools. The pre-registered `scale_px=20` ranking passed the candidate retrieval
+gate, but it is not part of official inference or decode.
+
+Stage-3 tools are also offline diagnostics:
+
+```text
+tools/diagnose_gcs_residual_set_replacement.py
+tools/train_gcs_residual_set_selector.py
+```
+
+The learned selector now supports prediction-only 49-dimensional set-context
+features and three utility classes (`harmful`, `neutral`, `improve`) with
+image-level pairwise ranking. This implementation is not promotable: neither
+selector v1 nor selector v2 approaches the top3 set oracle while preserving
+victim identity, FP, lane count, and zero-harm constraints across canonical,
+clean, and train0601 splits. Do not connect it to official decode.
+
+## 2026-08-10 Residual Official-Utility Selector Contract
+
+The residual selector remains an explicit, default-off experimental decode;
+the normal env30 decode and YAML behavior are unchanged. The residual head now
+also exposes read-only internal diagnostic tokens:
+
+```text
+pred_residual_base_token: B x 12 x 64
+pred_residual_base_visual_token: B x 12 x 128
+pred_residual_victim_pair_token: B x 8 x 12 x 64
+```
+
+The selected policy uses four independently trained selector checkpoints,
+averages their utility/unique probabilities, and applies the frozen rules:
+
+```text
+residual topk = 3
+flip consistency scale = 20 px
+utility threshold = 0.95
+replace victim unique probability <= 0.25
+unique override disabled
+```
+
+Selector utility is trained from per-image TuSimple official
+`Accuracy/FP/FN`, not hit20 count. GT is used only to build training labels and
+offline metrics; inference uses predictions and internal model tokens only.
+
+TuSimple TEST images in the current archive are converted `960x544` images,
+while `archive/TUSimple/test_label.json` remains in original `1280x720`
+coordinates. Official TEST export must therefore use:
+
+```text
+--official-image-shape 720 1280
+```
+
+The earlier Stage-13 result without that option is invalid protocol evidence
+and must never be cited as model accuracy.
+
+## 2026-08-11 Default-off query-survival diagnostic contract
+
+The query-survival YAML remains a default-off experimental diagnostic:
+
+```text
+ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q12-k56-query-survival.yaml
+```
+
+It emits the normal query outputs plus:
+
+```text
+pred_base_logits: B x 12
+pred_survival_delta_logits: B x 12
+```
+
+Zero initialization keeps `pred_logits == pred_base_logits`. With
+`gcs_query_survival_freeze_base=true`, only `query_survival_*` parameters are
+trainable; frozen env30 tensors are excluded from EMA and frozen modules remain
+in `eval()` mode.
+
+The following loss is also default off:
+
+```text
+gcs_query_survival_rank = 0.0
+gcs_query_survival_rank_margin = 0.5
+gcs_query_survival_rank_max_ape_px = 20.0
+gcs_query_survival_rank_min_lanes = 4
+```
+
+It trains only the weakest accurate matched query against the strongest
+unmatched query. Its v4 clean-val probe was rejected because epoch5 and
+epoch10 exactly matched the frozen clean-val decode metrics. This diagnostic
+must not be treated as active env30 behavior or as promotion evidence.
+
+The follow-up hard-sampling v5 and geometry-adapter v6 probes are also
+rejected. v5 proves that harder sampling does not change train0601 survival
+when the raw query pool lacks the target geometry. v6 adds zero-initialized
+`pred_survival_point_delta` and `pred_survival_valid_delta`, but clean-val
+regresses at both epoch5 and epoch10; its best epoch5 ACC is `0.965310` versus
+the frozen env30 `0.966132`, with worse FP, FN, and `count_acc_4`.
+
+These outputs remain default-off diagnostics only. Do not run v5/v6 on TEST,
+repeat seeds, extend training, enlarge the point delta, or treat the geometry
+adapter as an active branch mechanism. Future work must add missing-lane
+spatial evidence rather than only deform or rerank existing frozen queries.
