@@ -215,6 +215,8 @@ class GCSLaneHead(nn.Module):
         max_lanes=5,
         count_classes=None,
         query_count_head: bool = False,
+        short_proposal_queries: int = 0,
+        short_proposal_enabled: bool = False,
     ):
         """Initialize the GCS lane query decoder and training-only auxiliary heads."""
         super().__init__()
@@ -333,6 +335,29 @@ class GCSLaneHead(nn.Module):
             nn.Linear(c1, 1),
         )
         self.query_count_head = self.gcs_mode == "query" and bool(query_count_head)
+        self.short_proposal_queries = int(short_proposal_queries)
+        self.short_proposal_enabled = bool(short_proposal_enabled) and self.short_proposal_queries > 0
+        if self.short_proposal_enabled and self.gcs_mode != "query":
+            raise ValueError("short proposal queries require gcs_mode='query'.")
+        if self.short_proposal_enabled:
+            self.short_proposal_query_embed = nn.Embedding(self.short_proposal_queries, c1)
+            self.short_proposal_point_mlp = nn.Sequential(
+                nn.Linear(c1, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, num_points * self.point_dims),
+            )
+            self.short_proposal_valid_mlp = nn.Sequential(
+                nn.Linear(c1, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, num_points),
+            )
+            self.short_proposal_exist_mlp = nn.Sequential(
+                nn.Linear(c1, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, 1),
+            )
         if self.query_count_head:
             self.query_count_mlp = nn.Sequential(
                 nn.Linear(c1, c1),
@@ -643,6 +668,29 @@ class GCSLaneHead(nn.Module):
         }
         if getattr(self, "query_count_head", False):
             out["pred_count_logits"] = self.query_count_mlp(hs.mean(dim=1))
+        if self.short_proposal_enabled:
+            proposal_query = self.short_proposal_query_embed.weight.unsqueeze(0).expand(b, -1, -1)
+            proposal_hs = self.decoder(tgt=proposal_query, memory=memory)
+            proposal_delta = self.short_proposal_point_mlp(proposal_hs).view(
+                b, self.short_proposal_queries, self.num_points, point_dims
+            )
+            if point_mode == "fixed_y":
+                proposal_x_logits = proposal_delta.squeeze(-1)
+                proposal_x_logits = self._refine_fixed_y_logits(xs, proposal_hs, proposal_x_logits, fixed_y)
+                proposal_x = torch.sigmoid(proposal_x_logits)
+                proposal_y = fixed_y.to(device=proposal_x.device, dtype=proposal_x.dtype).view(1, 1, self.num_points)
+                proposal_points = torch.stack(
+                    (proposal_x, proposal_y.expand(b, self.short_proposal_queries, -1)), dim=-1
+                )
+            elif point_ref is None:
+                proposal_points = torch.sigmoid(proposal_delta)
+            else:
+                proposal_points = torch.sigmoid(proposal_delta + point_ref)
+            out["pred_short_proposal_points"] = proposal_points
+            out["pred_short_proposal_logits"] = self.short_proposal_exist_mlp(proposal_hs).squeeze(-1)
+            out["pred_short_proposal_valid_logits"] = self.short_proposal_valid_mlp(proposal_hs).view(
+                b, self.short_proposal_queries, self.num_points
+            )
         if self.gcs_mode == "ordered_slot":
             out["pred_exist_logits"] = pred_logits
             out["pred_start_logits"] = self.start_mlp(hs).view(b, self.num_queries, self.num_points)

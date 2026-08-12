@@ -11,6 +11,7 @@ import torch
 
 __all__ = (
     "decode_gcs_predictions",
+    "decode_gcs_candidate_pool",
     "draw_gcs_lanes",
     "lane_x_distance_px",
     "lane_mean_distance_px",
@@ -30,6 +31,40 @@ GCS_LANE_COLORS = (
     (255, 80, 80),
     (180, 120, 255),
 )
+
+
+def decode_gcs_candidate_pool(
+    pred_points: torch.Tensor,
+    pred_logits: torch.Tensor,
+    pred_valid_logits: torch.Tensor | None = None,
+    proposal_points: torch.Tensor | None = None,
+    proposal_logits: torch.Tensor | None = None,
+    proposal_valid_logits: torch.Tensor | None = None,
+    **kwargs,
+) -> list[dict]:
+    """Decode base queries and optional short proposals as one capped candidate pool."""
+    if proposal_points is None or proposal_logits is None:
+        return decode_gcs_predictions(pred_points, pred_logits, pred_valid_logits=pred_valid_logits, **kwargs)
+    if proposal_valid_logits is None:
+        raise ValueError("proposal_valid_logits is required when proposal_points are provided.")
+    base_count = int(pred_points.shape[0])
+    points = torch.cat((pred_points, proposal_points), dim=0)
+    logits = torch.cat((pred_logits, proposal_logits), dim=0)
+    if pred_valid_logits is None:
+        base_valid = torch.zeros(
+            (base_count, int(pred_points.shape[1])),
+            dtype=proposal_valid_logits.dtype,
+            device=proposal_valid_logits.device,
+        )
+        valid = torch.cat((base_valid, proposal_valid_logits), dim=0)
+    else:
+        valid = torch.cat((pred_valid_logits, proposal_valid_logits), dim=0)
+    lanes = decode_gcs_predictions(points, logits, pred_valid_logits=valid, **kwargs)
+    for lane in lanes:
+        query = int(lane["query"])
+        lane["candidate_source"] = "base" if query < base_count else "short_proposal"
+        lane["query"] = query if query < base_count else query - base_count
+    return lanes
 
 
 def sort_lane_bottom_to_top(points: torch.Tensor) -> torch.Tensor:

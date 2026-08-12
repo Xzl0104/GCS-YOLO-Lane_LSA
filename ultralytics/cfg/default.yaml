@@ -182,6 +182,12 @@ gcs_short_geom_gt4_weight: 1.0 # (float) default-off GT4 short geometry boost
 gcs_short_geom_gt5_weight: 2.0 # (float) target lane weight when gcs_short_geom=1.0
 gcs_short_geom_max_weight: 3.0 # (float) maximum clamped lane weight for short geometry boost
 gcs_short_geom_curve: 1.0 # (float) fraction of short geometry lane boost applied to curve_loss
+gcs_short_proposal: 0.0 # (float) default-off GT5-short proposal supervision gain
+gcs_short_proposal_visible_thr: 10 # (int) maximum visible anchors for short proposal targets
+gcs_short_proposal_point_weight: 1.0 # (float) short proposal point regression weight
+gcs_short_proposal_valid_weight: 1.0 # (float) short proposal visibility weight
+gcs_short_proposal_exist_weight: 0.5 # (float) short proposal existence weight
+gcs_short_proposal_decode: False # (bool) merge short proposals during decode; default-off
 gcs_boundary_pseudo_neg: 0.0 # (float) extra BCE negative loss gain for GT5 short far boundary pseudo lanes; 0 disables
 gcs_boundary_pseudo_visible_thr: 10 # (int) maximum predicted visible anchors for boundary pseudo negatives
 gcs_boundary_pseudo_dist_thr: 60.0 # (float) minimum mean x distance in pixels from nearest GT lane

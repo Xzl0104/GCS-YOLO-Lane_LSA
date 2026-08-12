@@ -455,6 +455,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--gcs-short-geom-gt5-weight", type=float, default=2.0)
     parser.add_argument("--gcs-short-geom-max-weight", type=float, default=3.0)
     parser.add_argument("--gcs-short-geom-curve", type=float, default=1.0)
+    parser.add_argument("--gcs-short-proposal", type=float, default=0.0)
+    parser.add_argument("--gcs-short-proposal-visible-thr", type=int, default=10)
+    parser.add_argument("--gcs-short-proposal-point-weight", type=float, default=1.0)
+    parser.add_argument("--gcs-short-proposal-valid-weight", type=float, default=1.0)
+    parser.add_argument("--gcs-short-proposal-exist-weight", type=float, default=0.5)
+    parser.add_argument("--gcs-short-proposal-decode", action="store_true")
     parser.add_argument("--gcs-boundary-pseudo-neg", type=float, default=0.0)
     parser.add_argument("--gcs-boundary-pseudo-visible-thr", type=int, default=10)
     parser.add_argument("--gcs-boundary-pseudo-dist-thr", type=float, default=60.0)
@@ -801,6 +807,12 @@ def main() -> None:
         "gcs_short_geom_gt5_weight": args.gcs_short_geom_gt5_weight,
         "gcs_short_geom_max_weight": args.gcs_short_geom_max_weight,
         "gcs_short_geom_curve": args.gcs_short_geom_curve,
+        "gcs_short_proposal": args.gcs_short_proposal,
+        "gcs_short_proposal_visible_thr": args.gcs_short_proposal_visible_thr,
+        "gcs_short_proposal_point_weight": args.gcs_short_proposal_point_weight,
+        "gcs_short_proposal_valid_weight": args.gcs_short_proposal_valid_weight,
+        "gcs_short_proposal_exist_weight": args.gcs_short_proposal_exist_weight,
+        "gcs_short_proposal_decode": args.gcs_short_proposal_decode,
         "gcs_boundary_pseudo_neg": args.gcs_boundary_pseudo_neg,
         "gcs_boundary_pseudo_visible_thr": args.gcs_boundary_pseudo_visible_thr,
         "gcs_boundary_pseudo_dist_thr": args.gcs_boundary_pseudo_dist_thr,

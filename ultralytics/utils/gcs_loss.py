@@ -50,6 +50,9 @@ class GCSLoss(nn.Module):
         "query_count_ce_loss",
         "query_count_acc",
         "query_count_pred_mean",
+        "short_proposal_loss",
+        "short_proposal_pos_count",
+        "short_proposal_gt_count",
     )
 
     def __init__(
@@ -347,6 +350,11 @@ class GCSLoss(nn.Module):
         self.short_geom_gt5_weight = float(self._arg(args, "gcs_short_geom_gt5_weight", 2.0))
         self.short_geom_max_weight = float(self._arg(args, "gcs_short_geom_max_weight", 3.0))
         self.short_geom_curve = float(self._arg(args, "gcs_short_geom_curve", 1.0))
+        self.short_proposal_gain = float(self._arg(args, "gcs_short_proposal", 0.0))
+        self.short_proposal_visible_thr = int(self._arg(args, "gcs_short_proposal_visible_thr", 10))
+        self.short_proposal_point_weight = float(self._arg(args, "gcs_short_proposal_point_weight", 1.0))
+        self.short_proposal_valid_weight = float(self._arg(args, "gcs_short_proposal_valid_weight", 1.0))
+        self.short_proposal_exist_weight = float(self._arg(args, "gcs_short_proposal_exist_weight", 0.5))
         self.boundary_pseudo_neg_gain = float(self._arg(args, "gcs_boundary_pseudo_neg", 0.0))
         self.boundary_pseudo_visible_thr = int(self._arg(args, "gcs_boundary_pseudo_visible_thr", 10))
         self.boundary_pseudo_dist_thr = float(self._arg(args, "gcs_boundary_pseudo_dist_thr", 60.0))
@@ -373,6 +381,10 @@ class GCSLoss(nn.Module):
             raise ValueError(f"gcs_short_geom_max_weight must be >= 1, got {self.short_geom_max_weight}.")
         if self.short_geom_curve < 0.0:
             raise ValueError(f"gcs_short_geom_curve must be >= 0, got {self.short_geom_curve}.")
+        if self.short_proposal_gain < 0.0:
+            raise ValueError("gcs_short_proposal must be >= 0.")
+        if self.short_proposal_visible_thr < 0:
+            raise ValueError("gcs_short_proposal_visible_thr must be >= 0.")
         if self.boundary_pseudo_neg_gain < 0.0:
             raise ValueError("gcs_boundary_pseudo_neg must be >= 0.")
         if self.boundary_pseudo_visible_thr < 0:
@@ -1497,6 +1509,77 @@ class GCSLoss(nn.Module):
         dice = self._dice_loss(logits.sigmoid(), target)
         return bce + self.aux_dice_gain * dice
 
+    def short_proposal_loss(
+        self,
+        preds: dict[str, torch.Tensor],
+        gt_points: list[torch.Tensor],
+        gt_valid: list[torch.Tensor],
+        gt_lanes: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Supervise an isolated proposal bank on short GT5 lanes only."""
+        proposal_points = preds.get("pred_short_proposal_points")
+        proposal_logits = preds.get("pred_short_proposal_logits")
+        proposal_valid = preds.get("pred_short_proposal_valid_logits")
+        if proposal_points is None or proposal_logits is None or proposal_valid is None:
+            zero = self._zero_like(gt_lanes)
+            return zero, zero, zero
+        if float(self.short_proposal_gain) <= 0.0:
+            zero = self._zero_like(proposal_points)
+            return zero, zero, zero
+        if proposal_points.ndim != 4 or proposal_points.shape[-1] != 2:
+            raise ValueError("pred_short_proposal_points must have shape B x P x K x 2.")
+        if proposal_logits.shape[:2] != proposal_points.shape[:2]:
+            raise ValueError("pred_short_proposal_logits must have shape B x P.")
+        if proposal_valid.shape != proposal_points.shape[:3]:
+            raise ValueError("pred_short_proposal_valid_logits must have shape B x P x K.")
+
+        total = self._zero_like(proposal_points)
+        positive_count = proposal_points.new_zeros(())
+        target_count = proposal_points.new_zeros(())
+        scale = self._pixel_scale_for(proposal_points)
+        for batch_index in range(proposal_points.shape[0]):
+            count = int(round(float(gt_lanes[batch_index].detach().cpu().item())))
+            if count != 5:
+                continue
+            valid = gt_valid[batch_index].to(device=proposal_points.device, dtype=proposal_points.dtype)
+            points = gt_points[batch_index].to(device=proposal_points.device, dtype=proposal_points.dtype)
+            short = valid.sum(dim=1) <= float(self.short_proposal_visible_thr)
+            target_count = target_count + short.sum().to(dtype=target_count.dtype)
+            if not bool(short.any()):
+                continue
+            target_points = points[short]
+            target_valid = valid[short]
+            proposal = proposal_points[batch_index]
+            proposal_valid_prob = proposal_valid[batch_index].sigmoid()
+            distance = ((proposal[:, None] - target_points[None]) * scale).abs().sum(dim=-1)
+            distance = (distance * target_valid[None]).sum(dim=-1) / target_valid[None].sum(dim=-1).clamp_min(1.0)
+            used = set()
+            for target_index in range(target_points.shape[0]):
+                ranked = torch.argsort(distance[:, target_index])
+                proposal_index = next((int(index) for index in ranked.tolist() if int(index) not in used), None)
+                if proposal_index is None:
+                    break
+                used.add(proposal_index)
+                chosen = proposal[proposal_index]
+                chosen_valid = proposal_valid[batch_index, proposal_index]
+                chosen_logits = proposal_logits[batch_index, proposal_index]
+                target = target_points[target_index]
+                target_mask = target_valid[target_index]
+                point_error = ((chosen - target) * scale).abs().sum(dim=-1)
+                point_loss = (point_error * target_mask).sum() / target_mask.sum().clamp_min(1.0)
+                valid_loss = F.binary_cross_entropy_with_logits(chosen_valid, target_mask)
+                exist_loss = F.binary_cross_entropy_with_logits(chosen_logits, chosen_logits.new_ones(()))
+                total = total + (
+                    float(self.short_proposal_point_weight) * point_loss
+                    + float(self.short_proposal_valid_weight) * valid_loss
+                    + float(self.short_proposal_exist_weight) * exist_loss
+                )
+                positive_count = positive_count + 1.0
+        if positive_count.item() > 0:
+            total = total / positive_count
+        return total, positive_count, target_count
+
+
     def forward(self, preds: dict[str, torch.Tensor], batch: dict) -> tuple[torch.Tensor, torch.Tensor]:
         """Compute total GCS lane loss and detached loss components."""
         pred_points, pred_logits = self._normalize_pred_shapes(preds)
@@ -1570,6 +1653,9 @@ class GCSLoss(nn.Module):
             gt_valid,
             target_count=gt_lanes,
         )
+        short_proposal_loss, short_proposal_pos_count, short_proposal_gt_count = self.short_proposal_loss(
+            preds, gt_points, gt_valid, gt_lanes
+        )
         (
             spurious_neg_loss,
             spurious_negative_count,
@@ -1616,6 +1702,8 @@ class GCSLoss(nn.Module):
             total = total + self.query_count_ce_gain * query_count_ce_loss
         if self.spurious_neg_gain != 0.0:
             total = total + self.spurious_neg_gain * self.spurious_neg_weight * spurious_neg_loss
+        if self.short_proposal_gain != 0.0:
+            total = total + self.short_proposal_gain * short_proposal_loss
         loss_items = torch.stack(
             (
                 exist_loss.detach(),
@@ -1652,6 +1740,9 @@ class GCSLoss(nn.Module):
                 query_count_ce_loss.detach(),
                 query_count_acc.detach(),
                 query_count_pred_mean.detach(),
+                short_proposal_loss.detach(),
+                short_proposal_pos_count.detach(),
+                short_proposal_gt_count.detach(),
             )
         )
         return total, loss_items

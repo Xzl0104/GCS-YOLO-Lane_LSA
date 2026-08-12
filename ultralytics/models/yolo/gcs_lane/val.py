@@ -18,47 +18,13 @@ from ultralytics.models.gcs.loss_ordered_slot import OrderedSlotGCSLoss
 from ultralytics.nn.modules import GCSLaneHead
 from ultralytics.nn.tasks import load_checkpoint
 from ultralytics.utils import ROOT
+from ultralytics.utils.gcs_loss import GCSLoss
 from ultralytics.utils.gcs_shape import assert_gcs_image_tensor, assert_gcs_shape, normalize_imgsz
-from ultralytics.utils.gcs_postprocess import decode_gcs_predictions
+from ultralytics.utils.gcs_postprocess import decode_gcs_candidate_pool, decode_gcs_predictions
 from ultralytics.utils.torch_utils import select_device
 
 
-LOSS_NAMES = (
-    "exist_loss",
-    "point_loss",
-    "point_valid_loss",
-    "smooth_loss",
-    "curve_loss",
-    "mask_loss",
-    "edge_loss",
-    "count_loss",
-    "count_under5_loss",
-    "count_boundary_loss",
-    "spurious_neg_loss",
-    "spurious_negative_count",
-    "spur_cand",
-    "spur_prot",
-    "spur_final",
-    "spur_neg",
-    "spur_cnt_gt3",
-    "spur_cnt_gt4",
-    "spur_cnt_gt5",
-    "spur_neg_gt3",
-    "spur_neg_gt4",
-    "spur_neg_gt5",
-    "count_score_mean",
-    "gt5_short_pos_count",
-    "gt5_short_pos_anchor_count",
-    "gt5_short_point_valid_loss",
-    "cnt_bound_5under",
-    "cnt_score",
-    "boundary_pseudo_neg_loss",
-    "boundary_pseudo_count",
-    "boundary_pseudo_score_mean",
-    "query_count_ce_loss",
-    "query_count_acc",
-    "query_count_pred_mean",
-)
+LOSS_NAMES = GCSLoss.loss_names
 LOSS_GAIN_ARGS = (
     "gcs_exist",
     "gcs_point",
@@ -94,6 +60,9 @@ LOSS_GAIN_ARGS = (
     "gcs_query_count_ce",
     None,
     None,
+    "gcs_short_proposal",
+    None,
+    None,
 )
 DEFAULT_LOSS_GAINS = (
     2.0,
@@ -103,6 +72,9 @@ DEFAULT_LOSS_GAINS = (
     0.1,
     0.2,
     0.2,
+    0.0,
+    0.0,
+    0.0,
     0.0,
     0.0,
     0.0,
@@ -608,15 +580,16 @@ class GCSLaneValidator:
                 state["ordered_slot_order_violations"] += int(order_diag["order_violation_count"])
                 state["ordered_slot_order_violation_images"] += int(order_diag["has_order_violation"])
             else:
-                pred_lanes = decode_gcs_predictions(
+                proposal_enabled = bool(self._arg(self.args, "gcs_short_proposal_decode", False))
+                pred_lanes = decode_gcs_candidate_pool(
                     pred_points[i],
                     pred_logits[i],
                     pred_valid_logits=pred_valid_logits[i] if pred_valid_logits is not None else None,
-                    image_shape=(h, w),
-                    score_thr=conf,
-                    point_valid_thr=point_valid_thr,
-                    max_det=max_det,
-                    nms_dist_px=nms_dist_px,
+                    proposal_points=preds.get("pred_short_proposal_points")[i] if proposal_enabled and "pred_short_proposal_points" in preds else None,
+                    proposal_logits=preds.get("pred_short_proposal_logits")[i] if proposal_enabled and "pred_short_proposal_logits" in preds else None,
+                    proposal_valid_logits=preds.get("pred_short_proposal_valid_logits")[i] if proposal_enabled and "pred_short_proposal_valid_logits" in preds else None,
+                    image_shape=(h, w), score_thr=conf, point_valid_thr=point_valid_thr,
+                    max_det=max_det, nms_dist_px=nms_dist_px, valid_before_maxdet=proposal_enabled,
                 )
             gt_lanes, gt_valid = self._valid_gt_lanes(gt_lanes_t, gt_valid_t)
             tp, fp, fn, apes_tp, apes_all, apes_fp = self._match_lanes(

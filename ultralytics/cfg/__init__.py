@@ -226,6 +226,10 @@ CFG_FLOAT_KEYS = frozenset(
         "gcs_spurious_gt_protect_margin_px",
         "gcs_gt5_short_point_valid_weight",
         "gcs_short_geom",
+        "gcs_short_proposal",
+        "gcs_short_proposal_point_weight",
+        "gcs_short_proposal_valid_weight",
+        "gcs_short_proposal_exist_weight",
         "gcs_short_geom_gt4_weight",
         "gcs_short_geom_gt5_weight",
         "gcs_short_geom_max_weight",
@@ -326,6 +330,7 @@ CFG_INT_KEYS = frozenset(
         "gcs_spurious_gt_protect_min_overlap",
         "gcs_gt5_short_visible_thr",
         "gcs_short_geom_visible_thr",
+        "gcs_short_proposal_visible_thr",
         "gcs_hard_visible_thr",
         "gcs_hard_gt3_visible_thr",
     }
@@ -375,6 +380,7 @@ CFG_BOOL_KEYS = frozenset(
         "gcs_point_x_only",
         "gcs_spurious_disable_gt5",
         "gcs_spurious_gt_protect",
+        "gcs_short_proposal_decode",
     }
 )
 

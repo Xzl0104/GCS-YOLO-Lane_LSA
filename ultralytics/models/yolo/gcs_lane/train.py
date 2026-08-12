@@ -78,6 +78,9 @@ class GCSLaneTrainer(BaseTrainer):
         "query_count_ce_loss",
         "query_count_acc",
         "query_count_pred_mean",
+        "short_proposal_loss",
+        "short_proposal_pos_count",
+        "short_proposal_gt_count",
     )
     # Keep tqdm headers within BaseTrainer's 11-character progress columns.
     progress_loss_names = (

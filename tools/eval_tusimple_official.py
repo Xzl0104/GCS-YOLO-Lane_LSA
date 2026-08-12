@@ -42,7 +42,7 @@ from ultralytics.models.gcs.decode_summary import (  # noqa: E402
 )
 from ultralytics.models.gcs.decode_ordered_slot import decode_ordered_slot_predictions  # noqa: E402
 from ultralytics.models.gcs.mode_utils import resolve_decode_mode  # noqa: E402
-from ultralytics.utils.gcs_postprocess import decode_gcs_predictions  # noqa: E402
+from ultralytics.utils.gcs_postprocess import decode_gcs_candidate_pool, decode_gcs_predictions  # noqa: E402
 from ultralytics.utils.gcs_shape import DATASET_IMAGE_SHAPES, normalize_imgsz, shape_str  # noqa: E402
 from ultralytics.utils.torch_utils import select_device  # noqa: E402
 
@@ -100,6 +100,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-points", type=int, default=6, help="Minimum visible anchors required to keep a lane.")
     parser.add_argument("--max-det", type=int, default=8, help="Maximum decoded lane queries kept before official evaluation.")
     parser.add_argument("--valid-before-maxdet", action="store_true", help="Filter point-valid/min_points failures before max_det truncation.")
+    parser.add_argument("--short-proposal-decode", action="store_true", help="Merge short proposal candidates into capped official decode.")
     parser.add_argument("--count-aware-topk", action="store_true", help="Use count_score to keep only the quality-best dynamic lane count.")
     parser.add_argument("--count-aware-min-k", type=int, default=3, help="Minimum k_hat for --count-aware-topk.")
     parser.add_argument("--count-aware-max-k", type=int, default=5, help="Maximum k_hat for --count-aware-topk.")
@@ -313,6 +314,7 @@ def generate_predictions(
     count_mode: str = "score_sum",
     oracle_count: bool = False,
     valid_before_maxdet: bool = False,
+    short_proposal_decode: bool = False,
     decode_mode: str = "auto",
     decode_yaml_cfg: dict | None = None,
     gcs_min_lanes: int = 2,
@@ -429,10 +431,14 @@ def generate_predictions(
         else:
             pred_valid = preds.get("pred_valid_logits")
             pred_count_logits = preds.get("pred_count_logits")
-            lanes = decode_gcs_predictions(
+            proposal_enabled = bool(short_proposal_decode)
+            lanes = decode_gcs_candidate_pool(
                 preds["pred_points"][0],
                 preds["pred_logits"][0],
                 pred_valid_logits=pred_valid[0] if pred_valid is not None else None,
+                proposal_points=preds.get("pred_short_proposal_points")[0] if proposal_enabled and "pred_short_proposal_points" in preds else None,
+                proposal_logits=preds.get("pred_short_proposal_logits")[0] if proposal_enabled and "pred_short_proposal_logits" in preds else None,
+                proposal_valid_logits=preds.get("pred_short_proposal_valid_logits")[0] if proposal_enabled and "pred_short_proposal_valid_logits" in preds else None,
                 pred_count_logits=pred_count_logits[0] if pred_count_logits is not None else None,
                 oracle_count=_gt_lane_count(record) if oracle_count else None,
                 image_shape=original_shape,
@@ -441,7 +447,7 @@ def generate_predictions(
                 min_points=min_points,
                 max_det=max_det,
                 nms_dist_px=nms_dist_px,
-                valid_before_maxdet=valid_before_maxdet,
+                valid_before_maxdet=True if proposal_enabled else valid_before_maxdet,
                 count_aware_topk=count_aware_topk,
                 count_aware_min_k=count_aware_min_k,
                 count_aware_max_k=count_aware_max_k,
@@ -530,6 +536,7 @@ def evaluate_official(args: argparse.Namespace) -> dict:
             max_det=query_max_det,
             min_points=query_min_points,
             valid_before_maxdet=query_valid_before_maxdet,
+            short_proposal_decode=bool(getattr(args, "short_proposal_decode", False)),
             count_aware_topk=query_count_aware_topk,
             count_aware_min_k=query_count_aware_min_k,
             count_aware_max_k=query_count_aware_max_k,
