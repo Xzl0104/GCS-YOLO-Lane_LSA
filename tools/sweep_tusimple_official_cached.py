@@ -81,6 +81,9 @@ PREDICTION_KEYS = (
     "pred_points",
     "pred_logits",
     "pred_valid_logits",
+    "pred_short_proposal_points",
+    "pred_short_proposal_logits",
+    "pred_short_proposal_valid_logits",
     "pred_count_logits",
     "pred_start_logits",
     "pred_end_logits",
@@ -569,8 +572,18 @@ class CachedQueryPrediction:
         if "pred_points" not in preds or "pred_logits" not in preds:
             raise KeyError(f"Query prediction cache for {self.raw_file} lacks pred_points/pred_logits.")
 
-        points = preds["pred_points"].float().cpu().numpy().astype(np.float32)
-        logits = preds["pred_logits"].float().cpu().numpy().astype(np.float32)
+        points_tensor = preds["pred_points"].float()
+        logits_tensor = preds["pred_logits"].float()
+        proposal_points = preds.get("pred_short_proposal_points")
+        proposal_logits = preds.get("pred_short_proposal_logits")
+        proposal_valid = preds.get("pred_short_proposal_valid_logits")
+        if proposal_points is not None or proposal_logits is not None or proposal_valid is not None:
+            if not all(isinstance(value, torch.Tensor) for value in (proposal_points, proposal_logits, proposal_valid)):
+                raise ValueError(f"Short proposal cache is incomplete for {self.raw_file}.")
+            points_tensor = torch.cat((points_tensor, proposal_points.float()), dim=0)
+            logits_tensor = torch.cat((logits_tensor, proposal_logits.float()), dim=0)
+        points = points_tensor.cpu().numpy().astype(np.float32)
+        logits = logits_tensor.cpu().numpy().astype(np.float32)
         if logits.ndim == 2 and logits.shape[-1] == 1:
             logits = np.squeeze(logits, axis=-1)
         if points.ndim != 3 or points.shape[-1] != 2:
@@ -586,6 +599,8 @@ class CachedQueryPrediction:
         self.k = int(self.points.shape[1])
 
         pred_valid = preds.get("pred_valid_logits")
+        if proposal_points is not None:
+            pred_valid = torch.cat((pred_valid.float(), proposal_valid.float()), dim=0)
         self.valid_scores: np.ndarray | None = None
         if isinstance(pred_valid, torch.Tensor):
             valid_logits = pred_valid.float().cpu().numpy().astype(np.float32)
