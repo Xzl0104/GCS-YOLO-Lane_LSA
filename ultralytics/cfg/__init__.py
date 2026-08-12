@@ -351,6 +351,7 @@ CFG_FLOAT_KEYS = frozenset(
         "gcs_lane_instance_topology_weight",
         "gcs_lane_instance_identity_weight",
         "gcs_lane_instance_set_noop_weight",
+        "gcs_lane_instance_count_weight",
         "gcs_lane_instance_min_span",
         "gcs_lane_instance_duplicate_px",
         "gcs_lane_instance_quality_tau_px",

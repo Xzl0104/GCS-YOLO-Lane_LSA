@@ -56,6 +56,7 @@ if is_true "${RUN_TRAIN}"; then
     epochs="${EPOCHS}" batch="${BATCH}" workers="${WORKERS}" device="${DEVICE}" seed="${SEED}" \
     amp=False scale=0.0 erasing=0.0 mosaic=0.0 project="${PROJECT}" name="${RUN_NAME}" val=True exist_ok=False \
     gcs_lane_instance_set=1.0 gcs_lane_instance_set_noop_weight=0.5 gcs_lane_instance_set_margin=0.5 \
+    gcs_lane_instance_count_weight="${COUNT_WEIGHT:-1.0}" \
     gcs_official_best=True gcs_official_interval="${OFFICIAL_INTERVAL:-5}" gcs_official_warmup="${OFFICIAL_WARMUP:-5}" \
     gcs_official_archive_root="${ARCHIVE_ROOT}" gcs_official_gt_json="${GT_JSON}" \
     gcs_official_confs='[0.03,0.05,0.10,0.15,0.25]' \

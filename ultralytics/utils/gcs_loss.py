@@ -118,6 +118,7 @@ class GCSLoss(nn.Module):
         "lane_instance_topology_loss",
         "lane_instance_identity_relation_loss",
         "lane_instance_set_noop_loss",
+        "lane_instance_count_calibration_loss",
         "lane_instance_match_count",
     )
     lane_instance_progress_loss_names = (
@@ -306,6 +307,7 @@ class GCSLoss(nn.Module):
         self.lane_instance_topology_weight = float(self._arg(args, "gcs_lane_instance_topology_weight", 0.5))
         self.lane_instance_identity_weight = float(self._arg(args, "gcs_lane_instance_identity_weight", 0.5))
         self.lane_instance_set_noop_weight = float(self._arg(args, "gcs_lane_instance_set_noop_weight", 0.5))
+        self.lane_instance_count_weight = float(self._arg(args, "gcs_lane_instance_count_weight", 0.0))
         self.lane_instance_min_span = float(self._arg(args, "gcs_lane_instance_min_span", 2.0))
         self.lane_instance_duplicate_px = float(self._arg(args, "gcs_lane_instance_duplicate_px", 20.0))
         self.lane_instance_quality_tau_px = float(self._arg(args, "gcs_lane_instance_quality_tau_px", 20.0))
@@ -772,6 +774,7 @@ class GCSLoss(nn.Module):
             self.lane_instance_topology_weight,
             self.lane_instance_identity_weight,
             self.lane_instance_set_noop_weight,
+            self.lane_instance_count_weight,
         )
         if any(weight < 0.0 for weight in lane_instance_weights):
             raise ValueError("gcs_lane_instance_*_weight values must be >= 0.")
@@ -3767,6 +3770,7 @@ class GCSLoss(nn.Module):
         target_quality = torch.zeros_like(quality_logits)
         target_novelty = torch.zeros_like(novelty_logits)
         empty_target = torch.zeros_like(empty_logit)
+        count_calibration_values: list[torch.Tensor] = []
         anchor_index = torch.arange(points_per_lane, device=points.device, dtype=points.dtype)
         pixel_scale = self._pixel_scale_for(points)
         match_count = 0
@@ -3775,6 +3779,12 @@ class GCSLoss(nn.Module):
             gt_points_b = gt_points[batch_index].to(device=points.device, dtype=points.dtype)
             gt_valid_b = gt_valid[batch_index].to(device=points.device, dtype=points.dtype)
             lane_count = int(gt_points_b.shape[0])
+            count_calibration_values.append(
+                F.smooth_l1_loss(
+                    survival_logits[batch_index].sigmoid().sum(),
+                    survival_logits.new_tensor(float(lane_count)),
+                )
+            )
             empty_target[batch_index] = float(lane_count == 0)
             if lane_count == 0:
                 buckets["set_noop"].append(F.softplus(survival_logits[batch_index]).mean())
@@ -3888,6 +3898,7 @@ class GCSLoss(nn.Module):
         topology_loss = mean_bucket("topology")
         identity_loss = mean_bucket("identity")
         set_noop_loss = mean_bucket("set_noop")
+        count_calibration_loss = torch.stack(count_calibration_values).mean() if count_calibration_values else zero
         total = (
             self.lane_instance_visibility_weight * visibility_loss
             + self.lane_instance_endpoint_weight * (start_loss + end_loss)
@@ -3902,6 +3913,7 @@ class GCSLoss(nn.Module):
             + self.lane_instance_topology_weight * topology_loss
             + self.lane_instance_identity_weight * identity_loss
             + self.lane_instance_set_noop_weight * set_noop_loss
+            + self.lane_instance_count_weight * count_calibration_loss
         )
         return (
             total,
@@ -3919,6 +3931,7 @@ class GCSLoss(nn.Module):
             topology_loss,
             identity_loss,
             set_noop_loss,
+            count_calibration_loss,
             points.new_tensor(float(match_count)),
         )
 

@@ -242,6 +242,7 @@ gcs_lane_instance_novelty_weight: 0.5 # (float) matched unique-instance novelty 
 gcs_lane_instance_topology_weight: 0.5 # (float) left/right matched-pair topology weight
 gcs_lane_instance_identity_weight: 0.5 # (float) identity pair-relation weight
 gcs_lane_instance_set_noop_weight: 0.5 # (float) set survival/no-op margin weight
+gcs_lane_instance_count_weight: 0.0 # (float) default-off differentiable survivor-count calibration weight
 gcs_lane_instance_min_span: 2.0 # (float) minimum positive bottom-to-top interval span
 gcs_lane_instance_duplicate_px: 20.0 # (float) GT-relative duplicate-label distance in input pixels
 gcs_lane_instance_quality_tau_px: 20.0 # (float) geometry-quality exponential target scale
