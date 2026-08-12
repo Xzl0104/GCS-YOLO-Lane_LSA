@@ -40,6 +40,8 @@ def decode_gcs_candidate_pool(
     proposal_points: torch.Tensor | None = None,
     proposal_logits: torch.Tensor | None = None,
     proposal_valid_logits: torch.Tensor | None = None,
+    proposal_score_thr: float | None = None,
+    proposal_point_valid_thr: float | None = None,
     **kwargs,
 ) -> list[dict]:
     """Decode base queries and optional short proposals as one capped candidate pool."""
@@ -48,6 +50,25 @@ def decode_gcs_candidate_pool(
     if proposal_valid_logits is None:
         raise ValueError("proposal_valid_logits is required when proposal_points are provided.")
     base_count = int(pred_points.shape[0])
+    base_score_thr = float(kwargs.get("score_thr", 0.5))
+    base_point_valid_thr = float(kwargs.get("point_valid_thr", 0.5))
+    proposal_score_thr = base_score_thr if proposal_score_thr is None else float(proposal_score_thr)
+    proposal_point_valid_thr = (
+        base_point_valid_thr if proposal_point_valid_thr is None else float(proposal_point_valid_thr)
+    )
+    if not 0.0 <= proposal_score_thr <= 1.0:
+        raise ValueError(f"proposal_score_thr must be in [0, 1], got {proposal_score_thr}.")
+    if not 0.0 <= proposal_point_valid_thr <= 1.0:
+        raise ValueError(f"proposal_point_valid_thr must be in [0, 1], got {proposal_point_valid_thr}.")
+    proposal_keep = proposal_logits.detach().float().sigmoid() >= proposal_score_thr
+    proposal_points = proposal_points[proposal_keep]
+    proposal_logits = proposal_logits[proposal_keep]
+    proposal_valid_logits = proposal_valid_logits[proposal_keep]
+    if proposal_valid_logits.numel() > 0 and proposal_point_valid_thr != base_point_valid_thr:
+        eps = torch.finfo(proposal_valid_logits.dtype).eps
+        base_prob = proposal_valid_logits.new_tensor(base_point_valid_thr).clamp(eps, 1.0 - eps)
+        proposal_prob = proposal_valid_logits.new_tensor(proposal_point_valid_thr).clamp(eps, 1.0 - eps)
+        proposal_valid_logits = proposal_valid_logits + torch.logit(base_prob) - torch.logit(proposal_prob)
     points = torch.cat((pred_points, proposal_points), dim=0)
     logits = torch.cat((pred_logits, proposal_logits), dim=0)
     if pred_valid_logits is None:

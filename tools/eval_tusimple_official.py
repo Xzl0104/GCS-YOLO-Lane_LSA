@@ -101,6 +101,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-det", type=int, default=8, help="Maximum decoded lane queries kept before official evaluation.")
     parser.add_argument("--valid-before-maxdet", action="store_true", help="Filter point-valid/min_points failures before max_det truncation.")
     parser.add_argument("--short-proposal-decode", action="store_true", help="Merge short proposal candidates into capped official decode.")
+    parser.add_argument("--proposal-score-thr", type=float, default=None, help="Existence threshold for short proposals; defaults to --conf.")
+    parser.add_argument("--proposal-point-valid-thr", type=float, default=None, help="Visibility threshold for short proposals; defaults to --point-valid-thr.")
     parser.add_argument("--count-aware-topk", action="store_true", help="Use count_score to keep only the quality-best dynamic lane count.")
     parser.add_argument("--count-aware-min-k", type=int, default=3, help="Minimum k_hat for --count-aware-topk.")
     parser.add_argument("--count-aware-max-k", type=int, default=5, help="Maximum k_hat for --count-aware-topk.")
@@ -315,6 +317,8 @@ def generate_predictions(
     oracle_count: bool = False,
     valid_before_maxdet: bool = False,
     short_proposal_decode: bool = False,
+    proposal_score_thr: float | None = None,
+    proposal_point_valid_thr: float | None = None,
     decode_mode: str = "auto",
     decode_yaml_cfg: dict | None = None,
     gcs_min_lanes: int = 2,
@@ -444,6 +448,8 @@ def generate_predictions(
                 image_shape=original_shape,
                 score_thr=conf,
                 point_valid_thr=point_valid_thr,
+                proposal_score_thr=getattr(args, "proposal_score_thr", None),
+                proposal_point_valid_thr=getattr(args, "proposal_point_valid_thr", None),
                 min_points=min_points,
                 max_det=max_det,
                 nms_dist_px=nms_dist_px,
@@ -537,6 +543,8 @@ def evaluate_official(args: argparse.Namespace) -> dict:
             min_points=query_min_points,
             valid_before_maxdet=query_valid_before_maxdet,
             short_proposal_decode=bool(getattr(args, "short_proposal_decode", False)),
+            proposal_score_thr=getattr(args, "proposal_score_thr", None),
+            proposal_point_valid_thr=getattr(args, "proposal_point_valid_thr", None),
             count_aware_topk=query_count_aware_topk,
             count_aware_min_k=query_count_aware_min_k,
             count_aware_max_k=query_count_aware_max_k,

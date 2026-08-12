@@ -119,6 +119,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-points", type=int, default=2, help="Minimum visible anchors required to keep a lane.")
     parser.add_argument("--valid-before-maxdet", action="store_true", help="Filter point-valid/min_points failures before max_det truncation.")
     parser.add_argument("--short-proposal-decode", action="store_true", help="Merge short proposal candidates into capped decode.")
+    parser.add_argument("--proposal-score-thr", type=float, default=None, help="Existence threshold for short proposals; defaults to --conf.")
+    parser.add_argument("--proposal-point-valid-thr", type=float, default=None, help="Visibility threshold for short proposals; defaults to --point-valid-thr.")
     parser.add_argument("--count-aware-topk", action="store_true", help="Use count_score to keep only the quality-best dynamic lane count.")
     parser.add_argument("--count-aware-min-k", type=int, default=3, help="Minimum k_hat for --count-aware-topk.")
     parser.add_argument("--count-aware-max-k", type=int, default=5, help="Maximum k_hat for --count-aware-topk.")
@@ -310,6 +312,8 @@ def run_inference(
     min_points: int = 2,
     valid_before_maxdet: bool = False,
     short_proposal_decode: bool = False,
+    proposal_score_thr: float | None = None,
+    proposal_point_valid_thr: float | None = None,
     count_aware_topk: bool = False,
     count_aware_min_k: int = 3,
     count_aware_max_k: int = 5,
@@ -405,6 +409,8 @@ def run_inference(
                 image_shape=img.shape[:2],
                 score_thr=conf,
                 point_valid_thr=point_valid_thr,
+                proposal_score_thr=proposal_score_thr,
+                proposal_point_valid_thr=proposal_point_valid_thr,
                 min_points=min_points,
                 max_det=max_det,
                 nms_dist_px=nms_dist_px,
@@ -513,6 +519,8 @@ def main() -> None:
         min_points=args.min_points,
         valid_before_maxdet=args.valid_before_maxdet,
         short_proposal_decode=args.short_proposal_decode,
+        proposal_score_thr=args.proposal_score_thr,
+        proposal_point_valid_thr=args.proposal_point_valid_thr,
         count_aware_topk=args.count_aware_topk,
         count_aware_min_k=args.count_aware_min_k,
         count_aware_max_k=args.count_aware_max_k,
