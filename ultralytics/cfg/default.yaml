@@ -186,7 +186,7 @@ gcs_short_proposal: 0.0 # (float) default-off GT5-short proposal supervision gai
 gcs_short_proposal_visible_thr: 10 # (int) maximum visible anchors for short proposal targets
 gcs_short_proposal_point_weight: 1.0 # (float) short proposal point regression weight
 gcs_short_proposal_valid_weight: 1.0 # (float) short proposal visibility weight
-gcs_short_proposal_valid_pos_weight: 1.0 # (float) positive visibility weight for short proposals
+gcs_short_proposal_valid_pos_weight: 32.0 # (float) positive visibility weight for short proposals
 gcs_short_proposal_exist_weight: 0.5 # (float) short proposal existence weight
 gcs_short_proposal_decode: False # (bool) merge short proposals during decode; default-off
 gcs_short_proposal_only: False # (bool) freeze the env30 base and train only short proposal parameters
