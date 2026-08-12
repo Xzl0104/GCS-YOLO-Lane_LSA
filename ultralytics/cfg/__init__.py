@@ -229,6 +229,7 @@ CFG_FLOAT_KEYS = frozenset(
         "gcs_short_proposal",
         "gcs_short_proposal_point_weight",
         "gcs_short_proposal_valid_weight",
+        "gcs_short_proposal_valid_pos_weight",
         "gcs_short_proposal_exist_weight",
         "gcs_short_geom_gt4_weight",
         "gcs_short_geom_gt5_weight",

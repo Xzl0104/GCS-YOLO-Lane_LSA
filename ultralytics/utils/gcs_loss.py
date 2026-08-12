@@ -354,6 +354,9 @@ class GCSLoss(nn.Module):
         self.short_proposal_visible_thr = int(self._arg(args, "gcs_short_proposal_visible_thr", 10))
         self.short_proposal_point_weight = float(self._arg(args, "gcs_short_proposal_point_weight", 1.0))
         self.short_proposal_valid_weight = float(self._arg(args, "gcs_short_proposal_valid_weight", 1.0))
+        self.short_proposal_valid_pos_weight = float(
+            self._arg(args, "gcs_short_proposal_valid_pos_weight", 1.0)
+        )
         self.short_proposal_exist_weight = float(self._arg(args, "gcs_short_proposal_exist_weight", 0.5))
         self.boundary_pseudo_neg_gain = float(self._arg(args, "gcs_boundary_pseudo_neg", 0.0))
         self.boundary_pseudo_visible_thr = int(self._arg(args, "gcs_boundary_pseudo_visible_thr", 10))
@@ -1574,6 +1577,11 @@ class GCSLoss(nn.Module):
                     )
                     positive_count = positive_count + 1.0
             valid_loss = F.binary_cross_entropy_with_logits(proposal_valid[batch_index], target_valid)
+            if self.short_proposal_valid_pos_weight != 1.0:
+                valid_pos_weight = proposal_valid.new_tensor(self.short_proposal_valid_pos_weight)
+                valid_loss = F.binary_cross_entropy_with_logits(
+                    proposal_valid[batch_index], target_valid, pos_weight=valid_pos_weight
+                )
             total = total + float(self.short_proposal_valid_weight) * valid_loss
             total = total + float(self.short_proposal_exist_weight) * F.binary_cross_entropy_with_logits(
                 proposal_logits[batch_index], target_exists

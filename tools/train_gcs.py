@@ -459,6 +459,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--gcs-short-proposal-visible-thr", type=int, default=10)
     parser.add_argument("--gcs-short-proposal-point-weight", type=float, default=1.0)
     parser.add_argument("--gcs-short-proposal-valid-weight", type=float, default=1.0)
+    parser.add_argument("--gcs-short-proposal-valid-pos-weight", type=float, default=1.0)
     parser.add_argument("--gcs-short-proposal-exist-weight", type=float, default=0.5)
     parser.add_argument("--gcs-short-proposal-decode", action="store_true")
     parser.add_argument("--gcs-short-proposal-only", action="store_true")
@@ -812,6 +813,7 @@ def main() -> None:
         "gcs_short_proposal_visible_thr": args.gcs_short_proposal_visible_thr,
         "gcs_short_proposal_point_weight": args.gcs_short_proposal_point_weight,
         "gcs_short_proposal_valid_weight": args.gcs_short_proposal_valid_weight,
+        "gcs_short_proposal_valid_pos_weight": args.gcs_short_proposal_valid_pos_weight,
         "gcs_short_proposal_exist_weight": args.gcs_short_proposal_exist_weight,
         "gcs_short_proposal_decode": args.gcs_short_proposal_decode,
         "gcs_short_proposal_only": args.gcs_short_proposal_only,
