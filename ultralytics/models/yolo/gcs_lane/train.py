@@ -1113,6 +1113,7 @@ class GCSLaneTrainer(BaseTrainer):
             weights=str(self.last),
             imgsz=[int(shape[0]), int(shape[1])],
             decode_mode="ordered_slot" if ordered_slot else "query",
+            short_proposal_decode=bool(getattr(self.args, "gcs_short_proposal_decode", False)),
             confs=confs,
             point_valid_thrs=point_valid_thrs,
             nms_dist_pxs=nms_dist_pxs,

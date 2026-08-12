@@ -137,6 +137,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-dets", nargs="+", type=int, default=[8], help="max_det values to sweep.")
     parser.add_argument("--min-points", nargs="+", type=int, default=[6], help="Minimum visible-anchor floors to sweep.")
     parser.add_argument("--valid-before-maxdet", action="store_true", help="Filter point-valid/min_points failures before max_det truncation.")
+    parser.add_argument("--short-proposal-decode", action="store_true", help="Include cached short-proposal candidates in query decoding.")
     parser.add_argument("--count-aware-topk", action="store_true", help="Use count_score to keep only the quality-best dynamic lane count.")
     parser.add_argument("--count-aware-min-k", type=int, default=3, help="Minimum k_hat for --count-aware-topk.")
     parser.add_argument("--count-aware-max-k", type=int, default=5, help="Maximum k_hat for --count-aware-topk.")
@@ -564,7 +565,7 @@ def _query_lane_to_tusimple(
 class CachedQueryPrediction:
     """In-memory query prediction cache with per-threshold decode precomputation."""
 
-    def __init__(self, item: dict[str, Any]):
+    def __init__(self, item: dict[str, Any], *, include_short_proposal: bool = False):
         self.raw_file = str(item["raw_file"])
         self.h_samples = [int(x) for x in item["h_samples"]]
         self.image_shape = (int(item["image_shape"][0]), int(item["image_shape"][1]))
@@ -574,9 +575,9 @@ class CachedQueryPrediction:
 
         points_tensor = preds["pred_points"].float()
         logits_tensor = preds["pred_logits"].float()
-        proposal_points = preds.get("pred_short_proposal_points")
-        proposal_logits = preds.get("pred_short_proposal_logits")
-        proposal_valid = preds.get("pred_short_proposal_valid_logits")
+        proposal_points = preds.get("pred_short_proposal_points") if include_short_proposal else None
+        proposal_logits = preds.get("pred_short_proposal_logits") if include_short_proposal else None
+        proposal_valid = preds.get("pred_short_proposal_valid_logits") if include_short_proposal else None
         if proposal_points is not None or proposal_logits is not None or proposal_valid is not None:
             if not all(isinstance(value, torch.Tensor) for value in (proposal_points, proposal_logits, proposal_valid)):
                 raise ValueError(f"Short proposal cache is incomplete for {self.raw_file}.")
@@ -891,7 +892,10 @@ def cached_sweep_query(
     combos: list[dict[str, Any]],
     args: argparse.Namespace,
 ) -> tuple[list[dict[str, Any]], dict[str, float]]:
-    cached_predictions = [CachedQueryPrediction(item) for item in entries]
+    cached_predictions = [
+        CachedQueryPrediction(item, include_short_proposal=bool(getattr(args, "short_proposal_decode", False)))
+        for item in entries
+    ]
     gt_by_raw = {str(record["raw_file"]): record for record in gt_records}
     states = {_combo_key(combo): _new_state() for combo in combos}
 

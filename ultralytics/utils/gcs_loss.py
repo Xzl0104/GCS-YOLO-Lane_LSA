@@ -1536,47 +1536,49 @@ class GCSLoss(nn.Module):
         total = self._zero_like(proposal_points)
         positive_count = proposal_points.new_zeros(())
         target_count = proposal_points.new_zeros(())
+        image_count = proposal_points.new_zeros(())
         scale = self._pixel_scale_for(proposal_points)
         for batch_index in range(proposal_points.shape[0]):
+            image_count = image_count + 1.0
             count = int(round(float(gt_lanes[batch_index].detach().cpu().item())))
-            if count != 5:
-                continue
             valid = gt_valid[batch_index].to(device=proposal_points.device, dtype=proposal_points.dtype)
             points = gt_points[batch_index].to(device=proposal_points.device, dtype=proposal_points.dtype)
             short = valid.sum(dim=1) <= float(self.short_proposal_visible_thr)
-            target_count = target_count + short.sum().to(dtype=target_count.dtype)
-            if not bool(short.any()):
-                continue
-            target_points = points[short]
-            target_valid = valid[short]
+            if count == 5:
+                target_count = target_count + short.sum().to(dtype=target_count.dtype)
             proposal = proposal_points[batch_index]
-            proposal_valid_prob = proposal_valid[batch_index].sigmoid()
-            distance = ((proposal[:, None] - target_points[None]) * scale).abs().sum(dim=-1)
-            distance = (distance * target_valid[None]).sum(dim=-1) / target_valid[None].sum(dim=-1).clamp_min(1.0)
-            used = set()
-            for target_index in range(target_points.shape[0]):
-                ranked = torch.argsort(distance[:, target_index])
-                proposal_index = next((int(index) for index in ranked.tolist() if int(index) not in used), None)
-                if proposal_index is None:
-                    break
-                used.add(proposal_index)
-                chosen = proposal[proposal_index]
-                chosen_valid = proposal_valid[batch_index, proposal_index]
-                chosen_logits = proposal_logits[batch_index, proposal_index]
-                target = target_points[target_index]
-                target_mask = target_valid[target_index]
-                point_error = ((chosen - target) * scale).abs().sum(dim=-1)
-                point_loss = (point_error * target_mask).sum() / target_mask.sum().clamp_min(1.0)
-                valid_loss = F.binary_cross_entropy_with_logits(chosen_valid, target_mask)
-                exist_loss = F.binary_cross_entropy_with_logits(chosen_logits, chosen_logits.new_ones(()))
-                total = total + (
-                    float(self.short_proposal_point_weight) * point_loss
-                    + float(self.short_proposal_valid_weight) * valid_loss
-                    + float(self.short_proposal_exist_weight) * exist_loss
-                )
-                positive_count = positive_count + 1.0
-        if positive_count.item() > 0:
-            total = total / positive_count
+            target_exists = proposal_logits[batch_index].new_zeros(proposal_logits.shape[1])
+            if count == 5 and bool(short.any()):
+                target_points = points[short]
+                target_valid = valid[short]
+                distance = ((proposal[:, None] - target_points[None]) * scale).abs().sum(dim=-1)
+                distance = (distance * target_valid[None]).sum(dim=-1) / target_valid[None].sum(dim=-1).clamp_min(1.0)
+                used = set()
+                for target_index in range(target_points.shape[0]):
+                    ranked = torch.argsort(distance[:, target_index])
+                    proposal_index = next((int(index) for index in ranked.tolist() if int(index) not in used), None)
+                    if proposal_index is None:
+                        break
+                    used.add(proposal_index)
+                    target_exists[proposal_index] = 1.0
+                    chosen = proposal[proposal_index]
+                    chosen_valid = proposal_valid[batch_index, proposal_index]
+                    target = target_points[target_index]
+                    target_mask = target_valid[target_index]
+                    point_error = ((chosen - target) * scale).abs().sum(dim=-1)
+                    point_loss = (point_error * target_mask).sum() / target_mask.sum().clamp_min(1.0)
+                    valid_loss = F.binary_cross_entropy_with_logits(chosen_valid, target_mask)
+                    total = total + (
+                        float(self.short_proposal_point_weight) * point_loss
+                        + float(self.short_proposal_valid_weight) * valid_loss
+                    )
+                    positive_count = positive_count + 1.0
+            total = total + float(self.short_proposal_exist_weight) * F.binary_cross_entropy_with_logits(
+                proposal_logits[batch_index], target_exists
+            )
+        normalizer = positive_count + image_count
+        if normalizer.item() > 0:
+            total = total / normalizer
         return total, positive_count, target_count
 
 
