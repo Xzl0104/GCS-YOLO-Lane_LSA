@@ -158,6 +158,26 @@ def collect_images(source: str | Path, max_images: int = 0) -> list[Path]:
     return files
 
 
+def merge_query_score_valid_predictions(
+    predictions: dict[str, torch.Tensor],
+    score_valid_predictions: dict[str, torch.Tensor],
+    context: str = "query score/valid merge",
+) -> dict[str, torch.Tensor]:
+    """Merge optional score/valid-head outputs without dropping proposal predictions."""
+    if not isinstance(predictions, dict) or not isinstance(score_valid_predictions, dict):
+        raise TypeError(f"{context} requires two prediction dictionaries.")
+    merged = dict(predictions)
+    for key in ("pred_logits", "pred_valid_logits"):
+        value = score_valid_predictions.get(key)
+        if isinstance(value, torch.Tensor):
+            if key in merged and merged[key].shape != value.shape:
+                raise ValueError(
+                    f"{context}: {key} shape mismatch {tuple(merged[key].shape)} vs {tuple(value.shape)}."
+                )
+            merged[key] = value
+    return merged
+
+
 def _model_arg_value(model: torch.nn.Module, name: str):
     args = getattr(model, "args", None)
     if isinstance(args, dict):
