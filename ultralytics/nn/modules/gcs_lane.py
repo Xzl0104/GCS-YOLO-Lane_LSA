@@ -341,6 +341,18 @@ class GCSLaneHead(nn.Module):
             raise ValueError("short proposal queries require gcs_mode='query'.")
         if self.short_proposal_enabled:
             self.short_proposal_query_embed = nn.Embedding(self.short_proposal_queries, c1)
+            proposal_decoder_layer = nn.TransformerDecoderLayer(
+                d_model=c1,
+                nhead=nhead,
+                dim_feedforward=c1 * 4,
+                dropout=0.0,
+                batch_first=True,
+                activation="gelu",
+            )
+            self.short_proposal_decoder = nn.TransformerDecoder(
+                proposal_decoder_layer,
+                num_layers=num_decoder_layers,
+            )
             self.short_proposal_point_mlp = nn.Sequential(
                 nn.Linear(c1, c1),
                 nn.ReLU(inplace=True),
@@ -670,7 +682,7 @@ class GCSLaneHead(nn.Module):
             out["pred_count_logits"] = self.query_count_mlp(hs.mean(dim=1))
         if self.short_proposal_enabled:
             proposal_query = self.short_proposal_query_embed.weight.unsqueeze(0).expand(b, -1, -1)
-            proposal_hs = self.decoder(tgt=proposal_query, memory=memory)
+            proposal_hs = self.short_proposal_decoder(tgt=proposal_query, memory=memory.detach())
             proposal_delta = self.short_proposal_point_mlp(proposal_hs).view(
                 b, self.short_proposal_queries, self.num_points, point_dims
             )
