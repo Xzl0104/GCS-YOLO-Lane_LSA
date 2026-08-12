@@ -627,8 +627,9 @@ class BaseTrainer:
         """Set model in training mode."""
         self.model.train()
         # Freeze BN stat
+        proposal_only = bool(getattr(self.args, "gcs_short_proposal_only", False))
         for n, m in self.model.named_modules():
-            if any(filter(lambda f: f in n, self.freeze_layer_names)) and isinstance(m, nn.BatchNorm2d):
+            if (proposal_only or any(filter(lambda f: f in n, self.freeze_layer_names))) and isinstance(m, nn.BatchNorm2d):
                 m.eval()
 
     def save_model(self):
