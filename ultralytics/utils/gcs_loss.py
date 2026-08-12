@@ -1548,11 +1548,12 @@ class GCSLoss(nn.Module):
                 target_count = target_count + short.sum().to(dtype=target_count.dtype)
             proposal = proposal_points[batch_index]
             target_exists = proposal_logits[batch_index].new_zeros(proposal_logits.shape[1])
+            target_valid = proposal_valid[batch_index].new_zeros(proposal_valid.shape[1:])
             if count == 5 and bool(short.any()):
                 target_points = points[short]
-                target_valid = valid[short]
+                target_valid_lanes = valid[short]
                 distance = ((proposal[:, None] - target_points[None]) * scale).abs().sum(dim=-1)
-                distance = (distance * target_valid[None]).sum(dim=-1) / target_valid[None].sum(dim=-1).clamp_min(1.0)
+                distance = (distance * target_valid_lanes[None]).sum(dim=-1) / target_valid_lanes[None].sum(dim=-1).clamp_min(1.0)
                 used = set()
                 for target_index in range(target_points.shape[0]):
                     ranked = torch.argsort(distance[:, target_index])
@@ -1564,15 +1565,16 @@ class GCSLoss(nn.Module):
                     chosen = proposal[proposal_index]
                     chosen_valid = proposal_valid[batch_index, proposal_index]
                     target = target_points[target_index]
-                    target_mask = target_valid[target_index]
+                    target_mask = target_valid_lanes[target_index]
+                    target_valid[proposal_index] = target_mask
                     point_error = ((chosen - target) * scale).abs().sum(dim=-1)
                     point_loss = (point_error * target_mask).sum() / target_mask.sum().clamp_min(1.0)
-                    valid_loss = F.binary_cross_entropy_with_logits(chosen_valid, target_mask)
                     total = total + (
                         float(self.short_proposal_point_weight) * point_loss
-                        + float(self.short_proposal_valid_weight) * valid_loss
                     )
                     positive_count = positive_count + 1.0
+            valid_loss = F.binary_cross_entropy_with_logits(proposal_valid[batch_index], target_valid)
+            total = total + float(self.short_proposal_valid_weight) * valid_loss
             total = total + float(self.short_proposal_exist_weight) * F.binary_cross_entropy_with_logits(
                 proposal_logits[batch_index], target_exists
             )
