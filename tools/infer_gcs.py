@@ -120,6 +120,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--valid-before-maxdet", action="store_true", help="Filter point-valid/min_points failures before max_det truncation.")
     parser.add_argument("--short-proposal-decode", action="store_true", help="Merge short proposal candidates into capped decode.")
     parser.add_argument("--proposal-score-thr", type=float, default=None, help="Existence threshold for short proposals; defaults to --conf.")
+    parser.add_argument("--proposal-score-calibration-thr", type=float, default=None, help="Raw proposal score mapped to --conf for ranking; defaults to proposal-score-thr.")
     parser.add_argument("--proposal-point-valid-thr", type=float, default=None, help="Visibility threshold for short proposals; defaults to --point-valid-thr.")
     parser.add_argument("--count-aware-topk", action="store_true", help="Use count_score to keep only the quality-best dynamic lane count.")
     parser.add_argument("--count-aware-min-k", type=int, default=3, help="Minimum k_hat for --count-aware-topk.")
@@ -313,6 +314,7 @@ def run_inference(
     valid_before_maxdet: bool = False,
     short_proposal_decode: bool = False,
     proposal_score_thr: float | None = None,
+    proposal_score_calibration_thr: float | None = None,
     proposal_point_valid_thr: float | None = None,
     count_aware_topk: bool = False,
     count_aware_min_k: int = 3,
@@ -410,6 +412,7 @@ def run_inference(
                 score_thr=conf,
                 point_valid_thr=point_valid_thr,
                 proposal_score_thr=proposal_score_thr,
+                proposal_score_calibration_thr=proposal_score_calibration_thr,
                 proposal_point_valid_thr=proposal_point_valid_thr,
                 min_points=min_points,
                 max_det=max_det,
@@ -520,6 +523,7 @@ def main() -> None:
         valid_before_maxdet=args.valid_before_maxdet,
         short_proposal_decode=args.short_proposal_decode,
         proposal_score_thr=args.proposal_score_thr,
+        proposal_score_calibration_thr=args.proposal_score_calibration_thr,
         proposal_point_valid_thr=args.proposal_point_valid_thr,
         count_aware_topk=args.count_aware_topk,
         count_aware_min_k=args.count_aware_min_k,
