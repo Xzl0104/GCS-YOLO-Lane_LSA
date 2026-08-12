@@ -158,6 +158,18 @@ def collect_images(source: str | Path, max_images: int = 0) -> list[Path]:
     return files
 
 
+def score_valid_weights_tag(weights: str | Path | None) -> str:
+    """Return a filesystem-safe cache tag for an optional score/valid checkpoint."""
+    if weights is None or not str(weights).strip():
+        return ""
+    path = Path(weights)
+    try:
+        stat = path.stat()
+        return f"{path.stem}_{stat.st_size:x}_{stat.st_mtime_ns:x}"
+    except FileNotFoundError:
+        return path.stem or "missing"
+
+
 def merge_query_score_valid_predictions(
     predictions: dict[str, torch.Tensor],
     score_valid_predictions: dict[str, torch.Tensor],
