@@ -680,7 +680,7 @@ class GCSLaneHead(nn.Module):
         }
         if getattr(self, "query_count_head", False):
             out["pred_count_logits"] = self.query_count_mlp(hs.mean(dim=1))
-        if self.short_proposal_enabled:
+        if getattr(self, "short_proposal_enabled", False):
             proposal_query = self.short_proposal_query_embed.weight.unsqueeze(0).expand(b, -1, -1)
             proposal_hs = self.short_proposal_decoder(tgt=proposal_query, memory=memory.detach())
             proposal_delta = self.short_proposal_point_mlp(proposal_hs).view(
