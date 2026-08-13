@@ -230,6 +230,10 @@ CFG_FLOAT_KEYS = frozenset(
         "gcs_short_geom_gt5_weight",
         "gcs_short_geom_max_weight",
         "gcs_short_geom_curve",
+        "gcs_short_survival",
+        "gcs_short_survival_gt4_weight",
+        "gcs_short_survival_gt5_weight",
+        "gcs_short_survival_valid_weight",
         "gcs_exist_pos_weight",
         "gcs_exist_focal_gamma",
         "gcs_exist_focal_alpha",
@@ -326,6 +330,7 @@ CFG_INT_KEYS = frozenset(
         "gcs_spurious_gt_protect_min_overlap",
         "gcs_gt5_short_visible_thr",
         "gcs_short_geom_visible_thr",
+        "gcs_short_survival_visible_thr",
         "gcs_hard_visible_thr",
         "gcs_hard_gt3_visible_thr",
     }

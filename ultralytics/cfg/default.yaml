@@ -182,6 +182,11 @@ gcs_short_geom_gt4_weight: 1.0 # (float) default-off GT4 short geometry boost
 gcs_short_geom_gt5_weight: 2.0 # (float) target lane weight when gcs_short_geom=1.0
 gcs_short_geom_max_weight: 3.0 # (float) maximum clamped lane weight for short geometry boost
 gcs_short_geom_curve: 1.0 # (float) fraction of short geometry lane boost applied to curve_loss
+gcs_short_survival: 0.0 # (float) matched short GT4/GT5 existence plus point-valid survival gain; 0 disables
+gcs_short_survival_visible_thr: 10 # (int) visible anchor threshold for short GT4/GT5 survival protection
+gcs_short_survival_gt4_weight: 1.0 # (float) GT4 matched short-lane survival multiplier
+gcs_short_survival_gt5_weight: 1.0 # (float) GT5 matched short-lane survival multiplier
+gcs_short_survival_valid_weight: 1.0 # (float) point-valid component multiplier inside short survival loss
 gcs_boundary_pseudo_neg: 0.0 # (float) extra BCE negative loss gain for GT5 short far boundary pseudo lanes; 0 disables
 gcs_boundary_pseudo_visible_thr: 10 # (int) maximum predicted visible anchors for boundary pseudo negatives
 gcs_boundary_pseudo_dist_thr: 60.0 # (float) minimum mean x distance in pixels from nearest GT lane

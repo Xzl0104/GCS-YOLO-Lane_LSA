@@ -42,6 +42,11 @@ class GCSLoss(nn.Module):
         "gt5_short_pos_count",
         "gt5_short_pos_anchor_count",
         "gt5_short_point_valid_loss",
+        "short_survival_loss",
+        "short_survival_exist_loss",
+        "short_survival_valid_loss",
+        "short_survival_pos_count",
+        "short_survival_anchor_count",
         "cnt_bound_5under",
         "cnt_score",
         "boundary_pseudo_neg_loss",
@@ -347,6 +352,11 @@ class GCSLoss(nn.Module):
         self.short_geom_gt5_weight = float(self._arg(args, "gcs_short_geom_gt5_weight", 2.0))
         self.short_geom_max_weight = float(self._arg(args, "gcs_short_geom_max_weight", 3.0))
         self.short_geom_curve = float(self._arg(args, "gcs_short_geom_curve", 1.0))
+        self.short_survival_gain = float(self._arg(args, "gcs_short_survival", 0.0))
+        self.short_survival_visible_thr = int(self._arg(args, "gcs_short_survival_visible_thr", 10))
+        self.short_survival_gt4_weight = float(self._arg(args, "gcs_short_survival_gt4_weight", 1.0))
+        self.short_survival_gt5_weight = float(self._arg(args, "gcs_short_survival_gt5_weight", 1.0))
+        self.short_survival_valid_weight = float(self._arg(args, "gcs_short_survival_valid_weight", 1.0))
         self.boundary_pseudo_neg_gain = float(self._arg(args, "gcs_boundary_pseudo_neg", 0.0))
         self.boundary_pseudo_visible_thr = int(self._arg(args, "gcs_boundary_pseudo_visible_thr", 10))
         self.boundary_pseudo_dist_thr = float(self._arg(args, "gcs_boundary_pseudo_dist_thr", 60.0))
@@ -373,6 +383,24 @@ class GCSLoss(nn.Module):
             raise ValueError(f"gcs_short_geom_max_weight must be >= 1, got {self.short_geom_max_weight}.")
         if self.short_geom_curve < 0.0:
             raise ValueError(f"gcs_short_geom_curve must be >= 0, got {self.short_geom_curve}.")
+        if self.short_survival_gain < 0.0:
+            raise ValueError(f"gcs_short_survival must be >= 0, got {self.short_survival_gain}.")
+        if self.short_survival_visible_thr < 0:
+            raise ValueError(
+                f"gcs_short_survival_visible_thr must be >= 0, got {self.short_survival_visible_thr}."
+            )
+        if self.short_survival_gt4_weight < 0.0:
+            raise ValueError(
+                f"gcs_short_survival_gt4_weight must be >= 0, got {self.short_survival_gt4_weight}."
+            )
+        if self.short_survival_gt5_weight < 0.0:
+            raise ValueError(
+                f"gcs_short_survival_gt5_weight must be >= 0, got {self.short_survival_gt5_weight}."
+            )
+        if self.short_survival_valid_weight < 0.0:
+            raise ValueError(
+                f"gcs_short_survival_valid_weight must be >= 0, got {self.short_survival_valid_weight}."
+            )
         if self.boundary_pseudo_neg_gain < 0.0:
             raise ValueError("gcs_boundary_pseudo_neg must be >= 0.")
         if self.boundary_pseudo_visible_thr < 0:
@@ -815,6 +843,106 @@ class GCSLoss(nn.Module):
             pred_valid_logits.new_tensor(float(gt5_short_pos_count)),
             pred_valid_logits.new_tensor(float(gt5_short_pos_anchor_count)),
             gt5_short_point_valid_loss,
+        )
+
+    def short_survival_loss(
+        self,
+        pred_logits: torch.Tensor,
+        pred_valid_logits: torch.Tensor | None,
+        pred_points: torch.Tensor,
+        gt_valid: list[torch.Tensor],
+        indices: list[tuple[torch.Tensor, torch.Tensor]],
+        gt_lanes: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Positive-only survival protection for matched short GT4/GT5 lanes."""
+        zero = self._zero_like(pred_points)
+        count_zero = pred_logits.new_zeros(())
+        if (
+            float(self.short_survival_gain) <= 0.0
+            or int(self.short_survival_visible_thr) <= 0
+            or gt_lanes is None
+        ):
+            return zero, zero, zero, count_zero, count_zero
+
+        gt_lanes = torch.as_tensor(gt_lanes, device=pred_logits.device, dtype=pred_logits.dtype).reshape(-1)
+        if gt_lanes.numel() != pred_logits.shape[0]:
+            raise ValueError(
+                f"gt_lanes must have one value per image, got {gt_lanes.numel()} vs B={pred_logits.shape[0]}."
+            )
+
+        exist_losses = []
+        exist_weights = []
+        valid_losses = []
+        valid_weights = []
+        short_pos_count = 0
+        short_anchor_count = 0
+
+        for b, (src_idx, tgt_idx) in enumerate(indices):
+            if src_idx.numel() == 0:
+                continue
+
+            gt_count = int(round(float(gt_lanes[b].detach().item())))
+            if gt_count == 4:
+                group_weight = float(self.short_survival_gt4_weight)
+            elif gt_count == 5:
+                group_weight = float(self.short_survival_gt5_weight)
+            else:
+                continue
+            if group_weight <= 0.0:
+                continue
+
+            src_idx = src_idx.to(device=pred_logits.device, dtype=torch.long)
+            tgt_idx = tgt_idx.to(device=pred_logits.device, dtype=torch.long)
+            target_valid = gt_valid[b].to(device=pred_logits.device, dtype=pred_logits.dtype)[tgt_idx]
+            visible_counts = target_valid.sum(dim=1)
+            short_mask = (visible_counts > 0.0) & (visible_counts <= float(self.short_survival_visible_thr))
+            if not bool(short_mask.any()):
+                continue
+
+            selected_src = src_idx[short_mask]
+            selected_valid = target_valid[short_mask]
+            lane_weight = pred_logits.new_full((selected_src.numel(),), group_weight)
+            exist_bce = F.binary_cross_entropy_with_logits(
+                pred_logits[b, selected_src],
+                torch.ones_like(pred_logits[b, selected_src]),
+                reduction="none",
+            )
+            exist_losses.append(exist_bce)
+            exist_weights.append(lane_weight)
+
+            short_pos_count += int(selected_src.numel())
+            visible_mask = selected_valid > 0.5
+            short_anchor_count += int(visible_mask.sum().item())
+            if pred_valid_logits is not None and bool(visible_mask.any()):
+                valid_bce = F.binary_cross_entropy_with_logits(
+                    pred_valid_logits[b, selected_src][visible_mask],
+                    torch.ones_like(pred_valid_logits[b, selected_src][visible_mask]),
+                    reduction="none",
+                )
+                valid_losses.append(valid_bce)
+                valid_weights.append(pred_logits.new_full((valid_bce.numel(),), group_weight))
+
+        if exist_losses:
+            exist_loss = torch.cat([loss.reshape(-1) for loss in exist_losses])
+            exist_weight = torch.cat([weight.reshape(-1) for weight in exist_weights]).to(exist_loss)
+            short_exist_loss = (exist_loss * exist_weight).sum() / exist_weight.sum().clamp_min(1.0)
+        else:
+            short_exist_loss = zero
+
+        if valid_losses:
+            valid_loss = torch.cat([loss.reshape(-1) for loss in valid_losses])
+            valid_weight = torch.cat([weight.reshape(-1) for weight in valid_weights]).to(valid_loss)
+            short_valid_loss = (valid_loss * valid_weight).sum() / valid_weight.sum().clamp_min(1.0)
+        else:
+            short_valid_loss = zero
+
+        short_loss = short_exist_loss + float(self.short_survival_valid_weight) * short_valid_loss
+        return (
+            short_loss,
+            short_exist_loss,
+            short_valid_loss,
+            pred_logits.new_tensor(float(short_pos_count)),
+            pred_logits.new_tensor(float(short_anchor_count)),
         )
 
     def smooth_loss(
@@ -1543,6 +1671,13 @@ class GCSLoss(nn.Module):
             gt5_short_pos_anchor_count,
             gt5_short_point_valid_loss,
         ) = self.point_valid_loss(pred_valid_logits, pred_points, gt_valid, indices, gt_lanes=gt_lanes, return_details=True)
+        (
+            short_survival_loss,
+            short_survival_exist_loss,
+            short_survival_valid_loss,
+            short_survival_pos_count,
+            short_survival_anchor_count,
+        ) = self.short_survival_loss(pred_logits, pred_valid_logits, pred_points, gt_valid, indices, gt_lanes=gt_lanes)
         smooth_loss = self.smooth_loss(pred_points, gt_valid, indices)
         curve_loss = self.curve_loss(pred_points, gt_points, gt_valid, indices, gt_lanes=gt_lanes)
         (
@@ -1616,6 +1751,8 @@ class GCSLoss(nn.Module):
             total = total + self.query_count_ce_gain * query_count_ce_loss
         if self.spurious_neg_gain != 0.0:
             total = total + self.spurious_neg_gain * self.spurious_neg_weight * spurious_neg_loss
+        if self.short_survival_gain != 0.0:
+            total = total + self.short_survival_gain * short_survival_loss
         loss_items = torch.stack(
             (
                 exist_loss.detach(),
@@ -1644,6 +1781,11 @@ class GCSLoss(nn.Module):
                 gt5_short_pos_count.detach(),
                 gt5_short_pos_anchor_count.detach(),
                 gt5_short_point_valid_loss.detach(),
+                short_survival_loss.detach(),
+                short_survival_exist_loss.detach(),
+                short_survival_valid_loss.detach(),
+                short_survival_pos_count.detach(),
+                short_survival_anchor_count.detach(),
                 cnt_bound_5under.detach(),
                 cnt_score.detach(),
                 boundary_pseudo_neg_loss.detach(),
