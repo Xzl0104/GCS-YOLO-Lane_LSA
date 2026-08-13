@@ -76,6 +76,7 @@ QUERY_ROW_KEYS = (
     "count_aware_length_norm",
     "count_aware_extra_margin",
     "count_mode",
+    "proposal_activation_thr",
 )
 PREDICTION_KEYS = (
     "pred_points",
@@ -84,6 +85,7 @@ PREDICTION_KEYS = (
     "pred_short_proposal_points",
     "pred_short_proposal_logits",
     "pred_short_proposal_valid_logits",
+    "pred_short_proposal_activation_logits",
     "pred_count_logits",
     "pred_start_logits",
     "pred_end_logits",
@@ -138,6 +140,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-points", nargs="+", type=int, default=[6], help="Minimum visible-anchor floors to sweep.")
     parser.add_argument("--valid-before-maxdet", action="store_true", help="Filter point-valid/min_points failures before max_det truncation.")
     parser.add_argument("--short-proposal-decode", action="store_true", help="Include cached short-proposal candidates in query decoding.")
+    parser.add_argument("--proposal-activation-thrs", nargs="+", type=float, default=[0.0])
     parser.add_argument("--count-aware-topk", action="store_true", help="Use count_score to keep only the quality-best dynamic lane count.")
     parser.add_argument("--count-aware-min-k", type=int, default=3, help="Minimum k_hat for --count-aware-topk.")
     parser.add_argument("--count-aware-max-k", type=int, default=5, help="Maximum k_hat for --count-aware-topk.")
@@ -578,6 +581,7 @@ class CachedQueryPrediction:
         proposal_points = preds.get("pred_short_proposal_points") if include_short_proposal else None
         proposal_logits = preds.get("pred_short_proposal_logits") if include_short_proposal else None
         proposal_valid = preds.get("pred_short_proposal_valid_logits") if include_short_proposal else None
+        proposal_activation = preds.get("pred_short_proposal_activation_logits") if include_short_proposal else None
         if proposal_points is not None or proposal_logits is not None or proposal_valid is not None:
             if not all(isinstance(value, torch.Tensor) for value in (proposal_points, proposal_logits, proposal_valid)):
                 raise ValueError(f"Short proposal cache is incomplete for {self.raw_file}.")
@@ -597,6 +601,10 @@ class CachedQueryPrediction:
         self.points = np.take_along_axis(points, order[:, :, None], axis=1).astype(np.float32)
         self.scores = _sigmoid_np(logits)
         self.query_indices = np.arange(self.points.shape[0], dtype=np.int64)
+        self.base_query_count = int(preds["pred_points"].shape[0])
+        self.short_proposal_activation_score = None
+        if isinstance(proposal_activation, torch.Tensor):
+            self.short_proposal_activation_score = float(torch.sigmoid(proposal_activation.float().reshape(-1)[0]).item())
         self.k = int(self.points.shape[1])
 
         pred_valid = preds.get("pred_valid_logits")
@@ -734,6 +742,10 @@ class CachedQueryPrediction:
         qualities = context["qualities"]
 
         query_ids = np.flatnonzero(self.scores >= float(combo["conf"])).astype(np.int64)
+        activation_thr = float(combo.get("proposal_activation_thr", 0.0) or 0.0)
+        if activation_thr > 0.0 and self.short_proposal_activation_score is not None:
+            if self.short_proposal_activation_score < activation_thr:
+                query_ids = query_ids[query_ids < self.base_query_count]
         if query_ids.size == 0:
             return []
         scores = self.scores[query_ids]
@@ -860,6 +872,7 @@ def _combo_key(combo: dict[str, Any]) -> tuple[Any, ...]:
         int(combo["min_points"]),
         str(combo.get("count_mode", "score_sum")),
         int(combo.get("count_aware_extra_margin", 0)),
+        float(combo.get("proposal_activation_thr", 0.0)),
     )
 
 
@@ -874,6 +887,7 @@ def _row_sort_key(row: dict[str, Any]) -> tuple[Any, ...]:
         int(row["min_points"]),
         str(row.get("count_mode", "score_sum")),
         int(row.get("count_aware_extra_margin", 0)),
+        float(row.get("proposal_activation_thr", 0.0)),
     )
 
 

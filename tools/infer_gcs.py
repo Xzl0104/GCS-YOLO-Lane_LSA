@@ -122,6 +122,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--proposal-score-thr", type=float, default=None, help="Existence threshold for short proposals; defaults to --conf.")
     parser.add_argument("--proposal-score-calibration-thr", type=float, default=None, help="Raw proposal score mapped to --conf for ranking; defaults to proposal-score-thr.")
     parser.add_argument("--proposal-point-valid-thr", type=float, default=None, help="Visibility threshold for short proposals; defaults to --point-valid-thr.")
+    parser.add_argument("--proposal-activation-thr", type=float, default=0.0, help="Image-level activation threshold for short proposals; 0 disables the gate.")
+    parser.add_argument("--proposal-activation-thr", type=float, default=0.0, help="Image-level activation threshold for short proposals; 0 disables the gate.")
     parser.add_argument("--count-aware-topk", action="store_true", help="Use count_score to keep only the quality-best dynamic lane count.")
     parser.add_argument("--count-aware-min-k", type=int, default=3, help="Minimum k_hat for --count-aware-topk.")
     parser.add_argument("--count-aware-max-k", type=int, default=5, help="Maximum k_hat for --count-aware-topk.")
@@ -316,6 +318,7 @@ def run_inference(
     proposal_score_thr: float | None = None,
     proposal_score_calibration_thr: float | None = None,
     proposal_point_valid_thr: float | None = None,
+    proposal_activation_thr: float = 0.0,
     count_aware_topk: bool = False,
     count_aware_min_k: int = 3,
     count_aware_max_k: int = 5,
@@ -408,6 +411,8 @@ def run_inference(
                 proposal_points=preds.get("pred_short_proposal_points")[0] if proposal_enabled and "pred_short_proposal_points" in preds else None,
                 proposal_logits=preds.get("pred_short_proposal_logits")[0] if proposal_enabled and "pred_short_proposal_logits" in preds else None,
                 proposal_valid_logits=preds.get("pred_short_proposal_valid_logits")[0] if proposal_enabled and "pred_short_proposal_valid_logits" in preds else None,
+                proposal_activation_logits=preds.get("pred_short_proposal_activation_logits")[0] if proposal_enabled and "pred_short_proposal_activation_logits" in preds else None,
+                proposal_activation_thr=proposal_activation_thr,
                 image_shape=img.shape[:2],
                 score_thr=conf,
                 point_valid_thr=point_valid_thr,
@@ -525,6 +530,7 @@ def main() -> None:
         proposal_score_thr=args.proposal_score_thr,
         proposal_score_calibration_thr=args.proposal_score_calibration_thr,
         proposal_point_valid_thr=args.proposal_point_valid_thr,
+        proposal_activation_thr=args.proposal_activation_thr,
         count_aware_topk=args.count_aware_topk,
         count_aware_min_k=args.count_aware_min_k,
         count_aware_max_k=args.count_aware_max_k,

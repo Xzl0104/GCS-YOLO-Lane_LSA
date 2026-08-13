@@ -361,6 +361,12 @@ class GCSLoss(nn.Module):
             self._arg(args, "gcs_short_proposal_exist_pos_weight", 1.0)
         )
         self.short_proposal_exist_weight = float(self._arg(args, "gcs_short_proposal_exist_weight", 0.5))
+        self.short_proposal_activation_weight = float(
+            self._arg(args, "gcs_short_proposal_activation_weight", 0.0)
+        )
+        self.short_proposal_activation_pos_weight = float(
+            self._arg(args, "gcs_short_proposal_activation_pos_weight", 1.0)
+        )
         self.short_proposal_raw_miss_only = bool(self._arg(args, "gcs_short_proposal_raw_miss_only", False))
         self.short_proposal_raw_miss_px = float(self._arg(args, "gcs_short_proposal_raw_miss_px", 20.0))
         self.boundary_pseudo_neg_gain = float(self._arg(args, "gcs_boundary_pseudo_neg", 0.0))
@@ -395,6 +401,10 @@ class GCSLoss(nn.Module):
             raise ValueError("gcs_short_proposal_visible_thr must be >= 0.")
         if self.short_proposal_raw_miss_px < 0.0:
             raise ValueError("gcs_short_proposal_raw_miss_px must be >= 0.")
+        if self.short_proposal_activation_weight < 0.0:
+            raise ValueError("gcs_short_proposal_activation_weight must be >= 0.")
+        if self.short_proposal_activation_pos_weight <= 0.0:
+            raise ValueError("gcs_short_proposal_activation_pos_weight must be > 0.")
         if self.boundary_pseudo_neg_gain < 0.0:
             raise ValueError("gcs_boundary_pseudo_neg must be >= 0.")
         if self.boundary_pseudo_visible_thr < 0:
@@ -1526,17 +1536,18 @@ class GCSLoss(nn.Module):
         gt_valid: list[torch.Tensor],
         gt_lanes: torch.Tensor,
         base_points: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Supervise an isolated proposal bank on short GT5 lanes only."""
         proposal_points = preds.get("pred_short_proposal_points")
         proposal_logits = preds.get("pred_short_proposal_logits")
         proposal_valid = preds.get("pred_short_proposal_valid_logits")
+        activation_logits = preds.get("pred_short_proposal_activation_logits")
         if proposal_points is None or proposal_logits is None or proposal_valid is None:
             zero = self._zero_like(gt_lanes)
-            return zero, zero, zero
+            return zero, zero, zero, zero, zero
         if float(self.short_proposal_gain) <= 0.0:
             zero = self._zero_like(proposal_points)
-            return zero, zero, zero
+            return zero, zero, zero, zero, zero
         if proposal_points.ndim != 4 or proposal_points.shape[-1] != 2:
             raise ValueError("pred_short_proposal_points must have shape B x P x K x 2.")
         if proposal_logits.shape[:2] != proposal_points.shape[:2]:
@@ -1548,6 +1559,8 @@ class GCSLoss(nn.Module):
         positive_count = proposal_points.new_zeros(())
         target_count = proposal_points.new_zeros(())
         image_count = proposal_points.new_zeros(())
+        activation_loss = proposal_points.new_zeros(())
+        activation_pos_count = proposal_points.new_zeros(())
         scale = self._pixel_scale_for(proposal_points)
         for batch_index in range(proposal_points.shape[0]):
             image_count = image_count + 1.0
@@ -1562,6 +1575,14 @@ class GCSLoss(nn.Module):
                 short = short & (base_distance.min(dim=0).values > self.short_proposal_raw_miss_px)
             if count == 5:
                 target_count = target_count + short.sum().to(dtype=target_count.dtype)
+            activation_target = proposal_logits.new_tensor(float(count == 5 and bool(short.any())))
+            activation_pos_count = activation_pos_count + activation_target
+            if activation_logits is not None and self.short_proposal_activation_weight > 0.0:
+                activation_loss = activation_loss + F.binary_cross_entropy_with_logits(
+                    activation_logits[batch_index],
+                    activation_target,
+                    pos_weight=activation_logits.new_tensor(self.short_proposal_activation_pos_weight),
+                )
             proposal = proposal_points[batch_index]
             target_exists = proposal_logits[batch_index].new_zeros(proposal_logits.shape[1])
             target_valid = proposal_valid[batch_index].new_zeros(proposal_valid.shape[1:])
@@ -1605,7 +1626,9 @@ class GCSLoss(nn.Module):
         normalizer = positive_count + image_count
         if normalizer.item() > 0:
             total = total / normalizer
-        return total, positive_count, target_count
+        activation_loss = activation_loss / image_count.clamp_min(1.0)
+        total = total + self.short_proposal_activation_weight * activation_loss
+        return total, positive_count, target_count, activation_loss, activation_pos_count
 
 
     def forward(self, preds: dict[str, torch.Tensor], batch: dict) -> tuple[torch.Tensor, torch.Tensor]:
@@ -1681,9 +1704,13 @@ class GCSLoss(nn.Module):
             gt_valid,
             target_count=gt_lanes,
         )
-        short_proposal_loss, short_proposal_pos_count, short_proposal_gt_count = self.short_proposal_loss(
-            preds, gt_points, gt_valid, gt_lanes, pred_points
-        )
+        (
+            short_proposal_loss,
+            short_proposal_pos_count,
+            short_proposal_gt_count,
+            short_proposal_activation_loss,
+            short_proposal_activation_pos_count,
+        ) = self.short_proposal_loss(preds, gt_points, gt_valid, gt_lanes, pred_points)
         (
             spurious_neg_loss,
             spurious_negative_count,
@@ -1771,6 +1798,8 @@ class GCSLoss(nn.Module):
                 short_proposal_loss.detach(),
                 short_proposal_pos_count.detach(),
                 short_proposal_gt_count.detach(),
+                short_proposal_activation_loss.detach(),
+                short_proposal_activation_pos_count.detach(),
             )
         )
         return total, loss_items

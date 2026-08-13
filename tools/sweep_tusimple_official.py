@@ -154,6 +154,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-dets", nargs="+", type=int, default=[8], help="max_det values to sweep.")
     parser.add_argument("--min-points", nargs="+", type=int, default=[6], help="Minimum visible-anchor floors to sweep.")
     parser.add_argument("--valid-before-maxdet", action="store_true", help="Filter point-valid/min_points failures before max_det truncation.")
+    parser.add_argument("--proposal-activation-thrs", nargs="+", type=float, default=[0.0])
     parser.add_argument("--count-aware-topk", action="store_true", help="Use count_score to keep only the quality-best dynamic lane count.")
     parser.add_argument("--count-aware-min-k", type=int, default=3, help="Minimum k_hat for --count-aware-topk.")
     parser.add_argument("--count-aware-max-k", type=int, default=5, help="Maximum k_hat for --count-aware-topk.")
@@ -299,7 +300,7 @@ def build_combos(args: argparse.Namespace, decode_yaml_cfg: dict | None = None) 
             raise ValueError(f"count-aware length norm must be > 0, got {count_aware_length_norm}.")
     else:
         count_aware_extra_margins = [0]
-    for conf, point_valid_thr, nms_dist_px, max_det, min_points, count_mode, count_aware_extra_margin in product(
+    for conf, point_valid_thr, nms_dist_px, max_det, min_points, count_mode, count_aware_extra_margin, proposal_activation_thr in product(
         sorted({float(x) for x in args.confs}),
         sorted({float(x) for x in args.point_valid_thrs}),
         sorted({float(x) for x in args.nms_dist_pxs}),
@@ -307,6 +308,7 @@ def build_combos(args: argparse.Namespace, decode_yaml_cfg: dict | None = None) 
         sorted({int(x) for x in args.min_points}),
         count_modes,
         count_aware_extra_margins,
+        sorted({float(x) for x in getattr(args, "proposal_activation_thrs", [0.0])}),
     ):
         if point_valid_thr < 0.0 or point_valid_thr > 1.0:
             raise ValueError(f"point-valid thresholds must be in [0, 1], got {point_valid_thr}.")
@@ -330,6 +332,7 @@ def build_combos(args: argparse.Namespace, decode_yaml_cfg: dict | None = None) 
                 "count_aware_length_norm": count_aware_length_norm,
                 "count_aware_extra_margin": int(count_aware_extra_margin),
                 "count_mode": count_mode,
+                "proposal_activation_thr": proposal_activation_thr,
             }
         )
     if not combos:
@@ -374,6 +377,7 @@ def write_csv(path: Path, rows: list[dict]) -> None:
         "count_aware_length_norm",
         "count_aware_extra_margin",
         "count_mode",
+        "proposal_activation_thr",
         "strict_order_valid",
         "ordered_slot_order_violations",
         "ordered_slot_order_violation_images",

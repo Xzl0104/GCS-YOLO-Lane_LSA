@@ -40,6 +40,8 @@ def decode_gcs_candidate_pool(
     proposal_points: torch.Tensor | None = None,
     proposal_logits: torch.Tensor | None = None,
     proposal_valid_logits: torch.Tensor | None = None,
+    proposal_activation_logits: torch.Tensor | None = None,
+    proposal_activation_thr: float = 0.0,
     proposal_score_thr: float | None = None,
     proposal_score_calibration_thr: float | None = None,
     proposal_point_valid_thr: float | None = None,
@@ -50,6 +52,12 @@ def decode_gcs_candidate_pool(
         return decode_gcs_predictions(pred_points, pred_logits, pred_valid_logits=pred_valid_logits, **kwargs)
     if proposal_valid_logits is None:
         raise ValueError("proposal_valid_logits is required when proposal_points are provided.")
+    if float(proposal_activation_thr) > 0.0:
+        if proposal_activation_logits is None:
+            raise ValueError("proposal_activation_logits is required when proposal_activation_thr > 0.")
+        activation_score = float(proposal_activation_logits.detach().float().sigmoid().reshape(-1)[0])
+        if activation_score < float(proposal_activation_thr):
+            return decode_gcs_predictions(pred_points, pred_logits, pred_valid_logits=pred_valid_logits, **kwargs)
     base_count = int(pred_points.shape[0])
     base_score_thr = float(kwargs.get("score_thr", 0.5))
     base_point_valid_thr = float(kwargs.get("point_valid_thr", 0.5))

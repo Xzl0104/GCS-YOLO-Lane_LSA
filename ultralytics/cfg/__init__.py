@@ -232,6 +232,9 @@ CFG_FLOAT_KEYS = frozenset(
         "gcs_short_proposal_valid_pos_weight",
         "gcs_short_proposal_exist_weight",
         "gcs_short_proposal_exist_pos_weight",
+        "gcs_short_proposal_activation_weight",
+        "gcs_short_proposal_activation_pos_weight",
+        "gcs_short_proposal_activation_thr",
         "gcs_short_proposal_raw_miss_px",
         "gcs_short_geom_gt4_weight",
         "gcs_short_geom_gt5_weight",
@@ -385,6 +388,7 @@ CFG_BOOL_KEYS = frozenset(
         "gcs_spurious_gt_protect",
         "gcs_short_proposal_decode",
         "gcs_short_proposal_only",
+        "gcs_short_proposal_activation_only",
         "gcs_short_proposal_raw_miss_only",
     }
 )

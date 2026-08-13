@@ -370,6 +370,11 @@ class GCSLaneHead(nn.Module):
                 nn.ReLU(inplace=True),
                 nn.Linear(c1, 1),
             )
+            self.short_proposal_activation_mlp = nn.Sequential(
+                nn.Linear(c1, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, 1),
+            )
         if self.query_count_head:
             self.query_count_mlp = nn.Sequential(
                 nn.Linear(c1, c1),
@@ -703,6 +708,9 @@ class GCSLaneHead(nn.Module):
             out["pred_short_proposal_valid_logits"] = self.short_proposal_valid_mlp(proposal_hs).view(
                 b, self.short_proposal_queries, self.num_points
             )
+            out["pred_short_proposal_activation_logits"] = self.short_proposal_activation_mlp(
+                proposal_hs.mean(dim=1)
+            ).squeeze(-1)
         if self.gcs_mode == "ordered_slot":
             out["pred_exist_logits"] = pred_logits
             out["pred_start_logits"] = self.start_mlp(hs).view(b, self.num_queries, self.num_points)

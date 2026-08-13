@@ -588,6 +588,8 @@ class GCSLaneValidator:
                     proposal_points=preds.get("pred_short_proposal_points")[i] if proposal_enabled and "pred_short_proposal_points" in preds else None,
                     proposal_logits=preds.get("pred_short_proposal_logits")[i] if proposal_enabled and "pred_short_proposal_logits" in preds else None,
                     proposal_valid_logits=preds.get("pred_short_proposal_valid_logits")[i] if proposal_enabled and "pred_short_proposal_valid_logits" in preds else None,
+                    proposal_activation_logits=preds.get("pred_short_proposal_activation_logits")[i] if proposal_enabled and "pred_short_proposal_activation_logits" in preds else None,
+                    proposal_activation_thr=float(self._arg(self.args, "gcs_short_proposal_activation_thr", 0.0)),
                     image_shape=(h, w), score_thr=conf, point_valid_thr=point_valid_thr,
                     max_det=max_det, nms_dist_px=nms_dist_px, valid_before_maxdet=proposal_enabled,
                 )

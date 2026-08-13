@@ -317,7 +317,9 @@ class BaseTrainer:
             # v.register_hook(lambda x: torch.nan_to_num(x))  # NaN to 0 (commented for erratic training results)
             proposal_only = bool(getattr(self.args, "gcs_short_proposal_only", False))
             proposal_parameter = "short_proposal_" in k
-            if any(x in k for x in freeze_layer_names) or (proposal_only and not proposal_parameter):
+            activation_only = bool(getattr(self.args, "gcs_short_proposal_activation_only", False))
+            activation_parameter = "short_proposal_activation_mlp" in k
+            if any(x in k for x in freeze_layer_names) or (activation_only and not activation_parameter) or (proposal_only and not proposal_parameter):
                 LOGGER.info(f"Freezing layer '{k}'")
                 v.requires_grad = False
             elif not v.requires_grad and v.dtype.is_floating_point:  # only floating point Tensor can require gradients
@@ -628,8 +630,9 @@ class BaseTrainer:
         self.model.train()
         # Freeze BN stat
         proposal_only = bool(getattr(self.args, "gcs_short_proposal_only", False))
+        activation_only = bool(getattr(self.args, "gcs_short_proposal_activation_only", False))
         for n, m in self.model.named_modules():
-            if (proposal_only or any(filter(lambda f: f in n, self.freeze_layer_names))) and isinstance(m, nn.BatchNorm2d):
+            if (proposal_only or activation_only or any(filter(lambda f: f in n, self.freeze_layer_names))) and isinstance(m, nn.BatchNorm2d):
                 m.eval()
 
     def save_model(self):
