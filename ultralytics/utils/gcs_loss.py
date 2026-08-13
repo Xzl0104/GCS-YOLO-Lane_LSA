@@ -361,6 +361,8 @@ class GCSLoss(nn.Module):
             self._arg(args, "gcs_short_proposal_exist_pos_weight", 1.0)
         )
         self.short_proposal_exist_weight = float(self._arg(args, "gcs_short_proposal_exist_weight", 0.5))
+        self.short_proposal_raw_miss_only = bool(self._arg(args, "gcs_short_proposal_raw_miss_only", False))
+        self.short_proposal_raw_miss_px = float(self._arg(args, "gcs_short_proposal_raw_miss_px", 20.0))
         self.boundary_pseudo_neg_gain = float(self._arg(args, "gcs_boundary_pseudo_neg", 0.0))
         self.boundary_pseudo_visible_thr = int(self._arg(args, "gcs_boundary_pseudo_visible_thr", 10))
         self.boundary_pseudo_dist_thr = float(self._arg(args, "gcs_boundary_pseudo_dist_thr", 60.0))
@@ -391,6 +393,8 @@ class GCSLoss(nn.Module):
             raise ValueError("gcs_short_proposal must be >= 0.")
         if self.short_proposal_visible_thr < 0:
             raise ValueError("gcs_short_proposal_visible_thr must be >= 0.")
+        if self.short_proposal_raw_miss_px < 0.0:
+            raise ValueError("gcs_short_proposal_raw_miss_px must be >= 0.")
         if self.boundary_pseudo_neg_gain < 0.0:
             raise ValueError("gcs_boundary_pseudo_neg must be >= 0.")
         if self.boundary_pseudo_visible_thr < 0:
@@ -1521,6 +1525,7 @@ class GCSLoss(nn.Module):
         gt_points: list[torch.Tensor],
         gt_valid: list[torch.Tensor],
         gt_lanes: torch.Tensor,
+        base_points: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Supervise an isolated proposal bank on short GT5 lanes only."""
         proposal_points = preds.get("pred_short_proposal_points")
@@ -1550,6 +1555,11 @@ class GCSLoss(nn.Module):
             valid = gt_valid[batch_index].to(device=proposal_points.device, dtype=proposal_points.dtype)
             points = gt_points[batch_index].to(device=proposal_points.device, dtype=proposal_points.dtype)
             short = valid.sum(dim=1) <= float(self.short_proposal_visible_thr)
+            if self.short_proposal_raw_miss_only and bool(short.any()):
+                base = base_points[batch_index].detach().to(device=proposal_points.device, dtype=proposal_points.dtype)
+                base_distance = ((base[:, None] - points[None]) * scale).abs().sum(dim=-1)
+                base_distance = (base_distance * valid[None]).sum(dim=-1) / valid[None].sum(dim=-1).clamp_min(1.0)
+                short = short & (base_distance.min(dim=0).values > self.short_proposal_raw_miss_px)
             if count == 5:
                 target_count = target_count + short.sum().to(dtype=target_count.dtype)
             proposal = proposal_points[batch_index]
@@ -1672,7 +1682,7 @@ class GCSLoss(nn.Module):
             target_count=gt_lanes,
         )
         short_proposal_loss, short_proposal_pos_count, short_proposal_gt_count = self.short_proposal_loss(
-            preds, gt_points, gt_valid, gt_lanes
+            preds, gt_points, gt_valid, gt_lanes, pred_points
         )
         (
             spurious_neg_loss,

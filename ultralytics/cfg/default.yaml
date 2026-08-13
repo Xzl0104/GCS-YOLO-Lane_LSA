@@ -189,6 +189,8 @@ gcs_short_proposal_valid_weight: 1.0 # (float) short proposal visibility weight
 gcs_short_proposal_valid_pos_weight: 32.0 # (float) positive visibility weight for short proposals
 gcs_short_proposal_exist_weight: 0.5 # (float) short proposal existence weight
 gcs_short_proposal_exist_pos_weight: 1.0 # (float) positive existence weight for short proposals
+gcs_short_proposal_raw_miss_only: False # (bool) supervise only GT5-short lanes absent from base raw geometry
+gcs_short_proposal_raw_miss_px: 20.0 # (float) base raw-geometry hit threshold in pixels
 gcs_short_proposal_decode: False # (bool) merge short proposals during decode; default-off
 gcs_short_proposal_only: False # (bool) freeze the env30 base and train only short proposal parameters
 gcs_boundary_pseudo_neg: 0.0 # (float) extra BCE negative loss gain for GT5 short far boundary pseudo lanes; 0 disables
