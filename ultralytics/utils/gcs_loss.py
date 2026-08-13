@@ -53,6 +53,8 @@ class GCSLoss(nn.Module):
         "short_proposal_loss",
         "short_proposal_pos_count",
         "short_proposal_gt_count",
+        "short_proposal_activation_loss",
+        "short_proposal_activation_pos_count",
     )
 
     def __init__(

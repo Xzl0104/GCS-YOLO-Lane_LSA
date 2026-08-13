@@ -63,6 +63,8 @@ LOSS_GAIN_ARGS = (
     "gcs_short_proposal",
     None,
     None,
+    None,
+    None,
 )
 DEFAULT_LOSS_GAINS = (
     2.0,
@@ -72,6 +74,8 @@ DEFAULT_LOSS_GAINS = (
     0.1,
     0.2,
     0.2,
+    0.0,
+    0.0,
     0.0,
     0.0,
     0.0,
