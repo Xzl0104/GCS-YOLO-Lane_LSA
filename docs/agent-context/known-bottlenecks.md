@@ -2,6 +2,59 @@
 
 This file applies to branch `codex/5-25-3-k56`.
 
+## 2026-08-14 env30/v7 Early Official-Val Warning
+
+The v7 GT5 weak-geometry point-valid candidate is still running at the time of
+this note and is not finally rejected here. However, official-val sweeps
+through epoch030 show that the added GT5 weak-positive pressure is high risk
+and has not moved toward the env30 gate.
+
+Reference gate:
+
+```text
+env30 official-val ACC/FP/FN = 0.973330 / 0.015748 / 0.009642
+```
+
+v7 early official-val evidence:
+
+```text
+epoch005 ACC/FP/FN = 0.968580 / 0.063912 / 0.014004
+epoch010 ACC/FP/FN = 0.967880 / 0.049679 / 0.015611
+epoch015 ACC/FP/FN = 0.968018 / 0.035491 / 0.016070
+epoch020 ACC/FP/FN = 0.966003 / 0.037328 / 0.022268
+epoch025 ACC/FP/FN = 0.965535 / 0.073508 / 0.025712
+epoch030 ACC/FP/FN = 0.968879 / 0.035032 / 0.014463
+```
+
+The epoch030 full sweep does not show a decode-only rescue. Rows that remove
+GT5 `5->6` by using `max_det=5` remain at `ACC=0.968830`, while rows with the
+same primary ACC and larger candidate budgets expose `5->6=20..24`. The
+selected epoch030 row has:
+
+```text
+count_acc_3/4/5 = 0.950673 / 0.893939 / 0.716216
+count_confusion includes 3->4=11, 4->5=6, 5->6=21
+```
+
+Supported early diagnosis:
+
+- v7 is not a command/config no-op: `gt5_short`, `short_survival`, and
+  `far_extra` training logs are nonzero.
+- The early failure surface is not rescued by threshold, NMS, `max_det`, or
+  `min_points` within the current official-val sweep grid.
+- The current evidence supports the risk that broad GT5 weak-positive pressure
+  loosens count-shape separation and reintroduces sixth-lane survival.
+
+Prepared next candidate if v7 finishes below gate:
+
+```text
+script = scripts/run_query_env30_far_extra_only_alpha05_v8.sh
+start = env30 weights/official_best.pt
+key change vs v6/v7 = remove short_survival and GT5 point-valid rescue;
+                      keep only env30 recipe + selective far-extra guard
+TEST = closed until official-val strictly beats env30 and diagnostics pass
+```
+
 ## 2026-08-14 env30/v6 Official-Val Bottleneck
 
 The v6 alpha05 far-extra follow-up is rejected. It restores the env30

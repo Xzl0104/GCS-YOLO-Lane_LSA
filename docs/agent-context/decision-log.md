@@ -2,6 +2,80 @@
 
 This file records decisions for branch `codex/5-25-3-k56`.
 
+## 2026-08-14: Prepare env30 far-extra-only v8
+
+Decision:
+
+Add a reproducible v8 training entry that isolates the far-extra guard from
+the v6/v7 short-survival and GT5 point-valid rescue changes. This is a
+prepared candidate entry, not a final rejection of v7 before its 80-epoch run
+finishes. Keep TEST closed unless a frozen official-val candidate strictly
+beats the env30 gate.
+
+Why:
+
+v6 restored the env30 `gcs_exist_quality_alpha=0.5` recipe and lowered FP, but
+missed env30 on official-val because matched-lane geometry/point quality
+slipped:
+
+```text
+env30 official-val ACC/FP/FN = 0.973330 / 0.015748 / 0.009642
+v6 official-val ACC/FP/FN    = 0.972645 / 0.014233 / 0.009412
+```
+
+The v7 candidate tests whether additional GT5 weak-lane positive pressure can
+recover that geometry gap. Early official-val sweeps through epoch030 show the
+risk of that direction: the best ACC is still far below env30 and the sweep
+surface alternates between GT3/GT4 overcount and GT5 `5->6` overcount:
+
+```text
+v7 epoch030 best ACC/FP/FN = 0.968879 / 0.035032 / 0.014463
+v7 epoch030 selected count_acc_3/4/5 = 0.950673 / 0.893939 / 0.716216
+v7 epoch030 selected confusion includes 3->4=11, 4->5=6, 5->6=21
+```
+
+This does not close v7 yet, but it supports preparing a cleaner isolation run:
+keep env30's narrow GT5 short geometry and boundary-pseudo mask, add only the
+selective far-extra BCE, and leave matched short-survival plus GT5 point-valid
+rescue off.
+
+Implementation scope:
+
+```text
+script = scripts/run_query_env30_far_extra_only_alpha05_v8.sh
+start = env30 weights/official_best.pt supplied through PRETRAINED
+model/default YAML/default losses = unchanged
+official metrics/decode implementation = unchanged
+
+kept from env30:
+  gcs_exist_quality_alpha = 0.5
+  gcs_short_geom = 1.0
+  gcs_short_geom_visible_thr = 10
+  gcs_short_geom_gt4_weight = 1.0
+  gcs_short_geom_gt5_weight = 2.0
+  gcs_gt5_short_visible_thr = 0
+  boundary-pseudo mask-v2/envelope params
+
+added:
+  gcs_far_extra_neg = 0.05
+  gcs_far_extra_dist_thr = 80
+  gcs_far_extra_score_thr = 0.02
+  gcs_far_extra_gt3/gt4/gt5_weight = 1.0 / 1.0 / 0.5
+
+explicitly off:
+  gcs_short_survival = 0.0
+  GT5 point-valid rescue remains off through gcs_gt5_short_visible_thr = 0
+```
+
+Gate:
+
+Launch this candidate only after v7 either finishes below the env30
+official-val gate or otherwise becomes clearly non-promotable by the same
+official-val protocol. Do not run TEST for v8 unless its selected
+`weights/official_best.pt` plus `weights/official_best_decode.yaml` strictly
+exceed env30 on canonical official-val and follow-up diagnostics do not reveal
+hidden GT4/GT5 count-shape or raw-geometry regression.
+
 ## 2026-08-14: Launch env30 GT5 weak-geometry point-valid v7
 
 Decision:
