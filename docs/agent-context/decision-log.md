@@ -2,6 +2,104 @@
 
 This file records decisions for branch `codex/5-25-3-k56`.
 
+## 2026-08-14: Reject v8 and Add GT5-Safe Far-Extra v9
+
+Decision:
+
+Do not promote
+`query_env30_far_extra005_d80_alpha05_env30recipe_b32_amp_v8_fixofficial`.
+Add a v9 training entry that keeps the v8 selective far-extra guard for GT3
+and GT4 samples, but removes far-extra pressure from GT5-or-denser samples.
+The v9 candidate must start from the env30 `official_best.pt` checkpoint and
+must be selected by canonical 363-image official-val before any formal TEST
+claim.
+
+User-requested protocol note:
+
+The user explicitly requested TEST reporting even when a run fails the
+official-val gate. Such TEST runs are allowed only as reporting-only failure
+diagnostics. They must not choose thresholds, checkpoint, NMS, `max_det`,
+`min_points`, decode policy, loss gain, or follow-up hyperparameters for the
+same candidate.
+
+Official-val evidence:
+
+```text
+env30 official-val ACC/FP/FN = 0.973330 / 0.015748 / 0.009642
+v8 official-val ACC/FP/FN    = 0.971404 / 0.017631 / 0.015152
+v8 selected epoch            = 80
+v8 decode                    = conf=0.001, point_valid_thr=0.6,
+                               nms_dist_px=0, max_det=5,
+                               min_points=5, valid_before_maxdet=true
+v8 official_output_shape     = [720, 1280]
+```
+
+Because v8 is below the env30 official-val gate by `0.001926` ACC and has
+worse FP/FN, it is not promotable.
+
+Reporting-only TEST evidence:
+
+```text
+env30 TEST ACC/FP/FN = 0.966784 / 0.028732 / 0.023544
+v7 TEST ACC/FP/FN    = 0.963603 / 0.035915 / 0.026360
+v8 TEST ACC/FP/FN    = 0.966291 / 0.030122 / 0.025911
+```
+
+v8 is better than v7 but still below env30 on TEST:
+
+```text
+v8 - env30 TEST ACC = -0.000493
+v8 - env30 TEST FP  = +0.001390
+v8 - env30 TEST FN  = +0.002367
+```
+
+Count-shape evidence:
+
+```text
+v8 TEST count_acc_3/4/5    = 0.965517 / 0.632479 / 0.861160
+env30 TEST count_acc_3/4/5 = 0.964943 / 0.598291 / 0.891037
+
+v8 GT4 confusion   = 4->3=92, 4->4=296, 4->5=80
+env30 GT4 confusion = 4->3=98, 4->4=280, 4->5=90
+
+v8 GT5 confusion   = 5->3=20, 5->4=59, 5->5=490
+env30 GT5 confusion = 5->3=19, 5->4=43, 5->5=507
+```
+
+Why:
+
+- The fixed official-output-shape path is now correct; the TEST summaries
+  record `[720, 1280]` output shape. The prior `0.358303` TEST result was a
+  scale/export bug, not the real model quality.
+- v8 confirms that the selective far-extra guard is useful compared with v7:
+  it lowers FP, improves count accuracy, and recovers most of the v7 TEST
+  regression.
+- v8 also shows the remaining harm clearly: the GT4 improvement is offset by
+  GT5 undercount. GT5 `5->5` drops from env30 `507` to v8 `490`, while GT5
+  undercount grows from `62` to `79`.
+- The issue is not solved by decode-only tuning under the tested official-val
+  grid. v8's official-val-selected decode still fails the env30 gate, and TEST
+  cannot be used to retune the same candidate.
+
+Smallest safe next action:
+
+```text
+script = scripts/run_query_env30_far_extra_gt5off_alpha05_v9.sh
+start = env30 weights/official_best.pt
+key change vs v8 = gcs_far_extra_gt5_weight 0.5 -> 0.0
+unchanged = alpha05 env30 recipe, short_geom visible<=10,
+            boundary-pseudo mask-v2/envelope,
+            far_extra_neg 0.05, dist_thr 80, score_thr 0.02,
+            gcs_short_survival 0.0,
+            gcs_gt5_short_visible_thr 0,
+            training-time official_best full sweep
+```
+
+This is a new train-side candidate, not a TEST-selected decode or threshold
+change. It tests the hypothesis that GT3/GT4 clear-far extra suppression is
+helpful, while GT5 far-extra pressure is too risky for TEST-domain GT5
+retention.
+
 ## 2026-08-14: Prepare env30 far-extra-only v8
 
 Decision:

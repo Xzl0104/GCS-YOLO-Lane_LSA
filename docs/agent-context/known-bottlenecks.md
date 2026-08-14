@@ -2,6 +2,93 @@
 
 This file applies to branch `codex/5-25-3-k56`.
 
+## 2026-08-14 env30/v8 Reporting-Only TEST Bottleneck
+
+The v8 far-extra-only candidate is rejected by canonical official-val and the
+user-requested reporting-only TEST confirms that it does not improve env30
+TEST ACC.
+
+Reference gate and v8 official-val:
+
+```text
+env30 official-val ACC/FP/FN = 0.973330 / 0.015748 / 0.009642
+v8 official-val ACC/FP/FN    = 0.971404 / 0.017631 / 0.015152
+v8 gap vs env30 ACC          = -0.001926
+```
+
+Corrected-shape reporting-only TEST:
+
+```text
+env30 TEST ACC/FP/FN = 0.966784 / 0.028732 / 0.023544
+v7 TEST ACC/FP/FN    = 0.963603 / 0.035915 / 0.026360
+v8 TEST ACC/FP/FN    = 0.966291 / 0.030122 / 0.025911
+```
+
+v8 should be read as a partial recovery from v7, not an improvement over
+env30:
+
+```text
+v8 vs v7 TEST ACC = +0.002688
+v8 vs env30 TEST ACC = -0.000493
+```
+
+The count-shape change isolates the bottleneck:
+
+```text
+env30 TEST GT4: 4->3=98, 4->4=280, 4->5=90
+v8 TEST GT4:    4->3=92, 4->4=296, 4->5=80
+
+env30 TEST GT5: 5->3=19, 5->4=43, 5->5=507
+v8 TEST GT5:    5->3=20, 5->4=59, 5->5=490
+```
+
+Per-GT-lane TEST ACC also shows that GT5 lost more than GT4 gained:
+
+```text
+env30 GT4 acc = 0.952724
+v8 GT4 acc    = 0.952381
+
+env30 GT5 acc = 0.973356
+v8 GT5 acc    = 0.971818
+```
+
+Supported diagnosis:
+
+- The prior bad TEST result near `ACC=0.358303` was caused by exporting
+  predictions at `960x544` while official TuSimple GT uses `1280x720`. The
+  corrected summaries now record `official_output_shape=[720,1280]`, so the
+  remaining gap is a model/selection issue, not an export-scale issue.
+- v8 fixes part of the v7 overcount/generalization problem, especially GT4
+  count shape, but the fixed guard still applies to GT5 samples with weight
+  `0.5`. That pressure correlates with worse GT5 retention on TEST.
+- The remaining failure is not a simple threshold, NMS, `max_det`, or
+  `min_points` problem. The official-val-selected row already comes from the
+  configured full sweep, and TEST must not be used to choose another decode.
+- The high-confidence bottleneck is score/geometry/valid separation between
+  true weak GT4/GT5 lanes and clear-far or boundary pseudo extras. For v8
+  specifically, the narrowest actionable failure is GT5 undercount introduced
+  while suppressing far extras.
+
+Smallest safe next action:
+
+```text
+script = scripts/run_query_env30_far_extra_gt5off_alpha05_v9.sh
+start = env30 weights/official_best.pt
+key change = gcs_far_extra_gt5_weight 0.5 -> 0.0
+kept = gcs_far_extra_gt3_weight 1.0,
+       gcs_far_extra_gt4_weight 1.0,
+       gcs_far_extra_neg 0.05,
+       gcs_far_extra_dist_thr 80,
+       gcs_far_extra_score_thr 0.02,
+       env30 alpha05/boundary-pseudo/short-geom recipe
+```
+
+This is the smallest new candidate that tests whether the useful GT3/GT4
+far-extra suppression can be retained while removing the GT5 pressure that
+v8's reporting-only TEST exposed. Promotion still requires official-val
+selection first; any TEST result for a below-gate v9 candidate is
+reporting-only.
+
 ## 2026-08-14 env30/v7 Early Official-Val Warning
 
 The v7 GT5 weak-geometry point-valid candidate is still running at the time of
