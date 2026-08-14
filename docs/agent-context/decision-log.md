@@ -2,6 +2,80 @@
 
 This file records decisions for branch `codex/5-25-3-k56`.
 
+## 2026-08-14: Reject env30 short-survival v3/v4
+
+Decision:
+
+Do not promote the `gcs_short_survival` v3/v4 candidates. Keep the new
+short-survival code default-off as diagnostic/ablation infrastructure only.
+Do not continue by simply increasing matched short GT4/GT5 existence pressure.
+
+Baseline:
+
+```text
+env30 run = query_alpha05_gt5short_geom_w2_bneg002_env30_nocount_v1
+official-val ACC/FP/FN = 0.973330 / 0.015748 / 0.009642
+official-test raw20 ACC/FP/FN = 0.966784 / 0.028732 / 0.023544
+official-test count_acc_4/5 = 0.598291 / 0.891037
+```
+
+v3 evidence:
+
+```text
+run = query_env30_short_survival_gt45_b16_w4_v3
+source = env30 official_best.pt
+recipe miss = boundary_pseudo_neg disabled, scale/erasing disabled,
+              official max_dets only 5, GT4 short_geom weight raised to 1.5
+short_survival = 0.5
+official-val best ACC/FP/FN = 0.968402 / 0.024013 / 0.016529
+official-test raw20 ACC/FP/FN = 0.963262 / 0.039648 / 0.027229
+official-test count_acc_3/4/5 = 0.939655 / 0.591880 / 0.884007
+official-test count_confusion includes 3->4=89, 4->5=108, 5->4=55
+```
+
+v4 evidence:
+
+```text
+run = query_env30_short_survival_split_ex02_env30recipe_b32_amp_v4
+source = env30 official_best.pt
+recipe = env30 boundary_pseudo/augmentation/sweep grid restored
+short_survival = 0.2
+short_survival_exist_weight = 0.2
+short_survival_valid_weight = 1.0
+official-val best ACC/FP/FN = 0.972401 / 0.022865 / 0.012167
+official-val count_acc_4/5 = 0.909091 / 0.972973
+official-test raw20 ACC/FP/FN = 0.965407 / 0.038288 / 0.025971
+official-test count_acc_3/4/5 = 0.953448 / 0.576923 / 0.768014
+official-test count_confusion includes 3->6=3, 4->6=21, 5->6=69
+```
+
+Why:
+
+- The original env30 shortfall remains dominated by test-side GT4/GT5
+  instance survival and count-shape instability, but v3/v4 show that matched
+  short-lane positive pressure alone is not selective enough.
+- v3 proves the failure mode sharply: without env30 boundary-pseudo and
+  augmentation controls, short-survival pressure creates broad FP/overcount and
+  drops test ACC by `0.003522` versus env30.
+- v4 fixes the v3 protocol miss and splits the short-survival existence/valid
+  components. This recovers official-val to `0.972401`, but still remains
+  below env30 and fails on raw20 TEST by `0.001377`.
+- The v4 TEST failure is mainly sixth-lane/overcount generalization:
+  `5->6=69`, `4->6=21`, and `count_acc_5=0.768014`. Therefore the bottleneck
+  is not only "short lane too weak"; it is the missing ability to distinguish a
+  true short 4th/5th lane from an extra spurious sixth/duplicate lane under the
+  test distribution.
+
+Next action:
+
+Do not run more final-test variants from this line. Any next candidate must be
+selected on official-val before one-shot TEST and must include an explicit
+overcount guard, not only positive short-lane survival. A safer direction is a
+train/val-only diagnostic that separates true matched short GT4/GT5 positives
+from duplicate/sixth-lane candidates by GT-envelope or clear-far evidence, then
+tests a default-off objective that preserves true short lanes while suppressing
+only envelope-external or duplicate-ranked extras.
+
 ## 2026-07-10: Use cached official-val sweep for threshold selection
 
 Decision:

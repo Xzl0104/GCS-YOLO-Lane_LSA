@@ -2,6 +2,44 @@
 
 This file applies to branch `codex/5-25-3-k56`.
 
+## 2026-08-14 env30 TEST Bottleneck After Short-Survival v3/v4
+
+The env30 baseline missed `0.970000` raw20 TEST ACC by about `8.95`
+accuracy-points over 2,782 images:
+
+```text
+env30 official-test ACC/FP/FN = 0.966784 / 0.028732 / 0.023544
+count_acc_3/4/5 = 0.964943 / 0.598291 / 0.891037
+GT4 confusion includes 4->3=98 and 4->5=90
+GT5 confusion includes 5->3=19 and 5->4=43
+```
+
+The supported bottleneck is GT4/GT5 instance survival plus count-shape
+separation, not lane-count prediction alone and not threshold/NMS selection
+alone. The failed short-survival follow-ups sharpened this conclusion:
+
+```text
+v3 official-test ACC/FP/FN = 0.963262 / 0.039648 / 0.027229
+v3 count_acc_3/4/5 = 0.939655 / 0.591880 / 0.884007
+v3 confusion includes 3->4=89, 4->5=108, 5->4=55
+
+v4 official-val ACC/FP/FN = 0.972401 / 0.022865 / 0.012167
+v4 official-test ACC/FP/FN = 0.965407 / 0.038288 / 0.025971
+v4 count_acc_3/4/5 = 0.953448 / 0.576923 / 0.768014
+v4 confusion includes 3->6=3, 4->6=21, 5->6=69
+```
+
+Interpretation:
+
+- Naive matched short GT4/GT5 positive pressure can recover some validation
+  GT5 survival, but it also raises duplicate/sixth-lane survival.
+- Restoring env30 boundary pseudo-negative settings and lowering the new
+  existence component improves v4 over v3, but the candidate still fails both
+  official-val promotion and one-shot raw20 TEST.
+- The next useful diagnostic must explicitly separate true short side lanes
+  from duplicate or envelope-external extras. A positive-only survival loss is
+  too broad for the TEST bottleneck.
+
 ## Branch Scope
 
 The current mainline imports the historical `5-25-3.zip` algorithm and changes the TuSimple fixed-y contract to Q=12/K=56 with official h-sample anchors. It also includes the 2026-06-27 user-requested default-off `count_boundary_loss` for GT3/GT4/GT5 adjacent count-score boundaries, default-off train-only `gcs_hard_sampling` for 0601 and short-visible GT3/GT4/GT5 samples, default-off E3-lite `gcs_spurious_neg` loss for short unmatched duplicate-like queries, training-time `official_best`, and the default-off `valid_before_maxdet` query decode option present at `424ab1c86`. Follow-up code before that boundary keeps the old default behavior while adding default-preserving GT-count spurious weights, default-off GT spurious candidate protection, and default-effectively-off GT5 short point-valid rescue controls.
