@@ -40,6 +40,20 @@ Interpretation:
   from duplicate or envelope-external extras. A positive-only survival loss is
   too broad for the TEST bottleneck.
 
+Follow-up implementation direction:
+
+- Add only a default-off clear-far unmatched-extra guard, `gcs_far_extra_neg`,
+  so the next official-val candidate can combine v4's conservative
+  short-survival settings with pressure against sixth-lane/far-extra queries.
+- Keep the guard narrower than the older duplicate-like `gcs_spurious_neg`:
+  it selects unmatched queries by predicted-valid span, score floor, and
+  distance to every GT lane, so near-GT true short/side candidates are
+  protected by construction.
+- Do not treat this as a proven fix before official-val. It is a targeted
+  hypothesis supported by the v4 extra-lane diagnostic; promotion still
+  requires training-time `official_best`, canonical official-val selection,
+  and then one frozen one-shot TEST.
+
 ## Branch Scope
 
 The current mainline imports the historical `5-25-3.zip` algorithm and changes the TuSimple fixed-y contract to Q=12/K=56 with official h-sample anchors. It also includes the 2026-06-27 user-requested default-off `count_boundary_loss` for GT3/GT4/GT5 adjacent count-score boundaries, default-off train-only `gcs_hard_sampling` for 0601 and short-visible GT3/GT4/GT5 samples, default-off E3-lite `gcs_spurious_neg` loss for short unmatched duplicate-like queries, training-time `official_best`, and the default-off `valid_before_maxdet` query decode option present at `424ab1c86`. Follow-up code before that boundary keeps the old default behavior while adding default-preserving GT-count spurious weights, default-off GT spurious candidate protection, and default-effectively-off GT5 short point-valid rescue controls.

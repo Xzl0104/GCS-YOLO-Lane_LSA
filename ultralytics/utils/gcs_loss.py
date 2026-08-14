@@ -52,6 +52,9 @@ class GCSLoss(nn.Module):
         "boundary_pseudo_neg_loss",
         "boundary_pseudo_count",
         "boundary_pseudo_score_mean",
+        "far_extra_neg_loss",
+        "far_extra_neg_count",
+        "far_extra_score_mean",
         "query_count_ce_loss",
         "query_count_acc",
         "query_count_pred_mean",
@@ -371,6 +374,17 @@ class GCSLoss(nn.Module):
         self.boundary_pseudo_envelope_ratio_thr = float(
             self._arg(args, "gcs_boundary_pseudo_envelope_ratio_thr", 0.75)
         )
+        self.far_extra_neg_gain = float(self._arg(args, "gcs_far_extra_neg", 0.0))
+        self.far_extra_min_gt_lanes = int(self._arg(args, "gcs_far_extra_min_gt_lanes", 3))
+        self.far_extra_max_gt_lanes = int(self._arg(args, "gcs_far_extra_max_gt_lanes", 5))
+        self.far_extra_min_valid = int(self._arg(args, "gcs_far_extra_min_valid", 4))
+        self.far_extra_max_valid = int(self._arg(args, "gcs_far_extra_max_valid", 24))
+        self.far_extra_valid_thr = float(self._arg(args, "gcs_far_extra_valid_thr", 0.5))
+        self.far_extra_score_thr = float(self._arg(args, "gcs_far_extra_score_thr", 0.05))
+        self.far_extra_dist_thr = float(self._arg(args, "gcs_far_extra_dist_thr", 50.0))
+        self.far_extra_gt3_weight = float(self._arg(args, "gcs_far_extra_gt3_weight", 1.0))
+        self.far_extra_gt4_weight = float(self._arg(args, "gcs_far_extra_gt4_weight", 1.0))
+        self.far_extra_gt5_weight = float(self._arg(args, "gcs_far_extra_gt5_weight", 1.0))
 
         if self.short_geom_gain < 0.0:
             raise ValueError(f"gcs_short_geom must be >= 0, got {self.short_geom_gain}.")
@@ -424,6 +438,20 @@ class GCSLoss(nn.Module):
             raise ValueError("gcs_boundary_pseudo_envelope_margin_px must be >= -1.0.")
         if not (0.0 <= self.boundary_pseudo_envelope_ratio_thr <= 1.0):
             raise ValueError("gcs_boundary_pseudo_envelope_ratio_thr must be in [0, 1].")
+        if self.far_extra_neg_gain < 0.0:
+            raise ValueError("gcs_far_extra_neg must be >= 0.")
+        if self.far_extra_min_gt_lanes < 0 or self.far_extra_max_gt_lanes < self.far_extra_min_gt_lanes:
+            raise ValueError("gcs_far_extra_min_gt_lanes/max_gt_lanes must define a valid nonnegative range.")
+        if self.far_extra_min_valid < 0 or self.far_extra_max_valid < self.far_extra_min_valid:
+            raise ValueError("gcs_far_extra_min_valid/max_valid must define a valid nonnegative range.")
+        if not (0.0 <= self.far_extra_valid_thr <= 1.0):
+            raise ValueError("gcs_far_extra_valid_thr must be in [0, 1].")
+        if self.far_extra_score_thr < 0.0:
+            raise ValueError("gcs_far_extra_score_thr must be >= 0.")
+        if self.far_extra_dist_thr < 0.0:
+            raise ValueError("gcs_far_extra_dist_thr must be >= 0.")
+        if self.far_extra_gt3_weight < 0.0 or self.far_extra_gt4_weight < 0.0 or self.far_extra_gt5_weight < 0.0:
+            raise ValueError("gcs_far_extra_gt*_weight values must be >= 0.")
 
         self.exist_quality_alpha = float(
             exist_quality_alpha if exist_quality_alpha is not None else self._arg(args, "gcs_exist_quality_alpha", 1.0)
@@ -1407,6 +1435,125 @@ class GCSLoss(nn.Module):
 
         return torch.stack(losses).mean(), torch.stack(pseudo_counts).sum(), torch.stack(pseudo_score_means).mean()
 
+    def _far_extra_group_weight(self, gt_count: int) -> float:
+        """Return the configured far-extra loss weight for a GT-count group."""
+        if gt_count <= 3:
+            return float(self.far_extra_gt3_weight)
+        if gt_count == 4:
+            return float(self.far_extra_gt4_weight)
+        return float(self.far_extra_gt5_weight)
+
+    def far_extra_neg_loss(
+        self,
+        pred_points: torch.Tensor,
+        pred_logits: torch.Tensor,
+        pred_valid_logits: torch.Tensor | None,
+        gt_points: list[torch.Tensor],
+        gt_valid: list[torch.Tensor],
+        indices: list[tuple[torch.Tensor, torch.Tensor]],
+        gt_lanes: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Extra target-zero BCE for unmatched far-from-GT lane queries."""
+        zero = self._zero_like(pred_points)
+        if float(self.far_extra_neg_gain) <= 0.0:
+            return zero, zero, zero
+        if pred_valid_logits is None:
+            raise ValueError(
+                "gcs_far_extra_neg requires preds['pred_valid_logits'] with shape B x Q x K; "
+                "disable --gcs-far-extra-neg or use a GCS head that emits per-point visibility logits."
+            )
+
+        if pred_logits.ndim == 3 and pred_logits.shape[-1] == 1:
+            pred_logits_2d = pred_logits.squeeze(-1)
+        else:
+            pred_logits_2d = pred_logits
+        if pred_logits_2d.ndim != 2:
+            raise ValueError(f"pred_logits must be B x Q, got {tuple(pred_logits.shape)}.")
+
+        device = pred_points.device
+        dtype = pred_points.dtype
+        bsz, num_queries = pred_logits_2d.shape
+        gt_lanes = torch.as_tensor(gt_lanes, device=device, dtype=pred_logits_2d.dtype).reshape(-1)
+        if gt_lanes.numel() != bsz:
+            raise ValueError(f"gt_lanes must have one value per image, got {gt_lanes.numel()} vs B={bsz}.")
+
+        width = float(self._spurious_x_scale(pred_points).detach().cpu().item())
+        valid_prob = pred_valid_logits.detach().sigmoid()
+        exist_prob = pred_logits_2d.detach().sigmoid()
+        points = pred_points.detach()
+
+        losses = []
+        selected_scores = []
+        selected_count = 0
+
+        for b in range(bsz):
+            gt_count_b = int(round(float(gt_lanes[b].detach().cpu().item())))
+            if gt_count_b < int(self.far_extra_min_gt_lanes) or gt_count_b > int(self.far_extra_max_gt_lanes):
+                continue
+            group_weight = self._far_extra_group_weight(gt_count_b)
+            if group_weight <= 0.0:
+                continue
+
+            gt_points_b = gt_points[b].detach().to(device=device, dtype=dtype)
+            gt_valid_b = gt_valid[b].detach().to(device=device, dtype=dtype)
+            if gt_points_b.numel() == 0 or gt_points_b.ndim != 3:
+                continue
+            if gt_valid_b.shape != gt_points_b.shape[:2]:
+                raise ValueError(
+                    f"GT valid mask must match GT lane first two dims, got {tuple(gt_valid_b.shape)} vs "
+                    f"{tuple(gt_points_b.shape[:2])}."
+                )
+
+            src_idx, _ = indices[b]
+            matched = torch.zeros((num_queries,), device=device, dtype=torch.bool)
+            if src_idx.numel() > 0:
+                matched[src_idx.to(device=device, dtype=torch.long)] = True
+            unmatched_idx = torch.nonzero(~matched, as_tuple=False).flatten()
+            if unmatched_idx.numel() == 0:
+                continue
+
+            selected = []
+            for q in unmatched_idx.tolist():
+                q_valid = valid_prob[b, q] >= float(self.far_extra_valid_thr)
+                visible_len = int(q_valid.sum().item())
+                if visible_len < int(self.far_extra_min_valid) or visible_len > int(self.far_extra_max_valid):
+                    continue
+                score = exist_prob[b, q]
+                if float(score.detach().cpu().item()) < float(self.far_extra_score_thr):
+                    continue
+
+                dists = self._query_to_gt_lane_dist_px(
+                    points[b, q],
+                    q_valid,
+                    gt_points_b,
+                    gt_valid_b,
+                    width,
+                )
+                if dists.numel() == 0 or not bool(torch.isfinite(dists).any()):
+                    continue
+                nearest_dist = float(dists[torch.isfinite(dists)].min().detach().cpu().item())
+                if nearest_dist < float(self.far_extra_dist_thr):
+                    continue
+
+                selected.append(q)
+                selected_scores.append(score.to(device=device, dtype=dtype))
+
+            if not selected:
+                continue
+
+            selected_idx = torch.tensor(selected, device=device, dtype=torch.long)
+            logits = pred_logits_2d[b, selected_idx]
+            raw_loss = F.binary_cross_entropy_with_logits(logits, torch.zeros_like(logits), reduction="none")
+            losses.append(raw_loss * float(group_weight))
+            selected_count += int(selected_idx.numel())
+
+        if not losses:
+            return zero, zero, zero
+
+        loss = torch.cat([x.reshape(-1) for x in losses]).mean()
+        score_mean = torch.stack(selected_scores).mean() if selected_scores else zero
+        return loss, pred_logits_2d.new_tensor(float(selected_count)), score_mean
+
     def _spurious_candidate_gt_protected(
         self,
         points_b: torch.Tensor,
@@ -1707,6 +1854,15 @@ class GCSLoss(nn.Module):
             indices,
             gt_lanes,
         )
+        far_extra_neg_loss, far_extra_neg_count, far_extra_score_mean = self.far_extra_neg_loss(
+            pred_points,
+            pred_logits,
+            pred_valid_logits,
+            gt_points,
+            gt_valid,
+            indices,
+            gt_lanes,
+        )
         query_count_ce_loss, query_count_acc, query_count_pred_mean = self.query_count_ce_loss(
             preds,
             batch,
@@ -1755,6 +1911,8 @@ class GCSLoss(nn.Module):
             total = total + self.count_boundary_gain * count_boundary_loss
         if self.boundary_pseudo_neg_gain != 0.0:
             total = total + self.boundary_pseudo_neg_gain * boundary_pseudo_neg_loss
+        if self.far_extra_neg_gain != 0.0:
+            total = total + self.far_extra_neg_gain * far_extra_neg_loss
         if self.query_count_ce_gain != 0.0:
             total = total + self.query_count_ce_gain * query_count_ce_loss
         if self.spurious_neg_gain != 0.0:
@@ -1799,6 +1957,9 @@ class GCSLoss(nn.Module):
                 boundary_pseudo_neg_loss.detach(),
                 boundary_pseudo_count.detach(),
                 boundary_pseudo_score_mean.detach(),
+                far_extra_neg_loss.detach(),
+                far_extra_neg_count.detach(),
+                far_extra_score_mean.detach(),
                 query_count_ce_loss.detach(),
                 query_count_acc.detach(),
                 query_count_pred_mean.detach(),

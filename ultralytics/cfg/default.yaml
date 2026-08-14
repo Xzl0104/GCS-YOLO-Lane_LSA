@@ -197,6 +197,17 @@ gcs_boundary_pseudo_gt_count: 5 # (int) GT lane count targeted by boundary pseud
 gcs_boundary_pseudo_score_thr: 0.0 # (float) optional existence score floor for boundary pseudo negatives; 0 disables
 gcs_boundary_pseudo_envelope_margin_px: -1.0 # (float) require common-visible query anchors outside GT envelope by this margin; <0 disables
 gcs_boundary_pseudo_envelope_ratio_thr: 0.75 # (float) minimum common-visible anchor ratio outside GT envelope when envelope margin is enabled
+gcs_far_extra_neg: 0.0 # (float) extra BCE negative loss for unmatched far-from-GT extra lane queries; 0 disables
+gcs_far_extra_min_gt_lanes: 3 # (int) minimum GT lane count for far-extra negative guard
+gcs_far_extra_max_gt_lanes: 5 # (int) maximum GT lane count for far-extra negative guard
+gcs_far_extra_min_valid: 4 # (int) minimum predicted-valid anchors for far-extra candidates
+gcs_far_extra_max_valid: 24 # (int) maximum predicted-valid anchors for far-extra candidates
+gcs_far_extra_valid_thr: 0.5 # (float) point-valid threshold for far-extra candidate anchors
+gcs_far_extra_score_thr: 0.05 # (float) minimum existence score for far-extra candidates
+gcs_far_extra_dist_thr: 50.0 # (float) minimum mean x-distance to every GT lane in original pixels
+gcs_far_extra_gt3_weight: 1.0 # (float) GT3-or-fewer far-extra loss multiplier
+gcs_far_extra_gt4_weight: 1.0 # (float) GT4 far-extra loss multiplier
+gcs_far_extra_gt5_weight: 1.0 # (float) GT5-or-more far-extra loss multiplier
 gcs_exist_pos_weight: 1.0 # (float) positive query weight for GCS lane existence BCE
 gcs_exist_focal_gamma: 0.0 # (float) optional focal gamma for GCS existence BCE; 0 disables focal weighting
 gcs_exist_focal_alpha: -1.0 # (float) optional focal alpha for GCS existence BCE; set 0..1 to enable alpha weighting

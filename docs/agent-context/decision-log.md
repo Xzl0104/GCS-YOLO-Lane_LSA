@@ -2,6 +2,45 @@
 
 This file records decisions for branch `codex/5-25-3-k56`.
 
+## 2026-08-14: Add default-off far-extra overcount guard for next env30 candidate
+
+Decision:
+
+Add `gcs_far_extra_neg` as a default-off training loss and use it only for the
+next official-val-selected env30 follow-up. Do not change baseline defaults,
+decode, matcher assignment, labels, model outputs, NMS, or official metrics.
+
+Why:
+
+- env30's raw20 TEST miss is dominated by GT4/GT5 count-shape instability:
+  GT4 has both undercount and false-fifth lanes, while GT5 still has undercount
+  and v4 introduced sixth-lane overcount.
+- v3/v4 showed that matched short-lane positive pressure alone is not selective
+  enough. It can raise true short-lane survival, but it also raises extra
+  duplicate/far lane survival and hurts TEST ACC.
+- Official-val diagnostics on v4's frozen decode show the extra predicted lanes
+  are often boundary-pseudo or clear-far rather than near-GT true short lanes,
+  so they are not covered by the older duplicate-like `gcs_spurious_neg`
+  contract.
+
+Implementation scope:
+
+```text
+gcs_far_extra_neg = 0.0 default
+candidate scope = unmatched query only
+GT scope = gcs_far_extra_min_gt_lanes..gcs_far_extra_max_gt_lanes
+visible span gate = gcs_far_extra_min_valid..gcs_far_extra_max_valid
+score gate = sigmoid(pred_logits) >= gcs_far_extra_score_thr
+clear-far gate = nearest mean x-distance to every GT lane >= gcs_far_extra_dist_thr
+```
+
+Validation:
+
+Local contract checks must prove default-off behavior is unchanged, loss-name
+logging is synchronized across loss/trainer/validator, invalid parameters
+raise, far unmatched queries are selected, near-GT unmatched queries are
+protected, and matched queries are not selected.
+
 ## 2026-08-14: Reject env30 short-survival v3/v4
 
 Decision:

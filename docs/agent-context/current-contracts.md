@@ -404,6 +404,9 @@ cnt_score
 boundary_pseudo_neg_loss
 boundary_pseudo_count
 boundary_pseudo_score_mean
+far_extra_neg_loss
+far_extra_neg_count
+far_extra_score_mean
 query_count_ce_loss
 query_count_acc
 query_count_pred_mean
@@ -465,6 +468,19 @@ A left-boundary candidate must have at least
 right of `right_env_x + margin`. This changes only the training loss candidate
 mask; it does not change model outputs, matcher assignment, labels, decode,
 NMS, or official metrics.
+
+`far_extra_neg_loss` is disabled by default through `gcs_far_extra_neg=0.0`.
+When enabled, it requires `pred_valid_logits` and applies only to unmatched
+queries on images whose GT lane count is in
+`[gcs_far_extra_min_gt_lanes, gcs_far_extra_max_gt_lanes]`. Candidate queries
+must have predicted-visible anchor count in
+`[gcs_far_extra_min_valid, gcs_far_extra_max_valid]`, existence score at least
+`gcs_far_extra_score_thr`, and nearest-GT mean x distance at least
+`gcs_far_extra_dist_thr`. GT3-or-sparser, GT4, and GT5-or-denser samples are
+weighted by `gcs_far_extra_gt3_weight`, `gcs_far_extra_gt4_weight`, and
+`gcs_far_extra_gt5_weight`. This loss is an explicit overcount guard for
+clear-far extra lanes; it does not change model outputs, matcher assignment,
+labels, decode, NMS, official metrics, or default training behavior.
 
 ### Legacy Post-424 Loss And Diagnostic Records
 
