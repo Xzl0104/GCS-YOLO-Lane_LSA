@@ -2,7 +2,7 @@
 
 This file applies to branch `codex/5-25-3-k56`.
 
-## 2026-08-14 env30 TEST Bottleneck After Short-Survival v3/v4
+## 2026-08-14 env30 TEST Bottleneck After Short-Survival v3/v4/v5
 
 The env30 baseline missed `0.970000` raw20 TEST ACC by about `8.95`
 accuracy-points over 2,782 images:
@@ -27,6 +27,13 @@ v4 official-val ACC/FP/FN = 0.972401 / 0.022865 / 0.012167
 v4 official-test ACC/FP/FN = 0.965407 / 0.038288 / 0.025971
 v4 count_acc_3/4/5 = 0.953448 / 0.576923 / 0.768014
 v4 confusion includes 3->6=3, 4->6=21, 5->6=69
+
+v5 far-extra guard official-val ACC/FP/FN = 0.972258 / 0.016253 / 0.009642
+v5 official-val count_acc_3/4/5 = 0.968610 / 0.939394 / 0.986486
+v5 official-val confusion includes 3->4=6, 3->5=1, 4->3=2, 4->5=2, 5->4=1
+v5 official-val selected epoch/decode = epoch40,
+  conf=0.02, point_valid_thr=0.6, nms=0, max_det=5, min_points=4,
+  valid_before_maxdet=true
 ```
 
 Interpretation:
@@ -39,6 +46,14 @@ Interpretation:
 - The next useful diagnostic must explicitly separate true short side lanes
   from duplicate or envelope-external extras. A positive-only survival loss is
   too broad for the TEST bottleneck.
+- The first `gcs_far_extra_neg` v5 run is a useful partial validation of the
+  overcount direction, but it is not promotable. It recovers the late
+  validation count shape close to env30, yet remains below env30 on official
+  ACC (`0.972258 < 0.973330`) and slightly below v4 (`0.972401`).
+- Since v5 failed the official-val gate, do not run TEST for it. Its evidence
+  says the current `0.05/dist50/gt5_half` guard is not the missing final fix:
+  early/mid epochs had severe GT3/GT4 overcount and sixth-lane behavior, while
+  late epochs still keep residual GT4 under/over-count.
 
 Follow-up implementation direction:
 
@@ -53,6 +68,11 @@ Follow-up implementation direction:
   hypothesis supported by the v4 extra-lane diagnostic; promotion still
   requires training-time `official_best`, canonical official-val selection,
   and then one frozen one-shot TEST.
+- Do not continue with a blind larger far-extra gain or looser clear-far mask.
+  If this line is reopened, make the guard more selective and validation-gated:
+  compare clear-far false extras against near-GT true short side candidates,
+  then try a smaller or staged penalty only if it lowers GT3/GT4 extras without
+  hurting GT5 retention on official-val.
 
 ## Branch Scope
 

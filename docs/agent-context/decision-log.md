@@ -2,6 +2,65 @@
 
 This file records decisions for branch `codex/5-25-3-k56`.
 
+## 2026-08-14: Reject env30 short-survival far-extra v5
+
+Decision:
+
+Do not promote
+`query_env30_short_survival_far_extra005_d50_gt5half_env30recipe_b32_amp_v5`
+and do not run final TEST for it. Keep `gcs_far_extra_neg` default-off as
+diagnostic infrastructure only.
+
+Official-val evidence:
+
+```text
+source = env30 official_best.pt
+epochs = 40
+short_survival = 0.2
+short_survival_exist_weight = 0.2
+short_survival_valid_weight = 1.0
+gcs_far_extra_neg = 0.05
+gcs_far_extra_dist_thr = 50
+gcs_far_extra_gt3/gt4/gt5_weight = 1.0 / 1.0 / 0.5
+selected epoch = 40
+decode = conf=0.02, point_valid_thr=0.6, nms_dist_px=0.0,
+         max_det=5, min_points=4, valid_before_maxdet=true
+official-val ACC/FP/FN = 0.972258 / 0.016253 / 0.009642
+official-val count_acc_3/4/5 = 0.968610 / 0.939394 / 0.986486
+official-val count_confusion = 3->3=216, 3->4=6, 3->5=1,
+                               4->3=2, 4->4=62, 4->5=2,
+                               5->4=1, 5->5=73
+```
+
+Reference comparison:
+
+```text
+env30 official-val ACC/FP/FN = 0.973330 / 0.015748 / 0.009642
+v4 official-val ACC/FP/FN    = 0.972401 / 0.022865 / 0.012167
+```
+
+Why:
+
+- v5 partly fixes the v4 overcount shape by late training: the selected row no
+  longer has sixth-lane outputs, GT5 retention is good, and FP is much lower
+  than v4.
+- It still misses the official-val promotion gate. Primary ACC is below env30
+  by `0.001072` and slightly below v4 by `0.000143`.
+- Mid-training official sweeps show the current guard is not reliably
+  selective: epoch005/010/020 had high FP and GT3/GT4 false-extra behavior,
+  and epoch015 selected a max_det=6 row with `5->6=33`.
+- Therefore the TEST-side bottleneck remains true-short-lane versus
+  extra-lane separation, not a simple lack of far-extra BCE pressure.
+
+Next action:
+
+Do not tune thresholds, NMS, `max_det`, `min_points`, or loss weights from a
+TEST run, because no TEST was opened for v5. If continuing this line, first
+build a validation-only diagnostic that separates clear-far false extras from
+near-GT true short side lanes, then try a more selective or smaller guard only
+if it reduces GT3/GT4 false extras while preserving GT5 on canonical
+official-val.
+
 ## 2026-08-14: Add default-off far-extra overcount guard for next env30 candidate
 
 Decision:
