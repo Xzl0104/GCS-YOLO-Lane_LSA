@@ -27,6 +27,7 @@ from gcs_tools.tusimple_official_eval import (  # noqa: E402
     official_gt_contract_summary,
     official_metric_score,
     read_tusimple_json_lines,
+    resolve_official_output_shape,
     resolve_tusimple_gt_json,
     stable_gt_content_hash,
     stable_raw_file_hash,
@@ -104,6 +105,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--weights", default=str(DEFAULT_WEIGHTS), help="GCS checkpoint .pt.")
     parser.add_argument("--decode-mode", choices=("auto", "query", "ordered_slot"), default="auto", help="Decode path for official sweep.")
     parser.add_argument("--decode-yaml", default=None, help="Schema-validated official_best_decode.yaml to reproduce a decode.")
+    parser.add_argument(
+        "--official-output-shape",
+        nargs=2,
+        type=int,
+        default=None,
+        metavar=("H", "W"),
+        help="TuSimple official prediction coordinate shape as H W. Defaults to 720 1280 for TuSimple.",
+    )
     parser.add_argument("--gcs-min-lanes", type=int, default=2, help="ordered_slot minimum supported lane count.")
     parser.add_argument("--gcs-max-lanes", type=int, default=5, help="ordered_slot maximum supported lane count.")
     parser.add_argument("--gcs-num-slots", type=int, default=5, help="ordered_slot slot count.")
@@ -561,10 +570,11 @@ def _query_lane_to_tusimple(
 class CachedQueryPrediction:
     """In-memory query prediction cache with per-threshold decode precomputation."""
 
-    def __init__(self, item: dict[str, Any]):
+    def __init__(self, item: dict[str, Any], official_output_shape: tuple[int, int] | None = None):
         self.raw_file = str(item["raw_file"])
         self.h_samples = [int(x) for x in item["h_samples"]]
         self.image_shape = (int(item["image_shape"][0]), int(item["image_shape"][1]))
+        self.official_output_shape = tuple(official_output_shape or self.image_shape)
         preds = item["predictions"]
         if "pred_points" not in preds or "pred_logits" not in preds:
             raise KeyError(f"Query prediction cache for {self.raw_file} lacks pred_points/pred_logits.")
@@ -621,7 +631,12 @@ class CachedQueryPrediction:
             )
         valid_counts = masks.sum(axis=1).astype(np.int32)
         tusimple_lanes = [
-            _query_lane_to_tusimple(self.points[i], masks[i] if self.valid_scores is not None else None, self.h_samples, self.image_shape)
+            _query_lane_to_tusimple(
+                self.points[i],
+                masks[i] if self.valid_scores is not None else None,
+                self.h_samples,
+                self.official_output_shape,
+            )
             for i in range(self.points.shape[0])
         ]
 
@@ -875,8 +890,9 @@ def cached_sweep_query(
     gt_records: list[dict],
     combos: list[dict[str, Any]],
     args: argparse.Namespace,
+    official_output_shape: tuple[int, int],
 ) -> tuple[list[dict[str, Any]], dict[str, float]]:
-    cached_predictions = [CachedQueryPrediction(item) for item in entries]
+    cached_predictions = [CachedQueryPrediction(item, official_output_shape=official_output_shape) for item in entries]
     gt_by_raw = {str(record["raw_file"]): record for record in gt_records}
     states = {_combo_key(combo): _new_state() for combo in combos}
 
@@ -899,6 +915,7 @@ def cached_sweep_ordered_slot(
     combos: list[dict[str, Any]],
     args: argparse.Namespace,
     decode_yaml_cfg: dict[str, Any] | None,
+    official_output_shape: tuple[int, int],
 ) -> tuple[list[dict[str, Any]], dict[str, float]]:
     if len(combos) != 1:
         raise RuntimeError(f"ordered_slot cached sweep expects one combo, got {len(combos)}.")
@@ -929,7 +946,7 @@ def cached_sweep_ordered_slot(
         )
         order_stats["ordered_slot_order_violations"] += int(order_diag["order_violation_count"])
         order_stats["ordered_slot_order_violation_images"] += int(order_diag["has_order_violation"])
-        tusimple_lanes = gcs_lanes_to_tusimple_lanes(lanes, item["h_samples"], image_shape=image_shape)
+        tusimple_lanes = gcs_lanes_to_tusimple_lanes(lanes, item["h_samples"], image_shape=official_output_shape)
         _update_state(state, tusimple_lanes, gt_by_raw[raw_file], runtime_ms=float(args.runtime_ms))
     elapsed = time.perf_counter() - t0
 
@@ -949,6 +966,7 @@ def _config_for_summary(
     gt_path: Path,
     gt_contract: dict[str, Any],
     imgsz: tuple[int, int],
+    official_output_shape: tuple[int, int],
     decode_mode: str,
     effective_margins: list[int],
     decode_yaml_cfg: dict[str, Any] | None,
@@ -965,6 +983,7 @@ def _config_for_summary(
         "cache_weights": manifest.get("weights", {}),
         "cache_created_unix_time": manifest.get("created_unix_time"),
         "imgsz": [int(imgsz[0]), int(imgsz[1])],
+        "official_output_shape": [int(official_output_shape[0]), int(official_output_shape[1])],
         "decode_mode": str(decode_mode),
         "runtime_ms": float(args.runtime_ms),
         "max_images": int(args.max_images),
@@ -1051,6 +1070,7 @@ def sweep(args: argparse.Namespace) -> dict[str, Any]:
         allow_noncanonical_gt=bool(getattr(args, "allow_noncanonical_gt", False)),
     )
     imgsz = normalize_imgsz(args.imgsz, dataset=args.dataset)
+    official_output_shape = resolve_official_output_shape(args.official_output_shape, dataset=args.dataset)
     cache_dir = resolve_cache_dir(getattr(args, "cache_dir", None), args.weights, args.split)
 
     requested_mode = _normalize_decode_mode_name(getattr(args, "decode_mode", "auto"))
@@ -1107,9 +1127,16 @@ def sweep(args: argparse.Namespace) -> dict[str, Any]:
             combos=combos,
             args=args,
             decode_yaml_cfg=decode_yaml_cfg,
+            official_output_shape=official_output_shape,
         )
     else:
-        rows, timing = cached_sweep_query(entries=entries, gt_records=gt_records, combos=combos, args=args)
+        rows, timing = cached_sweep_query(
+            entries=entries,
+            gt_records=gt_records,
+            combos=combos,
+            args=args,
+            official_output_shape=official_output_shape,
+        )
     rows = sorted(rows, key=_row_sort_key)
     best = select_best(rows)
 
@@ -1129,6 +1156,7 @@ def sweep(args: argparse.Namespace) -> dict[str, Any]:
         gt_path=gt_path,
         gt_contract=gt_contract,
         imgsz=imgsz,
+        official_output_shape=official_output_shape,
         decode_mode=str(args.decode_mode),
         effective_margins=effective_margins,
         decode_yaml_cfg=decode_yaml_cfg,
@@ -1165,6 +1193,7 @@ def sweep(args: argparse.Namespace) -> dict[str, Any]:
     (save_dir / "tusimple_official_sweep_summary.json").write_text(json.dumps(output, indent=2), encoding="utf-8")
     print(json.dumps(best, indent=2))
     print(f"GCS input shape: {shape_str(imgsz)} (W x H), stored as H,W={imgsz}")
+    print(f"official output shape H,W={official_output_shape}")
     print(f"cached sweep used cache: {cache_dir.resolve()}")
     print(f"swept {len(rows)} combinations on {len(gt_records)} images")
     print(f"saved to: {save_dir.resolve()}")

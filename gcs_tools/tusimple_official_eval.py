@@ -70,6 +70,20 @@ def stable_raw_file_hash(gt_records: Iterable[dict]) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def resolve_official_output_shape(shape: Iterable[int] | None, *, dataset: str = "tusimple") -> tuple[int, int]:
+    """Return the H,W coordinate shape used for official prediction export."""
+    if shape is None:
+        if str(dataset).strip().lower() == "tusimple":
+            return TUSIMPLE_ORIGINAL_SHAPE
+        raise ValueError(f"Unsupported dataset for default official output shape: {dataset!r}")
+    values = [int(x) for x in shape]
+    if len(values) != 2:
+        raise ValueError(f"official output shape must be H W, got {values!r}.")
+    if values[0] <= 0 or values[1] <= 0:
+        raise ValueError(f"official output shape values must be positive, got {values!r}.")
+    return int(values[0]), int(values[1])
+
+
 def _normalize_gt_hash_value(value) -> int | float:
     """Normalize JSON numeric values for stable GT content hashing."""
     numeric = float(value)

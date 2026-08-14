@@ -25,6 +25,7 @@ from gcs_tools.tusimple_official_eval import (  # noqa: E402
     official_gt_contract_summary,
     official_metric_score,
     read_tusimple_json_lines,
+    resolve_official_output_shape,
     resolve_tusimple_gt_json,
     tusimple_image_path,
     write_tusimple_predictions,
@@ -67,6 +68,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--weights", default=str(DEFAULT_WEIGHTS), help="GCS checkpoint .pt used when --pred-json is not set.")
     parser.add_argument("--decode-mode", choices=("auto", "query", "ordered_slot"), default="auto", help="Decode path for official eval.")
     parser.add_argument("--decode-yaml", default=None, help="Schema-validated official_best_decode.yaml to use for final eval.")
+    parser.add_argument(
+        "--official-output-shape",
+        nargs=2,
+        type=int,
+        default=None,
+        metavar=("H", "W"),
+        help="TuSimple official prediction coordinate shape as H W. Defaults to 720 1280 for TuSimple.",
+    )
     parser.add_argument("--gcs-min-lanes", type=int, default=2, help="ordered_slot minimum supported lane count.")
     parser.add_argument("--gcs-max-lanes", type=int, default=5, help="ordered_slot maximum supported lane count.")
     parser.add_argument("--gcs-num-slots", type=int, default=5, help="ordered_slot slot count.")
@@ -315,6 +324,7 @@ def generate_predictions(
     valid_before_maxdet: bool = False,
     decode_mode: str = "auto",
     decode_yaml_cfg: dict | None = None,
+    official_output_shape: tuple[int, int] | None = None,
     gcs_min_lanes: int = 2,
     gcs_max_lanes: int = 5,
     gcs_num_slots: int = 5,
@@ -377,6 +387,7 @@ def generate_predictions(
             _ = model(warm_tensor)
         _sync_if_cuda(device_obj)
 
+    official_shape = resolve_official_output_shape(official_output_shape, dataset="tusimple")
     pred_records: list[dict] = []
     ordered_slot_runtime_cfg = ordered_slot_decode_runtime_config(context="official_eval")
     ordered_slot_order_stats = {
@@ -449,7 +460,7 @@ def generate_predictions(
                 count_aware_extra_margin=count_aware_extra_margin,
                 count_mode=count_mode,
             )
-        tusimple_lanes = gcs_lanes_to_tusimple_lanes(lanes, record["h_samples"], image_shape=original_shape)
+        tusimple_lanes = gcs_lanes_to_tusimple_lanes(lanes, record["h_samples"], image_shape=official_shape)
         t2 = time.perf_counter()
         infer_time_s += t1 - t0
         post_time_s += t2 - t1
@@ -479,6 +490,7 @@ def evaluate_official(args: argparse.Namespace) -> dict:
     )
 
     imgsz = normalize_imgsz(args.imgsz, dataset=args.dataset)
+    official_output_shape = resolve_official_output_shape(args.official_output_shape, dataset=args.dataset)
     timing = {"avg_inference_ms": None, "avg_postprocess_ms": None, "avg_total_ms": None}
     ordered_slot_order_stats: dict = {}
     pred_json = args.pred_json
@@ -539,6 +551,7 @@ def evaluate_official(args: argparse.Namespace) -> dict:
             oracle_count=query_oracle_count,
             decode_mode=args.decode_mode,
             decode_yaml_cfg=decode_yaml_cfg,
+            official_output_shape=official_output_shape,
             gcs_min_lanes=int(getattr(args, "gcs_min_lanes", 2)),
             gcs_max_lanes=int(getattr(args, "gcs_max_lanes", 5)),
             gcs_num_slots=int(getattr(args, "gcs_num_slots", 5)),
@@ -620,6 +633,8 @@ def evaluate_official(args: argparse.Namespace) -> dict:
         "split": args.split,
         "gt_json": str(gt_path.resolve()),
         "imgsz": [int(imgsz[0]), int(imgsz[1])],
+        "official_output_shape": [int(official_output_shape[0]), int(official_output_shape[1])] if not pred_json else None,
+        "official_output_shape_applied": not bool(pred_json),
         "decode_mode": str(active_decode_mode),
         "runtime_ms": float(args.runtime_ms),
         "use_measured_runtime": bool(args.use_measured_runtime),
@@ -705,6 +720,7 @@ def evaluate_official(args: argparse.Namespace) -> dict:
     (save_dir / "tusimple_official_summary.json").write_text(json.dumps(output, indent=2), encoding="utf-8")
     print(json.dumps(metrics, indent=2))
     print(f"GCS input shape: {shape_str(imgsz)} (W x H), stored as H,W={imgsz}")
+    print(f"official output shape H,W={official_output_shape}")
     print(f"saved to: {save_dir.resolve()}")
     return output
 

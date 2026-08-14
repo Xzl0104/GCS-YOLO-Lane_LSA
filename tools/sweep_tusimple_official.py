@@ -26,6 +26,7 @@ from gcs_tools.tusimple_official_eval import (  # noqa: E402
     official_gt_contract_summary,
     official_metric_score,
     read_tusimple_json_lines,
+    resolve_official_output_shape,
     resolve_tusimple_gt_json,
     tusimple_image_path,
 )
@@ -108,6 +109,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--weights", default=str(DEFAULT_WEIGHTS), help="GCS checkpoint .pt.")
     parser.add_argument("--decode-mode", choices=("auto", "query", "ordered_slot"), default="auto", help="Decode path for official sweep.")
     parser.add_argument("--decode-yaml", default=None, help="Schema-validated official_best_decode.yaml to reproduce a decode.")
+    parser.add_argument(
+        "--official-output-shape",
+        nargs=2,
+        type=int,
+        default=None,
+        metavar=("H", "W"),
+        help="TuSimple official prediction coordinate shape as H W. Defaults to 720 1280 for TuSimple.",
+    )
     parser.add_argument("--gcs-min-lanes", type=int, default=2, help="ordered_slot minimum supported lane count.")
     parser.add_argument("--gcs-max-lanes", type=int, default=5, help="ordered_slot maximum supported lane count.")
     parser.add_argument("--gcs-num-slots", type=int, default=5, help="ordered_slot slot count.")
@@ -426,6 +435,7 @@ def sweep(args: argparse.Namespace) -> dict:
     )
 
     imgsz = normalize_imgsz(args.imgsz, dataset=args.dataset)
+    official_output_shape = resolve_official_output_shape(args.official_output_shape, dataset=args.dataset)
     device_obj = select_device(args.device)
     model = load_gcs_model(args.weights, device=device_obj, half=args.half, gcs_imgsz=imgsz)
     decode_yaml_cfg = None
@@ -528,7 +538,7 @@ def sweep(args: argparse.Namespace) -> dict:
                     count_aware_extra_margin=combo["count_aware_extra_margin"],
                     count_mode=combo["count_mode"],
                 )
-            tusimple_lanes = gcs_lanes_to_tusimple_lanes(lanes, record["h_samples"], image_shape=original_shape)
+            tusimple_lanes = gcs_lanes_to_tusimple_lanes(lanes, record["h_samples"], image_shape=official_output_shape)
             combo_records[_combo_key(combo)].append(
                 {
                     "lanes": tusimple_lanes,
@@ -593,6 +603,7 @@ def sweep(args: argparse.Namespace) -> dict:
         "gt_json": str(gt_path.resolve()),
         "save_dir": str(save_dir.resolve()),
         "imgsz": [int(imgsz[0]), int(imgsz[1])],
+        "official_output_shape": [int(official_output_shape[0]), int(official_output_shape[1])],
         "decode_mode": str(getattr(args, "decode_mode", "query")),
         "runtime_ms": float(args.runtime_ms),
         "max_images": int(args.max_images),
@@ -677,6 +688,7 @@ def sweep(args: argparse.Namespace) -> dict:
     (save_dir / "tusimple_official_sweep_summary.json").write_text(json.dumps(output, indent=2), encoding="utf-8")
     print(json.dumps(best, indent=2))
     print(f"GCS input shape: {shape_str(imgsz)} (W x H), stored as H,W={imgsz}")
+    print(f"official output shape H,W={official_output_shape}")
     print(f"swept {len(rows)} combinations on {len(gt_records)} images")
     print(f"saved to: {save_dir.resolve()}")
     return output
