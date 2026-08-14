@@ -1125,6 +1125,7 @@ class GCSLaneTrainer(BaseTrainer):
             allow_noncanonical_gt=bool(getattr(self.args, "gcs_official_allow_noncanonical_gt", False)),
             weights=str(self.last),
             imgsz=[int(shape[0]), int(shape[1])],
+            official_output_shape=None,
             decode_mode="ordered_slot" if ordered_slot else "query",
             confs=confs,
             point_valid_thrs=point_valid_thrs,

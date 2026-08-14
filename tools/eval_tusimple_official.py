@@ -490,7 +490,10 @@ def evaluate_official(args: argparse.Namespace) -> dict:
     )
 
     imgsz = normalize_imgsz(args.imgsz, dataset=args.dataset)
-    official_output_shape = resolve_official_output_shape(args.official_output_shape, dataset=args.dataset)
+    official_output_shape = resolve_official_output_shape(
+        getattr(args, "official_output_shape", None),
+        dataset=args.dataset,
+    )
     timing = {"avg_inference_ms": None, "avg_postprocess_ms": None, "avg_total_ms": None}
     ordered_slot_order_stats: dict = {}
     pred_json = args.pred_json

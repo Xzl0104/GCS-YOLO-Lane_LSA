@@ -435,7 +435,10 @@ def sweep(args: argparse.Namespace) -> dict:
     )
 
     imgsz = normalize_imgsz(args.imgsz, dataset=args.dataset)
-    official_output_shape = resolve_official_output_shape(args.official_output_shape, dataset=args.dataset)
+    official_output_shape = resolve_official_output_shape(
+        getattr(args, "official_output_shape", None),
+        dataset=args.dataset,
+    )
     device_obj = select_device(args.device)
     model = load_gcs_model(args.weights, device=device_obj, half=args.half, gcs_imgsz=imgsz)
     decode_yaml_cfg = None

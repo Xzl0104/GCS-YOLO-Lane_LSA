@@ -1070,7 +1070,10 @@ def sweep(args: argparse.Namespace) -> dict[str, Any]:
         allow_noncanonical_gt=bool(getattr(args, "allow_noncanonical_gt", False)),
     )
     imgsz = normalize_imgsz(args.imgsz, dataset=args.dataset)
-    official_output_shape = resolve_official_output_shape(args.official_output_shape, dataset=args.dataset)
+    official_output_shape = resolve_official_output_shape(
+        getattr(args, "official_output_shape", None),
+        dataset=args.dataset,
+    )
     cache_dir = resolve_cache_dir(getattr(args, "cache_dir", None), args.weights, args.split)
 
     requested_mode = _normalize_decode_mode_name(getattr(args, "decode_mode", "auto"))
