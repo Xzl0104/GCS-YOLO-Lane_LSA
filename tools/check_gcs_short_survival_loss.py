@@ -56,6 +56,17 @@ def test_rejects_invalid_gain() -> None:
     raise AssertionError("negative gcs_short_survival should raise ValueError.")
 
 
+def test_rejects_invalid_component_weight() -> None:
+    for key in ("gcs_short_survival_exist_weight", "gcs_short_survival_valid_weight"):
+        try:
+            GCSLoss({"gcs_imgsz": [544, 960], key: -0.1})
+        except ValueError as exc:
+            if key not in str(exc):
+                raise AssertionError(f"unexpected ValueError for {key}: {exc}") from exc
+            continue
+        raise AssertionError(f"negative {key} should raise ValueError.")
+
+
 def test_loss_name_contracts_match() -> None:
     if tuple(GCSLoss.loss_names) != tuple(GCSLaneTrainer.loss_names):
         raise AssertionError("GCSLoss and GCSLaneTrainer loss_names must match exactly.")
@@ -126,6 +137,33 @@ def test_enabled_gt5_short_survival_counts_and_loss() -> None:
         raise AssertionError(f"expected 8 visible anchors on the short lane, got {int(anchor_count.item())}.")
 
 
+def test_component_weights_scale_short_survival_loss() -> None:
+    preds, batch, indices = _fixture(gt_count=5)
+    criterion = GCSLoss(
+        {
+            "gcs_imgsz": [544, 960],
+            "gcs_short_survival": 1.0,
+            "gcs_short_survival_visible_thr": 10,
+            "gcs_short_survival_exist_weight": 0.0,
+            "gcs_short_survival_valid_weight": 2.0,
+        }
+    )
+    loss, exist_loss, valid_loss, *_ = criterion.short_survival_loss(
+        preds["pred_logits"],
+        preds["pred_valid_logits"],
+        preds["pred_points"],
+        batch["lane_valid"],
+        indices,
+        gt_lanes=batch["num_lanes"],
+    )
+    expected = 2.0 * valid_loss
+    if not torch.allclose(loss, expected):
+        raise AssertionError(
+            f"component weights not applied correctly: got={float(loss)}, expected={float(expected)}, "
+            f"exist={float(exist_loss)}, valid={float(valid_loss)}."
+        )
+
+
 def test_enabled_gt4_short_survival_counts_and_forward_items() -> None:
     preds, batch, _ = _fixture(gt_count=4)
     criterion = GCSLoss(
@@ -166,12 +204,14 @@ def test_non_gt4_gt5_ignored() -> None:
 
 def main() -> None:
     test_rejects_invalid_gain()
+    test_rejects_invalid_component_weight()
     test_loss_name_contracts_match()
     test_default_off_forward_loss_matches_old_total()
     test_enabled_gt5_short_survival_counts_and_loss()
+    test_component_weights_scale_short_survival_loss()
     test_enabled_gt4_short_survival_counts_and_forward_items()
     test_non_gt4_gt5_ignored()
-    print(json.dumps({"status": "ok", "tests": 6}, indent=2))
+    print(json.dumps({"status": "ok", "tests": 8}, indent=2))
 
 
 if __name__ == "__main__":

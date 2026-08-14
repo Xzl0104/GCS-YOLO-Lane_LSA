@@ -233,6 +233,7 @@ CFG_FLOAT_KEYS = frozenset(
         "gcs_short_survival",
         "gcs_short_survival_gt4_weight",
         "gcs_short_survival_gt5_weight",
+        "gcs_short_survival_exist_weight",
         "gcs_short_survival_valid_weight",
         "gcs_exist_pos_weight",
         "gcs_exist_focal_gamma",

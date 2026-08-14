@@ -186,6 +186,7 @@ gcs_short_survival: 0.0 # (float) matched short GT4/GT5 existence plus point-val
 gcs_short_survival_visible_thr: 10 # (int) visible anchor threshold for short GT4/GT5 survival protection
 gcs_short_survival_gt4_weight: 1.0 # (float) GT4 matched short-lane survival multiplier
 gcs_short_survival_gt5_weight: 1.0 # (float) GT5 matched short-lane survival multiplier
+gcs_short_survival_exist_weight: 1.0 # (float) existence component multiplier inside short survival loss
 gcs_short_survival_valid_weight: 1.0 # (float) point-valid component multiplier inside short survival loss
 gcs_boundary_pseudo_neg: 0.0 # (float) extra BCE negative loss gain for GT5 short far boundary pseudo lanes; 0 disables
 gcs_boundary_pseudo_visible_thr: 10 # (int) maximum predicted visible anchors for boundary pseudo negatives

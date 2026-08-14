@@ -459,6 +459,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--gcs-short-survival-visible-thr", type=int, default=10)
     parser.add_argument("--gcs-short-survival-gt4-weight", type=float, default=1.0)
     parser.add_argument("--gcs-short-survival-gt5-weight", type=float, default=1.0)
+    parser.add_argument("--gcs-short-survival-exist-weight", type=float, default=1.0)
     parser.add_argument("--gcs-short-survival-valid-weight", type=float, default=1.0)
     parser.add_argument("--gcs-boundary-pseudo-neg", type=float, default=0.0)
     parser.add_argument("--gcs-boundary-pseudo-visible-thr", type=int, default=10)
@@ -810,6 +811,7 @@ def main() -> None:
         "gcs_short_survival_visible_thr": args.gcs_short_survival_visible_thr,
         "gcs_short_survival_gt4_weight": args.gcs_short_survival_gt4_weight,
         "gcs_short_survival_gt5_weight": args.gcs_short_survival_gt5_weight,
+        "gcs_short_survival_exist_weight": args.gcs_short_survival_exist_weight,
         "gcs_short_survival_valid_weight": args.gcs_short_survival_valid_weight,
         "gcs_boundary_pseudo_neg": args.gcs_boundary_pseudo_neg,
         "gcs_boundary_pseudo_visible_thr": args.gcs_boundary_pseudo_visible_thr,

@@ -356,6 +356,7 @@ class GCSLoss(nn.Module):
         self.short_survival_visible_thr = int(self._arg(args, "gcs_short_survival_visible_thr", 10))
         self.short_survival_gt4_weight = float(self._arg(args, "gcs_short_survival_gt4_weight", 1.0))
         self.short_survival_gt5_weight = float(self._arg(args, "gcs_short_survival_gt5_weight", 1.0))
+        self.short_survival_exist_weight = float(self._arg(args, "gcs_short_survival_exist_weight", 1.0))
         self.short_survival_valid_weight = float(self._arg(args, "gcs_short_survival_valid_weight", 1.0))
         self.boundary_pseudo_neg_gain = float(self._arg(args, "gcs_boundary_pseudo_neg", 0.0))
         self.boundary_pseudo_visible_thr = int(self._arg(args, "gcs_boundary_pseudo_visible_thr", 10))
@@ -396,6 +397,10 @@ class GCSLoss(nn.Module):
         if self.short_survival_gt5_weight < 0.0:
             raise ValueError(
                 f"gcs_short_survival_gt5_weight must be >= 0, got {self.short_survival_gt5_weight}."
+            )
+        if self.short_survival_exist_weight < 0.0:
+            raise ValueError(
+                f"gcs_short_survival_exist_weight must be >= 0, got {self.short_survival_exist_weight}."
             )
         if self.short_survival_valid_weight < 0.0:
             raise ValueError(
@@ -936,7 +941,10 @@ class GCSLoss(nn.Module):
         else:
             short_valid_loss = zero
 
-        short_loss = short_exist_loss + float(self.short_survival_valid_weight) * short_valid_loss
+        short_loss = (
+            float(self.short_survival_exist_weight) * short_exist_loss
+            + float(self.short_survival_valid_weight) * short_valid_loss
+        )
         return (
             short_loss,
             short_exist_loss,
