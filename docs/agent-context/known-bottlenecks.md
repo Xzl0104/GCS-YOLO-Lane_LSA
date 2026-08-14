@@ -2,6 +2,76 @@
 
 This file applies to branch `codex/5-25-3-k56`.
 
+## 2026-08-14 env30/v4/v5 Count-Shape Diagnostics
+
+The canonical 363-image official-val diagnostics for env30, v4, and v5 show
+that the remaining TEST-ACC bottleneck is the score/geometry separation between
+true GT4/GT5 short or weak-visible lanes and far/boundary pseudo extra lanes.
+
+Raw-Q12 candidate coverage is not the main failure on official-val:
+
+```text
+env30 raw has_match_20/30 = 0.976209 / 0.983883
+v4    raw has_match_20/30 = 0.972371 / 0.986186
+v5    raw has_match_20/30 = 0.973139 / 0.984651
+```
+
+The over-count diagnostics show that selected extra lanes are usually not
+ordinary duplicate lanes:
+
+```text
+env30 GT3->4: 7 images, category = spurious 4, boundary_pseudo 1, ambiguous 2
+v4    GT3->4: 8 images, category = spurious 6, boundary_pseudo 1, ambiguous 1
+v4    GT4->5: 5 images, category = boundary_pseudo 4, ambiguous 1
+v4    GT5->6: 1 image,  category = boundary_pseudo 1
+v5    GT3->4: 6 images, category = spurious 2, ambiguous 4
+v5    GT3->5: 1 image,  category = boundary_pseudo 1
+v5    GT4->5: 2 images, category = boundary_pseudo 1, ambiguous 1
+```
+
+The v4/v5 follow-ups also used `gcs_exist_quality_alpha=1.0`, while the env30
+baseline used `gcs_exist_quality_alpha=0.5`. This is a real recipe mismatch.
+It aligns with the raw true-lane score diagnostics: GT4/GT5 short or
+mid-visible true lanes lose score margin in v4/v5 even when raw geometry still
+exists. For example:
+
+```text
+GT4 right-side short/mid true-lane raw score mean:
+  env30 = 0.8806
+  v4    = 0.8095
+  v5    = 0.7949
+
+GT5 right-side short/mid true-lane raw score mean:
+  env30 = 0.9246
+  v4    = 0.8582
+  v5    = 0.8671
+```
+
+Supported diagnosis:
+
+- v4/v5's short-survival pressure improves some survival signals but is
+  paired with a stronger quality-aware existence target than env30. That lowers
+  true-lane score margin on weak/short lanes.
+- v5's `gcs_far_extra_neg` partially suppresses far/boundary extra lanes, but
+  the training exposure is sparse (`train/far_extra_neg_count` around `0.8`
+  per late batch while validation still reports about `4-6` candidates).
+- Therefore the next candidate should not simply increase far-extra gain.
+  It should preserve env30's `gcs_exist_quality_alpha=0.5`, keep the env30
+  short-geometry and boundary-pseudo recipe, and use a more selective far-extra
+  guard (`dist_thr=80`, `score_thr=0.02`) so true near-GT short lanes keep
+  score margin while clear-far/boundary extras are suppressed.
+
+Next candidate:
+
+```text
+script = scripts/run_query_env30_short_survival_far_extra_alpha05_v6.sh
+start = env30 weights/official_best.pt
+key change vs v5 = gcs_exist_quality_alpha 0.5, gcs_far_extra_dist_thr 80,
+                   gcs_far_extra_score_thr 0.02
+selection = training-time official_best on canonical official-val only
+TEST = closed until official-val beats env30 and count-shape diagnostics pass
+```
+
 ## 2026-08-14 env30 TEST Bottleneck After Short-Survival v3/v4/v5
 
 The env30 baseline missed `0.970000` raw20 TEST ACC by about `8.95`

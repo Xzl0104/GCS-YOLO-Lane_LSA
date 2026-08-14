@@ -2,6 +2,72 @@
 
 This file records decisions for branch `codex/5-25-3-k56`.
 
+## 2026-08-14: Launch env30 alpha05 short-survival far-extra v6
+
+Decision:
+
+Add a reproducible v6 training entry and use it as the next official-val
+candidate. Do not open TEST until the candidate beats env30 on canonical
+official-val and passes the count-shape diagnostics.
+
+Why:
+
+The env30/v4/v5 official-val diagnostics show that the previous v4/v5 runs
+were not exact env30-recipe follow-ups: they used
+`gcs_exist_quality_alpha=1.0`, while env30 used `0.5`. The stronger
+quality-aware target lowers raw true-lane existence scores on GT4/GT5
+short/mid-visible lanes, while the remaining over-count errors are mostly
+far/boundary pseudo extras rather than ordinary duplicate lanes.
+
+Evidence:
+
+```text
+raw-Q12 has_match_20/30:
+  env30 = 0.976209 / 0.983883
+  v4    = 0.972371 / 0.986186
+  v5    = 0.973139 / 0.984651
+
+GT4 right-side short/mid true-lane raw score mean:
+  env30 = 0.8806
+  v4    = 0.8095
+  v5    = 0.7949
+
+GT5 right-side short/mid true-lane raw score mean:
+  env30 = 0.9246
+  v4    = 0.8582
+  v5    = 0.8671
+
+v4 extra-lane categories:
+  GT3->4 = spurious 6, boundary_pseudo 1, ambiguous 1
+  GT4->5 = boundary_pseudo 4, ambiguous 1
+  GT5->6 = boundary_pseudo 1
+
+v5 extra-lane categories:
+  GT3->4 = spurious 2, ambiguous 4
+  GT3->5 = boundary_pseudo 1
+  GT4->5 = boundary_pseudo 1, ambiguous 1
+```
+
+Implementation scope:
+
+```text
+script = scripts/run_query_env30_short_survival_far_extra_alpha05_v6.sh
+default behavior = unchanged
+model/loss code = unchanged
+training start = env30 weights/official_best.pt supplied through PRETRAINED
+alpha = 0.5
+short_survival = 0.2
+far_extra_neg = 0.05
+far_extra_dist_thr = 80
+far_extra_score_thr = 0.02
+far_extra_gt3/gt4/gt5_weight = 1.0 / 1.0 / 0.5
+```
+
+The stricter distance threshold protects near-GT ambiguous short-lane
+candidates; the lower score threshold keeps low-score boundary pseudo extras
+eligible for a small target-zero BCE. This is an official-val candidate, not a
+TEST-driven retune.
+
 ## 2026-08-14: Reject env30 short-survival far-extra v5
 
 Decision:
