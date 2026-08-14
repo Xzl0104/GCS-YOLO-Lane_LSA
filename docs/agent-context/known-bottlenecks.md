@@ -2,6 +2,90 @@
 
 This file applies to branch `codex/5-25-3-k56`.
 
+## 2026-08-14 env30/v6 Official-Val Bottleneck
+
+The v6 alpha05 far-extra follow-up is rejected. It restores the env30
+`gcs_exist_quality_alpha=0.5` recipe and improves the v4/v5 true-lane score
+regression, but it still does not beat env30 on the canonical 363-image
+official-val gate.
+
+Official-val comparison:
+
+```text
+env30 gate ACC/FP/FN = 0.973330 / 0.015748 / 0.009642
+v6 best epoch        = 75
+v6 ACC/FP/FN         = 0.972645 / 0.014233 / 0.009412
+v6 decode            = conf=0.001, point_valid_thr=0.6, nms_dist_px=30,
+                       max_det=5, min_points=4, valid_before_maxdet=true
+v6 count_acc_3/4/5   = 0.973094 / 0.924242 / 1.000000
+v6 count confusion   = 3->3=217, 3->4=6,
+                       4->3=3, 4->4=61, 4->5=2,
+                       5->5=74
+```
+
+Raw-Q12 diagnostic comparison:
+
+```text
+env30 raw has_match_20/30/40 = 0.976209 / 0.983883 / 0.991558
+v4    raw has_match_20/30/40 = 0.972371 / 0.986186 / 0.993093
+v5    raw has_match_20/30/40 = 0.973139 / 0.984651 / 0.990790
+v6    raw has_match_20/30/40 = 0.974674 / 0.987721 / 0.993093
+
+env30 raw APE mean/p90 = 5.626967 / 10.039155
+v6    raw APE mean/p90 = 5.786358 / 10.201990
+```
+
+v6 fixes the v4/v5 right-side short/mid score regression:
+
+```text
+GT4 right-side short/mid true-lane raw score mean:
+  env30 = 0.880623
+  v4    = 0.809517
+  v5    = 0.794918
+  v6    = 0.896506
+
+GT5 right-side short/mid true-lane raw score mean:
+  env30 = 0.924650
+  v4    = 0.858155
+  v5    = 0.867118
+  v6    = 0.929116
+```
+
+The remaining v6 failure is narrower than the v4/v5 recipe mismatch:
+
+```text
+v6 final under-count images = 3
+v6 GT3->4 extras           = 6 images, category = ambiguous 4, spurious 2
+v6 GT3->5 extras           = 0
+v6 GT4->5 extras           = 2 images, category = ambiguous 1, boundary_pseudo 1
+v6 GT4->6 extras           = 0
+v6 GT5->6 extras           = 0
+
+env30 GT5 short lanes: match20=0.754717, match30=0.811321,
+                       point_valid_recall@0.6=0.957233,
+                       pred_valid_points@0.6_lt_min_points=2
+v6    GT5 short lanes: match20=0.754717, match30=0.849057,
+                       point_valid_recall@0.6=0.939623,
+                       pred_valid_points@0.6_lt_min_points=4
+
+env30 GT5 center short/mid lanes: match20=0.901099
+v6    GT5 center short/mid lanes: match20=0.879121
+```
+
+Supported diagnosis:
+
+- v6 suppresses sixth-lane overcount and reduces FP versus env30, so the
+  failure is not an unresolved `max_det=6` or duplicate-lane problem.
+- The candidate pays for lower FP with a small but decisive loss in raw 20px
+  geometry and point-valid survival on GT5 short/center lanes.
+- The remaining gap to env30 is therefore a score/geometry/valid separation
+  bottleneck on weak-visible GT4/GT5 lanes, plus a small GT3/GT4 ambiguous
+  extra-lane tail. It is not solved by threshold, NMS, `max_det`, or
+  `min_points` tuning, because v6 already uses the official-val-selected
+  decode and still misses the primary ACC gate.
+- Do not open TEST for v6. TEST remains closed until a new frozen
+  official-val candidate strictly beats env30 under the same protocol.
+
 ## 2026-08-14 env30/v4/v5 Count-Shape Diagnostics
 
 The canonical 363-image official-val diagnostics for env30, v4, and v5 show

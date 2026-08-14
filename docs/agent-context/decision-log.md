@@ -2,6 +2,75 @@
 
 This file records decisions for branch `codex/5-25-3-k56`.
 
+## 2026-08-14: Reject env30 alpha05 short-survival far-extra v6
+
+Decision:
+
+Do not promote
+`query_env30_short_survival_far_extra005_d80_alpha05_env30recipe_b32_amp_v6`.
+Do not run final TEST for it, because the frozen official-val-selected
+candidate does not strictly beat the env30 official-val gate.
+
+Official-val evidence:
+
+```text
+source = env30 official_best.pt
+script = scripts/run_query_env30_short_survival_far_extra_alpha05_v6.sh
+epochs = 80
+selected epoch = 75
+decode = conf=0.001, point_valid_thr=0.6, nms_dist_px=30,
+         max_det=5, min_points=4, valid_before_maxdet=true
+official-val ACC/FP/FN = 0.972645 / 0.014233 / 0.009412
+official-val count_acc_3/4/5 = 0.973094 / 0.924242 / 1.000000
+official-val count_confusion = 3->3=217, 3->4=6,
+                               4->3=3, 4->4=61, 4->5=2,
+                               5->5=74
+```
+
+Reference:
+
+```text
+env30 official-val ACC/FP/FN = 0.973330 / 0.015748 / 0.009642
+v6 gap vs env30 ACC          = -0.000685
+```
+
+Diagnostics:
+
+```text
+v6 raw has_match_20/30/40 = 0.974674 / 0.987721 / 0.993093
+v6 raw APE mean/p90       = 5.786358 / 10.201990
+v6 final under-count      = 3 images
+v6 GT3->4 extras          = ambiguous 4, spurious 2
+v6 GT3->5 extras          = 0
+v6 GT4->5 extras          = ambiguous 1, boundary_pseudo 1
+v6 GT4->6 extras          = 0
+v6 GT5->6 extras          = 0
+```
+
+Why:
+
+- Restoring `gcs_exist_quality_alpha=0.5` fixes the v4/v5 true-lane score
+  regression: v6 right-side short/mid true-lane raw scores recover to
+  `0.896506` on GT4 and `0.929116` on GT5.
+- The far-extra follow-up suppresses sixth-lane overcount and keeps FP below
+  env30, but the primary ACC still falls short.
+- The remaining failure is a small but decisive loss in raw 20px geometry and
+  point-valid survival on weak-visible GT4/GT5 lanes, especially GT5
+  short/center lanes. v6 has `pred_valid_points@0.6_lt_min_points=4` for GT5
+  short lanes versus env30's `2`, and GT5 center short/mid `match20` drops
+  from env30 `0.901099` to v6 `0.879121`.
+- Therefore this line is not blocked by decode tuning alone. Retuning
+  thresholds, NMS, `max_det`, `min_points`, or loss weights from TEST would
+  violate the project protocol.
+
+Next action:
+
+Keep v6 as a rejected official-val follow-up. If continuing this branch, the
+smallest defensible next experiment must improve GT5 short/center 20px
+geometry and point-valid survival while preserving v6's low FP and no
+sixth-lane behavior. It must again be selected on official-val before any
+one-shot TEST.
+
 ## 2026-08-14: Launch env30 alpha05 short-survival far-extra v6
 
 Decision:
