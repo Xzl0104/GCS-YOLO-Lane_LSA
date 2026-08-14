@@ -2,6 +2,84 @@
 
 This file records decisions for branch `codex/5-25-3-k56`.
 
+## 2026-08-14: Launch env30 GT5 weak-geometry point-valid v7
+
+Decision:
+
+Add a reproducible v7 training entry as the next official-val candidate after
+rejecting v6. Keep TEST closed. v7 must start from the env30
+`official_best.pt` checkpoint and use training-time official-val selection
+before any final TEST consideration.
+
+Why:
+
+v6 proved that restoring `gcs_exist_quality_alpha=0.5` and keeping the
+selective far-extra guard can suppress sixth-lane overcount and reduce FP, but
+it still missed env30 on primary official-val ACC:
+
+```text
+env30 official-val ACC/FP/FN = 0.973330 / 0.015748 / 0.009642
+v6 official-val ACC/FP/FN    = 0.972645 / 0.014233 / 0.009412
+```
+
+Because v6 has slightly lower FP/FN than env30 but lower ACC, the remaining
+gap is mainly matched-lane geometry/point quality, not raw count selection
+alone. The v6 diagnostics identify the narrow failure surface:
+
+```text
+env30 raw has_match_20/30/40 = 0.976209 / 0.983883 / 0.991558
+v6    raw has_match_20/30/40 = 0.974674 / 0.987721 / 0.993093
+
+env30 GT5 short lanes pred_valid_points@0.6_lt_min_points = 2
+v6    GT5 short lanes pred_valid_points@0.6_lt_min_points = 4
+
+env30 GT5 center short/mid match20 = 0.901099
+v6    GT5 center short/mid match20 = 0.879121
+```
+
+Implementation scope:
+
+```text
+script = scripts/run_query_env30_short_survival_far_extra_gt5weakgeom_pv_v7.sh
+default behavior = unchanged
+model/decode/official metrics = unchanged
+training start = env30 weights/official_best.pt supplied through PRETRAINED
+
+kept from v6:
+  gcs_exist_quality_alpha = 0.5
+  gcs_short_survival = 0.2
+  gcs_boundary_pseudo_neg = 0.02
+  gcs_far_extra_neg = 0.05
+  official-val sweep grid = same as v6
+
+changed vs v6:
+  gcs_short_geom_visible_thr = 20
+  gcs_short_geom_gt4_weight = 1.0
+  gcs_short_geom_gt5_weight = 2.0
+  gcs_gt5_short_visible_thr = 10
+  gcs_gt5_short_point_valid_weight = 1.25
+```
+
+Rationale:
+
+- Extending `gcs_short_geom_visible_thr` to `20` targets the GT5 center
+  short/mid lanes where v6 lost 20px geometry, while keeping
+  `gcs_short_geom_gt4_weight=1.0` avoids adding new GT4 positive pressure.
+- Enabling the existing GT5 short point-valid rescue targets only matched
+  `GT count == 5` lanes with visible anchors `<=10`; it does not change
+  matcher assignment, decode, NMS, official metrics, or unmatched-query
+  negatives.
+- Keeping the v6 far-extra and boundary-pseudo settings preserves the current
+  low-FP/no-sixth-lane guardrail while testing whether GT5 weak-lane geometry
+  and point-valid survival can recover the primary ACC gap.
+
+Promotion gate:
+
+Run formal training on the remote RTX 4090 with `--imgsz 544 960` and
+training-time `official_best`. Promote only if the frozen official-val
+candidate strictly exceeds env30 `ACC=0.973330` and follow-up count-shape/raw
+diagnostics do not reveal a hidden GT5 undercount or sixth-lane tradeoff.
+
 ## 2026-08-14: Reject env30 alpha05 short-survival far-extra v6
 
 Decision:

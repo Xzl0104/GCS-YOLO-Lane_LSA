@@ -86,6 +86,18 @@ Supported diagnosis:
 - Do not open TEST for v6. TEST remains closed until a new frozen
   official-val candidate strictly beats env30 under the same protocol.
 
+Next candidate:
+
+```text
+script = scripts/run_query_env30_short_survival_far_extra_gt5weakgeom_pv_v7.sh
+start = env30 weights/official_best.pt
+key change vs v6 = extend matched GT5 short geometry to visible<=20,
+                   enable matched GT5 visible<=10 point-valid rescue
+unchanged guardrails = alpha05, boundary-pseudo mask-v2, far-extra d80,
+                       short-survival 0.2, same official-val sweep grid
+TEST = closed until official-val beats env30 and diagnostics pass
+```
+
 ## 2026-08-14 env30/v4/v5 Count-Shape Diagnostics
 
 The canonical 363-image official-val diagnostics for env30, v4, and v5 show
