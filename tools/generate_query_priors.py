@@ -92,13 +92,70 @@ def collect_lane_priors(label_files: list[Path], num_points: int, img_w: float, 
     return np.asarray(all_lanes, dtype=np.float32), np.asarray(hard_lanes, dtype=np.float32)
 
 
-def cluster_priors(all_lanes: np.ndarray, hard_lanes: np.ndarray, num_queries: int, seed: int) -> np.ndarray:
-    """Cluster six global and six hard-lane priors, then sort by bottom x."""
+def _numpy_kmeans_plus_plus(data: np.ndarray, n_clusters: int, rng: np.random.Generator) -> np.ndarray:
+    """Initialize KMeans centers with a small deterministic NumPy k-means++ implementation."""
+    centers = [data[int(rng.integers(0, data.shape[0]))].copy()]
+    for _ in range(1, int(n_clusters)):
+        existing = np.asarray(centers, dtype=np.float32)
+        dist_sq = np.min(np.sum((data[:, None, :] - existing[None, :, :]) ** 2, axis=2), axis=1)
+        total = float(np.sum(dist_sq))
+        if not np.isfinite(total) or total <= 0.0:
+            centers.append(data[int(rng.integers(0, data.shape[0]))].copy())
+            continue
+        centers.append(data[int(rng.choice(data.shape[0], p=dist_sq / total))].copy())
+    return np.asarray(centers, dtype=np.float32)
+
+
+def _numpy_kmeans(data: np.ndarray, n_clusters: int, seed: int, n_init: int = 15, max_iter: int = 100) -> np.ndarray:
+    """Run deterministic NumPy KMeans when scikit-learn is unavailable."""
+    if data.shape[0] < int(n_clusters):
+        raise ValueError(f"Need at least {n_clusters} rows for KMeans, got {data.shape[0]}.")
+
+    data = np.asarray(data, dtype=np.float32)
+    best_centers: np.ndarray | None = None
+    best_inertia = float("inf")
+    for init_idx in range(int(n_init)):
+        rng = np.random.default_rng(int(seed) + init_idx)
+        centers = _numpy_kmeans_plus_plus(data, int(n_clusters), rng)
+        for _ in range(int(max_iter)):
+            distances = np.sum((data[:, None, :] - centers[None, :, :]) ** 2, axis=2)
+            labels = np.argmin(distances, axis=1)
+            updated = centers.copy()
+            for cluster_idx in range(int(n_clusters)):
+                members = data[labels == cluster_idx]
+                if len(members):
+                    updated[cluster_idx] = np.mean(members, axis=0)
+                else:
+                    updated[cluster_idx] = data[int(rng.integers(0, data.shape[0]))]
+            if np.allclose(updated, centers, atol=1e-6):
+                centers = updated
+                break
+            centers = updated
+
+        final_distances = np.sum((data[:, None, :] - centers[None, :, :]) ** 2, axis=2)
+        inertia = float(np.min(final_distances, axis=1).sum())
+        if inertia < best_inertia:
+            best_inertia = inertia
+            best_centers = centers.copy()
+
+    if best_centers is None:
+        raise RuntimeError("NumPy KMeans failed to produce cluster centers.")
+    return best_centers.astype(np.float32)
+
+
+def _fit_kmeans_centers(data: np.ndarray, n_clusters: int, seed: int) -> np.ndarray:
+    """Fit KMeans centers with scikit-learn when available, otherwise use the NumPy fallback."""
     try:
         from sklearn.cluster import KMeans
-    except ImportError as exc:  # pragma: no cover
-        raise ImportError("tools/generate_query_priors.py requires scikit-learn for KMeans.") from exc
+    except ImportError:
+        print("scikit-learn not found; using deterministic NumPy KMeans fallback.")
+        return _numpy_kmeans(data=data, n_clusters=int(n_clusters), seed=int(seed), n_init=15)
 
+    return KMeans(n_clusters=int(n_clusters), random_state=int(seed), n_init=15).fit(data).cluster_centers_
+
+
+def cluster_priors(all_lanes: np.ndarray, hard_lanes: np.ndarray, num_queries: int, seed: int) -> np.ndarray:
+    """Cluster six global and six hard-lane priors, then sort by bottom x."""
     if int(num_queries) % 2 != 0:
         raise ValueError(f"num_queries must be even for main/hard split clustering, got {num_queries}.")
     main_k = int(num_queries) // 2
@@ -108,8 +165,8 @@ def cluster_priors(all_lanes: np.ndarray, hard_lanes: np.ndarray, num_queries: i
     if hard_lanes.shape[0] < hard_k:
         raise ValueError(f"Need at least {hard_k} hard lanes for hard clustering, got {hard_lanes.shape[0]}.")
 
-    main = KMeans(n_clusters=main_k, random_state=int(seed), n_init=15).fit(all_lanes).cluster_centers_
-    hard = KMeans(n_clusters=hard_k, random_state=int(seed), n_init=15).fit(hard_lanes).cluster_centers_
+    main = _fit_kmeans_centers(all_lanes, n_clusters=main_k, seed=int(seed))
+    hard = _fit_kmeans_centers(hard_lanes, n_clusters=hard_k, seed=int(seed))
     priors = np.vstack((main, hard)).astype(np.float32)
     return priors[np.argsort(priors[:, 0], kind="stable")]
 

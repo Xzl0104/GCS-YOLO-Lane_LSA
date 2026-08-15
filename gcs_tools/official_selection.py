@@ -23,9 +23,39 @@ SWEEP_SELECTION_KEYS = (
     {"key": "min_points", "direction": "min"},
 )
 
+ROBUST_SWEEP_SELECTION_KEYS = (
+    {"key": "robust_score", "direction": "max"},
+    {"key": "official_acc", "direction": "max"},
+    {"key": "official_score", "direction": "max"},
+    {"key": "official_FP", "direction": "min"},
+    {"key": "official_FN", "direction": "min"},
+    {"key": "count_acc_4", "direction": "max"},
+    {"key": "count_acc", "direction": "max"},
+    {"key": "count_acc_5", "direction": "max"},
+    {"key": "conf", "direction": "min"},
+    {"key": "nms_dist_px", "direction": "min"},
+    {"key": "point_valid_thr", "direction": "min"},
+    {"key": "max_det", "direction": "min"},
+    {"key": "min_points", "direction": "min"},
+)
+
 OFFICIAL_BEST_SELECTION_KEYS = (
     {"key": "strict_order_valid", "direction": "max"},
     {"key": "ordered_slot_order_violations", "direction": "min"},
+    {"key": "official_acc", "direction": "max"},
+    {"key": "official_score", "direction": "max"},
+    {"key": "official_FP", "direction": "min"},
+    {"key": "official_FN", "direction": "min"},
+    {"key": "count_acc_4", "direction": "max"},
+    {"key": "count_acc", "direction": "max"},
+    {"key": "count_acc_5", "direction": "max"},
+    {"key": "epoch", "direction": "earliest"},
+)
+
+ROBUST_OFFICIAL_BEST_SELECTION_KEYS = (
+    {"key": "strict_order_valid", "direction": "max"},
+    {"key": "ordered_slot_order_violations", "direction": "min"},
+    {"key": "robust_score", "direction": "max"},
     {"key": "official_acc", "direction": "max"},
     {"key": "official_score", "direction": "max"},
     {"key": "official_FP", "direction": "min"},
@@ -43,7 +73,9 @@ def selection_policy(name: str, ordered_keys: tuple[dict[str, str], ...]) -> dic
 
 
 SWEEP_SELECTION_POLICY = selection_policy("official_sweep_v4", SWEEP_SELECTION_KEYS)
+ROBUST_SWEEP_SELECTION_POLICY = selection_policy("official_sweep_robust_v1", ROBUST_SWEEP_SELECTION_KEYS)
 OFFICIAL_SELECTION_POLICY = selection_policy("official_best_v4", OFFICIAL_BEST_SELECTION_KEYS)
+ROBUST_OFFICIAL_SELECTION_POLICY = selection_policy("official_best_robust_v1", ROBUST_OFFICIAL_BEST_SELECTION_KEYS)
 CONSTRAINED_SWEEP_SELECTION_POLICY = {
     "name": "count_safe_constrained_then_official_sweep_v1",
     "prefilter": "hard official-val gates, then official_sweep_v4 ordering",
@@ -90,9 +122,19 @@ def policy_sha256(policy: dict[str, Any]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def robust_sweep_selection_policy() -> dict[str, Any]:
+    """Return the robust sweep-selection policy for constrained official-val sweeps."""
+    return _copy_policy(ROBUST_SWEEP_SELECTION_POLICY)
+
+
 def official_best_selection_policy() -> dict[str, Any]:
     """Return the cross-epoch policy used by training-time official_best."""
     return _copy_policy(OFFICIAL_SELECTION_POLICY)
+
+
+def robust_official_best_selection_policy() -> dict[str, Any]:
+    """Return the robust cross-epoch policy used by training-time official_best."""
+    return _copy_policy(ROBUST_OFFICIAL_SELECTION_POLICY)
 
 
 def _numeric(value: Any, default: float = 0.0) -> float:
@@ -124,6 +166,11 @@ def selection_sort_key(row: dict[str, Any], ordered_keys: tuple[dict[str, str], 
 def sweep_sort_key(row: dict[str, Any]) -> tuple:
     """Return the exact official sweep sort key."""
     return selection_sort_key(row, SWEEP_SELECTION_KEYS)
+
+
+def robust_sweep_sort_key(row: dict[str, Any]) -> tuple:
+    """Return the robust official sweep sort key."""
+    return selection_sort_key(row, ROBUST_SWEEP_SELECTION_KEYS)
 
 
 def official_best_sort_key(best: dict[str, Any], epoch: int) -> tuple:
@@ -265,3 +312,10 @@ def select_count_safe_sweep_row(
     eligible_rows = [row for row in rows if count_safe_row_eligible(row, thresholds)]
     selected = dict(max(eligible_rows, key=sweep_sort_key)) if eligible_rows else None
     return selected, eligible_rows
+
+
+def official_best_robust_sort_key(best: dict[str, Any], epoch: int) -> tuple:
+    """Return the robust training-time official_best sort key."""
+    row = dict(best)
+    row["epoch"] = int(epoch)
+    return selection_sort_key(row, ROBUST_OFFICIAL_BEST_SELECTION_KEYS)
