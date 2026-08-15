@@ -928,9 +928,10 @@ class BaseTrainer:
                     "gcs_official_valid_before_maxdet",
                     "gcs_official_score_fp_weight",
                     "gcs_official_score_fn_weight",
+                    "gcs_official_robust_selection",
+                    "gcs_official_robust_balance_weight",
+                    "gcs_official_robust_count_acc4_weight",
                     "gcs_official_half",
-                    "gcs_visibility_only",
-                    "gcs_line_iou_geometry_only",
                     "gcs_hard_sampling",
                     "gcs_hard_date_0601_weight",
                     "gcs_hard_gt4_le10_weight",
@@ -939,6 +940,7 @@ class BaseTrainer:
                     "gcs_hard_0313_2_gt4_le10_weight",
                     "gcs_hard_visible_thr",
                     "gcs_hard_gt3_visible_thr",
+                    "gcs_gt45_oversample",
                 ):  # allow arg updates to reduce memory or update device on resume
                     if k in overrides:
                         setattr(self.args, k, overrides[k])
@@ -1069,8 +1071,6 @@ class BaseTrainer:
         use_muon = name == "MuSGD"
         for module_name, module in unwrap_model(model).named_modules():
             for param_name, param in module.named_parameters(recurse=False):
-                if not param.requires_grad:
-                    continue
                 fullname = f"{module_name}.{param_name}" if module_name else param_name
                 if param.ndim >= 2 and use_muon:
                     g[3][fullname] = param  # muon params

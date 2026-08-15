@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import ast
-import hashlib
 import json
 import math
 import numpy as np
@@ -23,12 +22,9 @@ from torch.utils.data import WeightedRandomSampler
 
 from gcs_tools.official_selection import (
     OFFICIAL_SELECTION_POLICY,
-    constrained_sweep_selection_policy,
-    count_safe_row_checks,
-    count_safe_thresholds,
+    ROBUST_OFFICIAL_SELECTION_POLICY,
+    official_best_robust_sort_key,
     official_best_sort_key,
-    policy_sha256,
-    select_count_safe_sweep_row,
 )
 from ultralytics.data import build_dataloader
 from ultralytics.data.dataset_gcs import GCSLaneDataset, resize_gcs_masks
@@ -45,9 +41,8 @@ from ultralytics.models.gcs.mode_utils import (
 from ultralytics.nn.modules import GCSLaneHead, LaneBiFPN, LSEM
 from ultralytics.nn.tasks import GCSLaneModel, load_checkpoint, torch_safe_load
 from ultralytics.utils import DEFAULT_CFG, LOCAL_RANK, LOGGER, RANK, ROOT, YAML
-from ultralytics.utils.gcs_loss import GCSLoss
 from ultralytics.utils.gcs_shape import assert_gcs_image_tensor, assert_gcs_shape, normalize_imgsz
-from ultralytics.utils.torch_utils import strip_optimizer, torch_distributed_zero_first, unwrap_model
+from ultralytics.utils.torch_utils import strip_optimizer, torch_distributed_zero_first
 
 
 class GCSLaneTrainer(BaseTrainer):
@@ -59,12 +54,6 @@ class GCSLaneTrainer(BaseTrainer):
         "point_valid_loss",
         "smooth_loss",
         "curve_loss",
-        "line_iou_loss",
-        "line_iou_valid_preserve_loss",
-        "line_iou_valid_preserve_count",
-        "line_iou_valid_preserve_anchor_count",
-        "line_iou_exist_survival_loss",
-        "line_iou_exist_survival_count",
         "mask_loss",
         "edge_loss",
         "count_loss",
@@ -72,13 +61,6 @@ class GCSLaneTrainer(BaseTrainer):
         "count_boundary_loss",
         "spurious_neg_loss",
         "spurious_negative_count",
-        "query_survival_rank_loss",
-        "query_survival_rank_pair_count",
-        "query_survival_rank_margin_mean",
-        "query_valid_survival_loss",
-        "query_valid_survival_count",
-        "query_valid_survival_anchor_count",
-        "query_valid_survival_dice_loss",
         "spur_cand",
         "spur_prot",
         "spur_final",
@@ -101,42 +83,6 @@ class GCSLaneTrainer(BaseTrainer):
         "query_count_ce_loss",
         "query_count_acc",
         "query_count_pred_mean",
-        "dense_instance_loss",
-        "dense_centerline_loss",
-        "dense_endpoint_loss",
-        "dense_endpoint_peak_loss",
-        "dense_endpoint_offset_loss",
-        "dense_embed_pull_loss",
-        "dense_embed_push_loss",
-        "dense_centerline_pos",
-        "dense_candidate_loss",
-        "dense_candidate_quality_loss",
-        "dense_candidate_replace_loss",
-        "dense_candidate_quality_pos",
-        "dense_candidate_replace_pos",
-        "residual_proposal_loss",
-        "residual_point_loss",
-        "residual_row_loss",
-        "residual_valid_loss",
-        "residual_interval_loss",
-        "residual_consistency_loss",
-        "residual_positive_span_loss",
-        "residual_identity_pull_loss",
-        "residual_identity_push_loss",
-        "residual_quality_loss",
-        "residual_quality_rank_loss",
-        "residual_quality_pos",
-        "residual_identity_pair_count",
-        "residual_exist_loss",
-        "residual_target_count",
-        "residual_match_count",
-        "residual_full_hit20",
-        "residual_replace_loss",
-        "residual_replace_pos",
-        "residual_replace_rank_loss",
-        "residual_replace_listwise_loss",
-        "residual_replace_action_pos",
-        "residual_replace_action_acc",
     )
     # Keep tqdm headers within BaseTrainer's 11-character progress columns.
     progress_loss_names = (
@@ -145,12 +91,6 @@ class GCSLaneTrainer(BaseTrainer):
         "pt_valid",
         "smooth",
         "curve",
-        "line_iou",
-        "liou_vp",
-        "liou_vpn",
-        "liou_vpa",
-        "liou_exist",
-        "liou_exn",
         "mask",
         "edge",
         "count",
@@ -158,9 +98,6 @@ class GCSLaneTrainer(BaseTrainer):
         "cnt_bound",
         "spur_loss",
         "spur_cnt",
-        "qsurv_rank",
-        "qsurv_pairs",
-        "qsurv_margin",
         "spur_cand",
         "spur_prot",
         "spur_final",
@@ -183,19 +120,6 @@ class GCSLaneTrainer(BaseTrainer):
         "qcnt_ce",
         "qcnt_acc",
         "qcnt_pred",
-        "dense",
-        "dense_ctr",
-        "dense_end",
-        "dense_peak",
-        "dense_off",
-        "dense_pull",
-        "dense_push",
-        "dense_pos",
-        "dense_cand",
-        "dense_q",
-        "dense_rep",
-        "dense_qpos",
-        "dense_rpos",
     )
     # YOLO11 backbone -> GCS-YOLO-Lane backbone. LSEM is inserted after old
     # layers 4 and 6, so all later backbone layers must be shifted explicitly.
@@ -237,14 +161,10 @@ class GCSLaneTrainer(BaseTrainer):
         overrides.setdefault("erasing", 0.0)
         super().__init__(cfg, overrides, _callbacks)
         self._warned_ordered_slot_without_official_best = False
-        self._visibility_only_frozen_state_keys: tuple[str, ...] = ()
-        self._visibility_only_frozen_state_hashes: dict[str, str] = {}
-        self._visibility_only_optimizer_param_names: tuple[str, ...] = ()
         assert_ordered_slot_scale_contract(self._gcs_mode(), getattr(self.args, "scale", 0.0))
         self.official_best = self.wdir / "official_best.pt"
         self.official_best_sweep = self.wdir / "official_best_sweep.json"
         self.official_best_decode = self.wdir / "official_best_decode.yaml"
-        self._register_official_count_safe_policy_metadata()
         self._official_best_state = self._load_official_best_state()
         self._lock_gcs_shape_contract()
         self._set_loss_names_for_mode()
@@ -259,14 +179,6 @@ class GCSLaneTrainer(BaseTrainer):
         if isinstance(head, GCSLaneHead):
             return self._normalize_gcs_mode(getattr(head, "gcs_mode", "query"))
         return self._normalize_gcs_mode(getattr(self.args, "gcs_mode", "query"))
-
-    def _lane_instance_set_capable(self) -> bool:
-        """Return whether the active model exposes the controlled lane-instance-set head."""
-        model = getattr(self, "model", None)
-        return bool(model is not None and any(
-            isinstance(module, GCSLaneHead) and bool(getattr(module, "lane_instance_set_decoder_head", False))
-            for module in model.modules()
-        ))
 
     def _set_args_gcs_mode(self, mode: str) -> None:
         """Persist normalized mode into args so loss, val, and official hooks agree."""
@@ -285,958 +197,6 @@ class GCSLaneTrainer(BaseTrainer):
     def _get_arg_value(self, name: str, default: Any = None) -> Any:
         """Read one trainer arg from a dict or namespace."""
         return self.args.get(name, default) if isinstance(self.args, dict) else getattr(self.args, name, default)
-
-    def _register_official_count_safe_policy_metadata(self) -> None:
-        """Persist pre-registered count-safe official selection metadata into run args."""
-        if not bool(self._get_arg_value("gcs_official_count_safe_selection", False)):
-            return
-        policy = constrained_sweep_selection_policy()
-        self._set_arg_value("gcs_official_count_safe_policy", policy)
-        self._set_arg_value("gcs_official_count_safe_policy_sha256", policy_sha256(policy))
-        self._set_arg_value("gcs_official_count_safe_thresholds", self._official_count_safe_thresholds())
-
-    @staticmethod
-    def _visibility_only_markers() -> tuple[str, ...]:
-        """Return parameter markers for the fixed-y visibility heads."""
-        return (".point_valid_mlp.", ".point_valid_refine_mlp.")
-
-    @classmethod
-    def _is_visibility_only_trainable_name(cls, name: str) -> bool:
-        """Return true only for fixed-y visibility-head parameters or state keys."""
-        return any(marker in f".{name}." for marker in cls._visibility_only_markers())
-
-    def _visibility_only_enabled(self) -> bool:
-        """Return whether this run trains only the fixed-y visibility heads."""
-        return bool(self._get_arg_value("gcs_visibility_only", False))
-
-    @staticmethod
-    def _line_iou_geometry_only_markers() -> tuple[str, ...]:
-        """Return parameter markers for fixed-y geometry-only LineIoU probes."""
-        return (".point_mlp.", ".point_refine_mlp.")
-
-    @classmethod
-    def _is_line_iou_geometry_only_trainable_name(cls, name: str) -> bool:
-        """Return true only for fixed-y geometry point-head parameters or state keys."""
-        return any(marker in f".{name}." for marker in cls._line_iou_geometry_only_markers())
-
-    def _line_iou_geometry_only_enabled(self) -> bool:
-        """Return whether this run trains only fixed-y geometry point heads."""
-        return bool(self._get_arg_value("gcs_line_iou_geometry_only", False))
-
-    @staticmethod
-    def _is_dense_instance_trainable_name(name: str) -> bool:
-        """Return true for parameters or modules owned by the dense evidence branch."""
-        return "dense_instance_" in str(name)
-
-    def _dense_instance_freeze_base_enabled(self) -> bool:
-        """Return whether this run trains only dense evidence parameters."""
-        return bool(self._get_arg_value("gcs_dense_freeze_base", False))
-
-    @staticmethod
-    def _is_query_survival_trainable_name(name: str) -> bool:
-        """Return true for parameters owned by the query-survival relation head."""
-        return "query_survival_" in str(name)
-
-    @staticmethod
-    def _is_query_valid_survival_trainable_name(name: str) -> bool:
-        """Return true for relation-state and valid-delta parameters used by the valid-only probe."""
-        normalized = f".{name}."
-        return any(
-            marker in normalized
-            for marker in (
-                ".query_survival_state_mlp.",
-                ".query_survival_attention.",
-                ".query_survival_norm.",
-                ".query_survival_valid_delta_mlp.",
-            )
-        )
-
-    def _query_valid_survival_only_enabled(self) -> bool:
-        """Return whether only the query-survival valid correction path is trainable."""
-        return bool(self._get_arg_value("gcs_query_valid_survival_only", False))
-
-    @staticmethod
-    def _is_query_valid_local_trainable_name(name: str) -> bool:
-        """Return true only for the anchor-local valid residual head."""
-        return "query_valid_local_delta_mlp" in str(name)
-
-    def _query_valid_local_only_enabled(self) -> bool:
-        """Return whether only the anchor-local valid residual head is trainable."""
-        return bool(self._get_arg_value("gcs_query_valid_local_only", False))
-
-    @staticmethod
-    def _is_query_valid_interval_trainable_name(name: str) -> bool:
-        """Return true only for the contiguous query visibility interval head."""
-        return "query_valid_interval_offset_mlp" in str(name)
-
-    def _query_valid_interval_only_enabled(self) -> bool:
-        """Return whether only the contiguous query visibility interval head is trainable."""
-        return bool(self._get_arg_value("gcs_query_valid_interval_only", False))
-
-    def _is_active_query_survival_trainable_name(self, name: str) -> bool:
-        """Return the active query-survival trainable-state contract for this run."""
-        if self._query_valid_interval_only_enabled():
-            return self._is_query_valid_interval_trainable_name(name)
-        if self._query_valid_local_only_enabled():
-            return self._is_query_valid_local_trainable_name(name)
-        if self._query_valid_survival_only_enabled():
-            return self._is_query_valid_survival_trainable_name(name)
-        return self._is_query_survival_trainable_name(name)
-
-    def _query_survival_freeze_base_enabled(self) -> bool:
-        """Return whether this run trains only the query-survival relation head."""
-        return bool(self._get_arg_value("gcs_query_survival_freeze_base", False))
-
-    @staticmethod
-    def _is_query_count_trainable_name(name: str) -> bool:
-        """Return true only for the query Count Head."""
-        return "query_count_mlp" in str(name)
-
-    def _query_count_freeze_base_enabled(self) -> bool:
-        """Return whether this run freezes the detector and trains only the query Count Head."""
-        return bool(self._get_arg_value("gcs_query_count_freeze_base", False))
-
-    @staticmethod
-    def _is_residual_proposal_trainable_name(name: str) -> bool:
-        """Return true for parameters owned by the residual proposal branch."""
-        return "residual_proposal_" in str(name)
-
-    @staticmethod
-    def _is_residual_visibility_trainable_name(name: str) -> bool:
-        """Return true only for residual point-valid and interval-head parameters."""
-        normalized = f".{name}."
-        return any(
-            marker in normalized
-            for marker in (
-                ".residual_proposal_valid_mlp.",
-                ".residual_proposal_start_mlp.",
-                ".residual_proposal_end_mlp.",
-            )
-        )
-
-    def _residual_visibility_only_enabled(self) -> bool:
-        """Return whether Stage-1b trains only residual visibility and interval heads."""
-        return bool(self._get_arg_value("gcs_residual_visibility_only", False))
-
-    @staticmethod
-    def _is_residual_identity_trainable_name(name: str) -> bool:
-        """Return true only for residual identity and quality parameters."""
-        normalized = f".{name}."
-        return any(
-            marker in normalized
-            for marker in (
-                ".residual_relation_",
-                ".residual_proposal_identity_mlp.",
-                ".residual_proposal_quality_mlp.",
-            )
-        )
-
-    def _residual_identity_only_enabled(self) -> bool:
-        """Return whether Stage-2 trains only residual identity and quality heads."""
-        return bool(self._get_arg_value("gcs_residual_identity_only", False))
-
-    @staticmethod
-    def _is_residual_topology_trainable_name(name: str) -> bool:
-        """Return true only for signed-topology and residual quality parameters."""
-        normalized = f".{name}."
-        return any(
-            marker in normalized
-            for marker in (
-                ".residual_topology_",
-                ".residual_proposal_quality_mlp.",
-            )
-        )
-
-    def _residual_topology_only_enabled(self) -> bool:
-        """Return whether Stage-2c trains only signed topology and quality heads."""
-        return bool(self._get_arg_value("gcs_residual_topology_only", False))
-
-    @staticmethod
-    def _is_residual_replacement_trainable_name(name: str) -> bool:
-        """Return true only for proposal-victim replacement utility parameters."""
-        return ".residual_replace_pair_mlp." in f".{name}."
-
-    def _residual_replacement_only_enabled(self) -> bool:
-        """Return whether Stage-2d trains only proposal-victim replacement utility."""
-        return bool(self._get_arg_value("gcs_residual_replacement_only", False))
-
-    @staticmethod
-    def _is_residual_visual_replacement_trainable_name(name: str) -> bool:
-        """Return true only for candidate-local visual replacement parameters."""
-        normalized = f".{name}."
-        return any(
-            marker in normalized
-            for marker in (
-                ".residual_visual_token_mlp.",
-                ".residual_replace_visual_pair_mlp.",
-            )
-        )
-
-    def _residual_visual_replacement_only_enabled(self) -> bool:
-        """Return whether Stage-2f trains only candidate-local visual replacement utility."""
-        return bool(self._get_arg_value("gcs_residual_visual_replacement_only", False))
-
-    @staticmethod
-    def _is_residual_listwise_replacement_trainable_name(name: str) -> bool:
-        """Return true only for Stage-2h pair, visual, and no-op action parameters."""
-        normalized = f".{name}."
-        return any(
-            marker in normalized
-            for marker in (
-                ".residual_replace_pair_mlp.",
-                ".residual_visual_token_mlp.",
-                ".residual_replace_visual_pair_mlp.",
-                ".residual_noop_mlp.",
-            )
-        )
-
-    def _residual_listwise_replacement_only_enabled(self) -> bool:
-        """Return whether Stage-2h trains only the image-level action selector."""
-        return bool(self._get_arg_value("gcs_residual_listwise_replacement_only", False))
-
-    def _is_active_residual_trainable_name(self, name: str) -> bool:
-        """Return the trainable-name contract for the active residual probe."""
-        if self._residual_listwise_replacement_only_enabled():
-            return self._is_residual_listwise_replacement_trainable_name(name)
-        if self._residual_visual_replacement_only_enabled():
-            return self._is_residual_visual_replacement_trainable_name(name)
-        if self._residual_replacement_only_enabled():
-            return self._is_residual_replacement_trainable_name(name)
-        if self._residual_topology_only_enabled():
-            return self._is_residual_topology_trainable_name(name)
-        if self._residual_identity_only_enabled():
-            return self._is_residual_identity_trainable_name(name)
-        if self._residual_visibility_only_enabled():
-            return self._is_residual_visibility_trainable_name(name)
-        return self._is_residual_proposal_trainable_name(name)
-
-    def _residual_proposal_freeze_base_enabled(self) -> bool:
-        """Return whether this run trains only residual proposal parameters."""
-        return (
-            bool(self._get_arg_value("gcs_residual_freeze_base", False))
-            or self._residual_visibility_only_enabled()
-            or self._residual_identity_only_enabled()
-            or self._residual_topology_only_enabled()
-            or self._residual_replacement_only_enabled()
-            or self._residual_visual_replacement_only_enabled()
-            or self._residual_listwise_replacement_only_enabled()
-        )
-
-    def _configure_visibility_only(self) -> None:
-        """Freeze the mature query model except its fixed-y visibility heads."""
-        if not self._visibility_only_enabled():
-            return
-        if self._dense_instance_freeze_base_enabled():
-            raise RuntimeError("gcs_visibility_only and gcs_dense_freeze_base are mutually exclusive.")
-        if self._gcs_mode() != "query":
-            raise RuntimeError("gcs_visibility_only requires gcs_mode=query.")
-        model = unwrap_model(self.model)
-        head = model.model[-1] if getattr(model, "model", None) is not None and len(model.model) else None
-        if not isinstance(head, GCSLaneHead) or str(getattr(head, "point_mode", "")) != "fixed_y":
-            raise RuntimeError("gcs_visibility_only requires a query GCSLaneHead with point_mode=fixed_y.")
-
-        markers = self._visibility_only_markers()
-        trainable_names = []
-        frozen_names = []
-        for name, parameter in self.model.named_parameters():
-            if self._is_visibility_only_trainable_name(name):
-                parameter.requires_grad = True
-                trainable_names.append(name)
-            else:
-                parameter.requires_grad = False
-                frozen_names.append(name)
-        if not trainable_names:
-            raise RuntimeError("gcs_visibility_only found no point-valid visibility parameters.")
-
-        self._visibility_only_trainable_names = tuple(trainable_names)
-        self._visibility_only_frozen_names = tuple(frozen_names)
-        self._set_arg_value("gcs_visibility_only_trainable_params", len(trainable_names))
-        self._set_arg_value("gcs_visibility_only_frozen_params", len(frozen_names))
-        LOGGER.info(
-            "GCS visibility-only enabled: "
-            f"trainable_params={len(trainable_names)}, frozen_params={len(frozen_names)}, "
-            "heads=point_valid_mlp,point_valid_refine_mlp"
-        )
-
-    def _configure_line_iou_geometry_only(self) -> None:
-        """Freeze the mature query model except fixed-y geometry point heads."""
-        if not self._line_iou_geometry_only_enabled():
-            return
-        if self._visibility_only_enabled() or self._dense_instance_freeze_base_enabled():
-            raise RuntimeError(
-                "gcs_line_iou_geometry_only is mutually exclusive with "
-                "gcs_visibility_only and gcs_dense_freeze_base."
-            )
-        if self._gcs_mode() != "query":
-            raise RuntimeError("gcs_line_iou_geometry_only requires gcs_mode=query.")
-        if float(self._get_arg_value("gcs_line_iou", 0.0)) <= 0.0:
-            raise RuntimeError("gcs_line_iou_geometry_only requires gcs_line_iou > 0.")
-        if float(self._get_arg_value("gcs_line_iou_valid_preserve", 0.0)) != 0.0:
-            raise RuntimeError("gcs_line_iou_geometry_only forbids gcs_line_iou_valid_preserve.")
-        if float(self._get_arg_value("gcs_line_iou_exist_survival", 0.0)) != 0.0:
-            raise RuntimeError("gcs_line_iou_geometry_only forbids gcs_line_iou_exist_survival.")
-        model = unwrap_model(self.model)
-        head = model.model[-1] if getattr(model, "model", None) is not None and len(model.model) else None
-        if not isinstance(head, GCSLaneHead) or str(getattr(head, "point_mode", "")) != "fixed_y":
-            raise RuntimeError("gcs_line_iou_geometry_only requires a query GCSLaneHead with point_mode=fixed_y.")
-
-        trainable_names = []
-        frozen_names = []
-        for name, parameter in self.model.named_parameters():
-            trainable = self._is_line_iou_geometry_only_trainable_name(name)
-            parameter.requires_grad = trainable
-            if trainable:
-                trainable_names.append(name)
-            else:
-                frozen_names.append(name)
-        if not trainable_names:
-            raise RuntimeError("gcs_line_iou_geometry_only found no point geometry parameters.")
-
-        self._line_iou_geometry_only_trainable_names = tuple(trainable_names)
-        self._line_iou_geometry_only_frozen_names = tuple(frozen_names)
-        self._set_arg_value("gcs_line_iou_geometry_trainable_params", len(trainable_names))
-        self._set_arg_value("gcs_line_iou_geometry_frozen_params", len(frozen_names))
-        LOGGER.info(
-            "GCS LineIoU geometry-only enabled: "
-            f"trainable_params={len(trainable_names)}, frozen_params={len(frozen_names)}, "
-            "heads=point_mlp,point_refine_mlp"
-        )
-
-    def _configure_dense_instance_freeze(self) -> None:
-        """Freeze env30/base parameters and train only dense evidence heads."""
-        if not self._dense_instance_freeze_base_enabled():
-            return
-        if bool(self._get_arg_value("gcs_visibility_only", False)) or self._line_iou_geometry_only_enabled():
-            raise RuntimeError(
-                "gcs_dense_freeze_base is mutually exclusive with "
-                "gcs_visibility_only and gcs_line_iou_geometry_only."
-            )
-        if self._gcs_mode() != "query":
-            raise RuntimeError("gcs_dense_freeze_base requires gcs_mode=query.")
-        if float(self._get_arg_value("gcs_dense_instance", 0.0)) <= 0.0:
-            raise RuntimeError("gcs_dense_freeze_base requires gcs_dense_instance > 0.")
-        model = unwrap_model(self.model)
-        head = model.model[-1] if getattr(model, "model", None) is not None and len(model.model) else None
-        if not isinstance(head, GCSLaneHead) or not bool(getattr(head, "dense_instance_head", False)):
-            raise RuntimeError("gcs_dense_freeze_base requires the dense-instance-proposal YAML.")
-
-        total_params = 0
-        trainable_params = 0
-        trainable_names = []
-        frozen_names = []
-        for name, parameter in model.named_parameters():
-            total_params += int(parameter.numel())
-            trainable = self._is_dense_instance_trainable_name(name)
-            parameter.requires_grad = trainable
-            if trainable:
-                trainable_params += int(parameter.numel())
-                trainable_names.append(name)
-            else:
-                frozen_names.append(name)
-        if not trainable_names:
-            raise RuntimeError("gcs_dense_freeze_base found no dense_instance_* parameters.")
-
-        self._dense_instance_trainable_names = tuple(trainable_names)
-        self._dense_instance_frozen_names = tuple(frozen_names)
-        self._set_arg_value("gcs_dense_trainable_params", trainable_params)
-        self._set_arg_value("gcs_dense_total_params", total_params)
-        LOGGER.info(
-            "GCS dense frozen-base enabled: trainable_params=%d/%d, trainable_tensors=%d",
-            trainable_params,
-            total_params,
-            len(trainable_names),
-        )
-
-    def _configure_residual_proposal_freeze(self) -> None:
-        """Freeze env30 and train only the segmentation-first residual proposal branch."""
-        if not self._residual_proposal_freeze_base_enabled():
-            return
-        residual_modes = sum(
-            int(enabled)
-            for enabled in (
-                self._residual_visibility_only_enabled(),
-                self._residual_identity_only_enabled(),
-                self._residual_topology_only_enabled(),
-                self._residual_replacement_only_enabled(),
-                self._residual_visual_replacement_only_enabled(),
-                self._residual_listwise_replacement_only_enabled(),
-            )
-        )
-        if residual_modes > 1:
-            raise RuntimeError(
-                "Residual visibility, identity, topology, replacement, visual-replacement, and listwise modes are mutually exclusive."
-            )
-        if self._visibility_only_enabled() or self._line_iou_geometry_only_enabled() or self._dense_instance_freeze_base_enabled():
-            raise RuntimeError("gcs_residual_freeze_base is mutually exclusive with other frozen-head probes.")
-        if self._gcs_mode() != "query":
-            raise RuntimeError("gcs_residual_freeze_base requires gcs_mode=query.")
-        if float(self._get_arg_value("gcs_residual_proposal", 0.0)) <= 0.0:
-            raise RuntimeError("gcs_residual_freeze_base requires gcs_residual_proposal > 0.")
-        model = unwrap_model(self.model)
-        head = model.model[-1] if getattr(model, "model", None) is not None and len(model.model) else None
-        if not isinstance(head, GCSLaneHead) or not bool(getattr(head, "residual_proposal_head", False)):
-            raise RuntimeError("gcs_residual_freeze_base requires the residual-proposal YAML.")
-        trainable_names = []
-        for name, parameter in model.named_parameters():
-            trainable = self._is_active_residual_trainable_name(name)
-            parameter.requires_grad = trainable
-            if trainable:
-                trainable_names.append(name)
-        if not trainable_names:
-            raise RuntimeError("gcs_residual_freeze_base found no residual_proposal_* parameters.")
-        self._set_arg_value("gcs_residual_trainable_tensors", len(trainable_names))
-        LOGGER.info(
-            "GCS residual frozen-base enabled: visibility_only=%s, identity_only=%s, topology_only=%s, "
-            "replacement_only=%s, visual_replacement_only=%s, listwise_replacement_only=%s, trainable_tensors=%d",
-            self._residual_visibility_only_enabled(),
-            self._residual_identity_only_enabled(),
-            self._residual_topology_only_enabled(),
-            self._residual_replacement_only_enabled(),
-            self._residual_visual_replacement_only_enabled(),
-            self._residual_listwise_replacement_only_enabled(),
-            len(trainable_names),
-        )
-
-    def _configure_query_survival_freeze(self) -> None:
-        """Freeze env30 and train only the zero-initialized query-survival relation head."""
-        if not self._query_survival_freeze_base_enabled():
-            return
-        if any(
-            (
-                self._visibility_only_enabled(),
-                self._line_iou_geometry_only_enabled(),
-                self._dense_instance_freeze_base_enabled(),
-                self._residual_proposal_freeze_base_enabled(),
-            )
-        ):
-            raise RuntimeError("gcs_query_survival_freeze_base is mutually exclusive with other frozen-head probes.")
-        if self._gcs_mode() != "query":
-            raise RuntimeError("gcs_query_survival_freeze_base requires gcs_mode=query.")
-        model = unwrap_model(self.model)
-        head = model.model[-1] if getattr(model, "model", None) is not None and len(model.model) else None
-        if not isinstance(head, GCSLaneHead) or not bool(getattr(head, "query_survival_head", False)):
-            raise RuntimeError("gcs_query_survival_freeze_base requires the query-survival YAML.")
-        if self._query_valid_survival_only_enabled() and not bool(
-            getattr(head, "query_survival_geometry_adapter", False)
-        ):
-            raise RuntimeError("gcs_query_valid_survival_only requires the query-survival geometry YAML.")
-        if self._query_valid_local_only_enabled() and not bool(getattr(head, "query_valid_local_adapter", False)):
-            raise RuntimeError("gcs_query_valid_local_only requires the query-valid-local YAML.")
-        if self._query_valid_interval_only_enabled() and not bool(
-            getattr(head, "query_valid_interval_adapter", False)
-        ):
-            raise RuntimeError("gcs_query_valid_interval_only requires the query-valid-interval YAML.")
-        valid_only_modes = sum(
-            int(enabled)
-            for enabled in (
-                self._query_valid_survival_only_enabled(),
-                self._query_valid_local_only_enabled(),
-                self._query_valid_interval_only_enabled(),
-            )
-        )
-        if valid_only_modes > 1:
-            raise RuntimeError("Query valid-only frozen modes are mutually exclusive.")
-        trainable_names = []
-        trainable_params = 0
-        total_params = 0
-        for name, parameter in model.named_parameters():
-            total_params += int(parameter.numel())
-            trainable = self._is_active_query_survival_trainable_name(name)
-            parameter.requires_grad = trainable
-            if trainable:
-                trainable_names.append(name)
-                trainable_params += int(parameter.numel())
-        if not trainable_names:
-            raise RuntimeError("gcs_query_survival_freeze_base found no query_survival_* parameters.")
-        self._set_arg_value("gcs_query_survival_trainable_tensors", len(trainable_names))
-        self._set_arg_value("gcs_query_survival_trainable_params", trainable_params)
-        self._set_arg_value("gcs_query_survival_total_params", total_params)
-        LOGGER.info(
-            "GCS query-survival frozen-base enabled: valid_only=%s, local_only=%s, interval_only=%s, "
-            "trainable_params=%d/%d, trainable_tensors=%d",
-            self._query_valid_survival_only_enabled(),
-            self._query_valid_local_only_enabled(),
-            self._query_valid_interval_only_enabled(),
-            trainable_params,
-            total_params,
-            len(trainable_names),
-        )
-
-    def _configure_query_count_freeze(self) -> None:
-        """Freeze the loaded query detector and train only its branch-local Count Head."""
-        if not self._query_count_freeze_base_enabled():
-            return
-        if any(
-            (
-                self._visibility_only_enabled(),
-                self._line_iou_geometry_only_enabled(),
-                self._dense_instance_freeze_base_enabled(),
-                self._residual_proposal_freeze_base_enabled(),
-                self._query_survival_freeze_base_enabled(),
-            )
-        ):
-            raise RuntimeError("gcs_query_count_freeze_base is mutually exclusive with other frozen-head probes.")
-        if self._gcs_mode() != "query":
-            raise RuntimeError("gcs_query_count_freeze_base requires gcs_mode=query.")
-        if float(self._get_arg_value("gcs_query_count_ce", 0.0)) <= 0.0:
-            raise RuntimeError("gcs_query_count_freeze_base requires gcs_query_count_ce > 0.")
-        model = unwrap_model(self.model)
-        head = model.model[-1] if getattr(model, "model", None) is not None and len(model.model) else None
-        if not isinstance(head, GCSLaneHead) or not bool(getattr(head, "query_count_head", False)):
-            raise RuntimeError("gcs_query_count_freeze_base requires the query Count Head YAML.")
-        trainable_names = []
-        trainable_params = 0
-        total_params = 0
-        for name, parameter in model.named_parameters():
-            total_params += int(parameter.numel())
-            trainable = self._is_query_count_trainable_name(name)
-            parameter.requires_grad = trainable
-            if trainable:
-                trainable_names.append(name)
-                trainable_params += int(parameter.numel())
-        if not trainable_names:
-            raise RuntimeError("gcs_query_count_freeze_base found no query_count_mlp parameters.")
-        self._set_arg_value("gcs_query_count_trainable_tensors", len(trainable_names))
-        self._set_arg_value("gcs_query_count_trainable_params", trainable_params)
-        self._set_arg_value("gcs_query_count_total_params", total_params)
-        LOGGER.info(
-            "GCS query-count frozen-base enabled: trainable_params=%d/%d, trainable_tensors=%d",
-            trainable_params,
-            total_params,
-            len(trainable_names),
-        )
-
-    def _build_train_pipeline(self) -> None:
-        """Configure GCS-specific parameter freezing before optimizer creation."""
-        self._configure_visibility_only()
-        self._configure_line_iou_geometry_only()
-        self._configure_dense_instance_freeze()
-        self._configure_residual_proposal_freeze()
-        self._configure_query_survival_freeze()
-        self._configure_query_count_freeze()
-        super()._build_train_pipeline()
-
-    @staticmethod
-    def _hash_state_tensors(state: dict[str, torch.Tensor], keys: tuple[str, ...]) -> str:
-        """Return a deterministic SHA256 over named tensor values."""
-        digest = hashlib.sha256()
-        for key in sorted(keys):
-            value = state.get(key)
-            if not isinstance(value, torch.Tensor):
-                raise RuntimeError(f"Frozen-state audit expected tensor key {key!r}.")
-            tensor = value.detach().cpu().contiguous()
-            digest.update(key.encode("utf-8"))
-            digest.update(str(tensor.dtype).encode("utf-8"))
-            digest.update(str(tuple(tensor.shape)).encode("utf-8"))
-            digest.update(tensor.reshape(-1).view(torch.uint8).numpy().tobytes())
-        return digest.hexdigest()
-
-    def _visibility_only_optimizer_param_names_or_raise(self) -> tuple[str, ...]:
-        """Verify the optimizer contains exactly the declared visibility-head parameters."""
-        model_parameters = {id(parameter): name for name, parameter in self.model.named_parameters()}
-        trainable_parameters = {
-            id(parameter): name for name, parameter in self.model.named_parameters() if parameter.requires_grad
-        }
-        if not trainable_parameters:
-            raise RuntimeError("gcs_visibility_only found no trainable model parameters after optimizer setup.")
-        unexpected_trainable = sorted(
-            name for name in trainable_parameters.values() if not self._is_visibility_only_trainable_name(name)
-        )
-        if unexpected_trainable:
-            raise RuntimeError(
-                "gcs_visibility_only left non-visibility parameters trainable: "
-                + ", ".join(unexpected_trainable)
-            )
-
-        optimizer_ids = []
-        optimizer_names = []
-        for group in self.optimizer.param_groups:
-            for parameter in group["params"]:
-                parameter_id = id(parameter)
-                name = model_parameters.get(parameter_id)
-                if name is None:
-                    raise RuntimeError("gcs_visibility_only optimizer contains a parameter outside the model.")
-                optimizer_ids.append(parameter_id)
-                optimizer_names.append(name)
-        if len(optimizer_ids) != len(set(optimizer_ids)):
-            raise RuntimeError("gcs_visibility_only optimizer contains duplicate parameters.")
-        if set(optimizer_ids) != set(trainable_parameters):
-            missing = sorted(trainable_parameters[parameter_id] for parameter_id in set(trainable_parameters) - set(optimizer_ids))
-            extra = sorted(model_parameters[parameter_id] for parameter_id in set(optimizer_ids) - set(trainable_parameters))
-            raise RuntimeError(
-                "gcs_visibility_only optimizer/trainable mismatch: "
-                f"missing={missing}, extra={extra}"
-            )
-        unexpected_optimizer = sorted(name for name in optimizer_names if not self._is_visibility_only_trainable_name(name))
-        if unexpected_optimizer:
-            raise RuntimeError(
-                "gcs_visibility_only optimizer contains non-visibility parameters: "
-                + ", ".join(unexpected_optimizer)
-            )
-        return tuple(sorted(optimizer_names))
-
-    def _visibility_only_audit_path(self) -> Path:
-        """Return the run-local frozen-state audit path."""
-        return Path(self.save_dir) / "frozen_state_audit.json"
-
-    def _write_visibility_only_frozen_state_audit(self, event: str, hashes: dict[str, str]) -> None:
-        """Append a frozen-state verification event for the active visibility-only run."""
-        if RANK not in {-1, 0}:
-            return
-        audit_path = self._visibility_only_audit_path()
-        audit_path.parent.mkdir(parents=True, exist_ok=True)
-        existing: dict[str, Any] = {}
-        if audit_path.exists():
-            try:
-                existing = json.loads(audit_path.read_text(encoding="utf-8"))
-            except Exception as exc:
-                raise RuntimeError(f"Could not read visibility-only frozen-state audit {audit_path}: {exc}") from exc
-        event_record = {
-            "event": str(event),
-            "epoch": int(getattr(self, "epoch", -1)) + 1,
-            "frozen_state_sha256": dict(hashes),
-        }
-        events = list(existing.get("events", []))
-        events.append(event_record)
-        audit = {
-            "schema": "gcs_visibility_only_frozen_state_v1",
-            "enabled": True,
-            "frozen_state_key_count": len(self._visibility_only_frozen_state_keys),
-            "optimizer_parameter_names": list(self._visibility_only_optimizer_param_names),
-            "events": events,
-            "latest": event_record,
-        }
-        audit_path.write_text(json.dumps(audit, indent=2, sort_keys=True), encoding="utf-8")
-
-    def _current_visibility_only_frozen_state_hashes(self) -> dict[str, str]:
-        """Hash frozen live-model and EMA state tensors for later equality checks."""
-        if self.ema is None:
-            raise RuntimeError("gcs_visibility_only requires ModelEMA before frozen-state auditing.")
-        model_state = unwrap_model(self.model).state_dict()
-        ema_state = self.ema.ema.state_dict()
-        keys = self._visibility_only_frozen_state_keys
-        if not keys:
-            raise RuntimeError("gcs_visibility_only has no registered frozen-state keys.")
-        if set(model_state) != set(ema_state):
-            raise RuntimeError("gcs_visibility_only live-model and EMA state keys differ.")
-        return {
-            "model": self._hash_state_tensors(model_state, keys),
-            "ema": self._hash_state_tensors(ema_state, keys),
-        }
-
-    def _assert_visibility_only_frozen_state(self, event: str) -> None:
-        """Fail when any frozen live-model or EMA state tensor has changed."""
-        if not self._visibility_only_enabled():
-            return
-        optimizer_names = self._visibility_only_optimizer_param_names_or_raise()
-        if tuple(optimizer_names) != self._visibility_only_optimizer_param_names:
-            raise RuntimeError("gcs_visibility_only optimizer parameter names changed after setup.")
-        if self.ema is None:
-            raise RuntimeError("gcs_visibility_only requires ModelEMA for frozen-state auditing.")
-        if set(self.ema.excluded_state_keys) != set(self._visibility_only_frozen_state_keys):
-            raise RuntimeError("gcs_visibility_only EMA exclusion no longer matches frozen state keys.")
-        hashes = self._current_visibility_only_frozen_state_hashes()
-        if hashes != self._visibility_only_frozen_state_hashes:
-            raise RuntimeError(
-                "gcs_visibility_only frozen live-model or EMA state changed: "
-                f"expected={self._visibility_only_frozen_state_hashes}, actual={hashes}"
-            )
-        self._write_visibility_only_frozen_state_audit(event, hashes)
-
-    def _configure_visibility_only_state_lock(self) -> None:
-        """Lock frozen state after optimizer, EMA creation, and optional resume restoration."""
-        if not self._visibility_only_enabled():
-            return
-        if self.ema is None:
-            raise RuntimeError("gcs_visibility_only requires ModelEMA after trainer setup.")
-        model_state = unwrap_model(self.model).state_dict()
-        frozen_keys = tuple(
-            key for key in model_state if not self._is_visibility_only_trainable_name(key)
-        )
-        if not frozen_keys:
-            raise RuntimeError("gcs_visibility_only found no frozen live-model state keys.")
-        optimizer_names = self._visibility_only_optimizer_param_names_or_raise()
-        self.ema.set_excluded_state_keys(frozen_keys)
-        self._visibility_only_frozen_state_keys = frozen_keys
-        self._visibility_only_optimizer_param_names = optimizer_names
-        self._set_arg_value("gcs_visibility_only_frozen_state_key_count", len(frozen_keys))
-        self._set_arg_value("gcs_visibility_only_frozen_state_audit", str(self._visibility_only_audit_path()))
-        hashes = self._current_visibility_only_frozen_state_hashes()
-        audit_path = self._visibility_only_audit_path()
-        if audit_path.exists():
-            try:
-                previous = json.loads(audit_path.read_text(encoding="utf-8")).get("latest", {}).get("frozen_state_sha256")
-            except Exception as exc:
-                raise RuntimeError(f"Could not read visibility-only frozen-state audit {audit_path}: {exc}") from exc
-            if previous and previous != hashes:
-                raise RuntimeError(
-                    "gcs_visibility_only resume frozen-state hashes do not match the previous audit: "
-                    f"previous={previous}, current={hashes}"
-                )
-        self._visibility_only_frozen_state_hashes = hashes
-        self._write_visibility_only_frozen_state_audit("setup", hashes)
-
-    def _line_iou_geometry_only_optimizer_param_names_or_raise(self) -> tuple[str, ...]:
-        """Verify the optimizer contains exactly the declared geometry-head parameters."""
-        model_parameters = {id(parameter): name for name, parameter in self.model.named_parameters()}
-        trainable_parameters = {
-            id(parameter): name for name, parameter in self.model.named_parameters() if parameter.requires_grad
-        }
-        if not trainable_parameters:
-            raise RuntimeError("gcs_line_iou_geometry_only found no trainable model parameters after optimizer setup.")
-        unexpected_trainable = sorted(
-            name for name in trainable_parameters.values() if not self._is_line_iou_geometry_only_trainable_name(name)
-        )
-        if unexpected_trainable:
-            raise RuntimeError(
-                "gcs_line_iou_geometry_only left non-geometry parameters trainable: "
-                + ", ".join(unexpected_trainable)
-            )
-
-        optimizer_ids = []
-        optimizer_names = []
-        for group in self.optimizer.param_groups:
-            for parameter in group["params"]:
-                parameter_id = id(parameter)
-                name = model_parameters.get(parameter_id)
-                if name is None:
-                    raise RuntimeError("gcs_line_iou_geometry_only optimizer contains a parameter outside the model.")
-                optimizer_ids.append(parameter_id)
-                optimizer_names.append(name)
-        if len(optimizer_ids) != len(set(optimizer_ids)):
-            raise RuntimeError("gcs_line_iou_geometry_only optimizer contains duplicate parameters.")
-        if set(optimizer_ids) != set(trainable_parameters):
-            missing = sorted(
-                trainable_parameters[parameter_id] for parameter_id in set(trainable_parameters) - set(optimizer_ids)
-            )
-            extra = sorted(model_parameters[parameter_id] for parameter_id in set(optimizer_ids) - set(trainable_parameters))
-            raise RuntimeError(
-                "gcs_line_iou_geometry_only optimizer/trainable mismatch: "
-                f"missing={missing}, extra={extra}"
-            )
-        unexpected_optimizer = sorted(
-            name for name in optimizer_names if not self._is_line_iou_geometry_only_trainable_name(name)
-        )
-        if unexpected_optimizer:
-            raise RuntimeError(
-                "gcs_line_iou_geometry_only optimizer contains non-geometry parameters: "
-                + ", ".join(unexpected_optimizer)
-            )
-        return tuple(sorted(optimizer_names))
-
-    def _line_iou_geometry_only_audit_path(self) -> Path:
-        """Return the run-local frozen-state audit path for geometry-only LineIoU."""
-        return Path(self.save_dir) / "line_iou_geometry_only_frozen_state_audit.json"
-
-    def _write_line_iou_geometry_only_frozen_state_audit(self, event: str, hashes: dict[str, str]) -> None:
-        """Append a frozen-state verification event for the active geometry-only run."""
-        if RANK not in {-1, 0}:
-            return
-        audit_path = self._line_iou_geometry_only_audit_path()
-        audit_path.parent.mkdir(parents=True, exist_ok=True)
-        existing: dict[str, Any] = {}
-        if audit_path.exists():
-            try:
-                existing = json.loads(audit_path.read_text(encoding="utf-8"))
-            except Exception as exc:
-                raise RuntimeError(f"Could not read LineIoU geometry-only frozen-state audit {audit_path}: {exc}") from exc
-        event_record = {
-            "event": str(event),
-            "epoch": int(getattr(self, "epoch", -1)) + 1,
-            "frozen_state_sha256": dict(hashes),
-        }
-        events = list(existing.get("events", []))
-        events.append(event_record)
-        audit = {
-            "schema": "gcs_line_iou_geometry_only_frozen_state_v1",
-            "enabled": True,
-            "trainable_heads": ["point_mlp", "point_refine_mlp"],
-            "frozen_state_key_count": len(self._line_iou_geometry_only_frozen_state_keys),
-            "optimizer_parameter_names": list(self._line_iou_geometry_only_optimizer_param_names),
-            "events": events,
-            "latest": event_record,
-        }
-        audit_path.write_text(json.dumps(audit, indent=2, sort_keys=True), encoding="utf-8")
-
-    def _current_line_iou_geometry_only_frozen_state_hashes(self) -> dict[str, str]:
-        """Hash frozen live-model and EMA state tensors for geometry-only checks."""
-        if self.ema is None:
-            raise RuntimeError("gcs_line_iou_geometry_only requires ModelEMA before frozen-state auditing.")
-        model_state = unwrap_model(self.model).state_dict()
-        ema_state = self.ema.ema.state_dict()
-        keys = self._line_iou_geometry_only_frozen_state_keys
-        if not keys:
-            raise RuntimeError("gcs_line_iou_geometry_only has no registered frozen-state keys.")
-        if set(model_state) != set(ema_state):
-            raise RuntimeError("gcs_line_iou_geometry_only live-model and EMA state keys differ.")
-        return {
-            "model": self._hash_state_tensors(model_state, keys),
-            "ema": self._hash_state_tensors(ema_state, keys),
-        }
-
-    def _assert_line_iou_geometry_only_frozen_state(self, event: str) -> None:
-        """Fail when any frozen live-model or EMA state tensor has changed."""
-        if not self._line_iou_geometry_only_enabled():
-            return
-        optimizer_names = self._line_iou_geometry_only_optimizer_param_names_or_raise()
-        if tuple(optimizer_names) != self._line_iou_geometry_only_optimizer_param_names:
-            raise RuntimeError("gcs_line_iou_geometry_only optimizer parameter names changed after setup.")
-        if self.ema is None:
-            raise RuntimeError("gcs_line_iou_geometry_only requires ModelEMA for frozen-state auditing.")
-        if set(self.ema.excluded_state_keys) != set(self._line_iou_geometry_only_frozen_state_keys):
-            raise RuntimeError("gcs_line_iou_geometry_only EMA exclusion no longer matches frozen state keys.")
-        hashes = self._current_line_iou_geometry_only_frozen_state_hashes()
-        if hashes != self._line_iou_geometry_only_frozen_state_hashes:
-            raise RuntimeError(
-                "gcs_line_iou_geometry_only frozen live-model or EMA state changed: "
-                f"expected={self._line_iou_geometry_only_frozen_state_hashes}, actual={hashes}"
-            )
-        self._write_line_iou_geometry_only_frozen_state_audit(event, hashes)
-
-    def _configure_line_iou_geometry_only_state_lock(self) -> None:
-        """Lock frozen state after optimizer, EMA creation, and optional resume restoration."""
-        if not self._line_iou_geometry_only_enabled():
-            return
-        if self.ema is None:
-            raise RuntimeError("gcs_line_iou_geometry_only requires ModelEMA after trainer setup.")
-        model_state = unwrap_model(self.model).state_dict()
-        frozen_keys = tuple(
-            key for key in model_state if not self._is_line_iou_geometry_only_trainable_name(key)
-        )
-        if not frozen_keys:
-            raise RuntimeError("gcs_line_iou_geometry_only found no frozen live-model state keys.")
-        optimizer_names = self._line_iou_geometry_only_optimizer_param_names_or_raise()
-        self.ema.set_excluded_state_keys(frozen_keys)
-        self._line_iou_geometry_only_frozen_state_keys = frozen_keys
-        self._line_iou_geometry_only_optimizer_param_names = optimizer_names
-        self._set_arg_value("gcs_line_iou_geometry_frozen_state_key_count", len(frozen_keys))
-        self._set_arg_value(
-            "gcs_line_iou_geometry_frozen_state_audit",
-            str(self._line_iou_geometry_only_audit_path()),
-        )
-        hashes = self._current_line_iou_geometry_only_frozen_state_hashes()
-        audit_path = self._line_iou_geometry_only_audit_path()
-        if audit_path.exists():
-            try:
-                previous = json.loads(audit_path.read_text(encoding="utf-8")).get("latest", {}).get("frozen_state_sha256")
-            except Exception as exc:
-                raise RuntimeError(f"Could not read LineIoU geometry-only frozen-state audit {audit_path}: {exc}") from exc
-            if previous and previous != hashes:
-                raise RuntimeError(
-                    "gcs_line_iou_geometry_only resume frozen-state hashes do not match the previous audit: "
-                    f"previous={previous}, current={hashes}"
-                )
-        self._line_iou_geometry_only_frozen_state_hashes = hashes
-        self._write_line_iou_geometry_only_frozen_state_audit("setup", hashes)
-
-    def _setup_train(self) -> None:
-        """Finish base setup, then lock any GCS frozen-state probe."""
-        super()._setup_train()
-        self._configure_visibility_only_state_lock()
-        self._configure_line_iou_geometry_only_state_lock()
-        self._configure_residual_visibility_state_lock()
-        self._configure_query_survival_state_lock()
-        self._configure_query_count_state_lock()
-
-    def _configure_residual_visibility_state_lock(self) -> None:
-        """Exclude all Stage-1b frozen tensors from EMA arithmetic updates."""
-        if not (
-            self._residual_visibility_only_enabled()
-            or self._residual_identity_only_enabled()
-            or self._residual_topology_only_enabled()
-            or self._residual_replacement_only_enabled()
-            or self._residual_visual_replacement_only_enabled()
-        ):
-            return
-        if self.ema is None:
-            raise RuntimeError("Frozen residual probes require ModelEMA after trainer setup.")
-        model_state = unwrap_model(self.model).state_dict()
-        frozen_keys = tuple(key for key in model_state if not self._is_active_residual_trainable_name(key))
-        if not frozen_keys:
-            raise RuntimeError("Frozen residual probe found no frozen state keys.")
-        self.ema.set_excluded_state_keys(frozen_keys)
-        self._set_arg_value("gcs_residual_frozen_state_key_count", len(frozen_keys))
-        LOGGER.info("GCS residual EMA lock: frozen_state_keys=%d", len(frozen_keys))
-
-    def _configure_query_survival_state_lock(self) -> None:
-        """Exclude frozen env30 tensors from EMA updates for query-survival probes."""
-        if not self._query_survival_freeze_base_enabled():
-            return
-        if self.ema is None:
-            raise RuntimeError("gcs_query_survival_freeze_base requires ModelEMA after trainer setup.")
-        model_state = unwrap_model(self.model).state_dict()
-        frozen_keys = tuple(key for key in model_state if not self._is_active_query_survival_trainable_name(key))
-        if not frozen_keys:
-            raise RuntimeError("Query-survival probe found no frozen env30 state keys.")
-        self.ema.set_excluded_state_keys(frozen_keys)
-        self._set_arg_value("gcs_query_survival_frozen_state_key_count", len(frozen_keys))
-        LOGGER.info("GCS query-survival EMA lock: frozen_state_keys=%d", len(frozen_keys))
-
-    def _configure_query_count_state_lock(self) -> None:
-        """Exclude frozen detector tensors from EMA updates for Count Head probes."""
-        if not self._query_count_freeze_base_enabled():
-            return
-        if self.ema is None:
-            raise RuntimeError("gcs_query_count_freeze_base requires ModelEMA after trainer setup.")
-        model_state = unwrap_model(self.model).state_dict()
-        frozen_keys = tuple(key for key in model_state if not self._is_query_count_trainable_name(key))
-        if not frozen_keys:
-            raise RuntimeError("Query Count Head probe found no frozen detector state keys.")
-        self.ema.set_excluded_state_keys(frozen_keys)
-        self._set_arg_value("gcs_query_count_frozen_state_key_count", len(frozen_keys))
-        LOGGER.info("GCS query-count EMA lock: frozen_state_keys=%d", len(frozen_keys))
-
-    def _model_train(self) -> None:
-        """Set train mode while preserving frozen BatchNorm statistics."""
-        super()._model_train()
-        if self._query_survival_freeze_base_enabled():
-            model = unwrap_model(self.model)
-            for name, module in model.named_modules():
-                if self._is_active_query_survival_trainable_name(name):
-                    module.train()
-                else:
-                    module.eval()
-            return
-        if self._query_count_freeze_base_enabled():
-            model = unwrap_model(self.model)
-            for name, module in model.named_modules():
-                if self._is_query_count_trainable_name(name):
-                    module.train()
-                else:
-                    module.eval()
-            return
-        if self._dense_instance_freeze_base_enabled():
-            model = unwrap_model(self.model)
-            for name, module in model.named_modules():
-                if self._is_dense_instance_trainable_name(name):
-                    module.train()
-                else:
-                    module.eval()
-            return
-        if self._residual_proposal_freeze_base_enabled():
-            model = unwrap_model(self.model)
-            for name, module in model.named_modules():
-                trainable = self._is_active_residual_trainable_name(name)
-                if trainable:
-                    module.train()
-                else:
-                    module.eval()
-            return
-        if self._line_iou_geometry_only_enabled():
-            for name, module in self.model.named_modules():
-                if self._is_line_iou_geometry_only_trainable_name(name):
-                    module.train()
-                else:
-                    module.eval()
-            return
-        if not self._visibility_only_enabled():
-            return
-        markers = self._visibility_only_markers()
-        for name, module in self.model.named_modules():
-            if isinstance(module, nn.modules.batchnorm._BatchNorm) and not any(
-                marker in f".{name}." for marker in markers
-            ):
-                module.eval()
 
     def _ordered_slot_loss_contract_from_args(self) -> dict[str, Any]:
         """Return and validate the effective ordered-slot loss supervision contract."""
@@ -1424,10 +384,8 @@ class GCSLaneTrainer(BaseTrainer):
             self.loss_names = OrderedSlotGCSLoss.loss_names
             self.progress_loss_names = OrderedSlotGCSLoss.progress_loss_names
         else:
-            self.loss_names = GCSLoss.active_loss_names(self.args)
-            self.progress_loss_names = self.__class__.progress_loss_names + (
-                GCSLoss.lane_instance_progress_loss_names if GCSLoss.lane_instance_enabled(self.args) else ()
-            )
+            self.loss_names = self.__class__.loss_names
+            self.progress_loss_names = self.__class__.progress_loss_names
 
     def get_dataset(self) -> dict[str, Any]:
         """Load a standard YAML but pair images with labels_gcs/*.npz at dataset time."""
@@ -1515,6 +473,7 @@ class GCSLaneTrainer(BaseTrainer):
             scale=self.args.scale if augment else 0.0,
             erasing=self.args.erasing if augment else 0.0,
             mosaic=self.args.mosaic if augment else 0.0,
+            gt45_oversample=mode == "train" and bool(getattr(self.args, "gcs_gt45_oversample", False)),
         )
         assert_gcs_shape(dataset.imgsz, gcs_imgsz, name=f"{mode} dataset.imgsz", context="GCSLaneTrainer.build_dataset")
         self._check_point_mode_contract(dataset, mode=mode)
@@ -2058,96 +1017,11 @@ class GCSLaneTrainer(BaseTrainer):
             value = [value]
         return [int(x) for x in value]
 
-    @staticmethod
-    def _official_best_key(best: dict[str, Any], epoch: int) -> tuple:
+    def _official_best_key(self, best: dict[str, Any], epoch: int) -> tuple:
         """Order official-val candidates by the project checkpoint-selection contract."""
+        if bool(getattr(self.args, "gcs_official_robust_selection", False)):
+            return official_best_robust_sort_key(best, epoch)
         return official_best_sort_key(best, epoch)
-
-    def _official_count_safe_enabled(self) -> bool:
-        """Return whether official_best should prefilter sweep rows by count-safe gates."""
-        return bool(getattr(self.args, "gcs_official_count_safe_selection", False))
-
-    def _official_count_safe_thresholds(self) -> dict[str, Any]:
-        """Return the configured count-safe official-val selection gates."""
-        return count_safe_thresholds(
-            acc_min_exclusive=getattr(self.args, "gcs_official_count_safe_acc_min_exclusive", None),
-            fp_max=getattr(self.args, "gcs_official_count_safe_fp_max", None),
-            fn_max=getattr(self.args, "gcs_official_count_safe_fn_max", None),
-            count_acc4_min=getattr(self.args, "gcs_official_count_safe_count_acc4_min", None),
-            count_acc5_min=getattr(self.args, "gcs_official_count_safe_count_acc5_min", None),
-            gt4_to3_max=getattr(self.args, "gcs_official_count_safe_gt4_to3_max", None),
-            gt4_to5_max=getattr(self.args, "gcs_official_count_safe_gt4_to5_max", None),
-            gt5_to4_max=getattr(self.args, "gcs_official_count_safe_gt5_to4_max", None),
-            allow_output6=getattr(self.args, "gcs_official_count_safe_allow_output6", None),
-        )
-
-    @staticmethod
-    def _official_sweep_provenance(output: dict[str, Any]) -> dict[str, Any]:
-        """Extract canonical official-val provenance fields from one sweep output."""
-        config = output.get("config") if isinstance(output.get("config"), dict) else {}
-        return {
-            "split": config.get("split"),
-            "gt_contract": output.get("gt_contract", config.get("gt_contract")),
-            "comparable_to_e1_spurious": output.get(
-                "comparable_to_e1_spurious", config.get("comparable_to_e1_spurious")
-            ),
-        }
-
-    def _assert_count_safe_sweep_provenance(self, output: dict[str, Any]) -> dict[str, Any]:
-        """Fail closed if count-safe selection is not running on canonical official-val."""
-        provenance = self._official_sweep_provenance(output)
-        if (
-            provenance["split"] != "val"
-            or provenance["gt_contract"] != "canonical_official_val_363"
-            or provenance["comparable_to_e1_spurious"] is not True
-            or bool(getattr(self.args, "gcs_official_allow_noncanonical_gt", False))
-            or int(getattr(self.args, "gcs_official_max_images", 0) or 0) != 0
-        ):
-            raise RuntimeError(
-                "gcs_official_count_safe_selection requires full canonical official-val. "
-                f"provenance={provenance}, "
-                f"allow_noncanonical_gt={bool(getattr(self.args, 'gcs_official_allow_noncanonical_gt', False))}, "
-                f"max_images={int(getattr(self.args, 'gcs_official_max_images', 0) or 0)}"
-            )
-        return provenance
-
-    def _apply_count_safe_sweep_selection(self, output: dict[str, Any], epoch_num: int) -> tuple[dict[str, Any], bool]:
-        """Replace ``output['best']`` with a pre-registered count-safe row when enabled."""
-        if not self._official_count_safe_enabled():
-            return output, True
-        provenance = self._assert_count_safe_sweep_provenance(output)
-        rows = output.get("results")
-        if not isinstance(rows, list) or not rows or any(not isinstance(row, dict) for row in rows):
-            raise RuntimeError("gcs_official_count_safe_selection requires non-empty sweep 'results' rows.")
-
-        thresholds = self._official_count_safe_thresholds()
-        natural_best = dict(output.get("best") or {})
-        selected, eligible_rows = select_count_safe_sweep_row(rows, thresholds)
-        policy = constrained_sweep_selection_policy()
-        count_safe_summary = {
-            "enabled": True,
-            "pre_registered": True,
-            "diagnostic_only": False,
-            "selection_policy": policy,
-            "selection_policy_sha256": policy_sha256(policy),
-            "thresholds": thresholds,
-            "provenance": provenance,
-            "epoch": int(epoch_num),
-            "total_rows": len(rows),
-            "eligible_rows": len(eligible_rows),
-            "selected": selected is not None,
-            "natural_best": natural_best,
-            "natural_best_checks": count_safe_row_checks(natural_best, thresholds) if natural_best else [],
-            "selected_checks": count_safe_row_checks(selected, thresholds) if selected else [],
-        }
-        selected_output = dict(output)
-        selected_output["natural_best"] = natural_best
-        selected_output["count_safe_selection"] = count_safe_summary
-        selected_output["count_safe_selection_policy"] = count_safe_summary["selection_policy"]
-        if selected is None:
-            return selected_output, False
-        selected_output["best"] = selected
-        return selected_output, True
 
     def _load_official_best_state(self) -> dict[str, Any] | None:
         """Restore official-best comparison state when resuming a run."""
@@ -2187,7 +1061,6 @@ class GCSLaneTrainer(BaseTrainer):
         """Build the in-process official-val sweep args for the current checkpoint."""
         shape = self._resolve_gcs_imgsz()
         ordered_slot = self._gcs_mode() == "ordered_slot"
-        lane_instance_set = self._lane_instance_set_capable()
         official_query_defaults = {
             "gcs_official_confs": [0.005, 0.01, 0.02, 0.05, 0.1],
             "gcs_official_point_valid_thrs": [0.45, 0.5],
@@ -2212,15 +1085,6 @@ class GCSLaneTrainer(BaseTrainer):
             nms_dist_pxs = [18.0]
             max_dets = [8]
             min_points = [6]
-        elif lane_instance_set:
-            confs = self._official_float_list(getattr(self.args, "gcs_official_confs", None), (0.05, 0.1, 0.2, 0.25))
-            point_valid_thrs = self._official_float_list(
-                getattr(self.args, "gcs_official_point_valid_thrs", None), (0.4, 0.5)
-            )
-            nms_dist_pxs = [0.0]
-            max_dets = [5]
-            min_points = self._official_int_list(getattr(self.args, "gcs_official_min_points", None), (4, 5, 6))
-            count_modes = ["score_sum"]
         else:
             confs = self._official_float_list(
                 getattr(self.args, "gcs_official_confs", None), official_query_defaults["gcs_official_confs"]
@@ -2252,23 +1116,13 @@ class GCSLaneTrainer(BaseTrainer):
             allow_noncanonical_gt=bool(getattr(self.args, "gcs_official_allow_noncanonical_gt", False)),
             weights=str(self.last),
             imgsz=[int(shape[0]), int(shape[1])],
-            decode_mode="ordered_slot" if ordered_slot else ("lane_instance_set" if lane_instance_set else "query"),
+            decode_mode="ordered_slot" if ordered_slot else "query",
             confs=confs,
             point_valid_thrs=point_valid_thrs,
             nms_dist_pxs=nms_dist_pxs,
             max_dets=max_dets,
             min_points=min_points,
             count_modes=count_modes,
-            count_aware_topk=False if lane_instance_set else bool(getattr(self.args, "gcs_official_count_aware_topk", False)),
-            count_aware_min_k=3,
-            count_aware_max_k=5,
-            count_aware_length_norm=12.0,
-            count_aware_extra_margins=[0],
-            lane_instance_duplicate_thrs=[float(getattr(self.args, "gcs_lane_instance_decode_duplicate_thr", 0.65))],
-            lane_instance_max_dets=[5],
-            lane_instance_allow_empty=bool(getattr(self.args, "gcs_lane_instance_decode_allow_empty", False)),
-            lane_instance_empty_thr=float(getattr(self.args, "gcs_lane_instance_decode_empty_thr", 0.75)),
-            lane_instance_min_survivors=int(getattr(self.args, "gcs_lane_instance_decode_min_survivors", 2)),
             gcs_min_lanes=int(getattr(self.args, "gcs_min_lanes", 2)),
             gcs_max_lanes=int(getattr(self.args, "gcs_max_lanes", 5)),
             gcs_num_slots=int(getattr(self.args, "gcs_num_slots", 5)),
@@ -2289,31 +1143,33 @@ class GCSLaneTrainer(BaseTrainer):
             ordered_slot_runtime_context="training_official_best" if ordered_slot else "official_sweep",
             score_fp_weight=float(getattr(self.args, "gcs_official_score_fp_weight", 0.02) or 0.02),
             score_fn_weight=float(getattr(self.args, "gcs_official_score_fn_weight", 0.02) or 0.02),
+            robust_selection=bool(getattr(self.args, "gcs_official_robust_selection", False)),
+            robust_balance_weight=float(getattr(self.args, "gcs_official_robust_balance_weight", 0.35) or 0.35),
+            robust_count_acc4_weight=float(getattr(self.args, "gcs_official_robust_count_acc4_weight", 0.15) or 0.15),
         )
 
     def _write_official_best_artifacts(self, output: dict[str, Any], epoch_num: int, sweep_dir: Path) -> None:
         """Persist official-best checkpoint, sweep summary, and decode config."""
-        self._assert_visibility_only_frozen_state(f"before_official_best_epoch{int(epoch_num):03d}")
-        self._assert_line_iou_geometry_only_frozen_state(f"before_official_best_epoch{int(epoch_num):03d}")
         best = dict(output["best"])
         summary = dict(output)
+        selection_policy = (
+            ROBUST_OFFICIAL_SELECTION_POLICY
+            if bool(getattr(self.args, "gcs_official_robust_selection", False))
+            else OFFICIAL_SELECTION_POLICY
+        )
         meta = {
             "epoch": int(epoch_num),
             "checkpoint": str(self.official_best.resolve()),
             "source_checkpoint": str(self.last.resolve()),
             "sweep_dir": str(sweep_dir.resolve()),
-            "selection_policy": OFFICIAL_SELECTION_POLICY,
+            "selection_policy": selection_policy,
             "sweep_selection_policy": output.get("selection_policy") or output.get("config", {}).get("selection_policy"),
-            "count_safe_selection": output.get("count_safe_selection"),
             "best": best,
         }
         summary["official_best"] = meta
-        summary["selection_policy"] = OFFICIAL_SELECTION_POLICY
-        summary["official_selection_policy"] = OFFICIAL_SELECTION_POLICY
+        summary["selection_policy"] = selection_policy
+        summary["official_selection_policy"] = selection_policy
         summary["sweep_selection_policy"] = meta["sweep_selection_policy"]
-        if output.get("count_safe_selection"):
-            summary["count_safe_selection"] = output["count_safe_selection"]
-            summary["count_safe_selection_policy"] = output.get("count_safe_selection_policy")
         shutil.copy2(self.last, self.official_best)
         self.official_best_sweep.write_text(json.dumps(summary, indent=2), encoding="utf-8")
         model_mode = str(best.get("decode_mode", self._gcs_mode()))
@@ -2326,13 +1182,15 @@ class GCSLaneTrainer(BaseTrainer):
                 "sweep_summary": str(self.official_best_sweep.resolve()),
                 "selection_policy": meta["selection_policy"],
                 "sweep_selection_policy": meta["sweep_selection_policy"],
-                "count_safe_selection": meta["count_safe_selection"],
                 "decode": decode_cfg,
                 "official_metrics": {
                     "official_acc": float(best["official_acc"]),
                     "official_score": float(best["official_score"]),
                     "official_FP": float(best["official_FP"]),
                     "official_FN": float(best["official_FN"]),
+                    "robust_score": float(best.get("robust_score", 0.0)),
+                    "robust_balance_penalty": float(best.get("robust_balance_penalty", 0.0)),
+                    "robust_count_acc4_penalty": float(best.get("robust_count_acc4_penalty", 0.0)),
                     "strict_order_valid": bool(best.get("strict_order_valid", True)),
                     "ordered_slot_order_violations": int(best.get("ordered_slot_order_violations", 0)),
                     "count_acc": float(best.get("count_acc", 0.0)),
@@ -2344,66 +1202,6 @@ class GCSLaneTrainer(BaseTrainer):
             },
         )
         self._official_best_state = {"best": best, "epoch": int(epoch_num), "key": self._official_best_key(best, epoch_num)}
-
-    def _write_official_epoch_artifacts(self, output: dict[str, Any], epoch_num: int, sweep_dir: Path) -> None:
-        """Persist the exact checkpoint and per-epoch decode selected by one official sweep."""
-        if not bool(getattr(self.args, "gcs_official_save_epoch_checkpoints", False)):
-            return
-        self._assert_visibility_only_frozen_state(f"before_official_epoch_snapshot{int(epoch_num):03d}")
-        self._assert_line_iou_geometry_only_frozen_state(f"before_official_epoch_snapshot{int(epoch_num):03d}")
-        best = dict(output["best"])
-        epoch_tag = f"official_epoch{int(epoch_num):03d}"
-        epoch_checkpoint = self.wdir / f"{epoch_tag}.pt"
-        epoch_sweep = self.wdir / f"{epoch_tag}_sweep.json"
-        epoch_decode = self.wdir / f"{epoch_tag}_decode.yaml"
-        summary = dict(output)
-        meta = {
-            "epoch": int(epoch_num),
-            "checkpoint": str(epoch_checkpoint.resolve()),
-            "source_checkpoint": str(self.last.resolve()),
-            "sweep_dir": str(sweep_dir.resolve()),
-            "snapshot_policy": "per_epoch_training_time_official_sweep",
-            "official_best_selection_policy": OFFICIAL_SELECTION_POLICY,
-            "sweep_selection_policy": output.get("selection_policy") or output.get("config", {}).get("selection_policy"),
-            "count_safe_selection": output.get("count_safe_selection"),
-            "best": best,
-        }
-        summary["official_epoch_checkpoint"] = meta
-        if output.get("count_safe_selection"):
-            summary["count_safe_selection"] = output["count_safe_selection"]
-            summary["count_safe_selection_policy"] = output.get("count_safe_selection_policy")
-        shutil.copy2(self.last, epoch_checkpoint)
-        epoch_sweep.write_text(json.dumps(summary, indent=2), encoding="utf-8")
-        model_mode = str(best.get("decode_mode", self._gcs_mode()))
-        decode_cfg = build_official_best_decode_cfg(best, model_mode=model_mode, args=self.args)
-        YAML.save(
-            epoch_decode,
-            {
-                "weights": str(epoch_checkpoint.resolve()),
-                "source_epoch": int(epoch_num),
-                "sweep_summary": str(epoch_sweep.resolve()),
-                "sweep_dir": str(sweep_dir.resolve()),
-                "snapshot_policy": meta["snapshot_policy"],
-                "official_best_selection_policy": meta["official_best_selection_policy"],
-                "sweep_selection_policy": meta["sweep_selection_policy"],
-                "count_safe_selection": meta["count_safe_selection"],
-                "decode": decode_cfg,
-                "official_metrics": {
-                    "official_acc": float(best["official_acc"]),
-                    "official_score": float(best["official_score"]),
-                    "official_FP": float(best["official_FP"]),
-                    "official_FN": float(best["official_FN"]),
-                    "strict_order_valid": bool(best.get("strict_order_valid", True)),
-                    "ordered_slot_order_violations": int(best.get("ordered_slot_order_violations", 0)),
-                    "count_acc": float(best.get("count_acc", 0.0)),
-                    "count_acc_2": float(best.get("count_acc_2", 0.0)),
-                    "count_acc_3": float(best.get("count_acc_3", 0.0)),
-                    "count_acc_4": float(best.get("count_acc_4", 0.0)),
-                    "count_acc_5": float(best.get("count_acc_5", 0.0)),
-                },
-            },
-        )
-        LOGGER.info(f"Saved official epoch checkpoint: epoch={epoch_num}, checkpoint={epoch_checkpoint}")
 
     def _maybe_update_official_best(self) -> None:
         """Run periodic official-val sweep and update official_best when the official metric improves."""
@@ -2418,17 +1216,7 @@ class GCSLaneTrainer(BaseTrainer):
         sweep_dir = self.save_dir / "official_sweeps" / f"epoch{epoch_num:03d}"
         LOGGER.info(f"Running cached TuSimple official-val sweep for checkpoint selection at epoch {epoch_num}...")
         output = sweep(self._official_sweep_args(sweep_dir))
-        output, count_safe_has_selected = self._apply_count_safe_sweep_selection(output, epoch_num)
         best = dict(output["best"])
-        self._write_official_epoch_artifacts(output, epoch_num=epoch_num, sweep_dir=sweep_dir)
-        if not count_safe_has_selected:
-            count_safe = output.get("count_safe_selection", {})
-            LOGGER.info(
-                "Count-safe official_best selection found no eligible rows: "
-                f"epoch={epoch_num}, total_rows={count_safe.get('total_rows')}, "
-                f"eligible_rows={count_safe.get('eligible_rows')}. Keeping existing official_best."
-            )
-            return
         new_key = self._official_best_key(best, epoch_num)
         old_key = self._official_best_state.get("key") if self._official_best_state else None
         if old_key is None or new_key > old_key:
@@ -2454,8 +1242,6 @@ class GCSLaneTrainer(BaseTrainer):
 
     def save_model(self):
         """Save checkpoints with explicit rectangular GCS imgsz in train_args."""
-        self._assert_visibility_only_frozen_state(f"before_checkpoint_epoch{int(self.epoch) + 1:03d}")
-        self._assert_line_iou_geometry_only_frozen_state(f"before_checkpoint_epoch{int(self.epoch) + 1:03d}")
         old_imgsz = self.args.imgsz
         shape = self._resolve_gcs_imgsz()
         self.args.gcs_imgsz = [int(shape[0]), int(shape[1])]
@@ -2465,8 +1251,6 @@ class GCSLaneTrainer(BaseTrainer):
         finally:
             self.args.imgsz = old_imgsz
         if saved:
-            self._assert_visibility_only_frozen_state(f"after_checkpoint_epoch{int(self.epoch) + 1:03d}")
-            self._assert_line_iou_geometry_only_frozen_state(f"after_checkpoint_epoch{int(self.epoch) + 1:03d}")
             self._maybe_update_official_best()
         return saved
 

@@ -78,7 +78,9 @@ class GCSHungarianMatcher:
         scale = self._scale_tensor(pred_points, dims=4)
         point_dist = (pred_points[:, None] - gt_points[None]).abs() * scale * gt_valid[None, :, :, None]
         valid_count = gt_valid.sum(dim=1).clamp_min(1.0)
-        return point_dist.sum(dim=(2, 3)) / valid_count[None, :]
+        point_cost = point_dist.sum(dim=(2, 3)) / valid_count[None, :]
+        length_discount = torch.sqrt(valid_count / 20.0).clamp(min=0.6, max=1.0)
+        return point_cost * length_discount[None, :]
 
     def _curve_cost(self, pred_points: torch.Tensor, gt_points: torch.Tensor, gt_valid: torch.Tensor) -> torch.Tensor:
         """Compute Q x N aspect-weighted L1 second-order curvature cost."""

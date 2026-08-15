@@ -121,137 +121,8 @@ gcs_contiguity_policy: strict # (str) ordered_slot fixed-y valid-mask policy: st
 gcs_exist: 2.0 # (float) GCS lane existence loss gain
 gcs_point: 15.0 # (float) GCS normalized point L1 loss gain
 gcs_point_valid: 1.0 # (float) GCS per-point visibility BCE loss gain for fixed-y lane anchors
-gcs_visibility_only: false # (bool) freeze the mature model and train only fixed-y visibility heads
 gcs_smooth: 0.05 # (float) GCS second-order smoothness loss gain
 gcs_curve: 0.1 # (float) GCS adaptive curvature-aware loss gain
-gcs_line_iou: 0.0 # (float) matched fixed-y masked LineIoU loss gain; 0 disables
-gcs_line_iou_half_width_px: 15.0 # (float) half width of each horizontal lane interval in pixels
-gcs_line_iou_short_min_points: 3 # (int) minimum GT-valid anchors required for LineIoU
-gcs_line_iou_geometry_only: false # (bool) train only fixed-y geometry point heads for LineIoU probes
-gcs_line_iou_valid_preserve: 0.0 # (float) LineIoU-only short GT4/GT5 positive point-valid preservation loss gain; 0 disables
-gcs_line_iou_exist_survival: 0.0 # (float) LineIoU-only short GT4/GT5 positive existence survival loss gain; 0 disables
-gcs_line_iou_valid_visible_thr: 10 # (int) max GT-visible anchors for LineIoU valid-preserve lanes
-gcs_line_iou_valid_min_visible: 3 # (int) min GT-visible anchors for LineIoU valid-preserve lanes
-gcs_line_iou_valid_max_ape_px: 30.0 # (float) max detached matched-lane APE for LineIoU valid-preserve; 0 disables APE gate
-gcs_line_iou_valid_gt4_weight: 1.0 # (float) GT4 lane weight inside LineIoU valid-preserve loss
-gcs_line_iou_valid_gt5_weight: 1.0 # (float) GT5 lane weight inside LineIoU valid-preserve loss
-gcs_dense_instance: 0.0 # (float) dense centerline/endpoint/instance-evidence loss gain; 0 disables
-gcs_dense_centerline_weight: 1.0 # (float) dense centerline BCE weight inside dense evidence loss
-gcs_dense_endpoint_weight: 1.0 # (float) dense endpoint BCE weight inside dense evidence loss
-gcs_dense_embed_pull_weight: 0.25 # (float) image-local same-lane embedding pull weight
-gcs_dense_embed_push_weight: 0.25 # (float) image-local different-lane embedding push weight
-gcs_dense_embed_margin: 0.5 # (float) embedding push margin
-gcs_dense_sigma_px: 3.0 # (float) Gaussian target radius in input-image pixels
-gcs_dense_pos_weight_max: 50.0 # (float) maximum sparse-positive BCE pos_weight
-gcs_dense_endpoint_pos_weight_max: 500.0 # (float) endpoint-specific maximum sparse-positive BCE pos_weight
-gcs_dense_hard_short_weight: 1.0 # (float) loss-map multiplier for short GT4/GT5 dense targets; 1 disables
-gcs_dense_hard_short_min_visible: 3 # (int) minimum visible anchors for short GT4/GT5 dense-target weighting
-gcs_dense_hard_short_visible_max: 10 # (int) maximum visible anchors for short GT4/GT5 dense-target weighting
-gcs_dense_hard_short_gt4_weight: 1.0 # (float) GT4 multiplier inside hard-short dense-target weighting
-gcs_dense_hard_short_gt5_weight: 1.0 # (float) GT5 multiplier inside hard-short dense-target weighting
-gcs_dense_endpoint_peak_weight: 0.0 # (float) local softmax endpoint peak localization loss weight; 0 disables
-gcs_dense_endpoint_peak_radius_px: 16.0 # (float) local endpoint peak loss window radius in input-image pixels
-gcs_dense_endpoint_offset_weight: 0.0 # (float) same-lane bottom/top endpoint offset regression weight; 0 disables
-gcs_dense_endpoint_offset_radius_px: 8.0 # (float) support radius for dense endpoint-offset targets in input-image pixels
-gcs_dense_endpoint_balance_mode: 0 # (int) endpoint BCE balance mode: 0=support pixels, 1=Gaussian mass
-gcs_dense_candidate: 0.0 # (float) dense candidate quality/replacement loss gain; 0 disables
-gcs_dense_candidate_quality_weight: 1.0 # (float) candidate quality BCE weight
-gcs_dense_candidate_replace_weight: 1.0 # (float) base-miss replacement BCE weight
-gcs_dense_candidate_quality_pos_weight_max: 50.0 # (float) maximum candidate-quality BCE pos_weight
-gcs_dense_candidate_replace_pos_weight_max: 100.0 # (float) maximum replacement BCE pos_weight
-gcs_dense_freeze_base: false # (bool) train only dense_instance_* parameters for dense evidence probe
-gcs_residual_proposal: 0.0 # (float) segmentation-first residual full-K56 proposal loss gain; 0 disables
-gcs_residual_point_weight: 5.0 # (float) matched residual proposal x-regression weight
-gcs_residual_row_weight: 1.0 # (float) proposal-instance row localization CE weight
-gcs_residual_valid_weight: 1.0 # (float) residual proposal point-valid BCE weight
-gcs_residual_interval_weight: 0.5 # (float) residual proposal start/end CE weight
-gcs_residual_interval_valid_consistency: 0.0 # (float) matched interval/point-valid bidirectional consistency gain
-gcs_residual_positive_span: 0.0 # (float) matched short-lane GT-valid anchor preservation gain
-gcs_residual_identity_pull_weight: 0.0 # (float) same-lane residual identity embedding pull weight
-gcs_residual_identity_push_weight: 0.0 # (float) different-lane residual identity embedding push weight
-gcs_residual_quality_weight: 0.0 # (float) unique strict-rescue proposal quality BCE weight
-gcs_residual_quality_rank_weight: 0.0 # (float) strict-positive versus negative pairwise ranking weight
-gcs_residual_quality_rank_margin: 0.5 # (float) pairwise quality-logit ranking margin
-gcs_residual_quality_soft_px: 0.0 # (float) >0 enables continuous all-GT geometry quality targets up to this APE
-gcs_residual_quality_rank_target_gap: 0.0 # (float) minimum soft-target gap used by pairwise ranking
-gcs_residual_quality_hard_weight: 1.0 # (float) quality/rank multiplier on images with short base-miss targets
-gcs_residual_identity_margin: 0.2 # (float) maximum allowed cosine similarity for different-lane proposals
-gcs_residual_identity_assign_px: 30.0 # (float) geometry gate for assigning proposals to lane identities
-gcs_residual_quality_pos_weight_max: 20.0 # (float) maximum quality BCE positive weight
-gcs_residual_replace_weight: 0.0 # (float) proposal-victim safe replacement BCE weight; 0 disables
-gcs_residual_replace_pos_weight_max: 50.0 # (float) maximum proposal-victim positive BCE weight
-gcs_residual_replace_hit_px: 20.0 # (float) full-span geometry threshold for replacement utility targets
-gcs_residual_replace_soft_px: 0.0 # (float) >0 enables continuous base-miss replacement utility up to this APE
-gcs_residual_replace_official_delta_scale: 0.0 # (float) >0 enables TuSimple official set-utility replacement targets
-gcs_residual_replace_official_min_delta: 0.001 # (float) minimum official_score gain for a positive replacement target
-gcs_residual_replace_official_pixel_thr: 20.0 # (float) TuSimple official base pixel threshold
-gcs_residual_replace_official_pt_thr: 0.85 # (float) TuSimple official matched-lane accuracy threshold
-gcs_residual_replace_official_fp_weight: 0.02 # (float) FP penalty used by official set-utility targets
-gcs_residual_replace_official_fn_weight: 0.02 # (float) FN penalty used by official set-utility targets
-gcs_residual_replace_rank_weight: 0.0 # (float) proposal-victim utility pairwise ranking weight
-gcs_residual_replace_listwise_weight: 0.0 # (float) image-level no-op versus replacement listwise CE weight
-gcs_residual_replace_listwise_positive_weight: 1.0 # (float) positive-action image weight inside listwise CE
-gcs_residual_replace_listwise_mode: flat # (str) flat no-op CE or hierarchical presence plus conditional action CE
-gcs_residual_replace_rank_margin: 0.5 # (float) proposal-victim utility logit ranking margin
-gcs_residual_replace_rank_target_gap: 0.0 # (float) minimum continuous utility gap used by pairwise ranking
-gcs_residual_replace_valid_thr: 0.5 # (float) point-valid threshold used to construct selected-set targets
-gcs_residual_replace_min_points: 4 # (int) minimum visible anchors for selected base queries
-gcs_residual_replace_max_det: 5 # (int) selected base-query set size used by replacement supervision
-gcs_residual_exist_weight: 1.0 # (float) residual proposal existence BCE weight
-gcs_residual_unmatched_weight: 0.05 # (float) unmatched residual negative weight
-gcs_residual_min_lanes: 4 # (int) minimum GT lane count eligible for residual supervision
-gcs_residual_min_visible: 3 # (int) minimum visible anchors eligible for residual supervision
-gcs_residual_max_visible: 10 # (int) maximum visible anchors eligible for residual supervision
-gcs_residual_base_miss_px: 20.0 # (float) env30 raw-query APE threshold defining a base miss
-gcs_residual_freeze_base: false # (bool) train only residual_proposal_* parameters
-gcs_residual_visibility_only: false # (bool) Stage-1b: train only residual valid/start/end MLPs
-gcs_residual_identity_only: false # (bool) Stage-2: train only residual identity/quality MLPs
-gcs_residual_topology_only: false # (bool) Stage-2c: train only signed-topology and residual quality MLPs
-gcs_residual_replacement_only: false # (bool) Stage-2d: train only proposal-victim replacement utility MLP
-gcs_residual_visual_replacement_only: false # (bool) Stage-2f: train only curve-sampled visual replacement MLPs
-gcs_residual_listwise_replacement_only: false # (bool) Stage-2h: train only pair, visual, and no-op action MLPs
-gcs_query_survival_freeze_base: false # (bool) train only the default-off query-survival relation head with env30 frozen
-gcs_query_survival_rank: 0.0 # (float) weakest-accurate-matched vs strongest-unmatched pairwise survival ranking gain
-gcs_query_survival_rank_margin: 0.5 # (float) required matched-minus-unmatched query logit margin
-gcs_query_survival_rank_max_ape_px: 20.0 # (float) maximum matched-query APE for a positive survival victim
-gcs_query_survival_rank_min_lanes: 4 # (int) minimum GT lane count for pairwise survival ranking
-gcs_query_valid_survival_only: false # (bool) train only query-survival relation state and valid-delta heads
-gcs_query_valid_local_only: false # (bool) train only the anchor-local query point-valid residual head
-gcs_query_valid_interval_only: false # (bool) train only the contiguous query visibility interval head
-gcs_query_count_freeze_base: false # (bool) freeze the detector and train only the query Count Head
-gcs_query_valid_survival: 0.0 # (float) geometry-qualified matched-query visibility correction gain
-gcs_query_valid_survival_hit_px: 20.0 # (float) TuSimple base pixel threshold before GT-angle adjustment
-gcs_query_valid_survival_min_hit_ratio: 0.85 # (float) minimum TuSimple line_accuracy for geometry-qualified matching
-gcs_query_valid_survival_boundary_weight: 4.0 # (float) weight on GT visibility boundary anchors and adjacent negatives
-gcs_query_valid_survival_dice_weight: 1.0 # (float) soft visibility Dice multiplier inside valid correction
-gcs_query_valid_survival_identity_weight: 0.0 # (float) unmatched-query valid-delta trust-region gain
-gcs_query_valid_survival_anchor_weight: 1.0 # (float) matched-query per-anchor BCE/Dice multiplier
-gcs_query_valid_interval_boundary_weight: 0.0 # (float) direct reachable start/end boundary regression gain
-gcs_query_valid_interval_min_span: 4.0 # (float) minimum supervised end-start span for count-safe interval correction
-gcs_lane_instance_set: 0.0 # (float) default-off lane-instance-set composite training loss gain
-gcs_lane_instance_visibility_weight: 1.0 # (float) matched fixed-y visibility BCE weight
-gcs_lane_instance_endpoint_weight: 1.0 # (float) start/end classification weight
-gcs_lane_instance_order_weight: 0.25 # (float) raw start<=end order penalty weight
-gcs_lane_instance_contiguity_weight: 1.0 # (float) contiguous interval target BCE weight
-gcs_lane_instance_positive_span_weight: 0.25 # (float) positive matched-span preservation weight
-gcs_lane_instance_empty_weight: 1.0 # (float) image-level empty/no-lane BCE weight
-gcs_lane_instance_geometry_quality_weight: 1.0 # (float) matched geometry-quality calibration weight
-gcs_lane_instance_survival_weight: 1.0 # (float) survivor confidence BCE weight
-gcs_lane_instance_duplicate_weight: 0.5 # (float) candidate-pair duplicate relation weight
-gcs_lane_instance_novelty_weight: 0.5 # (float) matched unique-instance novelty weight
-gcs_lane_instance_topology_weight: 0.5 # (float) left/right matched-pair topology weight
-gcs_lane_instance_identity_weight: 0.5 # (float) identity pair-relation weight
-gcs_lane_instance_set_noop_weight: 0.5 # (float) set survival/no-op margin weight
-gcs_lane_instance_count_weight: 0.0 # (float) default-off differentiable survivor-count calibration weight
-gcs_lane_instance_min_span: 2.0 # (float) minimum positive bottom-to-top interval span
-gcs_lane_instance_duplicate_px: 20.0 # (float) GT-relative duplicate-label distance in input pixels
-gcs_lane_instance_quality_tau_px: 20.0 # (float) geometry-quality exponential target scale
-gcs_lane_instance_identity_temperature: 0.2 # (float) identity relation logit temperature
-gcs_lane_instance_set_margin: 0.5 # (float) weakest-match versus strongest-unmatched survival margin
-gcs_lane_instance_decode_duplicate_thr: 0.65 # (float) prediction-only duplicate probability threshold
-gcs_lane_instance_decode_allow_empty: false # (bool) allow empty output; false for TuSimple experiment decode
-gcs_lane_instance_decode_empty_thr: 0.75 # (float) explicit empty probability threshold
-gcs_lane_instance_decode_min_survivors: 2 # (int) diagnostic under_min target only; never backfills lanes
 gcs_mask: 0.2 # (float) GCS auxiliary semantic mask loss gain
 gcs_edge: 0.2 # (float) GCS auxiliary edge loss gain
 gcs_count: 0.0 # (float) GCS lane-count/cardinality loss gain; 0 disables
@@ -329,7 +200,13 @@ gcs_exist_quality_tau: 25.0 # (float) APE decay scale in pixels for exp quality 
 gcs_exist_quality_floor: 0.0 # (float) minimum geometry quality for exp quality mode
 gcs_exist_quality_pos_px: 10.0 # (float) APE at or below this value receives quality 1.0 in linear mode
 gcs_exist_quality_neg_px: 20.0 # (float) APE at or above this value receives quality 0.0 in linear mode
+gcs_exist_quality_length_adaptive: False # (bool) reduce quality-target alpha for short matched lanes; keeps hard target for very short lanes
+gcs_exist_quality_length_min_points: 8.0 # (float) visible points at or below this use alpha=0 when length-adaptive quality is enabled
+gcs_exist_quality_length_full_points: 24.0 # (float) visible points at or above this use full gcs_exist_quality_alpha
 gcs_point_valid_pos_weight_max: 10.0 # (float) maximum positive weight for GCS per-point visibility loss
+gcs_point_valid_length_weight: False # (bool) boost point-valid positive BCE on short matched lanes
+gcs_point_valid_length_weight_base_points: 24.0 # (float) base visible length for short-lane point-valid positive weighting
+gcs_point_valid_length_weight_max: 2.5 # (float) maximum short-lane point-valid positive weight multiplier
 gcs_mask_pos_weight_max: 20.0 # (float) maximum foreground class weight for GCS mask auxiliary loss
 gcs_edge_pos_weight_max: 50.0 # (float) maximum foreground pos_weight for GCS edge auxiliary loss
 gcs_aux_dice: 0.5 # (float) Dice loss gain inside GCS mask/edge auxiliary losses
@@ -340,7 +217,7 @@ gcs_cost_curve: 0.05 # (float) Hungarian matching pixel-curvature cost gain
 gcs_cost_exist: 0.1 # (float) Hungarian matching existence-confidence cost gain
 gcs_match_min_overlap: 2 # (int) minimum valid GT points required for training Hungarian matching
 gcs_match_max_x_dist: 0.0 # (float) optional training matcher mean x-distance gate in pixels; 0 disables
-gcs_match_gate_px: 160.0 # (float) training matcher APE gate in pixels; 0 disables
+gcs_match_gate_px: 0.0 # (float) optional training matcher APE gate in pixels; 0 disables
 gcs_eval_conf: 0.2 # (float) GCS validation lane existence threshold for Precision/Recall/F1; quality-aware exist is calibrated lower
 gcs_eval_ape_thr: 20.0 # (float) GCS validation APE threshold in pixels for TP matching
 gcs_eval_match_gate_px: # (float, optional) strict validation APE gate; null defaults to gcs_eval_ape_thr
@@ -363,21 +240,12 @@ gcs_official_nms_dist_pxs: [0.0, 18.0, 30.0, 50.0] # (list[float]) official-val 
 gcs_official_max_dets: [5, 6, 8] # (list[int]) official-val sweep max_det values
 gcs_official_min_points: [4, 5, 6] # (list[int]) official-val sweep visible-anchor floors
 gcs_official_valid_before_maxdet: False # (bool) filter point-valid/min_points failures before max_det in official sweeps
-gcs_official_count_aware_topk: False # (bool) enable count-aware top-k in training-time official sweeps
 gcs_official_count_modes: [score_sum] # (list[str]) query count-aware top-k count sources for official sweeps
 gcs_official_score_fp_weight: 0.02 # (float) FP penalty for official_score tie-break logging
 gcs_official_score_fn_weight: 0.02 # (float) FN penalty for official_score tie-break logging
-gcs_official_save_epoch_checkpoints: False # (bool) save exact checkpoint/decode artifacts at every training-time official sweep
-gcs_official_count_safe_selection: False # (bool) prefilter official-val sweep rows by count/FN safety gates before official_best selection
-gcs_official_count_safe_acc_min_exclusive: 0.973330 # (float) minimum official ACC, exclusive, for count-safe official selection
-gcs_official_count_safe_fp_max: 0.015748 # (float) maximum official FP for count-safe official selection
-gcs_official_count_safe_fn_max: 0.009642 # (float) maximum official FN for count-safe official selection
-gcs_official_count_safe_count_acc4_min: 0.969697 # (float) minimum GT4 count accuracy for count-safe official selection
-gcs_official_count_safe_count_acc5_min: 0.986486 # (float) minimum GT5 count accuracy for count-safe official selection
-gcs_official_count_safe_gt4_to3_max: 1 # (int) maximum GT4 undercount 4->3 for count-safe official selection
-gcs_official_count_safe_gt4_to5_max: 0 # (int) maximum GT4 overcount 4->5 for count-safe official selection
-gcs_official_count_safe_gt5_to4_max: 1 # (int) maximum GT5 undercount 5->4 for count-safe official selection
-gcs_official_count_safe_allow_output6: False # (bool) allow predicted 6+ lanes in count-safe official selection
+gcs_official_robust_selection: False # (bool) select official_best rows/epochs by robust_score
+gcs_official_robust_balance_weight: 0.35 # (float) FP/FN imbalance penalty for robust_score
+gcs_official_robust_count_acc4_weight: 0.15 # (float) GT4 count-accuracy penalty for robust_score
 gcs_official_half: False # (bool) use FP16 inference for training-time official sweeps
 # Keep disabled by default to preserve training-distribution comparability.
 # Enable explicitly for count-balanced ordered_slot experiments.
@@ -392,6 +260,7 @@ gcs_hard_gt3_le20_weight: 1.5 # (float) multiplier for GT3 samples with min_visi
 gcs_hard_0313_2_gt4_le10_weight: 4.0 # (float) extra multiplier for 0313-2 GT4 short-visible samples
 gcs_hard_visible_thr: 10 # (int) visible-point threshold for GT4/GT5 hard-sampling groups
 gcs_hard_gt3_visible_thr: 20 # (int) visible-point threshold for GT3 hard-sampling group
+gcs_gt45_oversample: False # (bool) duplicate GT4/GT5 training samples once; validation/test unchanged
 nbs: 64 # (int) nominal batch size used for loss normalization
 hsv_h: 0.015 # (float) HSV hue augmentation fraction
 hsv_s: 0.7 # (float) HSV saturation augmentation fraction

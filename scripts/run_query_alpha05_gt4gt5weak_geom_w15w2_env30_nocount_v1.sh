@@ -14,7 +14,7 @@ ARCHIVE_ROOT="${ARCHIVE_ROOT:-archive/TUSimple}"
 GT_JSON="${GT_JSON:-runs/gcs_lane/tusimple_official_val_363_folder_aware_seed20260602_subset/labels/tusimple_official_val_363_folder_aware_seed20260602.json}"
 DEVICE="${DEVICE:-0}"
 BATCH="${BATCH:-32}"
-EPOCHS="${EPOCHS:-220}"
+EPOCHS="${EPOCHS:-120}"
 WORKERS="${WORKERS:-4}"
 OFFICIAL_INTERVAL="${OFFICIAL_INTERVAL:-5}"
 OFFICIAL_WARMUP="${OFFICIAL_WARMUP:-5}"
@@ -32,16 +32,29 @@ RUN_TESTS="${RUN_TESTS:-0}"
 RUN_DIAGNOSTICS="${RUN_DIAGNOSTICS:-1}"
 RUN_TEST_DIAGNOSTICS="${RUN_TEST_DIAGNOSTICS:-${RUN_TESTS}}"
 VALID_BEFORE_MAXDET="${VALID_BEFORE_MAXDET:-1}"
+GENERATE_QUERY_PRIORS="${GENERATE_QUERY_PRIORS:-1}"
+PRIORS_OUTPUT="${PRIORS_OUTPUT:-data/query_priors_q12_k56.pt}"
+PRIORS_LABEL_FILES="${PRIORS_LABEL_FILES:-${ARCHIVE_ROOT}/train_set/label_data_0313.json ${ARCHIVE_ROOT}/train_set/label_data_0531.json ${ARCHIVE_ROOT}/train_set/label_data_0601.json}"
 DIAG_WARMUP="${DIAG_WARMUP:-20}"
 DIAG_MATCH_THR_PX="${DIAG_MATCH_THR_PX:-20}"
 DIAG_MATCH_MIN_OVERLAP="${DIAG_MATCH_MIN_OVERLAP:-3}"
 DIAG_SHORT_VISIBLE_MAX="${DIAG_SHORT_VISIBLE_MAX:-10}"
+ROBUST_SELECTION="${ROBUST_SELECTION:-0}"
+ROBUST_BALANCE_WEIGHT="${ROBUST_BALANCE_WEIGHT:-0.35}"
+ROBUST_COUNT_ACC4_WEIGHT="${ROBUST_COUNT_ACC4_WEIGHT:-0.15}"
+LENGTH_ADAPTIVE_ALPHA="${LENGTH_ADAPTIVE_ALPHA:-1}"
+EXIST_QUALITY_LENGTH_MIN_POINTS="${EXIST_QUALITY_LENGTH_MIN_POINTS:-8.0}"
+EXIST_QUALITY_LENGTH_FULL_POINTS="${EXIST_QUALITY_LENGTH_FULL_POINTS:-24.0}"
+POINT_VALID_POS_WEIGHT_MAX="${POINT_VALID_POS_WEIGHT_MAX:-10.0}"
+POINT_VALID_LENGTH_WEIGHT="${POINT_VALID_LENGTH_WEIGHT:-1}"
+POINT_VALID_LENGTH_WEIGHT_BASE_POINTS="${POINT_VALID_LENGTH_WEIGHT_BASE_POINTS:-24.0}"
+POINT_VALID_LENGTH_WEIGHT_MAX="${POINT_VALID_LENGTH_WEIGHT_MAX:-2.5}"
 
-OFFICIAL_CONFS="${OFFICIAL_CONFS:-0.001 0.003 0.005 0.008 0.01 0.02}"
-OFFICIAL_POINT_VALID_THRS="${OFFICIAL_POINT_VALID_THRS:-0.45 0.50 0.55 0.60}"
-OFFICIAL_NMS_DIST_PXS="${OFFICIAL_NMS_DIST_PXS:-0 18 30}"
-OFFICIAL_MAX_DETS="${OFFICIAL_MAX_DETS:-5 6 8}"
-OFFICIAL_MIN_POINTS="${OFFICIAL_MIN_POINTS:-2 3 4 5}"
+OFFICIAL_CONFS="${OFFICIAL_CONFS:-0.20 0.25 0.30 0.35 0.40}"
+OFFICIAL_POINT_VALID_THRS="${OFFICIAL_POINT_VALID_THRS:-0.35 0.40 0.45}"
+OFFICIAL_NMS_DIST_PXS="${OFFICIAL_NMS_DIST_PXS:-15 20 25}"
+OFFICIAL_MAX_DETS="${OFFICIAL_MAX_DETS:-5}"
+OFFICIAL_MIN_POINTS="${OFFICIAL_MIN_POINTS:-3}"
 OFFICIAL_COUNT_MODES="${OFFICIAL_COUNT_MODES:-score_sum}"
 
 SWEEP_CONFS="${SWEEP_CONFS:-${OFFICIAL_CONFS}}"
@@ -63,6 +76,7 @@ read -r -a SWEEP_NMS_DIST_PXS_ARR <<< "${SWEEP_NMS_DIST_PXS}"
 read -r -a SWEEP_MAX_DETS_ARR <<< "${SWEEP_MAX_DETS}"
 read -r -a SWEEP_MIN_POINTS_ARR <<< "${SWEEP_MIN_POINTS}"
 read -r -a SWEEP_COUNT_MODES_ARR <<< "${SWEEP_COUNT_MODES}"
+read -r -a PRIORS_LABEL_FILES_ARR <<< "${PRIORS_LABEL_FILES}"
 
 is_true() {
   case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
@@ -105,6 +119,39 @@ if is_true "${HALF}"; then
   SWEEP_HALF_ARGS=(--half)
 fi
 
+EXIST_QUALITY_ARGS=()
+if is_true "${LENGTH_ADAPTIVE_ALPHA}"; then
+  EXIST_QUALITY_ARGS=(
+    --gcs-exist-quality-length-adaptive
+    --gcs-exist-quality-length-min-points "${EXIST_QUALITY_LENGTH_MIN_POINTS}"
+    --gcs-exist-quality-length-full-points "${EXIST_QUALITY_LENGTH_FULL_POINTS}"
+  )
+fi
+
+POINT_VALID_WEIGHT_ARGS=(--gcs-point-valid-pos-weight-max "${POINT_VALID_POS_WEIGHT_MAX}")
+if is_true "${POINT_VALID_LENGTH_WEIGHT}"; then
+  POINT_VALID_WEIGHT_ARGS+=(
+    --gcs-point-valid-length-weight
+    --gcs-point-valid-length-weight-base-points "${POINT_VALID_LENGTH_WEIGHT_BASE_POINTS}"
+    --gcs-point-valid-length-weight-max "${POINT_VALID_LENGTH_WEIGHT_MAX}"
+  )
+fi
+
+ROBUST_TRAIN_ARGS=()
+ROBUST_SWEEP_ARGS=()
+if is_true "${ROBUST_SELECTION}"; then
+  ROBUST_TRAIN_ARGS=(
+    --gcs-official-robust-selection
+    --gcs-official-robust-balance-weight "${ROBUST_BALANCE_WEIGHT}"
+    --gcs-official-robust-count-acc4-weight "${ROBUST_COUNT_ACC4_WEIGHT}"
+  )
+  ROBUST_SWEEP_ARGS=(
+    --robust-selection
+    --robust-balance-weight "${ROBUST_BALANCE_WEIGHT}"
+    --robust-count-acc4-weight "${ROBUST_COUNT_ACC4_WEIGHT}"
+  )
+fi
+
 OFFICIAL_BEST_SWEEP_DIR="${OFFICIAL_BEST_SWEEP_DIR:-${PROJECT}/${RUN_NAME}_official_best_val_sweep_${DECODE_TAG}}"
 BEST_SWEEP_DIR="${BEST_SWEEP_DIR:-${PROJECT}/${RUN_NAME}_best_val_sweep_${DECODE_TAG}}"
 OFFICIAL_BEST_TEST_DIR="${OFFICIAL_BEST_TEST_DIR:-${PROJECT}/${RUN_NAME}_official_best_test_from_val_sweep_${DECODE_TAG}}"
@@ -114,6 +161,14 @@ BEST_VAL_DIAG_DIR="${BEST_VAL_DIAG_DIR:-${PROJECT}/${RUN_NAME}_best_val_raw_q12_
 OFFICIAL_BEST_TEST_DIAG_DIR="${OFFICIAL_BEST_TEST_DIAG_DIR:-${PROJECT}/${RUN_NAME}_official_best_test_raw_q12_${DECODE_TAG}}"
 BEST_TEST_DIAG_DIR="${BEST_TEST_DIAG_DIR:-${PROJECT}/${RUN_NAME}_best_test_raw_q12_${DECODE_TAG}}"
 PROTOCOL_SUMMARY="${PROTOCOL_SUMMARY:-${PROJECT}/${RUN_NAME}_official_best_and_best_test_protocol_summary.json}"
+
+generate_query_priors() {
+  python tools/generate_query_priors.py \
+    --label-files "${PRIORS_LABEL_FILES_ARR[@]}" \
+    --output "${PRIORS_OUTPUT}" \
+    --num-queries 12 \
+    --num-points 56
+}
 
 run_train() {
   if [[ -e "${RUN_DIR}" ]]; then
@@ -136,6 +191,7 @@ run_train() {
     --erasing 0.10 \
     --mosaic 0.0 \
     --gcs-exist-quality-alpha 0.5 \
+    "${EXIST_QUALITY_ARGS[@]}" \
     --gcs-count 0.0 \
     --gcs-count-under5 0.0 \
     --gcs-count-boundary 0.0 \
@@ -146,8 +202,11 @@ run_train() {
     --gcs-short-geom-gt5-weight 2.0 \
     --gcs-short-geom-max-weight 3.0 \
     --gcs-short-geom-curve 1.0 \
+    --gcs-match-gate-px 0.0 \
+    --gcs-gt45-oversample \
     --gcs-gt5-short-visible-thr 10 \
     --gcs-gt5-short-point-valid-weight 1.25 \
+    "${POINT_VALID_WEIGHT_ARGS[@]}" \
     --gcs-boundary-pseudo-neg 0.02 \
     --gcs-boundary-pseudo-visible-thr 10 \
     --gcs-boundary-pseudo-dist-thr 80 \
@@ -171,6 +230,7 @@ run_train() {
     --gcs-official-count-modes "${OFFICIAL_COUNT_MODES_ARR[@]}" \
     "${TRAIN_VALID_ARGS[@]}" \
     "${OFFICIAL_HALF_ARGS[@]}" \
+    "${ROBUST_TRAIN_ARGS[@]}" \
     --project "${PROJECT}" \
     --name "${RUN_NAME}"
 }
@@ -207,6 +267,7 @@ run_val_sweep() {
     --min-points "${SWEEP_MIN_POINTS_ARR[@]}" \
     --count-modes "${SWEEP_COUNT_MODES_ARR[@]}" \
     "${SWEEP_VALID_ARGS[@]}" \
+    "${ROBUST_SWEEP_ARGS[@]}" \
     --save-dir "${save_dir}"
 }
 
@@ -473,6 +534,15 @@ output = {
         "gcs_short_geom_curve": 1.0,
         "gcs_gt5_short_visible_thr": 10,
         "gcs_gt5_short_point_valid_weight": 1.25,
+        "length_adaptive_alpha": "${LENGTH_ADAPTIVE_ALPHA}",
+        "gcs_exist_quality_length_min_points": "${EXIST_QUALITY_LENGTH_MIN_POINTS}",
+        "gcs_exist_quality_length_full_points": "${EXIST_QUALITY_LENGTH_FULL_POINTS}",
+        "gcs_point_valid_pos_weight_max": "${POINT_VALID_POS_WEIGHT_MAX}",
+        "point_valid_length_weight": "${POINT_VALID_LENGTH_WEIGHT}",
+        "gcs_point_valid_length_weight_base_points": "${POINT_VALID_LENGTH_WEIGHT_BASE_POINTS}",
+        "gcs_point_valid_length_weight_max": "${POINT_VALID_LENGTH_WEIGHT_MAX}",
+        "gcs_gt45_oversample": true,
+        "query_priors": "${PRIORS_OUTPUT}",
     },
     "mask_v2_params": {
         "gcs_boundary_pseudo_neg": 0.02,
@@ -506,7 +576,12 @@ PY
 
 echo "Run name: ${RUN_NAME}"
 echo "Weak-positive geometry params: short_geom=1.0 visible_thr=20 gt4_weight=1.5 gt5_weight=2.0 max_weight=3.0 curve=1.0 gt5_point_valid_weight=1.25"
+echo "Length-adaptive alpha: enabled=${LENGTH_ADAPTIVE_ALPHA} min_points=${EXIST_QUALITY_LENGTH_MIN_POINTS} full_points=${EXIST_QUALITY_LENGTH_FULL_POINTS}"
+echo "Valid BCE weighting: pos_weight_max=${POINT_VALID_POS_WEIGHT_MAX} length_weight=${POINT_VALID_LENGTH_WEIGHT} base_points=${POINT_VALID_LENGTH_WEIGHT_BASE_POINTS} max=${POINT_VALID_LENGTH_WEIGHT_MAX}"
+echo "Query priors: generate=${GENERATE_QUERY_PRIORS} output=${PRIORS_OUTPUT}"
+echo "GT4/GT5 oversampling: enabled=true"
 echo "Mask-v2 boundary pseudo params: neg=0.02 dist_thr=80 min_valid=4 score_thr=0.2 envelope_margin_px=30 envelope_ratio_thr=0.75"
+echo "Robust official selection: enabled=${ROBUST_SELECTION} balance_weight=${ROBUST_BALANCE_WEIGHT} count_acc4_weight=${ROBUST_COUNT_ACC4_WEIGHT}"
 echo "Selection GT: ${GT_JSON}"
 echo "Training-time official_best and post-train sweeps use tools/sweep_tusimple_official_cached.py."
 echo "RUN_TESTS=${RUN_TESTS}: official test is reporting-only and must stay off until official-val and diagnostics pass."
@@ -514,6 +589,9 @@ echo "RUN_DIAGNOSTICS=${RUN_DIAGNOSTICS}: val raw-Q12 diagnostics are selection-
 echo "RUN_TEST_DIAGNOSTICS=${RUN_TEST_DIAGNOSTICS}: test raw-Q12 diagnostics use --allow-test-oracle and are reporting-only."
 
 if is_true "${RUN_TRAIN}"; then
+  if is_true "${GENERATE_QUERY_PRIORS}"; then
+    generate_query_priors
+  fi
   run_train
 else
   echo "RUN_TRAIN=0: reusing existing run directory ${RUN_DIR}" >&2
