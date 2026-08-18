@@ -52,7 +52,6 @@ class GCSLaneDataset(Dataset):
         scale: float = 0.0,
         erasing: float = 0.0,
         mosaic: float = 0.0,
-        gt45_oversample: bool = False,
     ):
         """Create a GCS lane dataset from Ultralytics or reference-style arguments.
 
@@ -73,7 +72,6 @@ class GCSLaneDataset(Dataset):
             scale: Random center scaling gain, e.g. 0.3 samples a scale factor from 0.7 to 1.3.
             erasing: Random erasing probability applied to image pixels only.
             mosaic: Four-image mosaic probability.
-            gt45_oversample: Duplicate GT4/GT5 sample indices once for train-only Clean v4 sampling.
         """
         source = img_path if img_path is not None else image_dir
         if source is None:
@@ -110,11 +108,9 @@ class GCSLaneDataset(Dataset):
             raise FileNotFoundError(f"No images found in {source}")
 
         self.label_files = [self._label_path(p) for p in self.im_files]
-        self._check_label_pairs()
-        if bool(gt45_oversample):
-            self._oversample_gt45()
         self.image_paths = self.im_files
         self.label_paths = self.label_files
+        self._check_label_pairs()
         self.point_mode = self._detect_point_mode()
         self.fixed_y_anchors = self._detect_fixed_y_anchors()
         if self.point_mode == "fixed_y" and self.mosaic:
@@ -188,40 +184,6 @@ class GCSLaneDataset(Dataset):
         self.label_files = [x[1] for x in keep]
         if not self.im_files:
             raise FileNotFoundError("No image/labels_gcs npz pairs remain after filtering missing labels.")
-
-    @staticmethod
-    def _label_lane_count(label_file: Path) -> int:
-        """Read valid GT lane count from one GCS npz label."""
-        with np.load(label_file, allow_pickle=False) as data:
-            if "num_lanes" in data:
-                return int(np.asarray(data["num_lanes"]).reshape(-1)[0])
-            if "lane_valid" in data:
-                lane_valid = np.asarray(data["lane_valid"], dtype=np.float32)
-                return int((lane_valid.sum(axis=1) >= 2).sum())
-            if "lanes" in data:
-                return int(np.asarray(data["lanes"]).shape[0])
-        return 0
-
-    def _oversample_gt45(self) -> None:
-        """Duplicate GT4/GT5 sample indices once without changing labels or validation data."""
-        im_files: list[Path] = []
-        label_files: list[Path] = []
-        duplicated = 0
-        original = len(self.im_files)
-        for im_file, label_file in zip(self.im_files, self.label_files):
-            im_files.append(im_file)
-            label_files.append(label_file)
-            if self._label_lane_count(label_file) >= 4:
-                im_files.append(im_file)
-                label_files.append(label_file)
-                duplicated += 1
-
-        self.im_files = im_files
-        self.label_files = label_files
-        print(
-            f"[GCSLaneDataset] GT4/GT5 oversampling expanded train samples "
-            f"from {original} to {len(self.im_files)}; duplicated={duplicated}."
-        )
 
     @staticmethod
     def _normalize_point_mode(mode: str) -> str:

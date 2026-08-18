@@ -1,8 +1,6 @@
 # Ultralytics AGPL-3.0 License - https://ultralytics.com/license
 """GCS-YOLO-Lane neural network modules."""
 
-from pathlib import Path
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -217,7 +215,6 @@ class GCSLaneHead(nn.Module):
         max_lanes=5,
         count_classes=None,
         query_count_head: bool = False,
-        query_prior_path: str = "data/query_priors_q12_k56.pt",
     ):
         """Initialize the GCS lane query decoder and training-only auxiliary heads."""
         super().__init__()
@@ -367,13 +364,8 @@ class GCSLaneHead(nn.Module):
             ConvBNAct(c1, c1 // 2, k=3),
             nn.Conv2d(c1 // 2, 1, kernel_size=1),
         )
-        point_reference_logits = self._build_point_references()
-        if self.gcs_mode == "query":
-            self.point_reference_logits = nn.Parameter(point_reference_logits)
-        else:
-            self.register_buffer("point_reference_logits", point_reference_logits, persistent=False)
+        self.register_buffer("point_reference_logits", self._build_point_references(), persistent=False)
         self.register_buffer("fixed_y_anchors", self._build_fixed_y_anchors(), persistent=False)
-        self._load_query_priors(query_prior_path)
         self._init_point_delta_head()
         self._init_point_valid_head()
         self._init_point_refine_head()
@@ -416,30 +408,6 @@ class GCSLaneHead(nn.Module):
             return torch.logit(x.clamp(1e-4, 1.0 - 1e-4))
         points = torch.stack((x, y[None].expand(self.num_queries, -1)), dim=-1)
         return torch.logit(points.clamp(1e-4, 1.0 - 1e-4))
-
-    def _load_query_priors(self, query_prior_path: str) -> None:
-        """Use optional offline query priors as fixed-y x reference logits."""
-        if self.gcs_mode != "query" or self.point_mode != "fixed_y":
-            return
-
-        path = Path(query_prior_path)
-        if not path.is_absolute():
-            path = Path.cwd() / path
-        if not path.exists():
-            return
-
-        priors = torch.load(path, map_location="cpu")
-        if not isinstance(priors, torch.Tensor):
-            raise TypeError(f"GCS query prior file must contain a torch.Tensor, got {type(priors).__name__}.")
-        expected = (self.num_queries, self.num_points)
-        if tuple(priors.shape) != expected:
-            raise ValueError(f"GCS query prior tensor must have shape {expected}, got {tuple(priors.shape)} from {path}.")
-        if not torch.isfinite(priors).all():
-            raise ValueError(f"GCS query prior tensor contains NaN/Inf values: {path}.")
-
-        priors = priors.detach().float().clamp(1e-4, 1.0 - 1e-4)
-        with torch.no_grad():
-            self.point_reference_logits.copy_(torch.logit(priors).to(dtype=self.point_reference_logits.dtype))
 
     def _init_point_delta_head(self):
         """Initialize point deltas near zero while keeping point gradients live."""

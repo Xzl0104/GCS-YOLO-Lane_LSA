@@ -106,17 +106,11 @@ def main():
         max_y_err = float((y_pred - anchors.view(1, 1, -1)).abs().max().cpu().item())
         if max_y_err > 1e-6:
             raise RuntimeError(f"fixed_y GCSLaneHead produced non-anchor y coordinates, max error={max_y_err:.6g}.")
-        if bool(getattr(head, "lane_instance_set_decoder_head", False)):
-            if hasattr(head, "point_mlp"):
-                raise RuntimeError("lane-instance-set GCSLaneHead must not register the legacy point MLP.")
-            if "pred_lane_instance_points" not in y:
-                raise RuntimeError("lane-instance-set GCSLaneHead did not emit pred_lane_instance_points.")
-        else:
-            final = head.point_mlp[-1]
-            if getattr(final, "out_features", None) != head.num_points:
-                raise RuntimeError(
-                    f"fixed_y GCSLaneHead point MLP must output K x values, got out_features={final.out_features}."
-                )
+        final = head.point_mlp[-1]
+        if getattr(final, "out_features", None) != head.num_points:
+            raise RuntimeError(
+                f"fixed_y GCSLaneHead point MLP must output K x values, got out_features={final.out_features}."
+            )
 
     if args.detailed:
         print(f"task: {yolo.task}")

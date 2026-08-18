@@ -508,22 +508,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=20.0,
         help="APE at or above this value receives quality 0.0 in linear quality mode.",
     )
-    parser.add_argument(
-        "--gcs-exist-quality-length-adaptive",
-        action="store_true",
-        help="Reduce quality-target alpha on short matched lanes; visible_count <= min-points gets hard positive target.",
-    )
-    parser.add_argument("--gcs-exist-quality-length-min-points", type=float, default=8.0)
-    parser.add_argument("--gcs-exist-quality-length-full-points", type=float, default=24.0)
     parser.add_argument("--gcs-mask-pos-weight-max", type=float, default=20.0)
     parser.add_argument("--gcs-point-valid-pos-weight-max", type=float, default=10.0)
-    parser.add_argument(
-        "--gcs-point-valid-length-weight",
-        action="store_true",
-        help="Boost point-valid positive BCE for short matched lanes using base_points / visible_count.",
-    )
-    parser.add_argument("--gcs-point-valid-length-weight-base-points", type=float, default=24.0)
-    parser.add_argument("--gcs-point-valid-length-weight-max", type=float, default=2.5)
     parser.add_argument("--gcs-edge-pos-weight-max", type=float, default=50.0)
     parser.add_argument("--gcs-aux-dice", type=float, default=0.5)
     parser.add_argument("--gcs-cost-point", type=float, default=5.0)
@@ -531,7 +517,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--gcs-cost-exist", type=float, default=0.1)
     parser.add_argument("--gcs-match-min-overlap", type=int, default=2, help="Minimum valid GT points for training Hungarian matching.")
     parser.add_argument("--gcs-match-max-x-dist", type=float, default=0.0, help="Optional training matcher mean x-distance gate in pixels. 0 disables.")
-    parser.add_argument("--gcs-match-gate-px", type=float, default=0.0, help="Optional training matcher APE gate in pixels. 0 disables.")
+    parser.add_argument("--gcs-match-gate-px", type=float, default=160.0, help="Training matcher APE gate in pixels. 0 disables.")
     parser.add_argument("--gcs-eval-conf", type=float, default=0.2)
     parser.add_argument("--gcs-eval-ape-thr", type=float, default=20.0)
     parser.add_argument("--gcs-eval-match-gate-px", type=float, default=None, help="Strict validation APE gate in pixels. Defaults to --gcs-eval-ape-thr.")
@@ -608,13 +594,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--gcs-official-score-fp-weight", type=float, default=0.02)
     parser.add_argument("--gcs-official-score-fn-weight", type=float, default=0.02)
     parser.add_argument(
-        "--gcs-official-robust-selection",
-        action="store_true",
-        help="Select training-time official_best rows and epochs by robust_score.",
-    )
-    parser.add_argument("--gcs-official-robust-balance-weight", type=float, default=0.35)
-    parser.add_argument("--gcs-official-robust-count-acc4-weight", type=float, default=0.15)
-    parser.add_argument(
         "--gcs-official-half",
         action="store_true",
         help="Use FP16 inference during training-time official-val sweeps.",
@@ -683,11 +662,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=20,
         help="Visible-point threshold for GT3 hard-sampling group.",
-    )
-    parser.add_argument(
-        "--gcs-gt45-oversample",
-        action="store_true",
-        help="Duplicate GT4/GT5 training samples once. Train dataloader only; validation/test are unchanged.",
     )
     parser.add_argument("--no-val", action="store_true")
     parser.add_argument(
@@ -845,13 +819,7 @@ def main() -> None:
         "gcs_exist_quality_floor": args.gcs_exist_quality_floor,
         "gcs_exist_quality_pos_px": args.gcs_exist_quality_pos_px,
         "gcs_exist_quality_neg_px": args.gcs_exist_quality_neg_px,
-        "gcs_exist_quality_length_adaptive": args.gcs_exist_quality_length_adaptive,
-        "gcs_exist_quality_length_min_points": args.gcs_exist_quality_length_min_points,
-        "gcs_exist_quality_length_full_points": args.gcs_exist_quality_length_full_points,
         "gcs_point_valid_pos_weight_max": args.gcs_point_valid_pos_weight_max,
-        "gcs_point_valid_length_weight": args.gcs_point_valid_length_weight,
-        "gcs_point_valid_length_weight_base_points": args.gcs_point_valid_length_weight_base_points,
-        "gcs_point_valid_length_weight_max": args.gcs_point_valid_length_weight_max,
         "gcs_mask_pos_weight_max": args.gcs_mask_pos_weight_max,
         "gcs_edge_pos_weight_max": args.gcs_edge_pos_weight_max,
         "gcs_aux_dice": args.gcs_aux_dice,
@@ -885,9 +853,6 @@ def main() -> None:
         "gcs_official_count_modes": args.gcs_official_count_modes,
         "gcs_official_score_fp_weight": args.gcs_official_score_fp_weight,
         "gcs_official_score_fn_weight": args.gcs_official_score_fn_weight,
-        "gcs_official_robust_selection": args.gcs_official_robust_selection,
-        "gcs_official_robust_balance_weight": args.gcs_official_robust_balance_weight,
-        "gcs_official_robust_count_acc4_weight": args.gcs_official_robust_count_acc4_weight,
         "gcs_official_half": args.gcs_official_half,
         "gcs_lane_count_balanced": args.gcs_lane_count_balanced,
         "gcs_lane_count_balance_power": args.gcs_lane_count_balance_power,
@@ -900,7 +865,6 @@ def main() -> None:
         "gcs_hard_0313_2_gt4_le10_weight": args.gcs_hard_0313_2_gt4_le10_weight,
         "gcs_hard_visible_thr": args.gcs_hard_visible_thr,
         "gcs_hard_gt3_visible_thr": args.gcs_hard_gt3_visible_thr,
-        "gcs_gt45_oversample": args.gcs_gt45_oversample,
     }
     if args.gcs_official_valid_before_maxdet is not None:
         overrides["gcs_official_valid_before_maxdet"] = args.gcs_official_valid_before_maxdet

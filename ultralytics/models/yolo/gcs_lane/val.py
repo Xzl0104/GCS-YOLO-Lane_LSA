@@ -18,7 +18,6 @@ from ultralytics.models.gcs.loss_ordered_slot import OrderedSlotGCSLoss
 from ultralytics.nn.modules import GCSLaneHead
 from ultralytics.nn.tasks import load_checkpoint
 from ultralytics.utils import ROOT
-from ultralytics.utils.gcs_loss import GCSLoss
 from ultralytics.utils.gcs_shape import assert_gcs_image_tensor, assert_gcs_shape, normalize_imgsz
 from ultralytics.utils.gcs_postprocess import decode_gcs_predictions
 from ultralytics.utils.torch_utils import select_device
@@ -60,7 +59,6 @@ LOSS_NAMES = (
     "query_count_acc",
     "query_count_pred_mean",
 )
-LOSS_NAMES = GCSLoss.loss_names
 LOSS_GAIN_ARGS = (
     "gcs_exist",
     "gcs_point",

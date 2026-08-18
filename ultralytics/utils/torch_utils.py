@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 import numpy as np
 import torch
@@ -694,15 +694,6 @@ class ModelEMA:
             p.requires_grad_(False)
         self.enabled = True
         self.finite_warning_count = 0
-        self.excluded_state_keys: frozenset[str] = frozenset()
-
-    def set_excluded_state_keys(self, keys: Iterable[str] = ()) -> None:
-        """Exclude named floating-point state tensors from future EMA updates."""
-        excluded = frozenset(str(key) for key in keys)
-        unknown = sorted(excluded.difference(self.ema.state_dict()))
-        if unknown:
-            raise KeyError(f"ModelEMA exclusion contains unknown state keys: {unknown}")
-        self.excluded_state_keys = excluded
 
     def update(self, model):
         """Update EMA parameters.
@@ -716,8 +707,6 @@ class ModelEMA:
 
             msd = unwrap_model(model).state_dict()  # model state_dict
             for k, v in self.ema.state_dict().items():
-                if k in self.excluded_state_keys:
-                    continue
                 if v.dtype.is_floating_point:  # true for FP16 and FP32
                     src = msd[k].detach()
                     if not torch.isfinite(src).all().item():

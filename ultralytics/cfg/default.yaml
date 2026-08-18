@@ -200,13 +200,7 @@ gcs_exist_quality_tau: 25.0 # (float) APE decay scale in pixels for exp quality 
 gcs_exist_quality_floor: 0.0 # (float) minimum geometry quality for exp quality mode
 gcs_exist_quality_pos_px: 10.0 # (float) APE at or below this value receives quality 1.0 in linear mode
 gcs_exist_quality_neg_px: 20.0 # (float) APE at or above this value receives quality 0.0 in linear mode
-gcs_exist_quality_length_adaptive: False # (bool) reduce quality-target alpha for short matched lanes; keeps hard target for very short lanes
-gcs_exist_quality_length_min_points: 8.0 # (float) visible points at or below this use alpha=0 when length-adaptive quality is enabled
-gcs_exist_quality_length_full_points: 24.0 # (float) visible points at or above this use full gcs_exist_quality_alpha
 gcs_point_valid_pos_weight_max: 10.0 # (float) maximum positive weight for GCS per-point visibility loss
-gcs_point_valid_length_weight: False # (bool) boost point-valid positive BCE on short matched lanes
-gcs_point_valid_length_weight_base_points: 24.0 # (float) base visible length for short-lane point-valid positive weighting
-gcs_point_valid_length_weight_max: 2.5 # (float) maximum short-lane point-valid positive weight multiplier
 gcs_mask_pos_weight_max: 20.0 # (float) maximum foreground class weight for GCS mask auxiliary loss
 gcs_edge_pos_weight_max: 50.0 # (float) maximum foreground pos_weight for GCS edge auxiliary loss
 gcs_aux_dice: 0.5 # (float) Dice loss gain inside GCS mask/edge auxiliary losses
@@ -217,7 +211,7 @@ gcs_cost_curve: 0.05 # (float) Hungarian matching pixel-curvature cost gain
 gcs_cost_exist: 0.1 # (float) Hungarian matching existence-confidence cost gain
 gcs_match_min_overlap: 2 # (int) minimum valid GT points required for training Hungarian matching
 gcs_match_max_x_dist: 0.0 # (float) optional training matcher mean x-distance gate in pixels; 0 disables
-gcs_match_gate_px: 0.0 # (float) optional training matcher APE gate in pixels; 0 disables
+gcs_match_gate_px: 160.0 # (float) training matcher APE gate in pixels; 0 disables
 gcs_eval_conf: 0.2 # (float) GCS validation lane existence threshold for Precision/Recall/F1; quality-aware exist is calibrated lower
 gcs_eval_ape_thr: 20.0 # (float) GCS validation APE threshold in pixels for TP matching
 gcs_eval_match_gate_px: # (float, optional) strict validation APE gate; null defaults to gcs_eval_ape_thr
@@ -243,9 +237,6 @@ gcs_official_valid_before_maxdet: False # (bool) filter point-valid/min_points f
 gcs_official_count_modes: [score_sum] # (list[str]) query count-aware top-k count sources for official sweeps
 gcs_official_score_fp_weight: 0.02 # (float) FP penalty for official_score tie-break logging
 gcs_official_score_fn_weight: 0.02 # (float) FN penalty for official_score tie-break logging
-gcs_official_robust_selection: False # (bool) select official_best rows/epochs by robust_score
-gcs_official_robust_balance_weight: 0.35 # (float) FP/FN imbalance penalty for robust_score
-gcs_official_robust_count_acc4_weight: 0.15 # (float) GT4 count-accuracy penalty for robust_score
 gcs_official_half: False # (bool) use FP16 inference for training-time official sweeps
 # Keep disabled by default to preserve training-distribution comparability.
 # Enable explicitly for count-balanced ordered_slot experiments.
@@ -260,7 +251,6 @@ gcs_hard_gt3_le20_weight: 1.5 # (float) multiplier for GT3 samples with min_visi
 gcs_hard_0313_2_gt4_le10_weight: 4.0 # (float) extra multiplier for 0313-2 GT4 short-visible samples
 gcs_hard_visible_thr: 10 # (int) visible-point threshold for GT4/GT5 hard-sampling groups
 gcs_hard_gt3_visible_thr: 20 # (int) visible-point threshold for GT3 hard-sampling group
-gcs_gt45_oversample: False # (bool) duplicate GT4/GT5 training samples once; validation/test unchanged
 nbs: 64 # (int) nominal batch size used for loss normalization
 hsv_h: 0.015 # (float) HSV hue augmentation fraction
 hsv_s: 0.7 # (float) HSV saturation augmentation fraction

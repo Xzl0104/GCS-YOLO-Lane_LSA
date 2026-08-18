@@ -103,12 +103,6 @@ class GCSLoss(nn.Module):
         exist_quality_floor: float | None = None,
         exist_quality_pos_px: float | None = None,
         exist_quality_neg_px: float | None = None,
-        exist_quality_length_adaptive: bool | None = None,
-        exist_quality_length_min_points: float | None = None,
-        exist_quality_length_full_points: float | None = None,
-        point_valid_length_weight: bool | None = None,
-        point_valid_length_weight_base_points: float | None = None,
-        point_valid_length_weight_max: float | None = None,
         match_min_overlap: int | None = None,
         match_max_x_dist: float | None = None,
         match_gate_px: float | None = None,
@@ -431,57 +425,6 @@ class GCSLoss(nn.Module):
                 "gcs_exist_quality_neg_px must be greater than gcs_exist_quality_pos_px "
                 f"({self.exist_quality_neg_px} <= {self.exist_quality_pos_px})."
             )
-        self.exist_quality_length_adaptive = self._bool_arg(
-            exist_quality_length_adaptive
-            if exist_quality_length_adaptive is not None
-            else self._arg(args, "gcs_exist_quality_length_adaptive", False)
-        )
-        self.exist_quality_length_min_points = float(
-            exist_quality_length_min_points
-            if exist_quality_length_min_points is not None
-            else self._arg(args, "gcs_exist_quality_length_min_points", 8.0)
-        )
-        self.exist_quality_length_full_points = float(
-            exist_quality_length_full_points
-            if exist_quality_length_full_points is not None
-            else self._arg(args, "gcs_exist_quality_length_full_points", 24.0)
-        )
-        self.point_valid_length_weight = self._bool_arg(
-            point_valid_length_weight
-            if point_valid_length_weight is not None
-            else self._arg(args, "gcs_point_valid_length_weight", False)
-        )
-        self.point_valid_length_weight_base_points = float(
-            point_valid_length_weight_base_points
-            if point_valid_length_weight_base_points is not None
-            else self._arg(args, "gcs_point_valid_length_weight_base_points", 24.0)
-        )
-        self.point_valid_length_weight_max = float(
-            point_valid_length_weight_max
-            if point_valid_length_weight_max is not None
-            else self._arg(args, "gcs_point_valid_length_weight_max", 2.5)
-        )
-        if self.exist_quality_length_min_points < 0.0:
-            raise ValueError(
-                "gcs_exist_quality_length_min_points must be >= 0, "
-                f"got {self.exist_quality_length_min_points}."
-            )
-        if self.exist_quality_length_full_points <= self.exist_quality_length_min_points:
-            raise ValueError(
-                "gcs_exist_quality_length_full_points must be greater than "
-                "gcs_exist_quality_length_min_points, got "
-                f"{self.exist_quality_length_full_points} <= {self.exist_quality_length_min_points}."
-            )
-        if self.point_valid_length_weight_base_points <= 0.0:
-            raise ValueError(
-                "gcs_point_valid_length_weight_base_points must be > 0, "
-                f"got {self.point_valid_length_weight_base_points}."
-            )
-        if self.point_valid_length_weight_max < 1.0:
-            raise ValueError(
-                "gcs_point_valid_length_weight_max must be >= 1, "
-                f"got {self.point_valid_length_weight_max}."
-            )
         self.mask_pos_weight_max = float(
             mask_pos_weight_max if mask_pos_weight_max is not None else self._arg(args, "gcs_mask_pos_weight_max", 20.0)
         )
@@ -518,7 +461,7 @@ class GCSLoss(nn.Module):
             image_size=self.image_size,
             min_overlap=int(match_min_overlap if match_min_overlap is not None else self._arg(args, "gcs_match_min_overlap", 2)),
             max_x_dist=float(match_max_x_dist if match_max_x_dist is not None else self._arg(args, "gcs_match_max_x_dist", 0.0)),
-            match_gate_px=float(match_gate_px if match_gate_px is not None else self._arg(args, "gcs_match_gate_px", 0.0)),
+            match_gate_px=float(match_gate_px if match_gate_px is not None else self._arg(args, "gcs_match_gate_px", 160.0)),
         )
 
     @staticmethod
@@ -659,8 +602,7 @@ class GCSLoss(nn.Module):
                 target_points = gt_points[b].to(device=device, dtype=dtype)[tgt_idx]
                 valid = gt_valid[b].to(device=device, dtype=dtype)[tgt_idx]
                 point_error = torch.norm((pred - target_points) * scale, dim=-1)
-                valid_len = valid.sum(dim=1)
-                ape = (point_error * valid).sum(dim=1) / valid_len.clamp_min(1.0)
+                ape = (point_error * valid).sum(dim=1) / valid.sum(dim=1).clamp_min(1.0)
                 quality = self._exist_quality_from_ape(ape)
                 if pred_valid_logits is not None:
                     valid_prob = pred_valid_logits[b, src_idx].detach().sigmoid().to(dtype=dtype)
@@ -668,13 +610,7 @@ class GCSLoss(nn.Module):
                     union = valid_prob.sum(dim=1) + valid.sum(dim=1) - intersection
                     visible_quality = intersection / union.clamp_min(1e-6)
                     quality = quality * visible_quality.clamp(min=0.0, max=1.0)
-                if self.exist_quality_length_adaptive:
-                    length_span = self.exist_quality_length_full_points - self.exist_quality_length_min_points
-                    alpha_scale = ((valid_len - self.exist_quality_length_min_points) / length_span).clamp(0.0, 1.0)
-                    alpha_b = alpha * alpha_scale.to(dtype=target.dtype)
-                else:
-                    alpha_b = target.new_full((src_idx.numel(),), alpha)
-                target[b, src_idx] = (1.0 - alpha_b) + alpha_b * quality.to(dtype=target.dtype)
+                target[b, src_idx] = (1.0 - alpha) + alpha * quality.to(dtype=target.dtype)
         pos_weight = pred_logits.new_tensor(self.exist_pos_weight)
         loss = F.binary_cross_entropy_with_logits(pred_logits, target, pos_weight=pos_weight, reduction="none")
         gamma = max(float(self.exist_focal_gamma), 0.0)
@@ -829,7 +765,6 @@ class GCSLoss(nn.Module):
 
         target = torch.zeros_like(pred_valid_logits)
         extra_weight = torch.ones_like(pred_valid_logits)
-        length_pos_weight = torch.ones_like(pred_valid_logits)
         gt5_short_boost_mask = torch.zeros_like(pred_valid_logits, dtype=torch.bool)
         gt5_short_pos_count = 0
         gt5_short_pos_anchor_count = 0
@@ -847,20 +782,11 @@ class GCSLoss(nn.Module):
             tgt_idx = tgt_idx.to(device=target.device, dtype=torch.long)
             target_valid = gt_valid[b].to(device=target.device, dtype=target.dtype)[tgt_idx]
             target[b, src_idx] = target_valid
-            visible_counts = target_valid.sum(dim=1, keepdim=True)
-            if self.point_valid_length_weight:
-                lane_pos_weight = (
-                    self.point_valid_length_weight_base_points / visible_counts.clamp_min(1e-4)
-                ).clamp(min=1.0, max=float(self.point_valid_length_weight_max)).to(dtype=target_valid.dtype)
-                length_pos_weight[b, src_idx] = torch.where(
-                    target_valid > 0.5,
-                    lane_pos_weight.expand_as(target_valid),
-                    torch.ones_like(target_valid),
-                )
             if not rescue_enabled or int(round(float(gt_lanes[b].detach().item()))) != 5:
                 continue
 
-            short_mask = visible_counts.squeeze(1) <= float(self.gt5_short_visible_thr)
+            visible_counts = target_valid.sum(dim=1)
+            short_mask = visible_counts <= float(self.gt5_short_visible_thr)
             if not bool(short_mask.any()):
                 continue
             boost_mask = short_mask[:, None] & target_valid.bool()
@@ -877,7 +803,6 @@ class GCSLoss(nn.Module):
         pos = target.sum().clamp_min(1.0)
         neg = (target.numel() - target.sum()).clamp_min(1.0)
         pos_weight = (neg / pos).clamp(min=1.0, max=float(self.point_valid_pos_weight_max)).to(pred_valid_logits)
-        pos_weight = pos_weight * length_pos_weight
         bce = F.binary_cross_entropy_with_logits(pred_valid_logits, target, pos_weight=pos_weight, reduction="none")
         loss = (bce * extra_weight).sum() / extra_weight.sum().clamp_min(1.0)
         if not return_details:

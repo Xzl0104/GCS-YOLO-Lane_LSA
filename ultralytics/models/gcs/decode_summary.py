@@ -11,10 +11,6 @@ import yaml
 
 QUERY_DECODE_SCHEMA = "query_decode_v1"
 ORDERED_SLOT_DECODE_SCHEMA = "ordered_slot_decode_v1"
-LANE_INSTANCE_SET_DECODE_SCHEMA = "lane_instance_set_decode_v1"
-LANE_INSTANCE_SET_DECODE_KEYS = frozenset(
-    {"conf", "point_valid_thr", "max_det", "min_points", "duplicate_thr", "allow_empty", "empty_thr", "min_survivors"}
-)
 QUERY_DECODE_KEYS = frozenset(
     {
         "conf",
@@ -304,62 +300,13 @@ def query_decode_cfg(best_row: Mapping[str, Any], valid_before_maxdet: Any = Non
     return cfg
 
 
-def lane_instance_set_decode_params(args: Any = None, decode_cfg: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    """Return normalized lane-instance-set decode parameters from args or a decode schema."""
-    cfg = decode_cfg or {}
-    def value(key: str, arg_name: str, default: Any) -> Any:
-        return cfg[key] if key in cfg else _arg(args, arg_name, default)
-    return {
-        "conf": float(value("conf", "conf", 0.25)),
-        "point_valid_thr": float(value("point_valid_thr", "point_valid_thr", 0.5)),
-        "max_det": int(value("max_det", "max_det", 5)),
-        "min_points": int(value("min_points", "min_points", 6)),
-        "duplicate_thr": float(value("duplicate_thr", "lane_instance_duplicate_thr", 0.65)),
-        "allow_empty": _bool_value(value("allow_empty", "lane_instance_allow_empty", False)),
-        "empty_thr": float(value("empty_thr", "lane_instance_empty_thr", 0.75)),
-        "min_survivors": int(value("min_survivors", "lane_instance_min_survivors", 2)),
-    }
-
-
-def lane_instance_set_decode_cfg(best_row: Mapping[str, Any], args: Any = None) -> dict[str, Any]:
-    """Build the reproducible prediction-only lane-instance-set decode schema."""
-    params = lane_instance_set_decode_params(args, best_row)
-    cfg = {"schema": LANE_INSTANCE_SET_DECODE_SCHEMA, "decode_mode": "lane_instance_set", **params}
-    validate_decode_yaml_for_model(cfg, model_mode="lane_instance_set")
-    return cfg
-
-
-def lane_instance_set_sweep_summary(args: Any) -> dict[str, Any]:
-    """Build the shared direct/cached lane-instance sweep summary contract."""
-    def values(name: str, default: list[Any]) -> list[Any]:
-        value = _arg(args, name, default)
-        return list(value) if isinstance(value, (list, tuple)) else [value]
-    max_dets = _arg(args, "lane_instance_max_dets", None) or _arg(args, "max_dets", [5])
-    return {
-        "schema": LANE_INSTANCE_SET_DECODE_SCHEMA,
-        "confs": sorted({float(x) for x in values("confs", [0.25])}),
-        "point_valid_thrs": sorted({float(x) for x in values("point_valid_thrs", [0.5])}),
-        "max_dets": sorted({int(x) for x in max_dets}),
-        "min_points": sorted({int(x) for x in values("min_points", [6])}),
-        "duplicate_thrs": sorted({float(x) for x in values("lane_instance_duplicate_thrs", [0.65])}),
-        "allow_empty": _bool_value(_arg(args, "lane_instance_allow_empty", False)),
-        "empty_thr": float(_arg(args, "lane_instance_empty_thr", 0.75)),
-        "min_survivors": int(_arg(args, "lane_instance_min_survivors", 2)),
-        "uses_gt_for_inference": False,
-    }
-
-
 def build_official_best_decode_cfg(best_row: Mapping[str, Any], model_mode: str, args: Any = None) -> dict[str, Any]:
     """Build a schema-specific decode config for official_best_decode.yaml."""
     model_mode = str(model_mode or "query").strip().lower()
     if model_mode in {"ordered-slot", "orderedslot"}:
         model_mode = "ordered_slot"
-    if model_mode in {"lane-instance-set", "laneinstanceset"}:
-        model_mode = "lane_instance_set"
     if model_mode == "ordered_slot":
         return ordered_slot_decode_cfg(args)
-    if model_mode == "lane_instance_set":
-        return lane_instance_set_decode_cfg(best_row, args=args)
     if model_mode == "query":
         valid_before_maxdet = best_row.get(
             "valid_before_maxdet",
@@ -382,13 +329,9 @@ def validate_decode_yaml_for_model(decode_cfg: Mapping[str, Any], model_mode: st
     model_mode = str(model_mode or "query").strip().lower()
     if model_mode in {"ordered-slot", "orderedslot"}:
         model_mode = "ordered_slot"
-    if model_mode in {"lane-instance-set", "laneinstanceset"}:
-        model_mode = "lane_instance_set"
     decode_mode = str(decode_cfg.get("decode_mode", "")).strip().lower()
     if decode_mode in {"ordered-slot", "orderedslot"}:
         decode_mode = "ordered_slot"
-    if decode_mode in {"lane-instance-set", "laneinstanceset"}:
-        decode_mode = "lane_instance_set"
     schema = decode_cfg.get("schema")
 
     if decode_mode != model_mode:
@@ -428,23 +371,6 @@ def validate_decode_yaml_for_model(decode_cfg: Mapping[str, Any], model_mode: st
                 "Supported formal count modes are 'score_sum' and 'count_logits'. "
                 "Use --oracle-count for diagnostic GT-count decode."
             )
-        return
-
-    if model_mode == "lane_instance_set":
-        if schema != LANE_INSTANCE_SET_DECODE_SCHEMA:
-            raise RuntimeError(
-                f"Invalid lane_instance_set schema={schema!r}. Expected {LANE_INSTANCE_SET_DECODE_SCHEMA}."
-            )
-        missing = sorted(LANE_INSTANCE_SET_DECODE_KEYS.difference(decode_cfg))
-        if missing:
-            raise RuntimeError(f"Invalid lane_instance_set decode yaml: missing keys {missing}.")
-        params = lane_instance_set_decode_params(decode_cfg=decode_cfg)
-        if not 0.0 <= params["conf"] <= 1.0 or not 0.0 <= params["point_valid_thr"] <= 1.0:
-            raise RuntimeError("lane_instance_set conf and point_valid_thr must be in [0, 1].")
-        if not 0.0 <= params["duplicate_thr"] <= 1.0 or not 0.0 <= params["empty_thr"] <= 1.0:
-            raise RuntimeError("lane_instance_set duplicate_thr and empty_thr must be in [0, 1].")
-        if not 1 <= params["max_det"] <= 5 or params["min_points"] <= 0 or params["min_survivors"] < 0:
-            raise RuntimeError("lane_instance_set requires 1 <= max_det <= 5, min_points > 0, min_survivors >= 0.")
         return
 
     raise RuntimeError(f"Unsupported model_mode={model_mode!r} for decode yaml validation.")

@@ -34,18 +34,11 @@ from gcs_tools.tusimple_official_eval import (  # noqa: E402
 )
 from gcs_tools.official_selection import sweep_selection_policy  # noqa: E402
 from gcs_tools.tusimple_split_guard import reject_tusimple_test_search_gt_json  # noqa: E402
-from tools.infer_gcs import (  # noqa: E402
-    load_gcs_model,
-    merge_query_score_valid_predictions,
-    preprocess_image,
-    score_valid_weights_tag,
-    warn_max_det_mismatch,
-)
+from tools.infer_gcs import load_gcs_model, preprocess_image, warn_max_det_mismatch  # noqa: E402
 from tools.sweep_tusimple_official import (  # noqa: E402
     DEFAULT_ARCHIVE,
     DEFAULT_WEIGHTS,
     ORDERED_SLOT_QUERY_ONLY_DEFAULTS,
-    apply_lane_instance_decode_yaml,
     build_combos,
     resolve_save_dir as resolve_base_save_dir,
     select_best,
@@ -54,11 +47,8 @@ from tools.sweep_tusimple_official import (  # noqa: E402
 )
 from ultralytics.models.gcs.decode_ordered_slot import decode_ordered_slot_predictions  # noqa: E402
 from ultralytics.models.gcs.decode_summary import (  # noqa: E402
-    LANE_INSTANCE_SET_DECODE_SCHEMA,
     ORDERED_SLOT_DECODE_SCHEMA,
     build_ordered_slot_decode_summary,
-    lane_instance_set_decode_params,
-    lane_instance_set_sweep_summary,
     load_decode_yaml,
     ordered_slot_decode_params,
     ordered_slot_decode_runtime_config,
@@ -68,11 +58,6 @@ from ultralytics.models.gcs.decode_summary import (  # noqa: E402
 )
 from ultralytics.models.gcs.mode_utils import resolve_decode_mode  # noqa: E402
 from ultralytics.nn.modules import GCSLaneHead  # noqa: E402
-from ultralytics.utils.gcs_lane_instance_set import (  # noqa: E402
-    LANE_INSTANCE_PREDICTION_KEYS,
-    decode_lane_instance_set_predictions,
-    resolve_lane_instance_decode_mode,
-)
 from ultralytics.utils.gcs_shape import normalize_imgsz, shape_str  # noqa: E402
 from ultralytics.utils.torch_utils import select_device  # noqa: E402
 
@@ -100,7 +85,7 @@ PREDICTION_KEYS = (
     "pred_start_logits",
     "pred_end_logits",
     "pred_exist_logits",
-) + LANE_INSTANCE_PREDICTION_KEYS
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -117,17 +102,7 @@ def parse_args() -> argparse.Namespace:
         help="Allow non-363 split=val GT for diagnostics; summary marks it incomparable with E1/spurious.",
     )
     parser.add_argument("--weights", default=str(DEFAULT_WEIGHTS), help="GCS checkpoint .pt.")
-    parser.add_argument(
-        "--score-valid-weights",
-        default=None,
-        help="Default-off query decode: use this checkpoint's pred_logits/pred_valid_logits while keeping --weights pred_points.",
-    )
-    parser.add_argument("--decode-mode", choices=("auto", "query", "ordered_slot", "lane_instance_set"), default="auto", help="Decode path for official sweep.")
-    parser.add_argument("--lane-instance-duplicate-thrs", nargs="+", type=float, default=[0.65])
-    parser.add_argument("--lane-instance-max-dets", nargs="+", type=int, default=[5])
-    parser.add_argument("--lane-instance-allow-empty", action="store_true")
-    parser.add_argument("--lane-instance-empty-thr", type=float, default=0.75)
-    parser.add_argument("--lane-instance-min-survivors", type=int, default=2)
+    parser.add_argument("--decode-mode", choices=("auto", "query", "ordered_slot"), default="auto", help="Decode path for official sweep.")
     parser.add_argument("--decode-yaml", default=None, help="Schema-validated official_best_decode.yaml to reproduce a decode.")
     parser.add_argument("--gcs-min-lanes", type=int, default=2, help="ordered_slot minimum supported lane count.")
     parser.add_argument("--gcs-max-lanes", type=int, default=5, help="ordered_slot maximum supported lane count.")
@@ -225,21 +200,13 @@ def _weight_run_dir(weights: str | Path) -> Path | None:
     return None
 
 
-def resolve_cache_dir(
-    cache_dir: str | Path | None,
-    weights: str | Path,
-    split: str,
-    score_valid_weights: str | Path | None = None,
-) -> Path:
+def resolve_cache_dir(cache_dir: str | Path | None, weights: str | Path, split: str) -> Path:
     if cache_dir is not None and str(cache_dir).strip():
         return Path(cache_dir)
-    teacher_tag = score_valid_weights_tag(score_valid_weights)
-    suffix = f"_scorevalid_{teacher_tag}" if teacher_tag else ""
     run_dir = _weight_run_dir(weights)
     if run_dir is not None:
-        return run_dir / f"official_pred_cache_{split}{suffix}"
-    split_dir = f"{split}{suffix}"
-    return ROOT / "runs" / "gcs_lane" / "tusimple_official_prediction_cache" / Path(weights).stem / split_dir
+        return run_dir / f"official_pred_cache_{split}"
+    return ROOT / "runs" / "gcs_lane" / "tusimple_official_prediction_cache" / Path(weights).stem / str(split)
 
 
 def resolve_cached_save_dir(args: argparse.Namespace, effective_margins: list[int], decode_mode: str) -> Path:
@@ -254,9 +221,7 @@ def resolve_cached_save_dir(args: argparse.Namespace, effective_margins: list[in
         valid_before_maxdet=bool(getattr(args, "valid_before_maxdet", False)),
         decode_mode=decode_mode,
     )
-    teacher_tag = score_valid_weights_tag(getattr(args, "score_valid_weights", None))
-    two_source_tag = f"_scorevalid_{teacher_tag}" if teacher_tag else ""
-    return base.with_name(f"{base.name}{two_source_tag}_cached")
+    return base.with_name(f"{base.name}_cached")
 
 
 def _normalize_decode_mode_name(decode_mode: str | None) -> str:
@@ -326,9 +291,6 @@ def _load_decode_yaml_for_sweep(args: argparse.Namespace) -> dict[str, Any] | No
         _apply_query_decode_yaml(args, decode_yaml_cfg)
     elif yaml_mode == "ordered_slot":
         validate_decode_yaml_for_model(decode_yaml_cfg, model_mode="ordered_slot")
-    elif yaml_mode == "lane_instance_set":
-        validate_decode_yaml_for_model(decode_yaml_cfg, model_mode="lane_instance_set")
-        apply_lane_instance_decode_yaml(args, decode_yaml_cfg, max_dets_attr="lane_instance_max_dets")
     else:
         raise RuntimeError(f"Unsupported decode yaml mode: {yaml_mode!r}.")
     return decode_yaml_cfg
@@ -388,11 +350,6 @@ def _cache_mismatch_reasons(
         reasons.append(f"half {manifest.get('half')} != {bool(args.half)}")
     if decode_mode and decode_mode != "auto" and manifest.get("decode_mode") != decode_mode:
         reasons.append(f"decode_mode {manifest.get('decode_mode')!r} != {decode_mode!r}")
-    if decode_mode == "lane_instance_set":
-        recorded_keys = set(manifest.get("prediction_keys", []))
-        missing = [key for key in LANE_INSTANCE_PREDICTION_KEYS if key not in recorded_keys]
-        if missing:
-            reasons.append(f"lane_instance_set cache missing prediction keys: {missing}")
     recorded_weights = manifest.get("weights", {})
     current_weights = _weights_fingerprint(args.weights)
     if not bool(getattr(args, "allow_cache_weight_mismatch", False)):
@@ -400,19 +357,6 @@ def _cache_mismatch_reasons(
             if recorded_weights.get(key) != current_weights.get(key):
                 reasons.append(f"weights {key} differs")
                 break
-    two_source = bool(getattr(args, "score_valid_weights", None))
-    if bool(manifest.get("two_source_query_decode", False)) != two_source:
-        reasons.append(
-            f"two_source_query_decode {manifest.get('two_source_query_decode', False)} != {two_source}"
-        )
-    if two_source:
-        recorded_score_valid = manifest.get("score_valid_weights", {})
-        current_score_valid = _weights_fingerprint(args.score_valid_weights)
-        if not bool(getattr(args, "allow_cache_weight_mismatch", False)):
-            for key in ("path", "size", "mtime_ns"):
-                if recorded_score_valid.get(key) != current_score_valid.get(key):
-                    reasons.append(f"score_valid_weights {key} differs")
-                    break
     return reasons
 
 
@@ -439,18 +383,10 @@ def build_prediction_cache(
     device_obj = select_device(args.device)
     model = load_gcs_model(args.weights, device=device_obj, half=args.half, gcs_imgsz=imgsz)
     legacy_head_patches = _patch_legacy_gcs_head_attrs(model)
-    model_mode = resolve_lane_instance_decode_mode(getattr(args, "decode_mode", "auto"), model)
+    model_mode = resolve_decode_mode(getattr(args, "decode_mode", "auto"), model)
     if decode_yaml_cfg is not None:
         validate_decode_yaml_for_model(decode_yaml_cfg, model_mode=model_mode)
     args.decode_mode = model_mode
-    score_valid_model = None
-    score_valid_legacy_head_patches = 0
-    if getattr(args, "score_valid_weights", None):
-        if model_mode != "query":
-            raise RuntimeError("--score-valid-weights is only valid for query decode, not ordered_slot.")
-        score_valid_model = load_gcs_model(args.score_valid_weights, device=device_obj, half=args.half, gcs_imgsz=imgsz)
-        score_valid_legacy_head_patches = _patch_legacy_gcs_head_attrs(score_valid_model)
-        resolve_decode_mode("query", score_valid_model)
 
     if args.warmup > 0 and gt_records:
         warm_path = tusimple_image_path(archive_root, str(gt_records[0]["raw_file"]), split=args.split)
@@ -460,8 +396,6 @@ def build_prediction_cache(
         warm_tensor = preprocess_image(warm_img, imgsz, device=device_obj, half=args.half)
         for _ in range(int(args.warmup)):
             _ = model(warm_tensor)
-            if score_valid_model is not None:
-                _ = score_valid_model(warm_tensor)
         _sync_if_cuda(device_obj)
 
     entries: list[dict[str, Any]] = []
@@ -481,13 +415,6 @@ def build_prediction_cache(
         _sync_if_cuda(device_obj)
         t0 = time.perf_counter()
         preds = model(tensor)
-        if score_valid_model is not None:
-            score_valid_preds = score_valid_model(tensor)
-            preds = merge_query_score_valid_predictions(
-                preds,
-                score_valid_preds,
-                context=f"two-source query cache for {raw_file}",
-            )
         _sync_if_cuda(device_obj)
         t1 = time.perf_counter()
         infer_time_s += t1 - t0
@@ -518,12 +445,6 @@ def build_prediction_cache(
         "prediction_file": CACHE_FILE,
         "created_unix_time": time.time(),
         "weights": _weights_fingerprint(args.weights),
-        "point_weights": _weights_fingerprint(args.weights),
-        "score_valid_weights": (
-            _weights_fingerprint(args.score_valid_weights) if score_valid_model is not None else None
-        ),
-        "two_source_query_decode": bool(score_valid_model is not None),
-        "uses_gt_for_inference": False,
         "archive_root": str(archive_root.resolve()),
         "split": str(args.split),
         "gt_json": str(gt_path.resolve()),
@@ -536,7 +457,6 @@ def build_prediction_cache(
         "half": bool(args.half),
         "stored_tensor_dtype": "float32",
         "legacy_gcs_head_attr_patches": int(legacy_head_patches),
-        "score_valid_legacy_gcs_head_attr_patches": int(score_valid_legacy_head_patches),
         "prediction_keys": sorted({k for item in entries for k in item["predictions"]}),
         "timing": {
             "avg_image_read_ms": round(io_time_s * 1000.0 / n, 4),
@@ -563,9 +483,7 @@ def load_prediction_cache(cache_dir: Path) -> tuple[dict[str, Any], list[dict[st
     return manifest, entries
 
 
-def validate_prediction_cache_entries(
-    entries: list[dict[str, Any]], gt_records: list[dict], decode_mode: str = "query"
-) -> None:
+def validate_prediction_cache_entries(entries: list[dict[str, Any]], gt_records: list[dict]) -> None:
     """Fail fast if a cache tensor file was swapped under a valid manifest."""
     if len(entries) != len(gt_records):
         raise RuntimeError(f"Prediction cache entry count {len(entries)} != GT records {len(gt_records)}.")
@@ -578,14 +496,6 @@ def validate_prediction_cache_entries(
         expected_h = [int(x) for x in record.get("h_samples", [])]
         if cached_h != expected_h:
             raise RuntimeError(f"Prediction cache h_samples mismatch at index {idx} for {expected_raw}.")
-        if str(decode_mode) == "lane_instance_set":
-            predictions = entry.get("predictions", {})
-            missing = [key for key in LANE_INSTANCE_PREDICTION_KEYS if key not in predictions]
-            if missing:
-                raise RuntimeError(
-                    f"Prediction cache entry {idx} for {expected_raw} cannot decode lane_instance_set; "
-                    f"missing tensors: {missing}. Rebuild the cache with the lane-instance model."
-                )
 
 
 def _sigmoid_np(values: np.ndarray) -> np.ndarray:
@@ -926,12 +836,6 @@ def _state_to_row(combo: dict[str, Any], state: dict[str, Any], args: argparse.N
 def _combo_key(combo: dict[str, Any]) -> tuple[Any, ...]:
     if combo.get("decode_mode") == "ordered_slot":
         return ("ordered_slot",)
-    if combo.get("decode_mode") == "lane_instance_set":
-        return (
-            "lane_instance_set", float(combo["conf"]), float(combo["point_valid_thr"]),
-            int(combo["max_det"]), int(combo["min_points"]), float(combo["duplicate_thr"]),
-            bool(combo["allow_empty"]), float(combo["empty_thr"]), int(combo["min_survivors"]),
-        )
     return (
         float(combo["conf"]),
         float(combo["point_valid_thr"]),
@@ -946,11 +850,6 @@ def _combo_key(combo: dict[str, Any]) -> tuple[Any, ...]:
 def _row_sort_key(row: dict[str, Any]) -> tuple[Any, ...]:
     if row.get("decode_mode") == "ordered_slot":
         return ("ordered_slot", 0.0, 0.0, 0, 0)
-    if row.get("decode_mode") == "lane_instance_set":
-        return (
-            "lane_instance_set", float(row["conf"]), float(row["point_valid_thr"]),
-            int(row["max_det"]), int(row["min_points"]), float(row["duplicate_thr"]),
-        )
     return (
         float(row["conf"]),
         float(row["point_valid_thr"]),
@@ -1040,39 +939,6 @@ def cached_sweep_ordered_slot(
     return [row], {"cached_decode_eval_s": elapsed}
 
 
-def cached_sweep_lane_instance_set(
-    *, entries: list[dict[str, Any]], gt_records: list[dict], combos: list[dict[str, Any]], args: argparse.Namespace
-) -> tuple[list[dict[str, Any]], dict[str, float]]:
-    gt_by_raw = {str(record["raw_file"]): record for record in gt_records}
-    states = {_combo_key(combo): _new_state() for combo in combos}
-    under_min = {_combo_key(combo): 0 for combo in combos}
-    t0 = time.perf_counter()
-    for item in entries:
-        raw_file = str(item["raw_file"])
-        preds = _batched_pred_dict(item["predictions"])
-        image_shape = (int(item["image_shape"][0]), int(item["image_shape"][1]))
-        for combo in combos:
-            lanes, diagnostics = decode_lane_instance_set_predictions(
-                preds, batch_index=0, image_shape=image_shape, score_thr=combo["conf"],
-                point_valid_thr=combo["point_valid_thr"], min_points=combo["min_points"],
-                max_det=combo["max_det"], duplicate_thr=combo["duplicate_thr"],
-                min_survivors=combo["min_survivors"], allow_empty=combo["allow_empty"],
-                empty_thr=combo["empty_thr"], return_diagnostics=True,
-            )
-            key = _combo_key(combo)
-            under_min[key] += int(diagnostics["under_min"])
-            tusimple_lanes = gcs_lanes_to_tusimple_lanes(lanes, item["h_samples"], image_shape=image_shape)
-            _update_state(states[key], tusimple_lanes, gt_by_raw[raw_file], runtime_ms=float(args.runtime_ms))
-    elapsed = time.perf_counter() - t0
-    rows = []
-    for combo in combos:
-        key = _combo_key(combo)
-        row = _state_to_row(combo, states[key], args)
-        row["lane_instance_under_min_images"] = int(under_min[key])
-        rows.append(row)
-    return sorted(rows, key=_row_sort_key), {"cached_decode_eval_s": elapsed}
-
-
 def _config_for_summary(
     *,
     args: argparse.Namespace,
@@ -1089,12 +955,6 @@ def _config_for_summary(
 ) -> dict[str, Any]:
     config = {
         "weights": str(Path(args.weights).resolve()),
-        "point_weights": str(Path(args.weights).resolve()),
-        "score_valid_weights": (
-            str(Path(args.score_valid_weights).resolve()) if getattr(args, "score_valid_weights", None) else None
-        ),
-        "two_source_query_decode": bool(getattr(args, "score_valid_weights", None)),
-        "uses_gt_for_inference": False,
         "archive_root": str(archive_root.resolve()),
         "split": args.split,
         "gt_json": str(gt_path.resolve()),
@@ -1103,8 +963,6 @@ def _config_for_summary(
         "cache_schema": CACHE_SCHEMA,
         "cache_prediction_file": str(_cache_prediction_path(cache_dir).resolve()),
         "cache_weights": manifest.get("weights", {}),
-        "cache_point_weights": manifest.get("point_weights", manifest.get("weights", {})),
-        "cache_score_valid_weights": manifest.get("score_valid_weights"),
         "cache_created_unix_time": manifest.get("created_unix_time"),
         "imgsz": [int(imgsz[0]), int(imgsz[1])],
         "decode_mode": str(decode_mode),
@@ -1149,8 +1007,6 @@ def _config_for_summary(
                 "query_decode_args": effective_decode["query_decode_args"],
             }
         )
-    elif str(decode_mode) == "lane_instance_set":
-        config.update(lane_instance_set_sweep_summary(args))
     else:
         config.update(
             {
@@ -1195,12 +1051,7 @@ def sweep(args: argparse.Namespace) -> dict[str, Any]:
         allow_noncanonical_gt=bool(getattr(args, "allow_noncanonical_gt", False)),
     )
     imgsz = normalize_imgsz(args.imgsz, dataset=args.dataset)
-    cache_dir = resolve_cache_dir(
-        getattr(args, "cache_dir", None),
-        args.weights,
-        args.split,
-        score_valid_weights=getattr(args, "score_valid_weights", None),
-    )
+    cache_dir = resolve_cache_dir(getattr(args, "cache_dir", None), args.weights, args.split)
 
     requested_mode = _normalize_decode_mode_name(getattr(args, "decode_mode", "auto"))
     manifest = None if rebuild_cache else _read_manifest(cache_dir)
@@ -1239,22 +1090,14 @@ def sweep(args: argparse.Namespace) -> dict[str, Any]:
 
     if str(args.decode_mode) == "ordered_slot":
         raise_for_ordered_slot_query_args(args, ORDERED_SLOT_QUERY_ONLY_DEFAULTS, context="cached TuSimple official sweep")
-    elif str(args.decode_mode) == "lane_instance_set":
-        args.max_dets = [int(value) for value in getattr(args, "lane_instance_max_dets", [5])]
     combos = build_combos(args, decode_yaml_cfg=decode_yaml_cfg)
     if str(args.decode_mode) != "ordered_slot":
         for max_det in sorted({int(c["max_det"]) for c in combos}):
             warn_max_det_mismatch(args.weights, max_det=max_det, context="cached TuSimple official sweep")
-            if getattr(args, "score_valid_weights", None):
-                warn_max_det_mismatch(
-                    args.score_valid_weights,
-                    max_det=max_det,
-                    context="cached TuSimple official sweep score/valid",
-                )
 
     load_t0 = time.perf_counter()
     manifest, entries = load_prediction_cache(cache_dir)
-    validate_prediction_cache_entries(entries, gt_records, decode_mode=str(args.decode_mode))
+    validate_prediction_cache_entries(entries, gt_records)
     cache_load_s = time.perf_counter() - load_t0
 
     if str(args.decode_mode) == "ordered_slot":
@@ -1265,8 +1108,6 @@ def sweep(args: argparse.Namespace) -> dict[str, Any]:
             args=args,
             decode_yaml_cfg=decode_yaml_cfg,
         )
-    elif str(args.decode_mode) == "lane_instance_set":
-        rows, timing = cached_sweep_lane_instance_set(entries=entries, gt_records=gt_records, combos=combos, args=args)
     else:
         rows, timing = cached_sweep_query(entries=entries, gt_records=gt_records, combos=combos, args=args)
     rows = sorted(rows, key=_row_sort_key)

@@ -928,9 +928,6 @@ class BaseTrainer:
                     "gcs_official_valid_before_maxdet",
                     "gcs_official_score_fp_weight",
                     "gcs_official_score_fn_weight",
-                    "gcs_official_robust_selection",
-                    "gcs_official_robust_balance_weight",
-                    "gcs_official_robust_count_acc4_weight",
                     "gcs_official_half",
                     "gcs_hard_sampling",
                     "gcs_hard_date_0601_weight",
@@ -940,7 +937,6 @@ class BaseTrainer:
                     "gcs_hard_0313_2_gt4_le10_weight",
                     "gcs_hard_visible_thr",
                     "gcs_hard_gt3_visible_thr",
-                    "gcs_gt45_oversample",
                 ):  # allow arg updates to reduce memory or update device on resume
                     if k in overrides:
                         setattr(self.args, k, overrides[k])

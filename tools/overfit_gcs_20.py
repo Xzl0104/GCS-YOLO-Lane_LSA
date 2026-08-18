@@ -204,7 +204,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gcs-cost-exist", type=float, default=0.1, help="Hungarian matching existence cost weight.")
     parser.add_argument("--gcs-match-min-overlap", type=int, default=2, help="Minimum valid GT points for training Hungarian matching.")
     parser.add_argument("--gcs-match-max-x-dist", type=float, default=0.0, help="Optional training matcher mean x-distance gate in pixels. 0 disables.")
-    parser.add_argument("--gcs-match-gate-px", type=float, default=0.0, help="Optional training matcher APE gate in pixels. 0 disables.")
+    parser.add_argument("--gcs-match-gate-px", type=float, default=160.0, help="Training matcher APE gate in pixels. 0 disables.")
     parser.add_argument("--gcs-eval-match-gate-px", type=float, default=None, help="Strict validation APE gate in pixels. Defaults to --ape-thr.")
     parser.add_argument("--gcs-eval-max-x-dist", type=float, default=0.0, help="Optional strict validation mean x-distance gate in pixels. 0 disables.")
     parser.add_argument("--gcs-eval-min-overlap", type=int, default=2, help="Minimum valid overlapping GT points for strict validation matching.")

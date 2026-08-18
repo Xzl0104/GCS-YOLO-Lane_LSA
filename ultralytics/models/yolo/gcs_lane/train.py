@@ -20,12 +20,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import WeightedRandomSampler
 
-from gcs_tools.official_selection import (
-    OFFICIAL_SELECTION_POLICY,
-    ROBUST_OFFICIAL_SELECTION_POLICY,
-    official_best_robust_sort_key,
-    official_best_sort_key,
-)
+from gcs_tools.official_selection import OFFICIAL_SELECTION_POLICY, official_best_sort_key
 from ultralytics.data import build_dataloader
 from ultralytics.data.dataset_gcs import GCSLaneDataset, resize_gcs_masks
 from ultralytics.data.utils import check_det_dataset
@@ -473,7 +468,6 @@ class GCSLaneTrainer(BaseTrainer):
             scale=self.args.scale if augment else 0.0,
             erasing=self.args.erasing if augment else 0.0,
             mosaic=self.args.mosaic if augment else 0.0,
-            gt45_oversample=mode == "train" and bool(getattr(self.args, "gcs_gt45_oversample", False)),
         )
         assert_gcs_shape(dataset.imgsz, gcs_imgsz, name=f"{mode} dataset.imgsz", context="GCSLaneTrainer.build_dataset")
         self._check_point_mode_contract(dataset, mode=mode)
@@ -1017,10 +1011,9 @@ class GCSLaneTrainer(BaseTrainer):
             value = [value]
         return [int(x) for x in value]
 
-    def _official_best_key(self, best: dict[str, Any], epoch: int) -> tuple:
+    @staticmethod
+    def _official_best_key(best: dict[str, Any], epoch: int) -> tuple:
         """Order official-val candidates by the project checkpoint-selection contract."""
-        if bool(getattr(self.args, "gcs_official_robust_selection", False)):
-            return official_best_robust_sort_key(best, epoch)
         return official_best_sort_key(best, epoch)
 
     def _load_official_best_state(self) -> dict[str, Any] | None:
@@ -1143,32 +1136,24 @@ class GCSLaneTrainer(BaseTrainer):
             ordered_slot_runtime_context="training_official_best" if ordered_slot else "official_sweep",
             score_fp_weight=float(getattr(self.args, "gcs_official_score_fp_weight", 0.02) or 0.02),
             score_fn_weight=float(getattr(self.args, "gcs_official_score_fn_weight", 0.02) or 0.02),
-            robust_selection=bool(getattr(self.args, "gcs_official_robust_selection", False)),
-            robust_balance_weight=float(getattr(self.args, "gcs_official_robust_balance_weight", 0.35) or 0.35),
-            robust_count_acc4_weight=float(getattr(self.args, "gcs_official_robust_count_acc4_weight", 0.15) or 0.15),
         )
 
     def _write_official_best_artifacts(self, output: dict[str, Any], epoch_num: int, sweep_dir: Path) -> None:
         """Persist official-best checkpoint, sweep summary, and decode config."""
         best = dict(output["best"])
         summary = dict(output)
-        selection_policy = (
-            ROBUST_OFFICIAL_SELECTION_POLICY
-            if bool(getattr(self.args, "gcs_official_robust_selection", False))
-            else OFFICIAL_SELECTION_POLICY
-        )
         meta = {
             "epoch": int(epoch_num),
             "checkpoint": str(self.official_best.resolve()),
             "source_checkpoint": str(self.last.resolve()),
             "sweep_dir": str(sweep_dir.resolve()),
-            "selection_policy": selection_policy,
+            "selection_policy": OFFICIAL_SELECTION_POLICY,
             "sweep_selection_policy": output.get("selection_policy") or output.get("config", {}).get("selection_policy"),
             "best": best,
         }
         summary["official_best"] = meta
-        summary["selection_policy"] = selection_policy
-        summary["official_selection_policy"] = selection_policy
+        summary["selection_policy"] = OFFICIAL_SELECTION_POLICY
+        summary["official_selection_policy"] = OFFICIAL_SELECTION_POLICY
         summary["sweep_selection_policy"] = meta["sweep_selection_policy"]
         shutil.copy2(self.last, self.official_best)
         self.official_best_sweep.write_text(json.dumps(summary, indent=2), encoding="utf-8")
@@ -1188,9 +1173,6 @@ class GCSLaneTrainer(BaseTrainer):
                     "official_score": float(best["official_score"]),
                     "official_FP": float(best["official_FP"]),
                     "official_FN": float(best["official_FN"]),
-                    "robust_score": float(best.get("robust_score", 0.0)),
-                    "robust_balance_penalty": float(best.get("robust_balance_penalty", 0.0)),
-                    "robust_count_acc4_penalty": float(best.get("robust_count_acc4_penalty", 0.0)),
                     "strict_order_valid": bool(best.get("strict_order_valid", True)),
                     "ordered_slot_order_violations": int(best.get("ordered_slot_order_violations", 0)),
                     "count_acc": float(best.get("count_acc", 0.0)),

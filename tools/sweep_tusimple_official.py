@@ -34,12 +34,9 @@ from gcs_tools.tusimple_split_guard import reject_tusimple_test_search_gt_json  
 from tools.eval_tusimple_official import _count_diagnostics  # noqa: E402
 from tools.infer_gcs import load_gcs_model, preprocess_image, warn_max_det_mismatch  # noqa: E402
 from ultralytics.models.gcs.decode_summary import (  # noqa: E402
-    LANE_INSTANCE_SET_DECODE_SCHEMA,
     ORDERED_SLOT_DECODE_SCHEMA,
     QUERY_DECODE_SCHEMA,
     build_ordered_slot_decode_summary,
-    lane_instance_set_decode_params,
-    lane_instance_set_sweep_summary,
     load_decode_yaml,
     ordered_slot_decode_params,
     ordered_slot_decode_runtime_config,
@@ -49,10 +46,6 @@ from ultralytics.models.gcs.decode_summary import (  # noqa: E402
 )
 from ultralytics.models.gcs.decode_ordered_slot import decode_ordered_slot_predictions  # noqa: E402
 from ultralytics.models.gcs.mode_utils import resolve_decode_mode  # noqa: E402
-from ultralytics.utils.gcs_lane_instance_set import (  # noqa: E402
-    decode_lane_instance_set_predictions,
-    resolve_lane_instance_decode_mode,
-)
 from ultralytics.utils.gcs_postprocess import decode_gcs_predictions  # noqa: E402
 from ultralytics.utils.gcs_shape import normalize_imgsz, shape_str  # noqa: E402
 from ultralytics.utils.torch_utils import select_device  # noqa: E402
@@ -113,11 +106,7 @@ def parse_args() -> argparse.Namespace:
         help="Allow non-363 split=val GT for diagnostics; summary marks it incomparable with E1/spurious.",
     )
     parser.add_argument("--weights", default=str(DEFAULT_WEIGHTS), help="GCS checkpoint .pt.")
-    parser.add_argument("--decode-mode", choices=("auto", "query", "ordered_slot", "lane_instance_set"), default="auto", help="Decode path for official sweep.")
-    parser.add_argument("--lane-instance-duplicate-thrs", nargs="+", type=float, default=[0.65])
-    parser.add_argument("--lane-instance-allow-empty", action="store_true")
-    parser.add_argument("--lane-instance-empty-thr", type=float, default=0.75)
-    parser.add_argument("--lane-instance-min-survivors", type=int, default=2)
+    parser.add_argument("--decode-mode", choices=("auto", "query", "ordered_slot"), default="auto", help="Decode path for official sweep.")
     parser.add_argument("--decode-yaml", default=None, help="Schema-validated official_best_decode.yaml to reproduce a decode.")
     parser.add_argument("--gcs-min-lanes", type=int, default=2, help="ordered_slot minimum supported lane count.")
     parser.add_argument("--gcs-max-lanes", type=int, default=5, help="ordered_slot maximum supported lane count.")
@@ -253,12 +242,6 @@ def _limit_records(records: list[dict], max_images: int) -> list[dict]:
 def _combo_key(combo: dict) -> tuple:
     if combo.get("decode_mode") == "ordered_slot":
         return ("ordered_slot",)
-    if combo.get("decode_mode") == "lane_instance_set":
-        return (
-            "lane_instance_set", float(combo["conf"]), float(combo["point_valid_thr"]),
-            int(combo["max_det"]), int(combo["min_points"]), float(combo["duplicate_thr"]),
-            bool(combo["allow_empty"]), float(combo["empty_thr"]), int(combo["min_survivors"]),
-        )
     return (
         float(combo["conf"]),
         float(combo["point_valid_thr"]),
@@ -272,21 +255,6 @@ def _combo_key(combo: dict) -> tuple:
 
 def _ordered_slot_runtime_context(args: argparse.Namespace) -> str:
     return str(getattr(args, "ordered_slot_runtime_context", "official_sweep") or "official_sweep")
-
-
-def apply_lane_instance_decode_yaml(
-    args: argparse.Namespace, decode_yaml_cfg: dict, max_dets_attr: str = "max_dets"
-) -> None:
-    """Apply one validated lane-instance decode schema to direct or cached sweep args."""
-    params = lane_instance_set_decode_params(decode_cfg=decode_yaml_cfg)
-    args.confs = [params["conf"]]
-    args.point_valid_thrs = [params["point_valid_thr"]]
-    setattr(args, max_dets_attr, [params["max_det"]])
-    args.min_points = [params["min_points"]]
-    args.lane_instance_duplicate_thrs = [params["duplicate_thr"]]
-    args.lane_instance_allow_empty = params["allow_empty"]
-    args.lane_instance_empty_thr = params["empty_thr"]
-    args.lane_instance_min_survivors = params["min_survivors"]
 
 
 def build_combos(args: argparse.Namespace, decode_yaml_cfg: dict | None = None) -> list[dict]:
@@ -312,29 +280,6 @@ def build_combos(args: argparse.Namespace, decode_yaml_cfg: dict | None = None) 
                 "query_decode_args": effective_decode["query_decode_args"],
             }
         ]
-    if decode_mode == "lane_instance_set":
-        if bool(getattr(args, "count_aware_topk", False)):
-            raise ValueError("lane_instance_set derives count from survivors and forbids count-aware top-k.")
-        combos = []
-        for conf, point_valid_thr, max_det, min_points, duplicate_thr in product(
-            sorted({float(x) for x in args.confs}),
-            sorted({float(x) for x in args.point_valid_thrs}),
-            sorted({int(x) for x in args.max_dets}),
-            sorted({int(x) for x in args.min_points}),
-            sorted({float(x) for x in getattr(args, "lane_instance_duplicate_thrs", [0.65])}),
-        ):
-            if not 0.0 <= conf <= 1.0 or not 0.0 <= point_valid_thr <= 1.0 or not 0.0 <= duplicate_thr <= 1.0:
-                raise ValueError("lane-instance thresholds must be in [0, 1].")
-            if not 1 <= max_det <= 5 or min_points <= 0:
-                raise ValueError("lane_instance_set requires 1 <= max_det <= 5 and min_points > 0.")
-            combos.append({
-                "decode_mode": "lane_instance_set", "decode_schema": "lane_instance_set_decode_v1",
-                "conf": conf, "point_valid_thr": point_valid_thr, "max_det": max_det, "min_points": min_points,
-                "duplicate_thr": duplicate_thr, "allow_empty": bool(getattr(args, "lane_instance_allow_empty", False)),
-                "empty_thr": float(getattr(args, "lane_instance_empty_thr", 0.75)),
-                "min_survivors": int(getattr(args, "lane_instance_min_survivors", 2)),
-            })
-        return combos
     count_aware_topk = bool(getattr(args, "count_aware_topk", False))
     count_aware_min_k = int(getattr(args, "count_aware_min_k", 3))
     count_aware_max_k = int(getattr(args, "count_aware_max_k", 5))
@@ -400,11 +345,6 @@ def select_best(rows: list[dict]) -> dict:
 def _row_sort_key(row: dict) -> tuple:
     if row.get("decode_mode") == "ordered_slot":
         return ("ordered_slot", 0.0, 0.0, 0, 0)
-    if row.get("decode_mode") == "lane_instance_set":
-        return (
-            "lane_instance_set", float(row["conf"]), float(row["point_valid_thr"]),
-            int(row["max_det"]), int(row["min_points"]), float(row["duplicate_thr"]),
-        )
     return (
         float(row["conf"]),
         float(row["point_valid_thr"]),
@@ -434,11 +374,6 @@ def write_csv(path: Path, rows: list[dict]) -> None:
         "count_aware_length_norm",
         "count_aware_extra_margin",
         "count_mode",
-        "duplicate_thr",
-        "allow_empty",
-        "empty_thr",
-        "min_survivors",
-        "lane_instance_under_min_images",
         "strict_order_valid",
         "ordered_slot_order_violations",
         "ordered_slot_order_violation_images",
@@ -496,7 +431,7 @@ def sweep(args: argparse.Namespace) -> dict:
     decode_yaml_cfg = None
     if getattr(args, "decode_yaml", None):
         _, decode_yaml_cfg = load_decode_yaml(args.decode_yaml)
-        args.decode_mode = resolve_lane_instance_decode_mode(decode_yaml_cfg.get("decode_mode"), model)
+        args.decode_mode = resolve_decode_mode(decode_yaml_cfg.get("decode_mode"), model)
         validate_decode_yaml_for_model(decode_yaml_cfg, model_mode=args.decode_mode)
         if args.decode_mode == "query":
             args.confs = [float(decode_yaml_cfg["conf"])]
@@ -511,14 +446,12 @@ def sweep(args: argparse.Namespace) -> dict:
             args.count_aware_length_norm = float(decode_yaml_cfg["count_aware_length_norm"])
             args.count_aware_extra_margins = [int(decode_yaml_cfg.get("count_aware_extra_margin", 0))]
             args.count_modes = [str(decode_yaml_cfg.get("count_mode", "score_sum"))]
-        elif args.decode_mode == "lane_instance_set":
-            apply_lane_instance_decode_yaml(args, decode_yaml_cfg)
     else:
-        args.decode_mode = resolve_lane_instance_decode_mode(getattr(args, "decode_mode", "auto"), model)
+        args.decode_mode = resolve_decode_mode(getattr(args, "decode_mode", "auto"), model)
     if str(getattr(args, "decode_mode", "query")) == "ordered_slot":
         raise_for_ordered_slot_query_args(args, ORDERED_SLOT_QUERY_ONLY_DEFAULTS, context="TuSimple official sweep")
     combos = build_combos(args, decode_yaml_cfg=decode_yaml_cfg)
-    if str(getattr(args, "decode_mode", "query")) == "query":
+    if str(getattr(args, "decode_mode", "query")) != "ordered_slot":
         for max_det in sorted({int(c["max_det"]) for c in combos}):
             warn_max_det_mismatch(args.weights, max_det=max_det, context="TuSimple official sweep")
     if args.warmup > 0 and gt_records:
@@ -533,7 +466,7 @@ def sweep(args: argparse.Namespace) -> dict:
 
     combo_records = {_combo_key(combo): [] for combo in combos}
     combo_order_stats = {
-        _combo_key(combo): {"ordered_slot_order_violations": 0, "ordered_slot_order_violation_images": 0, "lane_instance_under_min_images": 0}
+        _combo_key(combo): {"ordered_slot_order_violations": 0, "ordered_slot_order_violation_images": 0}
         for combo in combos
     }
     ordered_slot_runtime_cfg = ordered_slot_decode_runtime_config(context=_ordered_slot_runtime_context(args))
@@ -555,15 +488,7 @@ def sweep(args: argparse.Namespace) -> dict:
         t1 = time.perf_counter()
 
         for combo in combos:
-            if combo["decode_mode"] == "lane_instance_set":
-                lanes, lane_diag = decode_lane_instance_set_predictions(
-                    preds, batch_index=0, image_shape=original_shape, score_thr=combo["conf"],
-                    point_valid_thr=combo["point_valid_thr"], min_points=combo["min_points"], max_det=combo["max_det"],
-                    duplicate_thr=combo["duplicate_thr"], min_survivors=combo["min_survivors"],
-                    allow_empty=combo["allow_empty"], empty_thr=combo["empty_thr"], return_diagnostics=True,
-                )
-                combo_order_stats[_combo_key(combo)]["lane_instance_under_min_images"] += int(lane_diag["under_min"])
-            elif combo["decode_mode"] == "ordered_slot":
+            if combo["decode_mode"] == "ordered_slot":
                 ordered_params = ordered_slot_decode_params(args, decode_yaml_cfg)
                 lanes, order_diag = decode_ordered_slot_predictions(
                     preds,
@@ -641,8 +566,6 @@ def sweep(args: argparse.Namespace) -> dict:
         if combo["decode_mode"] == "ordered_slot":
             row.update(combo_order_stats[_combo_key(combo)])
             row["strict_order_valid"] = int(row["ordered_slot_order_violations"]) == 0
-        elif combo["decode_mode"] == "lane_instance_set":
-            row.update(combo_order_stats[_combo_key(combo)])
         rows.append(row)
 
     rows = sorted(rows, key=_row_sort_key)
@@ -712,8 +635,6 @@ def sweep(args: argparse.Namespace) -> dict:
                 "query_decode_args": effective_decode["query_decode_args"],
             }
         )
-    elif str(getattr(args, "decode_mode", "query")) == "lane_instance_set":
-        config.update(lane_instance_set_sweep_summary(args))
     else:
         config.update(
             {

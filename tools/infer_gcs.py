@@ -24,7 +24,6 @@ from ultralytics.nn.modules import GCSLaneHead
 from ultralytics.nn.tasks import GCSLaneModel, load_checkpoint
 from ultralytics.utils.gcs_shape import DATASET_IMAGE_SHAPES, assert_gcs_image_tensor, normalize_imgsz, shape_str
 from ultralytics.utils.gcs_postprocess import decode_gcs_predictions, draw_gcs_lanes, save_gcs_lanes_txt
-from ultralytics.utils.gcs_lane_instance_set import decode_lane_instance_set_predictions, resolve_lane_instance_decode_mode
 from ultralytics.utils.torch_utils import select_device
 
 
@@ -58,93 +57,6 @@ def read_run_gcs_eval_max_det(weights: str | Path) -> int | None:
     return None
 
 
-def score_valid_weights_tag(weights: str | Path | None) -> str:
-    """Return a filesystem-safe short tag for a score/valid teacher checkpoint."""
-    if weights is None or not str(weights).strip():
-        return ""
-    path = Path(weights)
-    run_dir = weight_run_dir(path)
-    source = run_dir.name if run_dir is not None else path.stem
-    tag = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in str(source))
-    return tag.strip("_") or "scorevalid"
-
-
-def _check_query_tensor_shape(
-    tensor: torch.Tensor,
-    *,
-    expected: tuple[int, ...],
-    name: str,
-    context: str,
-    allow_trailing_unit: bool = False,
-) -> None:
-    shape = tuple(int(x) for x in tensor.shape)
-    if shape == expected:
-        return
-    if allow_trailing_unit and shape == (*expected, 1):
-        return
-    raise ValueError(f"{context}: {name} shape {shape} does not match expected {expected}.")
-
-
-def merge_query_score_valid_predictions(
-    point_preds: dict,
-    score_valid_preds: dict,
-    *,
-    context: str = "two-source query decode",
-) -> dict:
-    """Use geometry points from one query model and score/valid tensors from another.
-
-    This is inference-only and does not use GT. The score/valid model is the
-    carrier for query existence, per-anchor visibility, and any optional query
-    count logits; the point model contributes only ``pred_points``.
-    """
-    if not isinstance(point_preds, dict) or not isinstance(score_valid_preds, dict):
-        raise TypeError(f"{context}: two-source decode expects dict model outputs.")
-    for key in ("pred_points",):
-        if not isinstance(point_preds.get(key), torch.Tensor):
-            raise KeyError(f"{context}: point model output lacks tensor {key}.")
-    for key in ("pred_points", "pred_logits", "pred_valid_logits"):
-        if not isinstance(score_valid_preds.get(key), torch.Tensor):
-            raise KeyError(f"{context}: score/valid model output lacks tensor {key}.")
-
-    point_shape = tuple(int(x) for x in point_preds["pred_points"].shape)
-    score_point_shape = tuple(int(x) for x in score_valid_preds["pred_points"].shape)
-    if len(point_shape) != 4 or point_shape[-1] != 2:
-        raise ValueError(f"{context}: point model pred_points must be B x Q x K x 2, got {point_shape}.")
-    if score_point_shape != point_shape:
-        raise ValueError(
-            f"{context}: score/valid model pred_points shape {score_point_shape} does not match "
-            f"point model pred_points shape {point_shape}."
-        )
-    batch, queries, anchors, _ = point_shape
-    _check_query_tensor_shape(
-        score_valid_preds["pred_logits"],
-        expected=(batch, queries),
-        name="score/valid pred_logits",
-        context=context,
-        allow_trailing_unit=True,
-    )
-    _check_query_tensor_shape(
-        score_valid_preds["pred_valid_logits"],
-        expected=(batch, queries, anchors),
-        name="score/valid pred_valid_logits",
-        context=context,
-        allow_trailing_unit=True,
-    )
-    count_logits = score_valid_preds.get("pred_count_logits")
-    if isinstance(count_logits, torch.Tensor):
-        _check_query_tensor_shape(
-            count_logits,
-            expected=(batch, 4),
-            name="score/valid pred_count_logits",
-            context=context,
-            allow_trailing_unit=False,
-        )
-
-    merged = dict(score_valid_preds)
-    merged["pred_points"] = point_preds["pred_points"]
-    return merged
-
-
 def warn_max_det_mismatch(weights: str | Path, max_det: int, context: str) -> None:
     """Warn when evaluation keeps a different number of lanes than train-time validation."""
     train_max_det = read_run_gcs_eval_max_det(weights)
@@ -169,11 +81,6 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run GCS-YOLO-Lane inference and structured lane post-processing.")
     parser.add_argument("--dataset", default="tusimple", choices=sorted(DATASET_IMAGE_SHAPES))
     parser.add_argument("--weights", default=str(DEFAULT_WEIGHTS), help="GCS checkpoint .pt, or a GCS yaml for smoke tests.")
-    parser.add_argument(
-        "--score-valid-weights",
-        default=None,
-        help="Default-off query decode: use this checkpoint's pred_logits/pred_valid_logits while keeping --weights pred_points.",
-    )
     parser.add_argument("--source", default=None, help="Image file, image directory, or txt list.")
     parser.add_argument(
         "--imgsz",
@@ -183,11 +90,7 @@ def parse_args() -> argparse.Namespace:
         help="GCS inference shape as H W. Defaults: TuSimple 544 960, CULane 384 960.",
     )
     parser.add_argument("--conf", type=float, default=0.2, help="Lane existence confidence threshold.")
-    parser.add_argument("--decode-mode", choices=("auto", "query", "ordered_slot", "lane_instance_set"), default="auto", help="Decode path.")
-    parser.add_argument("--lane-instance-duplicate-thr", type=float, default=0.65)
-    parser.add_argument("--lane-instance-allow-empty", action="store_true")
-    parser.add_argument("--lane-instance-empty-thr", type=float, default=0.75)
-    parser.add_argument("--lane-instance-min-survivors", type=int, default=2)
+    parser.add_argument("--decode-mode", choices=("auto", "query", "ordered_slot"), default="auto", help="Decode path.")
     parser.add_argument("--gcs-min-lanes", type=int, default=2, help="ordered_slot minimum supported lane count.")
     parser.add_argument("--gcs-max-lanes", type=int, default=5, help="ordered_slot maximum supported lane count.")
     parser.add_argument("--gcs-num-slots", type=int, default=5, help="ordered_slot slot count.")
@@ -363,7 +266,6 @@ def _json_lane(lane: dict) -> dict:
 def run_inference(
     weights: str | Path,
     source: str | Path,
-    score_valid_weights: str | Path | None = None,
     save_dir: str | Path = "runs/gcs_lane/infer",
     imgsz: int | tuple[int, int] | list[int] = (544, 960),
     conf: float = 0.2,
@@ -384,10 +286,6 @@ def run_inference(
     gcs_min_interval_points: int = 2,
     gcs_bottom_order_margin_px: float = 2.0,
     decode_mode: str = "auto",
-    lane_instance_duplicate_thr: float = 0.65,
-    lane_instance_allow_empty: bool = False,
-    lane_instance_empty_thr: float = 0.75,
-    lane_instance_min_survivors: int = 2,
     max_images: int = 0,
     save_img: bool = True,
     save_txt: bool = False,
@@ -398,13 +296,7 @@ def run_inference(
     imgsz = normalize_imgsz(imgsz)
     device_obj = select_device(device, verbose=False)
     model = load_gcs_model(weights, device=device_obj, half=half, gcs_imgsz=imgsz)
-    active_decode_mode = resolve_lane_instance_decode_mode(decode_mode, model)
-    score_valid_model = None
-    if score_valid_weights is not None and str(score_valid_weights).strip():
-        if active_decode_mode != "query":
-            raise RuntimeError("--score-valid-weights is only valid for query decode, not ordered_slot.")
-        score_valid_model = load_gcs_model(score_valid_weights, device=device_obj, half=half, gcs_imgsz=imgsz)
-        resolve_decode_mode("query", score_valid_model)
+    active_decode_mode = resolve_decode_mode(decode_mode, model)
     ordered_slot_runtime_cfg = (
         ordered_slot_decode_runtime_config(context="infer") if active_decode_mode == "ordered_slot" else None
     )
@@ -446,13 +338,6 @@ def run_inference(
         _sync_if_cuda(device_obj)
         t0 = time.perf_counter()
         preds = model(tensor)
-        if score_valid_model is not None:
-            score_valid_preds = score_valid_model(tensor)
-            preds = merge_query_score_valid_predictions(
-                preds,
-                score_valid_preds,
-                context=f"two-source query decode for {img_path}",
-            )
         _sync_if_cuda(device_obj)
         infer_s = time.perf_counter() - t0
 
@@ -460,15 +345,7 @@ def run_inference(
             raise ValueError("GCS inference expects model outputs with pred_points and pred_logits.")
 
         t1 = time.perf_counter()
-        if active_decode_mode == "lane_instance_set":
-            lanes, lane_instance_diagnostics = decode_lane_instance_set_predictions(
-                preds, batch_index=0, image_shape=img.shape[:2], score_thr=conf,
-                point_valid_thr=point_valid_thr, min_points=min_points, max_det=max_det,
-                duplicate_thr=lane_instance_duplicate_thr, min_survivors=lane_instance_min_survivors,
-                allow_empty=lane_instance_allow_empty, empty_thr=lane_instance_empty_thr,
-                return_diagnostics=True,
-            )
-        elif active_decode_mode == "ordered_slot":
+        if active_decode_mode == "ordered_slot":
             lanes = decode_ordered_slot_predictions(
                 preds,
                 batch_index=0,
@@ -518,7 +395,6 @@ def run_inference(
                 "inference_ms": round(infer_s * 1000.0, 3),
                 "postprocess_ms": round(post_s * 1000.0, 3),
                 "lanes": [_json_lane(x) for x in lanes],
-                "lane_instance_diagnostics": lane_instance_diagnostics if active_decode_mode == "lane_instance_set" else None,
             }
         )
 
@@ -531,10 +407,6 @@ def run_inference(
     summary = {
         "config": {
             "weights": str(Path(weights).resolve()),
-            "point_weights": str(Path(weights).resolve()),
-            "score_valid_weights": str(Path(score_valid_weights).resolve()) if score_valid_model is not None else None,
-            "two_source_query_decode": bool(score_valid_model is not None),
-            "uses_gt_for_inference": False,
             "source": str(Path(source).resolve()),
             "save_dir": str(save_dir.resolve()),
             "imgsz": [int(imgsz[0]), int(imgsz[1])],
@@ -590,7 +462,6 @@ def main() -> None:
     defaults = dataset_defaults(args.dataset)
     run_inference(
         weights=args.weights,
-        score_valid_weights=args.score_valid_weights,
         source=args.source or defaults["source"],
         save_dir=args.save_dir,
         imgsz=imgsz,
@@ -612,10 +483,6 @@ def main() -> None:
         gcs_min_interval_points=args.gcs_min_interval_points,
         gcs_bottom_order_margin_px=args.gcs_bottom_order_margin_px,
         decode_mode=args.decode_mode,
-        lane_instance_duplicate_thr=args.lane_instance_duplicate_thr,
-        lane_instance_allow_empty=args.lane_instance_allow_empty,
-        lane_instance_empty_thr=args.lane_instance_empty_thr,
-        lane_instance_min_survivors=args.lane_instance_min_survivors,
         max_images=args.max_images,
         save_img=not args.no_save_img,
         save_txt=args.save_txt,
