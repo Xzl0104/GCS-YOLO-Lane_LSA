@@ -14,7 +14,7 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset
 
 from ultralytics.data.utils import IMG_FORMATS
-from ultralytics.utils.gcs_fixed_y import validate_training_fixed_y_desc
+from ultralytics.utils.gcs_fixed_y import validate_fixed_y_contract, validate_training_fixed_y_desc
 from ultralytics.utils.gcs_shape import assert_gcs_shape, normalize_imgsz
 
 __all__ = ("GCSLaneDataset", "gcs_collate_fn", "resize_gcs_masks")
@@ -52,6 +52,8 @@ class GCSLaneDataset(Dataset):
         scale: float = 0.0,
         erasing: float = 0.0,
         mosaic: float = 0.0,
+        point_mode: str | None = None,
+        fixed_y_contract: dict[str, Any] | None = None,
     ):
         """Create a GCS lane dataset from Ultralytics or reference-style arguments.
 
@@ -72,6 +74,8 @@ class GCSLaneDataset(Dataset):
             scale: Random center scaling gain, e.g. 0.3 samples a scale factor from 0.7 to 1.3.
             erasing: Random erasing probability applied to image pixels only.
             mosaic: Four-image mosaic probability.
+            point_mode: Explicit dataset-wide point mode from the data contract.
+            fixed_y_contract: Explicit fixed-y contract from the data contract.
         """
         source = img_path if img_path is not None else image_dir
         if source is None:
@@ -111,8 +115,24 @@ class GCSLaneDataset(Dataset):
         self.image_paths = self.im_files
         self.label_paths = self.label_files
         self._check_label_pairs()
-        self.point_mode = self._detect_point_mode()
-        self.fixed_y_anchors = self._detect_fixed_y_anchors()
+        self._explicit_point_mode = point_mode is not None
+        self._explicit_fixed_y_contract = fixed_y_contract is not None
+        self.point_mode = (
+            self._normalize_point_mode(point_mode)
+            if point_mode is not None
+            else self._detect_point_mode()
+        )
+        if fixed_y_contract is not None:
+            if self.point_mode != "fixed_y":
+                raise ValueError("fixed_y_contract is only valid when point_mode='fixed_y'.")
+            self.fixed_y_contract = self._normalize_fixed_y_contract(fixed_y_contract)
+        else:
+            self.fixed_y_contract = self._detect_fixed_y_contract()
+        self.fixed_y_anchors = (
+            None
+            if self.fixed_y_contract is None
+            else self.fixed_y_contract["fixed_y"].copy()
+        )
         if self.point_mode == "fixed_y" and self.mosaic:
             raise ValueError("fixed_y GCS labels do not support mosaic augmentation; set mosaic=0.0.")
         if self.point_mode == "fixed_y" and self.flipud > 0.0:
@@ -216,36 +236,212 @@ class GCSLaneDataset(Dataset):
             raise ValueError(f"Mixed GCS point_mode values in one dataset are not supported: {detail}")
         return next(iter(modes))
 
-    def _detect_fixed_y_anchors(self) -> np.ndarray | None:
-        """Read shared fixed-y anchors for fixed-y labels, if the dataset uses them."""
+    @classmethod
+    def _normalize_fixed_y_contract(cls, contract: dict[str, Any]) -> dict[str, Any]:
+        """Validate and normalize an explicit fixed-y contract without reading labels."""
+        if not isinstance(contract, dict):
+            raise TypeError(f"fixed_y_contract must be a dict, got {type(contract).__name__}.")
+        required = {"fixed_y", "fixed_y_original_h", "fixed_y_start_px", "fixed_y_end_px", "num_points"}
+        missing = sorted(required.difference(contract))
+        if missing:
+            raise KeyError(f"fixed_y_contract is missing required fields: {missing}.")
+
+        anchors = np.asarray(contract["fixed_y"], dtype=np.float32).reshape(-1)
+        num_points_value = np.asarray(contract["num_points"])
+        if num_points_value.size != 1:
+            raise ValueError("fixed_y_contract['num_points'] must be scalar.")
+        num_points_float = float(num_points_value.reshape(-1)[0])
+        if not np.isfinite(num_points_float) or not num_points_float.is_integer():
+            raise ValueError("fixed_y_contract['num_points'] must be a finite integer.")
+        num_points = int(num_points_float)
+
+        def scalar_number(key: str) -> float:
+            value = np.asarray(contract[key])
+            if value.size != 1:
+                raise ValueError(f"fixed_y_contract[{key!r}] must be scalar.")
+            number = float(value.reshape(-1)[0])
+            if not np.isfinite(number):
+                raise ValueError(f"fixed_y_contract[{key!r}] is NaN or Inf.")
+            return number
+
+        original_h = scalar_number("fixed_y_original_h")
+        if not original_h.is_integer():
+            raise ValueError("fixed_y_contract['fixed_y_original_h'] must be an integer.")
+        original_h_int = int(original_h)
+        start_px = scalar_number("fixed_y_start_px")
+        end_px = scalar_number("fixed_y_end_px")
+        validate_fixed_y_contract(
+            anchors,
+            original_h=original_h_int,
+            start_px=start_px,
+            end_px=end_px,
+            k=num_points,
+            name="fixed_y_contract",
+        )
+        return {
+            "fixed_y": anchors.copy(),
+            "fixed_y_original_h": original_h_int,
+            "fixed_y_start_px": start_px,
+            "fixed_y_end_px": end_px,
+            "num_points": num_points,
+            "legacy_fallback": bool(contract.get("legacy_fallback", False)),
+        }
+
+    def _validate_label_metadata(self, data: Any, label_file: Path) -> str:
+        """Validate one label's metadata against the dataset contract."""
+        raw_mode = str(np.asarray(data["point_mode"]).item()) if "point_mode" in data else "free"
+        point_mode = self._normalize_point_mode(raw_mode)
+        if point_mode != self.point_mode:
+            raise ValueError(
+                f"{label_file}: point_mode={point_mode!r} disagrees with dataset point_mode={self.point_mode!r}."
+            )
+        if point_mode != "fixed_y":
+            return point_mode
+
+        contract = self.fixed_y_contract
+        if not isinstance(contract, dict):
+            raise ValueError(f"{label_file}: fixed_y labels require a dataset fixed-y contract.")
+        required = {"fixed_y", "fixed_y_original_h", "fixed_y_start_px", "fixed_y_end_px"}
+        present = required.intersection(data.files)
+        if present and present != required:
+            missing = sorted(required.difference(present))
+            raise KeyError(f"{label_file}: fixed-y metadata is incomplete; missing {missing}.")
+        if not present:
+            if not bool(contract.get("legacy_fallback", False)):
+                raise KeyError(
+                    f"{label_file}: fixed-y metadata is missing; labels must include the complete fixed-y contract."
+                )
+            return point_mode
+
+        anchors = np.asarray(data["fixed_y"], dtype=np.float32).reshape(-1)
+        original_h = self._scalar_number(data, "fixed_y_original_h", label_file)
+        start_px = self._scalar_number(data, "fixed_y_start_px", label_file)
+        end_px = self._scalar_number(data, "fixed_y_end_px", label_file)
+        if "num_points" in data:
+            num_points = self._scalar_number(data, "num_points", label_file)
+            if not num_points.is_integer() or int(num_points) != int(contract["num_points"]):
+                raise ValueError(
+                    f"{label_file}: num_points={num_points} disagrees with dataset K={contract['num_points']}."
+                )
+        if (
+            int(round(original_h)) != int(contract["fixed_y_original_h"])
+            or not np.isclose(start_px, float(contract["fixed_y_start_px"]), atol=1e-4)
+            or not np.isclose(end_px, float(contract["fixed_y_end_px"]), atol=1e-4)
+            or anchors.size != int(contract["num_points"])
+            or not np.allclose(anchors, np.asarray(contract["fixed_y"], dtype=np.float32), atol=1e-6)
+        ):
+            raise ValueError(f"{label_file}: fixed-y metadata disagrees with the dataset contract.")
+        validate_fixed_y_contract(
+            anchors,
+            original_h=int(round(original_h)),
+            start_px=start_px,
+            end_px=end_px,
+            k=int(anchors.size),
+            name=f"{label_file}: fixed_y",
+        )
+        return point_mode
+
+    @staticmethod
+    def _scalar_number(data: Any, key: str, label_file: Path) -> float:
+        """Read one finite scalar numeric metadata field from an NPZ label."""
+        if key not in data:
+            raise KeyError(f"{label_file}: fixed-y metadata is missing {key!r}.")
+        value = np.asarray(data[key])
+        if value.size != 1:
+            raise ValueError(f"{label_file}: fixed-y metadata {key!r} must be scalar, got {value.shape}.")
+        number = float(value.reshape(-1)[0])
+        if not np.isfinite(number):
+            raise ValueError(f"{label_file}: fixed-y metadata {key!r} is NaN or Inf.")
+        return number
+
+    @staticmethod
+    def _infer_legacy_tusimple_fixed_y(data: Any, label_file: Path) -> np.ndarray:
+        """Infer canonical TuSimple anchors for old labels without contract metadata."""
+        if "fixed_y" in data:
+            anchors = np.asarray(data["fixed_y"], dtype=np.float32).reshape(-1)
+        elif "lanes" in data and "lane_valid" in data:
+            lanes = np.asarray(data["lanes"], dtype=np.float32)
+            lane_valid = np.asarray(data["lane_valid"], dtype=np.float32)
+            if lanes.ndim != 3 or lane_valid.shape != lanes.shape[:2]:
+                raise ValueError(f"{label_file}: cannot infer legacy fixed-y anchors from malformed lanes.")
+            kept = np.flatnonzero((lane_valid > 0.5).sum(axis=1) >= 2)
+            if kept.size == 0:
+                raise ValueError(
+                    f"{label_file}: fixed-y metadata is missing and the 0-lane label has no anchors to infer."
+                )
+            anchors = lanes[int(kept[0]), :, 1].reshape(-1)
+        else:
+            raise KeyError(f"{label_file}: fixed-y metadata is missing and anchors cannot be inferred.")
+        validate_training_fixed_y_desc(anchors, name=f"{label_file}: legacy fixed_y")
+        return np.clip(anchors, 0.0, 1.0).astype(np.float32)
+
+    def _detect_fixed_y_contract(self) -> dict[str, Any] | None:
+        """Read and validate one dataset-wide explicit fixed-y contract."""
         if getattr(self, "point_mode", "free") != "fixed_y":
             return None
+
+        required_metadata = {"fixed_y", "fixed_y_original_h", "fixed_y_start_px", "fixed_y_end_px"}
+        contract: dict[str, Any] | None = None
         for label_file in self.label_files:
             if not label_file.exists():
                 continue
             with np.load(label_file, allow_pickle=False) as data:
-                if "fixed_y" in data:
+                present = required_metadata.intersection(data.files)
+                if present and present != required_metadata:
+                    missing = sorted(required_metadata.difference(present))
+                    raise KeyError(
+                        f"{label_file}: fixed-y metadata is incomplete; missing {missing}. "
+                        "Regenerate the dataset with the fixed-y converter."
+                    )
+                if present == required_metadata:
                     anchors = np.asarray(data["fixed_y"], dtype=np.float32).reshape(-1)
-                elif "lanes" in data and data["lanes"].ndim == 3 and data["lanes"].shape[0] > 0:
-                    lanes = np.asarray(data["lanes"], dtype=np.float32)
-                    lane_valid = np.asarray(data["lane_valid"], dtype=np.float32) if "lane_valid" in data else None
-                    if lane_valid is not None and lane_valid.ndim == 2 and lane_valid.shape == lanes.shape[:2]:
-                        counts = (lane_valid > 0.5).sum(axis=1)
-                        kept = np.where(counts >= 2)[0]
-                        if kept.size == 0:
-                            continue
-                        anchors = lanes[int(kept[0]), :, 1].reshape(-1)
-                    else:
-                        anchors = lanes[0, :, 1].reshape(-1)
+                    original_h = int(round(self._scalar_number(data, "fixed_y_original_h", label_file)))
+                    start_px = self._scalar_number(data, "fixed_y_start_px", label_file)
+                    end_px = self._scalar_number(data, "fixed_y_end_px", label_file)
+                    validate_fixed_y_contract(
+                        anchors,
+                        original_h=original_h,
+                        start_px=start_px,
+                        end_px=end_px,
+                        k=anchors.size,
+                        name=f"{label_file}: fixed_y",
+                    )
+                    candidate = {
+                        "fixed_y": np.clip(anchors, 0.0, 1.0).astype(np.float32),
+                        "fixed_y_original_h": original_h,
+                        "fixed_y_start_px": float(start_px),
+                        "fixed_y_end_px": float(end_px),
+                        "legacy_fallback": False,
+                    }
                 else:
-                    continue
-            if anchors.size < 2:
-                raise ValueError(f"{label_file}: fixed_y anchors must contain at least two points.")
-            validate_training_fixed_y_desc(anchors, name=f"{label_file}: fixed_y")
-            if anchors.min() < -1e-4 or anchors.max() > 1.0 + 1e-4:
-                raise ValueError(f"{label_file}: fixed_y anchors must be normalized to [0, 1].")
-            return np.clip(anchors, 0.0, 1.0).astype(np.float32)
-        return None
+                    anchors = self._infer_legacy_tusimple_fixed_y(data, label_file)
+                    candidate = {
+                        "fixed_y": anchors,
+                        "fixed_y_original_h": 720,
+                        "fixed_y_start_px": 710.0,
+                        "fixed_y_end_px": 160.0,
+                        "legacy_fallback": True,
+                    }
+
+            if contract is None:
+                contract = candidate
+                continue
+            same = (
+                contract["fixed_y_original_h"] == candidate["fixed_y_original_h"]
+                and np.isclose(contract["fixed_y_start_px"], candidate["fixed_y_start_px"], atol=1e-4)
+                and np.isclose(contract["fixed_y_end_px"], candidate["fixed_y_end_px"], atol=1e-4)
+                and np.allclose(contract["fixed_y"], candidate["fixed_y"], atol=1e-6)
+            )
+            if not same:
+                raise ValueError(
+                    f"Mixed fixed-y contracts in dataset labels: {label_file} disagrees with "
+                    f"the first label under {self.label_files[0].parent}."
+                )
+
+        if contract is None:
+            raise ValueError("fixed_y dataset has no readable labels from which to determine its contract.")
+        contract["num_points"] = int(contract["fixed_y"].shape[0])
+        return contract
 
     def __len__(self) -> int:
         """Return dataset size."""
@@ -292,6 +488,7 @@ class GCSLaneDataset(Dataset):
         tol: float = 1e-4,
         num_lanes: np.ndarray | None = None,
         point_mode: str = "free",
+        fixed_y_contract: dict[str, Any] | None = None,
     ) -> tuple[np.ndarray, np.ndarray]:
         """Validate normalized lanes and enforce bottom-to-top point order."""
         point_mode = str(point_mode).lower()
@@ -330,8 +527,27 @@ class GCSLaneDataset(Dataset):
             return lanes.astype(np.float32), lane_valid.astype(np.float32)
 
         if point_mode == "fixed_y":
+            if fixed_y_contract is None:
+                raise ValueError(f"{label_file}: fixed_y lanes require an explicit fixed_y_contract.")
+            anchors = np.asarray(fixed_y_contract["fixed_y"], dtype=np.float32).reshape(-1)
+            if lanes.shape[1] != anchors.size:
+                raise ValueError(
+                    f"{label_file}: fixed_y lanes have K={lanes.shape[1]}, expected K={anchors.size}."
+                )
             for i, (lane, valid) in enumerate(zip(lanes, lane_valid)):
-                validate_training_fixed_y_desc(lane[:, 1], name=f"{label_file}: fixed_y lane {i}")
+                validate_fixed_y_contract(
+                    lane[:, 1],
+                    original_h=int(fixed_y_contract["fixed_y_original_h"]),
+                    start_px=float(fixed_y_contract["fixed_y_start_px"]),
+                    end_px=float(fixed_y_contract["fixed_y_end_px"]),
+                    k=anchors.size,
+                    name=f"{label_file}: fixed_y lane {i}",
+                )
+                if not np.allclose(lane[:, 1], anchors, atol=1e-6):
+                    raise ValueError(f"{label_file}: fixed_y lane {i} y coordinates do not match dataset anchors.")
+                invalid_x = lane[valid <= 0.5, 0]
+                if invalid_x.size and not np.allclose(invalid_x, 0.0, atol=1e-6):
+                    raise ValueError(f"{label_file}: fixed_y invalid anchors must use x=0.")
                 ys = lane[valid > 0.5, 1]
                 if ys.shape[0] >= 2:
                     diffs = np.diff(ys)
@@ -363,7 +579,7 @@ class GCSLaneDataset(Dataset):
             semantic_mask = data["semantic_mask"]
             edge_mask = data["edge_mask"]
             num_lanes = data["num_lanes"] if "num_lanes" in data else None
-            point_mode = str(np.asarray(data["point_mode"]).item()) if "point_mode" in data else "free"
+            point_mode = self._validate_label_metadata(data, label_file)
 
         lanes, lane_valid = self._normalize_lanes(
             lanes,
@@ -371,6 +587,7 @@ class GCSLaneDataset(Dataset):
             label_file,
             num_lanes=num_lanes,
             point_mode=point_mode,
+            fixed_y_contract=self.fixed_y_contract,
         )
         semantic_mask, edge_mask = self._normalize_masks(semantic_mask, edge_mask, self.imgsz, label_file)
         return lanes, lane_valid, semantic_mask, edge_mask
@@ -467,6 +684,7 @@ class GCSLaneDataset(Dataset):
                 lane_valid,
                 Path("<mosaic>"),
                 point_mode=getattr(self, "point_mode", "free"),
+                fixed_y_contract=getattr(self, "fixed_y_contract", None),
             )
         else:
             lanes, lane_valid = self._empty_lane_arrays(num_points)
@@ -532,7 +750,13 @@ class GCSLaneDataset(Dataset):
             out[i, :n, 0] = np.clip(transformed[:, 0] / float(self.img_w), 0.0, 1.0)
             out[i, :n, 1] = np.clip(transformed[:, 1] / float(self.img_h), 0.0, 1.0)
             out_valid[i, :n] = 1.0
-        return self._normalize_lanes(out, out_valid, Path("<scale>"), point_mode="free")
+        return self._normalize_lanes(
+            out,
+            out_valid,
+            Path("<scale>"),
+            point_mode="free",
+            fixed_y_contract=None,
+        )
 
     def _transform_fixed_y_lanes_affine(
         self,
@@ -585,7 +809,13 @@ class GCSLaneDataset(Dataset):
                 out[i, kept_indices, 0] = np.clip(sampled_x[x_valid] / float(self.img_w), 0.0, 1.0)
                 out_valid[i, kept_indices] = 1.0
 
-        return self._normalize_lanes(out, out_valid, Path("<scale>"), point_mode="fixed_y")
+        return self._normalize_lanes(
+            out,
+            out_valid,
+            Path("<scale>"),
+            point_mode="fixed_y",
+            fixed_y_contract=self.fixed_y_contract,
+        )
 
     def _transform_lanes_affine(
         self,
@@ -692,7 +922,8 @@ class GCSLaneDataset(Dataset):
             edge_mask = np.ascontiguousarray(edge_mask[:, ::-1])
             if lanes.shape[0]:
                 lanes = lanes.copy()
-                lanes[..., 0] = 1.0 - lanes[..., 0]
+                valid = lane_valid > 0.5
+                lanes[..., 0][valid] = 1.0 - lanes[..., 0][valid]
 
         if self.flipud > 0.0 and random.random() < self.flipud:
             img = np.ascontiguousarray(img[::-1])
@@ -708,6 +939,7 @@ class GCSLaneDataset(Dataset):
                 lane_valid,
                 Path("<augment>"),
                 point_mode=getattr(self, "point_mode", "free"),
+                fixed_y_contract=getattr(self, "fixed_y_contract", None),
             )
         return img, lanes, lane_valid, semantic_mask, edge_mask
 

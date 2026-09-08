@@ -35,9 +35,41 @@ configs, Count Head, count-guided decode, side-aux, or GT4-hard diagnostics
 are legacy experiment records only. They are not commands for the current code
 state unless a future task explicitly restores those commits.
 
-## Query Count Head CE0.5 Run
+## 2026-09-08 Query Five-Loss Command Note
 
-The default-off query Count Head ablation is launched through:
+The active query-mode loss is now the five-term user-requested contract:
+
+```text
+gcs_exist
+gcs_point
+gcs_point_valid
+gcs_curve
+gcs_line_iou
+```
+
+Use `--gcs-line-iou`, `--gcs-line-iou-width-px`, and
+`--gcs-line-iou-temperature-px` for the visible line-IoU term. Legacy query
+loss CLI keys such as `--gcs-smooth`, `--gcs-mask`, `--gcs-edge`,
+`--gcs-count`, `--gcs-count-under5`, `--gcs-count-boundary`,
+`--gcs-spurious-neg`, `--gcs-boundary-pseudo-neg`, and
+`--gcs-query-count-ce` may still exist for old command compatibility, but the
+active query `GCSLoss` does not compute or log those terms. For CULane query
+training, `--gcs-query-count-ce > 0` is invalid and fails fast.
+
+The active query `point_valid_loss` protects GT-close Hungarian-unmatched
+visible anchors from the old all-zero negative target by default:
+`--gcs-point-valid-unmatched-ignore True`,
+`--gcs-point-valid-unmatched-ignore-px 30.0`,
+`--gcs-point-valid-unmatched-ignore-anchor-px 30.0`, and
+`--gcs-point-valid-unmatched-ignore-min-overlap 3`. This changes only the
+internal `point_valid_loss` weight mask. It does not add a sixth loss item,
+does not make unmatched queries positive, and does not change decode or
+official metrics. Use `--no-gcs-point-valid-unmatched-ignore` only for an
+explicit legacy-path ablation.
+
+## Legacy Query Count Head CE0.5 Run
+
+This historical default-off query Count Head ablation was launched through:
 
 ```bash
 bash scripts/run_query_count_head_ce05_v1.sh
@@ -173,15 +205,15 @@ Against E1, `4->5` improves from `9` to `1` and `count_acc_4` improves from
 test for this checkpoint and do not use it as the starting point for E3-lite
 spurious-negative ablations.
 
-## E3-Lite GT4-Strong + GT5-Safe Spurious Negative From E1
+## Legacy E3-Lite GT4-Strong + GT5-Safe Spurious Negative From E1
 
-E3-lite GT-count-weighted spurious-negative experiments must initialize from
-the E1 count-boundary checkpoint, not from E2 hard sampling or count-aware
-top-k results. Keep hard sampling disabled.
+This section is a historical run record. Under the active 2026-09-08 query
+five-loss contract, `gcs_spurious_neg` and `gcs_count_boundary` CLI keys are
+legacy compatibility only and do not affect query `GCSLoss`. Do not use this
+section as the current training recipe unless a future task explicitly restores
+spurious-negative or count-boundary losses on a separate ablation path.
 
-For new formal runs, use the training-time official-best protocol below. If a
-run was trained without `--gcs-official-best`, record it explicitly as a
-post-hoc official-val sweep over that run's checkpoint.
+For historical reproduction of this old ablation, the protocol was:
 
 ```bash
 python tools/train_gcs.py \
@@ -1640,7 +1672,12 @@ train/val diagnostics rather than test threshold search.
 
 Regenerate K56 labels from original TuSimple JSON and images. Do not resample historical K32 labels.
 
-For this 5-25-3 branch, `.npz` labels must include `semantic_mask` and `edge_mask` because the branch trains `mask_loss` and `edge_loss`. If the remote clone has `datasets` as a symlink to a shared K56 dataset that lacks those arrays, replace only this clone's symlink with a real local runtime directory before rebuilding:
+Current query five-loss training does not consume `semantic_mask` or
+`edge_mask`. Historical 5-25-3 runs did train `mask_loss` and `edge_loss`, so
+regenerated labels may still include those arrays for compatibility with old
+records and tools. If the remote clone has `datasets` as a symlink to a shared
+K56 dataset and a legacy reproduction explicitly needs those arrays, replace
+only this clone's symlink with a real local runtime directory before rebuilding:
 
 ```bash
 cd /root/GCS-YOLO-Lane_LSA_5-25-3-k56

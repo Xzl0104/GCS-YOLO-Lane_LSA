@@ -121,10 +121,17 @@ gcs_contiguity_policy: strict # (str) ordered_slot fixed-y valid-mask policy: st
 gcs_exist: 2.0 # (float) GCS lane existence loss gain
 gcs_point: 15.0 # (float) GCS normalized point L1 loss gain
 gcs_point_valid: 1.0 # (float) GCS per-point visibility BCE loss gain for fixed-y lane anchors
-gcs_smooth: 0.05 # (float) GCS second-order smoothness loss gain
+gcs_point_valid_unmatched_ignore: True # (bool) ignore GT-close Hungarian-unmatched visible anchors inside point-valid BCE
+gcs_point_valid_unmatched_ignore_px: 30.0 # (float) mean x-distance threshold in training-image pixels for GT-close unmatched queries
+gcs_point_valid_unmatched_ignore_anchor_px: 30.0 # (float) per-anchor x-distance threshold in pixels for ignored GT-visible anchors
+gcs_point_valid_unmatched_ignore_min_overlap: 3 # (int) minimum GT-visible anchors required for unmatched ignore protection
+gcs_smooth: 0.0 # (float) legacy GCS second-order smoothness loss gain; query five-loss contract ignores it
 gcs_curve: 0.1 # (float) GCS adaptive curvature-aware loss gain
-gcs_mask: 0.2 # (float) GCS auxiliary semantic mask loss gain
-gcs_edge: 0.2 # (float) GCS auxiliary edge loss gain
+gcs_line_iou: 1.0 # (float) GCS visible lane-region IoU loss gain
+gcs_line_iou_width_px: 18.0 # (float) visible lane-region IoU surrogate lane width in pixels
+gcs_line_iou_temperature_px: 1.0 # (float) smooth distance temperature for visible lane-region IoU loss in pixels
+gcs_mask: 0.0 # (float) legacy GCS auxiliary semantic mask loss gain; query five-loss contract ignores it
+gcs_edge: 0.0 # (float) legacy GCS auxiliary edge loss gain; query five-loss contract ignores it
 gcs_count: 0.0 # (float) GCS lane-count/cardinality loss gain; 0 disables
 gcs_count_under5: 0.0 # (float) extra GCS undercount loss gain for dense-lane samples; 0 disables
 gcs_count_under5_min_lanes: 5 # (int) minimum GT lane count that enables gcs_count_under5
@@ -194,12 +201,15 @@ gcs_boundary_pseudo_envelope_ratio_thr: 0.75 # (float) minimum common-visible an
 gcs_exist_pos_weight: 1.0 # (float) positive query weight for GCS lane existence BCE
 gcs_exist_focal_gamma: 0.0 # (float) optional focal gamma for GCS existence BCE; 0 disables focal weighting
 gcs_exist_focal_alpha: -1.0 # (float) optional focal alpha for GCS existence BCE; set 0..1 to enable alpha weighting
-gcs_exist_quality_alpha: 1.0 # (float) blend factor for quality-aware existence targets; 1 uses pure geometry quality, 0 restores hard matched labels
-gcs_exist_quality_mode: linear # (str) linear uses strict APE thresholds; exp keeps the legacy exp(-APE/tau) target
-gcs_exist_quality_tau: 25.0 # (float) APE decay scale in pixels for exp quality mode
-gcs_exist_quality_floor: 0.0 # (float) minimum geometry quality for exp quality mode
-gcs_exist_quality_pos_px: 10.0 # (float) APE at or below this value receives quality 1.0 in linear mode
-gcs_exist_quality_neg_px: 20.0 # (float) APE at or above this value receives quality 0.0 in linear mode
+gcs_exist_quality_alpha: 0.0 # (float) legacy quality-aware existence target blend; query five-loss contract ignores it
+gcs_exist_quality_mode: linear # (str) legacy compatibility only; active query five-loss ignores quality-aware existence targets
+gcs_exist_quality_tau: 25.0 # (float) legacy compatibility only; active query five-loss ignores quality-aware existence targets
+gcs_exist_quality_floor: 0.0 # (float) legacy compatibility only; active query five-loss ignores quality-aware existence targets
+gcs_exist_quality_pos_px: 10.0 # (float) legacy compatibility only; active query five-loss ignores quality-aware existence targets
+gcs_exist_quality_neg_px: 20.0 # (float) legacy compatibility only; active query five-loss ignores quality-aware existence targets
+gcs_gt4_selective_exist_target_floor: 0.0 # (float) legacy compatibility only; active query five-loss uses hard matched existence targets
+gcs_gt4_selective_exist_target_ape_max: 20.0 # (float) legacy compatibility only; active query five-loss uses hard matched existence targets
+gcs_gt4_selective_exist_target_visible_thr: 10 # (int) legacy compatibility only; active query five-loss uses hard matched existence targets
 gcs_point_valid_pos_weight_max: 10.0 # (float) maximum positive weight for GCS per-point visibility loss
 gcs_mask_pos_weight_max: 20.0 # (float) maximum foreground class weight for GCS mask auxiliary loss
 gcs_edge_pos_weight_max: 50.0 # (float) maximum foreground pos_weight for GCS edge auxiliary loss
@@ -220,6 +230,19 @@ gcs_eval_min_overlap: 2 # (int) minimum valid overlapping GT points required for
 gcs_eval_nms_dist_px: 50.0 # (float) optional lane duplicate suppression distance in pixels; 0 disables
 gcs_eval_point_valid_thr: 0.5 # (float) per-point visibility threshold used when decoding fixed-y lanes for validation
 gcs_eval_max_det: 8 # (int) maximum decoded lane queries kept for GCS validation metrics
+dataset: tusimple # (str) dataset identity used by dataset-specific training hooks
+gcs_culane_val: False # (bool) run periodic CULane region-IoU validation and preserve the best F1 checkpoint
+gcs_culane_val_interval: 5 # (int) epoch interval for periodic CULane region-IoU validation
+gcs_culane_val_source: # (str, optional) CULane validation image directory
+gcs_culane_val_labels: # (str, optional) CULane validation labels_gcs directory
+gcs_culane_val_archive_root: # (str, optional) extracted CULane root containing original .lines.txt annotations
+gcs_culane_val_conf: 0.2 # (float) CULane validation lane existence threshold
+gcs_culane_val_point_valid_thr: 0.4 # (float) CULane validation per-point visibility threshold
+gcs_culane_val_nms_dist_px: 50.0 # (float) CULane validation lane NMS distance in pixels
+gcs_culane_val_max_det: 5 # (int) CULane validation maximum decoded lanes per image
+gcs_culane_val_max_images: 0 # (int) limit CULane validation images; 0 means all
+gcs_culane_val_warmup: 5 # (int) untimed warmup forwards before CULane validation
+gcs_culane_val_half: False # (bool) use FP16 inference for CULane validation
 gcs_official_best: False # (bool) run periodic TuSimple official-val sweeps and preserve weights/official_best.pt
 gcs_allow_internal_best: False # (bool) allow ordered_slot debug training without official_best checkpoint selection
 gcs_official_interval: 5 # (int) epoch interval for periodic official-val checkpoint selection

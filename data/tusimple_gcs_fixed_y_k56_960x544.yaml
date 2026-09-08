@@ -4,6 +4,9 @@ test: ../datasets/tusimple_fixed_y_k56_960x544/images/test
 image_shape: [544, 960]  # H, W; TuSimple is trained as 960x544 (W x H)
 point_mode: fixed_y
 num_points: 56
+fixed_y_original_h: 720
+fixed_y_start_px: 710
+fixed_y_end_px: 160
 fixed_y: [0.9861111111111112, 0.2222222222222222]  # 710/720 to 160/720, TuSimple h_samples step 10
 
 names:

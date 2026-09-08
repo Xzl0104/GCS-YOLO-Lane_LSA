@@ -2,6 +2,264 @@
 
 This file records decisions for branch `codex/5-25-3-k56`.
 
+## 2026-09-08: Protect GT-close unmatched anchors in point-valid loss
+
+Decision:
+
+Change the active query `point_valid_loss` so GT-close Hungarian-unmatched
+visible anchors are ignored instead of being trained as all-zero visibility
+negatives.
+
+Implementation scope:
+
+- The query loss vector remains exactly five items: `exist_loss`, `point_loss`,
+  `point_valid_loss`, `curve_loss`, and `visible_line_iou_loss`.
+- `point_valid_loss` now computes `BCEWithLogits(reduction="none")` and applies
+  an internal weight mask before normalization.
+- Hungarian-matched queries keep `target = GT visible mask` with weight `1`.
+- Far Hungarian-unmatched queries keep `target = 0` with weight `1`.
+- GT-close Hungarian-unmatched anchors get weight `0` only when the query/GT
+  pair has at least `3` GT-visible anchors, mean x error is at most `30 px`,
+  and the individual GT-visible anchor x error is at most `30 px`.
+- The ignore selection uses `pred_points.detach()` and training-image pixel
+  width, so it does not create a gradient path from point-valid loss into the
+  geometry coordinates.
+- This is not unmatched positive supervision, not a rescue lane assignment,
+  not a new loss item, and not a decode, NMS, matcher, model-output, or official
+  metric change.
+- `gcs_point_valid_unmatched_ignore=True` is the active default. Disable it
+  only through `--no-gcs-point-valid-unmatched-ignore` for a legacy-path
+  ablation.
+
+Rationale:
+
+The CULane fixed-y diagnosis found that a large fraction of unmatched queries
+are already close to GT geometry, especially on GT4 images and lane index 3.
+Keeping those visible anchors as all-zero point-valid negatives teaches the
+visibility branch to suppress plausible lane candidates. Ignoring only the
+GT-visible, geometry-close anchors removes the contradictory supervision while
+keeping clear-far unmatched queries as hard negatives against false lanes.
+
+Validation:
+
+Completed locally:
+
+- Python compilation passed for `ultralytics/utils/gcs_loss.py`,
+  `tools/train_gcs.py`, `ultralytics/cfg/__init__.py`, and
+  `tools/check_gcs_point_valid_unmatched_ignore.py`.
+- `tools/check_gcs_point_valid_unmatched_ignore.py` passed and verified that
+  close-unmatched visible anchors have zero point-valid gradient, far-unmatched
+  anchors still receive target-zero gradients, non-GT-visible anchors on a
+  close unmatched query remain supervised as negatives, the legacy disable path
+  still reproduces the old penalty, and query loss items remain `5`.
+- TuSimple CPU model-shape check passed for
+  `ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml` at `--imgsz 544 960`.
+- CULane CPU model-shape check passed for
+  `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-culane.yaml` at
+  `--dataset culane --imgsz 384 960`.
+- `tools/train_gcs.py --help` exposes the new active/default-on ignore flags
+  and `ultralytics.cfg.get_cfg` accepts the new bool/float/int config keys.
+- Static query-loss residue audit found no old query loss names in
+  `ultralytics/utils/gcs_loss.py`.
+
+## 2026-09-08: Replace query GCSLoss with five-term loss contract
+
+Decision:
+
+Replace the active query-mode `GCSLoss` with the user-requested five-term
+contract:
+
+```text
+lambda_exist * L_exist
++ lambda_point * L_point
++ lambda_valid * L_point_valid
++ lambda_curve * L_curve
++ lambda_line_iou * L_visible_line_iou
+```
+
+Implementation scope:
+
+- Query `GCSLoss` now returns exactly `exist_loss`, `point_loss`,
+  `point_valid_loss`, `curve_loss`, and `visible_line_iou_loss`.
+- Matched query existence uses hard BCE labels. Quality-aware existence
+  targets and GT4 selective existence floors are not used.
+- Point regression uses GT-visible anchors. Point-valid BCE uses matched GT
+  visible masks, keeps far-unmatched anchors as invisible, and applies the
+  GT-close unmatched ignore rule described above.
+- Curve loss uses GT-visible second-order SmoothL1 in pixel space.
+- Visible line-IoU loss is a differentiable GT-visible lane-region surrogate.
+- Legacy query losses are not computed, returned, logged, or backpropagated:
+  `smooth_loss`, `mask_loss`, `edge_loss`, score-count losses, under-count,
+  count-boundary, spurious-negative, boundary-pseudo-negative, query Count
+  Head CE, quality-aware existence, GT4 selective existence, and short-geometry
+  terms.
+- CULane query training rejects `--gcs-query-count-ce > 0` under this
+  five-loss contract. The default CULane query YAML emits no dense aux outputs
+  and no `pred_count_logits`.
+- `ordered_slot` keeps its existing `OrderedSlotGCSLoss` path and output/loss
+  contract.
+
+Validation completed locally:
+
+- Python compilation passed for `ultralytics/utils/gcs_loss.py`,
+  `ultralytics/models/yolo/gcs_lane/train.py`,
+  `ultralytics/models/yolo/gcs_lane/val.py`, and `tools/train_gcs.py`.
+- CULane CPU model-shape checks passed for both the default CULane query YAML
+  and the explicit CULane count YAML.
+- Targeted pytest passed: `tests/test_culane_contract.py`,
+  `tests/test_culane_gt4_selective_exist.py`,
+  `tests/test_culane_metrics.py`, and
+  `tests/test_culane_training_selection.py`.
+- Static query-loss residue audit found no old query loss names in
+  `ultralytics/utils/gcs_loss.py`,
+  `ultralytics/models/yolo/gcs_lane/train.py`, or
+  `ultralytics/models/yolo/gcs_lane/val.py`.
+
+This is an implementation and contract change only. It produces no new CULane
+F1 evidence until a fresh remote formal training run and validation sweep are
+completed.
+
+## 2026-09-07: Enable Three CULane Architecture Ablations Together
+
+The CULane-specific model configuration now enables the following three
+architecture changes together:
+
+- `geometry_aware_exist`: adds a zero-initialized residual existence head
+  conditioned on query state, sampled P2/P3/P4 features, point-valid
+  statistics, and lane geometry summaries.
+- `two_stage_refine`: performs a second point-coordinate refinement pass from
+  the first pass output; its final residual layer is zero-initialized.
+- `gated_multiscale`: replaces fixed equal averaging of sampled P2/P3/P4
+  point features with a coordinate-aware softmax gate; the gate is initialized
+  to equal weights.
+
+Scope and compatibility:
+
+- The three switches are enabled only in
+  `ultralytics/cfg/models/gcs/gcs-yolo-lane-s-culane.yaml`.
+- The default TuSimple model keeps all three switches disabled and preserves
+  the existing `pred_points`, `pred_logits`, `pred_valid_logits`,
+  `aux_mask_logits`, and `aux_edge_logits` contract.
+- The new residual/gating paths are initialized to baseline-compatible
+  behavior so model construction does not introduce an uncontrolled jump
+  before training.
+- This is an architecture experiment, not an F1 claim. No official CULane
+  validation result exists until the new configuration is formally trained
+  and evaluated under the same decode protocol as the baseline.
+
+Validation completed:
+
+- Local Python compilation and CULane model-shape checks passed.
+- Server Python compilation, CULane model-shape checks, and a combined
+  forward/backward finite-gradient check passed.
+- The two algorithm files were transferred to
+  `/root/GCS-YOLO-Lane_env30_next` and their SHA256 hashes matched.
+
+The next evidence-producing step is a remote formal CULane training run with
+official validation checkpoint selection. Test data must remain closed until
+an official-validation-selected checkpoint and decode are available.
+
+## 2026-09-05: Complete CULane Train GT4 Raw-Query E2 Diagnosis
+
+The CULane E2 train-side raw-query diagnosis is complete. It is a diagnostic
+experiment only: it did not modify the model, did not train a new checkpoint,
+and does not establish a CULane F1 improvement.
+
+Run and checkpoint:
+
+```text
+remote workspace = /root/GCS-YOLO-Lane_env30_next
+run = runs/gcs_lane/e2_culane_train_gt4_raw_full
+baseline =
+  runs/gcs_lane/culane_fixedy0to4_fp32aux_countce05_4090_full_20260903_r2_archivefix/
+  weights/culane_val_best.pt
+artifacts =
+  runs/gcs_lane/e2_culane_train_gt4_raw_full/gt4_train_hardset.jsonl
+  runs/gcs_lane/e2_culane_train_gt4_raw_full/gt4_train_hardset.csv
+  runs/gcs_lane/e2_culane_train_gt4_raw_full/gt4_train_hardset_summary.json
+```
+
+Protocol:
+
+```text
+split = CULane train
+imagesize = 384 960 (H,W)
+GT count = 4
+raw queries = 12
+fixed-y points = 56
+official IoU threshold = 0.5
+point_valid_thr = 0.30
+conf = 0.30
+nms_dist_px = 60
+max_det = 5
+```
+
+Dataset coverage:
+
+```text
+train images seen = 88,880
+GT4 images = 35,859
+GT4 lanes = 143,436
+GT count distribution = GT0 10,459; GT1 10; GT2 4,795;
+                         GT3 37,757; GT4 35,859
+```
+
+Per-GT-lane diagnosis:
+
+| Category | Count | Ratio |
+| --- | ---: | ---: |
+| `raw_candidate_good` | 129,675 | 90.4062% |
+| `geometry_near_miss` | 8,019 | 5.5906% |
+| `score_failure` | 5,372 | 3.7452% |
+| `geometry_missing` | 335 | 0.2336% |
+| `valid_span_failure` | 5 | 0.0035% |
+| `decoder_failure` | 30 | 0.0209% |
+| Total | 143,436 | 100% |
+
+Additional evidence:
+
+- Best-query collisions occurred in only `82` rows
+  (`0.0572%`), so query duplication is not the dominant train-side failure.
+- For all GT4 lanes, best visible IoU has `p50=0.848956` and `p90=0.930510`.
+  Best visible valid-point count has `p50=25` and `p90=31`.
+- The largest geometric failure bucket is `geometry_near_miss`, not
+  `geometry_missing`. Its best visible IoU is approximately
+  `mean=0.3648`, `p50=0.3876`, `p90=0.4813`; mean absolute x error is
+  approximately `37.86 px`, and mean bottom x error is approximately
+  `71.12 px`.
+- `score_failure` is a separate existence-score problem. Its best visible
+  geometry is already usable (`mean visible IoU approximately 0.6931`,
+  `p50 approximately 0.6937`), but its best visible score is low
+  (`mean approximately 0.1435`, `p50 approximately 0.1376`).
+- The fourth GT lane (`gt_index=3`) has a disproportionate score problem:
+  `score_failure=3,260/35,859=9.091%`, while its raw-candidate-good rate is
+  `85.859%`. The corresponding score-failure rates for `gt_index=0,1,2` are
+  `3.790%, 0.719%, 1.380%`.
+
+Decision:
+
+- Do not continue tuning NMS distance, `max_det`, ranking, or
+  `point_valid` postprocessing as the primary fix. Their train-side failure
+  buckets are negligible (`30` decoder failures, `5` valid-span failures,
+  and `82` collision rows).
+- Do not describe the previously observed validation-set GT4 raw-candidate
+  shortfall as a train-wide absence of candidates. On train, raw coverage is
+  high; the validation failure is more consistent with a train-to-validation
+  geometry-generalization gap on hard GT4 lanes, including endpoint,
+  curvature, side/edge, short-visible, and occluded cases.
+- Treat geometry and existence score as two related but separate bottlenecks:
+  `geometry_near_miss` is the main train-side geometry issue, while
+  `score_failure`, especially on the fourth lane slot, is the clearest
+  existence-calibration issue.
+- The next geometry work should compare train and validation hard GT4
+  samples, visualize near-miss shapes, and test selective geometry
+  supervision or a data-derived reference design. The next score work should
+  test a selective GT4 positive score rescue with an overcount guard rather
+  than a global existence-target relaxation.
+- Keep official-val as the only promotion/selection surface. Do not use this
+  train diagnostic to claim that F1 has reached `0.8`; no new F1 or
+  official-val result was produced by E2.
+
 ## 2026-07-10: Use cached official-val sweep for threshold selection
 
 Decision:
@@ -6198,3 +6456,38 @@ Validation target:
 Run local py_compile, `tools/check_gcs_count_contract_losses.py`, and the CPU
 model shape check. Formal training/official-val evidence remains remote-only
 and must be selected on official-val.
+## 2026-09-08: Add explicit proposal state refinement for CULane
+
+Decision:
+
+Upgrade the CULane two-stage point refinement from repeated coordinate residuals
+to explicit stage-wise proposal refinement. After stage 1 predicts coarse lane
+points, the head samples the gated P2/P3/P4 features at those points, combines
+their mean/max/bottom context with geometry and coarse visibility summaries,
+and applies a zero-initialized residual update to the query state. Stage 2 then
+predicts point coordinates from this updated proposal state. Final visibility,
+existence, count, and ordered-slot outputs also use the updated state.
+
+Implementation scope:
+
+- Add `proposal_state_refine`, default-off for existing models.
+- Enable it in the two CULane query YAMLs, alongside the existing geometry-aware
+  existence, two-stage point refinement, and gated multi-scale refinement flags.
+- Preserve the existing output tensor contract and fixed-y anchors.
+- Keep the zero-initialized state residual so construction remains compatible
+  with the pre-update forward path before retraining.
+
+Validation target:
+
+Run local compile, CULane model shape checks, a CPU forward smoke test, and
+remote source compilation. This structural change has no official-val metric
+evidence until a new CULane training run is completed.
+
+Review correction on the same date:
+
+- The automatic CULane query Count Head model was initially still using the
+  pre-proposal head. Its YAML now enables the same four CULane architecture
+  switches as the primary CULane query model, so `--gcs-query-count-ce > 0`
+  cannot silently run a structurally different head.
+- `profile_flops()` now counts every gated P2/P3/P4 fusion call, including the
+  proposal-state sampling call.

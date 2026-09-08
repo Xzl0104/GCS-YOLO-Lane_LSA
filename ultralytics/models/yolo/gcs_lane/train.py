@@ -36,6 +36,7 @@ from ultralytics.models.gcs.mode_utils import (
 from ultralytics.nn.modules import GCSLaneHead, LaneBiFPN, LSEM
 from ultralytics.nn.tasks import GCSLaneModel, load_checkpoint, torch_safe_load
 from ultralytics.utils import DEFAULT_CFG, LOCAL_RANK, LOGGER, RANK, ROOT, YAML
+from ultralytics.utils.gcs_fixed_y import build_fixed_y_contract
 from ultralytics.utils.gcs_shape import assert_gcs_image_tensor, assert_gcs_shape, normalize_imgsz
 from ultralytics.utils.torch_utils import strip_optimizer, torch_distributed_zero_first
 
@@ -47,74 +48,16 @@ class GCSLaneTrainer(BaseTrainer):
         "exist_loss",
         "point_loss",
         "point_valid_loss",
-        "smooth_loss",
         "curve_loss",
-        "mask_loss",
-        "edge_loss",
-        "count_loss",
-        "count_under5_loss",
-        "count_boundary_loss",
-        "spurious_neg_loss",
-        "spurious_negative_count",
-        "spur_cand",
-        "spur_prot",
-        "spur_final",
-        "spur_neg",
-        "spur_cnt_gt3",
-        "spur_cnt_gt4",
-        "spur_cnt_gt5",
-        "spur_neg_gt3",
-        "spur_neg_gt4",
-        "spur_neg_gt5",
-        "count_score_mean",
-        "gt5_short_pos_count",
-        "gt5_short_pos_anchor_count",
-        "gt5_short_point_valid_loss",
-        "cnt_bound_5under",
-        "cnt_score",
-        "boundary_pseudo_neg_loss",
-        "boundary_pseudo_count",
-        "boundary_pseudo_score_mean",
-        "query_count_ce_loss",
-        "query_count_acc",
-        "query_count_pred_mean",
+        "visible_line_iou_loss",
     )
     # Keep tqdm headers within BaseTrainer's 11-character progress columns.
     progress_loss_names = (
         "exist",
         "point",
         "pt_valid",
-        "smooth",
         "curve",
-        "mask",
-        "edge",
-        "count",
-        "cnt_under5",
-        "cnt_bound",
-        "spur_loss",
-        "spur_cnt",
-        "spur_cand",
-        "spur_prot",
-        "spur_final",
-        "spur_neg",
-        "spcnt_g3",
-        "spcnt_g4",
-        "spcnt_g5",
-        "spneg_g3",
-        "spneg_g4",
-        "spneg_g5",
-        "cnt_score",
-        "gt5s_cnt",
-        "gt5s_anc",
-        "gt5s_pv",
-        "cnt5under",
-        "cnt_score2",
-        "bneg",
-        "bneg_n",
-        "bneg_s",
-        "qcnt_ce",
-        "qcnt_acc",
-        "qcnt_pred",
+        "line_iou",
     )
     # YOLO11 backbone -> GCS-YOLO-Lane backbone. LSEM is inserted after old
     # layers 4 and 6, so all later backbone layers must be shifted explicitly.
@@ -161,6 +104,10 @@ class GCSLaneTrainer(BaseTrainer):
         self.official_best_sweep = self.wdir / "official_best_sweep.json"
         self.official_best_decode = self.wdir / "official_best_decode.yaml"
         self._official_best_state = self._load_official_best_state()
+        self.culane_val_best = self.wdir / "culane_val_best.pt"
+        self.culane_val_best_summary = self.save_dir / "culane_val_best.json"
+        self.culane_val_best_decode = self.wdir / "culane_val_best_decode.yaml"
+        self._culane_val_best_state = self._load_culane_val_best_state()
         self._lock_gcs_shape_contract()
         self._set_loss_names_for_mode()
         self._warn_if_ordered_slot_without_official_best()
@@ -447,6 +394,30 @@ class GCSLaneTrainer(BaseTrainer):
         self.args.imgsz = max(int(shape[0]), int(shape[1]))
         self._save_shape_locked_args()
 
+    def _dataset_point_contract(self) -> tuple[str | None, dict[str, Any] | None]:
+        """Build the explicit point contract declared by the dataset YAML."""
+        data = getattr(self, "data", None)
+        if not isinstance(data, dict) or data.get("point_mode") is None:
+            return None, None
+        point_mode = GCSLaneDataset._normalize_point_mode(data["point_mode"])
+        if point_mode != "fixed_y":
+            return point_mode, None
+
+        required = ("num_points", "fixed_y_original_h", "fixed_y_start_px", "fixed_y_end_px")
+        missing = [key for key in required if data.get(key) is None]
+        if missing:
+            raise KeyError(
+                f"fixed_y dataset YAML is missing required contract fields: {missing}. "
+                "Declare num_points, fixed_y_original_h, fixed_y_start_px, and fixed_y_end_px."
+            )
+        contract = build_fixed_y_contract(
+            original_h=int(data["fixed_y_original_h"]),
+            start_px=float(data["fixed_y_start_px"]),
+            end_px=float(data["fixed_y_end_px"]),
+            k=int(data["num_points"]),
+        )
+        return point_mode, contract
+
     def build_dataset(self, img_path: str, mode: str = "train", batch: int | None = None):
         """Build the GCS lane dataset."""
         fraction = self.args.fraction if mode == "train" else 1.0
@@ -454,6 +425,7 @@ class GCSLaneTrainer(BaseTrainer):
         label_dir = getattr(self.args, f"{mode}_gcs_labels", None)
         augment = mode == "train"
         gcs_imgsz = self._resolve_gcs_imgsz()
+        point_mode, fixed_y_contract = self._dataset_point_contract()
         dataset = GCSLaneDataset(
             img_path=image_dir,
             imgsz=gcs_imgsz,
@@ -468,28 +440,38 @@ class GCSLaneTrainer(BaseTrainer):
             scale=self.args.scale if augment else 0.0,
             erasing=self.args.erasing if augment else 0.0,
             mosaic=self.args.mosaic if augment else 0.0,
+            point_mode=point_mode,
+            fixed_y_contract=fixed_y_contract,
         )
         assert_gcs_shape(dataset.imgsz, gcs_imgsz, name=f"{mode} dataset.imgsz", context="GCSLaneTrainer.build_dataset")
         self._check_point_mode_contract(dataset, mode=mode)
         return dataset
 
-    def _head_point_mode(self) -> str | None:
-        """Return the GCS head point mode after the model has been constructed."""
+    def _gcs_lane_head(self) -> GCSLaneHead | None:
+        """Return the constructed GCS lane head, including distributed wrappers."""
         model = getattr(self, "model", None)
         if model is None:
             return None
         model = getattr(model, "module", model)
         for module in model.modules():
             if isinstance(module, GCSLaneHead):
-                mode = str(getattr(module, "point_mode", "free")).lower()
-                return "fixed_y" if mode in {"fixed-y", "fixedy"} else mode
+                return module
+        return None
+
+    def _head_point_mode(self) -> str | None:
+        """Return the GCS head point mode after the model has been constructed."""
+        head = self._gcs_lane_head()
+        if head is not None:
+            mode = str(getattr(head, "point_mode", "free")).lower()
+            return "fixed_y" if mode in {"fixed-y", "fixedy"} else mode
         return None
 
     def _check_point_mode_contract(self, dataset: GCSLaneDataset, mode: str) -> None:
-        """Fail fast when a fixed-y head is paired with free Kx2 labels, or vice versa."""
-        head_mode = self._head_point_mode()
-        if head_mode is None:
+        """Validate the full label/head contract before a GCS loader is used."""
+        head = self._gcs_lane_head()
+        if head is None:
             return
+        head_mode = self._head_point_mode()
         data_mode = str(getattr(dataset, "point_mode", "free")).lower()
         if data_mode in {"fixed-y", "fixedy"}:
             data_mode = "fixed_y"
@@ -499,6 +481,68 @@ class GCSLaneTrainer(BaseTrainer):
                 f"but labels under {dataset.label_files[0].parent} are point_mode={data_mode!r}. "
                 "Use fixed-y labels generated with tools/convert_tusimple_to_gcs.py --point-mode fixed_y "
                 "for the fixed-y x-only head."
+            )
+        if data_mode == "fixed_y":
+            contract = getattr(dataset, "fixed_y_contract", None)
+            if not isinstance(contract, dict):
+                raise ValueError(f"{mode} dataset is fixed_y but did not expose a fixed-y contract.")
+            expected_k = int(contract["num_points"])
+            if int(getattr(head, "num_points", -1)) != expected_k:
+                raise ValueError(
+                    f"GCS fixed-y K mismatch for {mode}: model K={getattr(head, 'num_points', None)} "
+                    f"but dataset K={expected_k}."
+                )
+            for field in ("fixed_y_original_h", "fixed_y_start_px", "fixed_y_end_px"):
+                head_value = float(getattr(head, field))
+                data_value = float(contract[field])
+                if not np.isclose(head_value, data_value, atol=1e-6):
+                    raise ValueError(
+                        f"GCS fixed-y {field} mismatch for {mode}: model={head_value}, dataset={data_value}."
+                    )
+            data_anchors = np.asarray(contract["fixed_y"], dtype=np.float32).reshape(-1)
+            head_anchors = head.fixed_y_anchors.detach().float().cpu().numpy().reshape(-1)
+            if not np.allclose(head_anchors, data_anchors, atol=1e-6):
+                raise ValueError(
+                    f"GCS fixed-y anchor mismatch for {mode}: model and dataset use different y anchors."
+                )
+
+        if not self._is_culane_training():
+            return
+        shape = self._resolve_gcs_imgsz()
+        if shape != (384, 960):
+            raise ValueError(f"CULane requires gcs_imgsz=(384, 960), got {shape}.")
+        if data_mode != "fixed_y":
+            raise ValueError(f"CULane requires fixed_y labels, got point_mode={data_mode!r}.")
+        if self._gcs_mode() != "query":
+            raise ValueError("CULane supports only gcs_mode='query'; ordered_slot is not a valid CULane contract.")
+        if (
+            int(getattr(head, "min_lanes", -1)),
+            int(getattr(head, "max_lanes", -1)),
+            int(getattr(head, "count_classes", -1)),
+        ) != (0, 4, 5):
+            raise ValueError(
+                "CULane query head must use lane range 0..4 with count_classes=5, got "
+                f"{getattr(head, 'min_lanes', None)}..{getattr(head, 'max_lanes', None)} "
+                f"and {getattr(head, 'count_classes', None)} classes."
+            )
+        culane_fixed_y = (
+            int(contract["num_points"]),
+            int(contract["fixed_y_original_h"]),
+            float(contract["fixed_y_start_px"]),
+            float(contract["fixed_y_end_px"]),
+        )
+        if culane_fixed_y != (56, 590, 589.0, 39.0):
+            raise ValueError(
+                "CULane fixed-y contract must be K=56, original_h=590, start_px=589, end_px=39, "
+                f"got {culane_fixed_y}."
+            )
+
+        query_count_enabled = bool(getattr(head, "query_count_head", False))
+        query_count_gain = float(self._get_arg_value("gcs_query_count_ce", 0.0) or 0.0)
+        if query_count_enabled or query_count_gain > 0.0:
+            raise ValueError(
+                "CULane query five-loss contract does not support query Count Head training. "
+                "Use the default CULane query model with --gcs-query-count-ce 0."
             )
 
     @staticmethod
@@ -1222,6 +1266,208 @@ class GCSLaneTrainer(BaseTrainer):
         if self.device.type == "cuda":
             torch.cuda.empty_cache()
 
+    def _is_culane_training(self) -> bool:
+        """Return whether the current run explicitly targets the CULane dataset."""
+        return str(self._get_arg_value("dataset", "")).lower() == "culane"
+
+    @staticmethod
+    def _culane_val_epoch_due(epoch: int, epochs: int, interval: int, stop: bool = False) -> bool:
+        """Return whether a one-based epoch is due for periodic CULane validation."""
+        if interval <= 0:
+            raise ValueError(f"gcs_culane_val_interval must be > 0, got {interval}.")
+        epoch_num = int(epoch) + 1
+        return (epoch_num % int(interval) == 0) or bool(stop) or epoch_num >= int(epochs)
+
+    def _should_run_culane_val(self) -> bool:
+        """Return True when this epoch should run the periodic CULane region-IoU validation."""
+        if RANK not in {-1, 0} or not self._is_culane_training():
+            return False
+        if not bool(self._get_arg_value("gcs_culane_val", False)):
+            return False
+        interval = int(self._get_arg_value("gcs_culane_val_interval", 5) or 0)
+        return self._culane_val_epoch_due(
+            epoch=int(self.epoch),
+            epochs=int(self.epochs),
+            interval=interval,
+            stop=bool(getattr(self, "stop", False)),
+        )
+
+    @staticmethod
+    def _culane_val_best_key(summary: dict[str, Any], epoch: int) -> tuple:
+        """Order CULane candidates by F1, then lower FP/FN/APE, then newer epoch."""
+        f1 = float(summary.get("f1", 0.0))
+        fp = int(summary.get("fp", 0))
+        fn = int(summary.get("fn", 0))
+        ape = summary.get("ape_mean_px")
+        ape_value = float(ape) if ape is not None else float("inf")
+        return f1, -fp, -fn, -ape_value, int(epoch)
+
+    def _load_culane_val_best_state(self) -> dict[str, Any] | None:
+        """Restore CULane-val best state when resuming a run."""
+        if not self.culane_val_best_summary.exists():
+            return None
+        try:
+            data = json.loads(self.culane_val_best_summary.read_text(encoding="utf-8"))
+            meta = data.get("culane_val_best", data)
+            summary = meta.get("summary")
+            epoch = int(meta.get("epoch", 0) or 0)
+            if isinstance(summary, dict):
+                return {"summary": summary, "epoch": epoch, "key": self._culane_val_best_key(summary, epoch)}
+        except Exception as exc:
+            LOGGER.warning(f"Could not restore existing CULane val best state from {self.culane_val_best_summary}: {exc}")
+        return None
+
+    def _culane_val_device_arg(self) -> str:
+        """Return a stable device string for in-process CULane validation."""
+        value = self._get_arg_value("device", None)
+        if value is not None and str(value).strip() and str(value).strip().lower() != "none":
+            return str(value)
+        if self.device.type == "cuda":
+            return str(0 if self.device.index is None else self.device.index)
+        return str(self.device)
+
+    def _culane_val_source(self) -> str:
+        """Resolve CULane validation images from the explicit hook argument or dataset YAML."""
+        source = self._get_arg_value("gcs_culane_val_source", None)
+        if source:
+            return str(source)
+        data = getattr(self, "data", None)
+        if isinstance(data, dict) and data.get("val"):
+            return str(data["val"])
+        raise ValueError("CULane val source is missing. Pass --gcs-culane-val-source.")
+
+    def _culane_val_labels(self) -> str:
+        """Resolve converted CULane validation labels."""
+        labels = self._get_arg_value("gcs_culane_val_labels", None)
+        if labels:
+            return str(labels)
+        data = getattr(self, "data", None)
+        if isinstance(data, dict):
+            data_root = data.get("path")
+            if data_root:
+                return str(Path(data_root) / "labels_gcs" / "val")
+        raise ValueError("CULane val labels are missing. Pass --gcs-culane-val-labels.")
+
+    def _culane_val_archive_root(self) -> str:
+        """Resolve the original CULane archive root required by region-IoU evaluation."""
+        archive_root = self._get_arg_value("gcs_culane_val_archive_root", None)
+        if archive_root:
+            return str(archive_root)
+        raise ValueError("CULane archive root is missing. Pass --gcs-culane-val-archive-root.")
+
+    @staticmethod
+    def _path_has_segment(value: str, segment: str) -> bool:
+        """Return whether a path contains an exact, case-insensitive directory segment."""
+        return any(part.lower() == segment.lower() for part in Path(value).parts)
+
+    def _assert_culane_val_selection_contract(self) -> tuple[str, str]:
+        """Reject accidental CULane test selection before invoking the evaluator."""
+        head = self._gcs_lane_head()
+        if not self._is_culane_training() or self._gcs_mode() != "query" or head is None:
+            raise RuntimeError("CULane checkpoint selection requires an active CULane query-mode training run.")
+        if self._resolve_gcs_imgsz() != (384, 960):
+            raise RuntimeError("CULane checkpoint selection requires gcs_imgsz=(384, 960).")
+        source = self._culane_val_source()
+        labels = self._culane_val_labels()
+        for name, value in (("source", source), ("labels", labels)):
+            if self._path_has_segment(value, "test"):
+                raise RuntimeError(f"CULane validation {name} points at a test path: {value}")
+            if not self._path_has_segment(value, "val"):
+                raise RuntimeError(f"CULane validation {name} must point at the val split: {value}")
+        return source, labels
+
+    def _maybe_update_culane_val_best(self) -> None:
+        """Run CULane region-IoU val and preserve the F1-best checkpoint."""
+        if not self._should_run_culane_val():
+            return
+        source, labels = self._assert_culane_val_selection_contract()
+        if not self.last.exists():
+            raise FileNotFoundError(f"Cannot run CULane val selection because {self.last} does not exist.")
+
+        from tools.eval_gcs import evaluate
+
+        epoch_num = int(self.epoch) + 1
+        sweep_dir = self.save_dir / "culane_val_sweeps" / f"epoch{epoch_num:03d}"
+        sweep_dir.mkdir(parents=True, exist_ok=True)
+        shape = self._resolve_gcs_imgsz()
+        LOGGER.info(f"Running CULane region-IoU val for checkpoint selection at epoch {epoch_num}...")
+        output = evaluate(
+            weights=self.last,
+            source=source,
+            labels=labels,
+            imgsz=shape,
+            conf=float(self._get_arg_value("gcs_culane_val_conf", 0.2)),
+            point_valid_thr=float(self._get_arg_value("gcs_culane_val_point_valid_thr", 0.4)),
+            nms_dist_px=float(self._get_arg_value("gcs_culane_val_nms_dist_px", 50.0)),
+            max_det=int(self._get_arg_value("gcs_culane_val_max_det", 5)),
+            decode_mode="query",
+            max_images=int(self._get_arg_value("gcs_culane_val_max_images", 0) or 0),
+            warmup=int(self._get_arg_value("gcs_culane_val_warmup", 5) or 0),
+            device=self._culane_val_device_arg(),
+            half=bool(self._get_arg_value("gcs_culane_val_half", False)),
+            save_dir=sweep_dir,
+            save_json=False,
+            metric="culane_iou",
+            culane_archive_root=self._culane_val_archive_root(),
+        )
+        summary = dict(output["summary"])
+        new_key = self._culane_val_best_key(summary, epoch_num)
+        old_key = self._culane_val_best_state.get("key") if self._culane_val_best_state else None
+        if old_key is None or new_key > old_key:
+            selection_policy = {
+                "primary": "max_f1",
+                "tie_breakers": ["min_fp", "min_fn", "min_ape_mean_px", "max_epoch"],
+            }
+            meta = {
+                "epoch": int(epoch_num),
+                "checkpoint": str(self.culane_val_best.resolve()),
+                "source_checkpoint": str(self.last.resolve()),
+                "eval_dir": str(sweep_dir.resolve()),
+                "selection_policy": selection_policy,
+                "summary": summary,
+                "config": output.get("config", {}),
+            }
+            shutil.copy2(self.last, self.culane_val_best)
+            self.culane_val_best_summary.write_text(
+                json.dumps({"culane_val_best": meta, "selection_policy": selection_policy}, indent=2),
+                encoding="utf-8",
+            )
+            YAML.save(
+                self.culane_val_best_decode,
+                {
+                    "weights": str(self.culane_val_best.resolve()),
+                    "source_epoch": int(epoch_num),
+                    "eval_summary": str((sweep_dir / "eval_summary.json").resolve()),
+                    "selection_policy": selection_policy,
+                    "metric": "culane_iou",
+                    "culane_metrics": {
+                        "f1": float(summary["f1"]),
+                        "precision": float(summary["precision"]),
+                        "recall": float(summary["recall"]),
+                        "tp": int(summary["tp"]),
+                        "fp": int(summary["fp"]),
+                        "fn": int(summary["fn"]),
+                        "fps_infer_post": float(summary["fps_infer_post"]),
+                    },
+                    "decode": output.get("config", {}),
+                },
+            )
+            self._culane_val_best_state = {"summary": summary, "epoch": epoch_num, "key": new_key}
+            LOGGER.info(
+                "Updated culane_val_best.pt: "
+                f"epoch={epoch_num}, F1={float(summary['f1']):.6f}, "
+                f"TP={int(summary['tp'])}, FP={int(summary['fp'])}, FN={int(summary['fn'])}"
+            )
+        else:
+            current = self._culane_val_best_state["summary"]
+            LOGGER.info(
+                "Kept existing culane_val_best.pt: "
+                f"epoch={self._culane_val_best_state['epoch']}, F1={float(current['f1']):.6f}, "
+                f"new_epoch={epoch_num}, new_F1={float(summary['f1']):.6f}"
+            )
+        if self.device.type == "cuda":
+            torch.cuda.empty_cache()
+
     def save_model(self):
         """Save checkpoints with explicit rectangular GCS imgsz in train_args."""
         old_imgsz = self.args.imgsz
@@ -1234,6 +1480,7 @@ class GCSLaneTrainer(BaseTrainer):
             self.args.imgsz = old_imgsz
         if saved:
             self._maybe_update_official_best()
+            self._maybe_update_culane_val_best()
         return saved
 
     def label_loss_items(self, loss_items: list[float] | torch.Tensor | None = None, prefix: str = "train"):

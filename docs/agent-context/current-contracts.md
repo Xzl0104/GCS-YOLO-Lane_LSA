@@ -11,7 +11,12 @@ legacy archive: Q=8, K=32, fixed_y=[0.98, 0.25]
 this branch:    Q=12, K=56, fixed_y=[710/720, 160/720]
 ```
 
-Do not silently import later mainline mechanisms such as Count Head, Quality Head, Survival Head, or near-miss mining into this branch unless a future task explicitly asks for that algorithm change. The branch now includes the 2026-06-27 user-requested, default-off `count_boundary_loss` for adjacent GT3/GT4/GT5 count-score boundaries; this is not a Count Head or decode change.
+Do not silently import later mainline mechanisms such as Count Head, Quality
+Head, Survival Head, or near-miss mining into this branch unless a future task
+explicitly asks for that algorithm change. Historical/default-off
+`count_boundary_loss` config and CLI keys may remain for old command
+compatibility, but the active 2026-09-08 query five-loss `GCSLoss` does not
+compute, log, return, or backpropagate count-boundary terms.
 
 The 2026-07-06 user-requested query-mode explicit Count Head is active only as
 a default-off optional query ablation. It is enabled only by the dedicated
@@ -21,7 +26,12 @@ and ordered-slot keeps its existing count/slot logic unchanged.
 
 The branch also includes the 2026-06-27 user-requested, default-off `gcs_hard_sampling` train-only sampler for short-visible GT3/GT4/GT5 and 0601 samples. It changes only the training dataloader sampling frequency through `WeightedRandomSampler`; it does not change labels, validation/test dataloaders, point/smooth/curve losses, decode, or official metrics.
 
-The branch also includes the 2026-06-27 user-requested, default-off `gcs_spurious_neg` loss for E3-lite. It uses the training Hungarian matcher indices only to select unmatched short duplicate-like queries near matched queries, then adds an extra target-zero BCE on their `pred_logits`. The GT-count weighting extension keeps the old default behavior with `gcs_spurious_gt3_weight=1.0`, `gcs_spurious_gt4_weight=1.0`, `gcs_spurious_gt5_weight=1.0`, and `gcs_spurious_disable_gt5=False`, while allowing GT3-or-sparser, GT4, and GT5-or-denser samples to carry different spurious-negative weights. The 2026-06-28 `gcs_spurious_gt_protect` extension is also default-off and only removes GT-close candidate queries from this extra negative BCE. It does not change data sampling, dataset labels, matcher logic, point/smooth/curve losses, decode, NMS, or official metrics.
+Historical/default-off `gcs_spurious_neg` config and CLI keys may remain for old
+E3-lite run interpretation and command compatibility, but the active
+2026-09-08 query five-loss `GCSLoss` does not compute, log, return, or
+backpropagate `spurious_neg_loss`. Any future spurious-negative experiment must
+explicitly restore that loss on a separate ablation path instead of relying on
+legacy keys.
 
 Active source/config is rolled back to commit
 `424ab1c869f0a02556d8b6b6a44c27e5585e47c0` (`Add valid-before-maxdet decode
@@ -370,49 +380,63 @@ This optional output is default-off and uses class mapping
 
 ## Loss Contract
 
-Default logged loss items on the active `424ab1c86` rollback state include:
+As of 2026-09-08, the user-requested active query-mode `GCSLoss` is the
+five-term contract:
+
+```text
+L_total =
+    lambda_exist * L_exist
+  + lambda_point * L_point
+  + lambda_valid * L_point_valid
+  + lambda_curve * L_curve
+  + lambda_line_iou * L_visible_line_iou
+```
+
+The active query logged loss items are exactly:
 
 ```text
 exist_loss
 point_loss
 point_valid_loss
-smooth_loss
 curve_loss
-mask_loss
-edge_loss
-count_loss
-count_under5_loss
-count_boundary_loss
-spurious_neg_loss
-spurious_negative_count
-spur_cand
-spur_prot
-spur_final
-spur_neg
-spur_cnt_gt3
-spur_cnt_gt4
-spur_cnt_gt5
-spur_neg_gt3
-spur_neg_gt4
-spur_neg_gt5
-count_score_mean
-gt5_short_pos_count
-gt5_short_pos_anchor_count
-gt5_short_point_valid_loss
-cnt_bound_5under
-cnt_score
-boundary_pseudo_neg_loss
-boundary_pseudo_count
-boundary_pseudo_score_mean
-query_count_ce_loss
-query_count_acc
-query_count_pred_mean
+visible_line_iou_loss
 ```
 
-`query_count_ce_loss` is active only when a query model emits
-`pred_count_logits` and `gcs_query_count_ce > 0`; the default gain is `0.0`.
-When logits are absent, the three query-count log items are zero for old-model
-compatibility.
+The five query gains are `gcs_exist`, `gcs_point`, `gcs_point_valid`,
+`gcs_curve`, and `gcs_line_iou`. `gcs_line_iou_width_px` and
+`gcs_line_iou_temperature_px` configure the differentiable visible
+lane-region IoU surrogate. Query `GCSLoss` must not compute, return, log, or
+backpropagate the legacy `smooth`, dense `mask/edge`, score-count,
+under-count, count-boundary, spurious-negative, boundary-pseudo-negative,
+query Count Head CE, quality-aware existence, GT4 selective existence, or
+short-geometry terms. Legacy config/CLI keys may remain for old command
+compatibility, but they must not affect active query `GCSLoss`.
+
+Point-valid BCE uses a weighted reduction. Hungarian-matched queries keep
+normal supervision with `target = GT visible mask` and weight `1`. Far
+Hungarian-unmatched queries keep the all-zero target and weight `1`. GT-close
+Hungarian-unmatched visible anchors are ignored, not converted to positives:
+`gcs_point_valid_unmatched_ignore=True`,
+`gcs_point_valid_unmatched_ignore_px=30.0`,
+`gcs_point_valid_unmatched_ignore_anchor_px=30.0`, and
+`gcs_point_valid_unmatched_ignore_min_overlap=3` define the active rule. The
+ignore mask is selected from `pred_points.detach()` against GT-visible anchors
+in training image pixels, affects only `point_valid_loss`, does not reassign
+Hungarian matches, does not change `exist_loss`, point/curve/line-IoU losses,
+decode, NMS, official metrics, model outputs, or the five logged loss items.
+Use `gcs_point_valid_unmatched_ignore=False` only for an explicit legacy-path
+ablation.
+
+For CULane query training, `--gcs-query-count-ce > 0` is invalid under this
+five-loss contract, and the default CULane query YAML must not emit dense
+`aux_mask_logits`, dense `aux_edge_logits`, or `pred_count_logits`.
+
+Historical query loss/log records from the active `424ab1c86` rollback state
+included many additional items such as `smooth_loss`, `mask_loss`,
+`edge_loss`, `count_loss`, `spurious_neg_loss`,
+`boundary_pseudo_neg_loss`, and `query_count_ce_loss`. Those names are now
+legacy run records only unless a future task explicitly restores a separate
+ablation branch.
 
 Post-`424ab1c86` log items such as `short_side_geom_loss`, `far_spur_loss`,
 `farspur_if_loss`, `rank_topk_loss`, `shortside_*`, `rank_*`,
@@ -441,30 +465,13 @@ Per-class ordered-slot count accuracy logs may use `nan`/null internally when
 `NA`. Aggregation uses accumulated `correct/total`; absent classes are skipped
 instead of being logged as `0` or raw `nan`.
 
-`count_boundary_loss` is disabled by default through `gcs_count_boundary=0.0`.
-When enabled, it applies to `sum(sigmoid(pred_logits))` with GT3 upper, GT4
-lower/upper, and GT5 lower boundaries. `gcs_count_boundary_gt5_under_weight`
-defaults to `None`, which follows `gcs_count_boundary_gt5_weight`; setting it
-allows only the GT5 undercount boundary weight to be changed. `cnt_bound_5under`
-logs the unweighted GT5 undercount boundary term.
+Legacy query record: `count_boundary_loss` was disabled by default through
+`gcs_count_boundary=0.0`. This term is not computed, returned, logged, or
+backpropagated by the active 2026-09-08 query five-loss `GCSLoss`.
 
-`boundary_pseudo_neg_loss` is disabled by default through
-`gcs_boundary_pseudo_neg=0.0`. When enabled, it requires `pred_valid_logits`
-and applies only to unmatched queries on images whose GT lane count equals
-`gcs_boundary_pseudo_gt_count`. Candidate queries must have predicted-visible
-anchor count in `[gcs_boundary_pseudo_min_valid, gcs_boundary_pseudo_visible_thr]`,
-existence score at least `gcs_boundary_pseudo_score_thr`, nearest GT lane equal
-to the leftmost or rightmost GT lane, and nearest-GT mean x distance at least
-`gcs_boundary_pseudo_dist_thr`. `gcs_boundary_pseudo_envelope_margin_px=-1.0`
-preserves the old mask. When set to a non-negative margin, the envelope gate is
-computed on query/GT common-visible anchors. For each such anchor, the left and
-right GT envelope is the minimum and maximum valid GT x at that fixed-y anchor.
-A left-boundary candidate must have at least
-`gcs_boundary_pseudo_envelope_ratio_thr` of common-visible anchors left of
-`left_env_x - margin`; a right-boundary candidate must have at least that ratio
-right of `right_env_x + margin`. This changes only the training loss candidate
-mask; it does not change model outputs, matcher assignment, labels, decode,
-NMS, or official metrics.
+Legacy query record: `boundary_pseudo_neg_loss` was disabled by default through
+`gcs_boundary_pseudo_neg=0.0`. This term is not computed, returned, logged, or
+backpropagated by the active 2026-09-08 query five-loss `GCSLoss`.
 
 ### Legacy Post-424 Loss And Diagnostic Records
 

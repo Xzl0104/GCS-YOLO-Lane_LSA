@@ -12,6 +12,7 @@ import cv2
 import numpy as np
 import torch
 from scipy.optimize import linear_sum_assignment
+from scipy.interpolate import CubicSpline
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -34,6 +35,10 @@ from ultralytics.utils.torch_utils import select_device
 DEFAULT_WEIGHTS = ROOT / "runs" / "gcs_lane" / "overfit20" / "weights" / "best.pt"
 DEFAULT_SOURCE = ROOT / "datasets" / "tusimple_fixed_y_k56_960x544" / "images" / "val"
 DEFAULT_LABELS = ROOT / "datasets" / "tusimple_fixed_y_k56_960x544" / "labels_gcs" / "val"
+DEFAULT_CULANE_ARCHIVE_ROOT = Path(r"D:\BaiduNetdiskDownload\CULane")
+CULANE_RAW_SHAPE = (590, 1640)
+CULANE_LANE_WIDTH = 30
+CULANE_IOU_THRESHOLD = 0.5
 
 
 def dataset_defaults(dataset: str) -> dict[str, Path]:
@@ -51,6 +56,37 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--weights", default=str(DEFAULT_WEIGHTS), help="GCS checkpoint .pt or model yaml.")
     parser.add_argument("--source", default=None, help="Image file, image directory, or txt list.")
     parser.add_argument("--labels", default=None, help="labels_gcs directory. Empty means infer from image path.")
+    parser.add_argument(
+        "--metric",
+        choices=("ape", "culane_iou"),
+        default="ape",
+        help="Primary matching metric. Use culane_iou for CULane benchmark F1.",
+    )
+    parser.add_argument(
+        "--culane-archive-root",
+        default=str(DEFAULT_CULANE_ARCHIVE_ROOT),
+        help="Extracted CULane root containing the original .lines.txt annotations.",
+    )
+    parser.add_argument(
+        "--culane-raw-imgsz",
+        nargs=2,
+        type=int,
+        metavar=("H", "W"),
+        default=CULANE_RAW_SHAPE,
+        help="Original CULane image shape used by the official evaluator.",
+    )
+    parser.add_argument(
+        "--culane-lane-width",
+        type=int,
+        default=CULANE_LANE_WIDTH,
+        help="Lane mask width in original CULane pixels.",
+    )
+    parser.add_argument(
+        "--culane-iou-thr",
+        type=float,
+        default=CULANE_IOU_THRESHOLD,
+        help="Strict CULane lane IoU threshold; IoU must be greater than this value.",
+    )
     parser.add_argument(
         "--imgsz",
         nargs="+",
@@ -165,6 +201,238 @@ def load_gcs_label(label_path: Path) -> tuple[np.ndarray, np.ndarray]:
     return ordered_lanes, ordered_valid
 
 
+def _scalar_label_string(value: np.ndarray) -> str:
+    """Read a scalar string stored in a converted CULane NPZ label."""
+    array = np.asarray(value)
+    return str(array.item()) if array.shape == () else str(array.reshape(-1)[0])
+
+
+def parse_culane_lines_file(path: Path) -> list[list[tuple[float, float]]]:
+    """Parse one original CULane ``.lines.txt`` file into pixel-space lanes."""
+    if not path.is_file():
+        raise FileNotFoundError(f"Missing CULane lane annotation: {path}")
+
+    lanes: list[list[tuple[float, float]]] = []
+    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        tokens = line.strip().split()
+        if not tokens:
+            continue
+        if len(tokens) % 2:
+            raise ValueError(f"{path}:{line_number} has an odd number of coordinate values.")
+        points: list[tuple[float, float]] = []
+        for index in range(0, len(tokens), 2):
+            try:
+                x = float(tokens[index])
+                y = float(tokens[index + 1])
+            except ValueError as exc:
+                raise ValueError(f"{path}:{line_number} contains non-numeric coordinates.") from exc
+            if np.isfinite(x) and np.isfinite(y):
+                points.append((x, y))
+        if len(points) >= 2:
+            lanes.append(points)
+    return lanes
+
+
+def culane_lines_path(label_path: Path, archive_root: str | Path) -> Path:
+    """Resolve the original CULane ``.lines.txt`` path recorded in one NPZ label."""
+    with np.load(label_path, allow_pickle=False) as data:
+        if "source_lines" not in data.files:
+            raise KeyError(f"{label_path} does not contain source_lines metadata.")
+        source_lines = _scalar_label_string(data["source_lines"])
+    if not source_lines:
+        raise ValueError(f"{label_path} contains an empty source_lines metadata value.")
+    relative = Path(source_lines.replace("/", os.sep))
+    path = Path(archive_root).expanduser().resolve() / relative
+    if not path.is_file():
+        raise FileNotFoundError(f"Original CULane annotation does not exist: {path}")
+    return path
+
+
+def culane_spline_interp_points(
+    points: list[tuple[float, float]],
+    samples_per_segment: int = 50,
+) -> np.ndarray:
+    """Match the official CULane natural cubic spline interpolation."""
+    if samples_per_segment <= 0:
+        raise ValueError(f"samples_per_segment must be positive, got {samples_per_segment}")
+    clean = np.asarray(points, dtype=np.float64)
+    if clean.ndim != 2 or clean.shape[1] != 2 or clean.shape[0] < 2:
+        return np.zeros((0, 2), dtype=np.float64)
+    if not np.isfinite(clean).all():
+        raise ValueError("CULane lane points contain NaN or Inf.")
+
+    segment_lengths = np.linalg.norm(np.diff(clean, axis=0), axis=1)
+    keep = np.concatenate(([True], segment_lengths > 1e-9))
+    clean = clean[keep]
+    if clean.shape[0] < 2:
+        return np.zeros((0, 2), dtype=np.float64)
+    segment_lengths = np.linalg.norm(np.diff(clean, axis=0), axis=1)
+    arc = np.concatenate(([0.0], np.cumsum(segment_lengths)))
+
+    if clean.shape[0] == 2:
+        fractions = np.linspace(0.0, 1.0, samples_per_segment + 1, dtype=np.float64)
+        return clean[0] + fractions[:, None] * (clean[1] - clean[0])
+
+    spline = CubicSpline(arc, clean, axis=0, bc_type="natural")
+    chunks = []
+    for index, length in enumerate(segment_lengths):
+        local_arc = np.linspace(0.0, length, samples_per_segment, endpoint=False, dtype=np.float64)
+        chunks.append(spline(arc[index] + local_arc))
+    chunks.append(clean[-1][None, :])
+    return np.concatenate(chunks, axis=0)
+
+
+def culane_lane_mask(
+    lane: list[tuple[float, float]] | np.ndarray,
+    image_shape: tuple[int, int],
+    lane_width: int = CULANE_LANE_WIDTH,
+) -> np.ndarray:
+    """Rasterize one lane using the official CULane spline and mask width."""
+    height, width = int(image_shape[0]), int(image_shape[1])
+    lane_width = int(lane_width)
+    if height <= 0 or width <= 0:
+        raise ValueError(f"Invalid CULane mask shape: {image_shape}")
+    if lane_width <= 0:
+        raise ValueError(f"lane_width must be positive, got {lane_width}")
+
+    mask = np.zeros((height, width), dtype=np.uint8)
+    points = np.asarray(lane, dtype=np.float64)
+    if points.ndim != 2 or points.shape[1] != 2 or points.shape[0] < 2:
+        return mask
+    interpolated = culane_spline_interp_points(points.tolist(), samples_per_segment=50)
+    if interpolated.shape[0] < 2:
+        return mask
+    integer_points = np.rint(interpolated).astype(np.int32)
+    for first, second in zip(integer_points[:-1], integer_points[1:]):
+        cv2.line(
+            mask,
+            (int(first[0]), int(first[1])),
+            (int(second[0]), int(second[1])),
+            color=1,
+            thickness=lane_width,
+            lineType=cv2.LINE_8,
+        )
+    return mask
+
+
+def culane_lane_iou(
+    lane_a: list[tuple[float, float]] | np.ndarray,
+    lane_b: list[tuple[float, float]] | np.ndarray,
+    image_shape: tuple[int, int],
+    lane_width: int = CULANE_LANE_WIDTH,
+) -> float:
+    """Calculate CULane region IoU for one lane pair."""
+    mask_a = culane_lane_mask(lane_a, image_shape=image_shape, lane_width=lane_width)
+    mask_b = culane_lane_mask(lane_b, image_shape=image_shape, lane_width=lane_width)
+    intersection = int(np.logical_and(mask_a > 0, mask_b > 0).sum())
+    union = int(np.logical_or(mask_a > 0, mask_b > 0).sum())
+    return float(intersection / union) if union else 0.0
+
+
+def load_culane_ground_truth(
+    label_path: Path,
+    archive_root: str | Path,
+    raw_shape: tuple[int, int],
+) -> list[list[tuple[float, float]]]:
+    """Load and validate original CULane lanes for official-style evaluation."""
+    with np.load(label_path, allow_pickle=False) as data:
+        if "raw_image_shape" in data.files:
+            recorded_shape = tuple(int(x) for x in np.asarray(data["raw_image_shape"]).reshape(-1)[:2])
+            if recorded_shape != tuple(raw_shape):
+                raise ValueError(
+                    f"{label_path}: raw_image_shape={recorded_shape} does not match requested {tuple(raw_shape)}."
+                )
+    return parse_culane_lines_file(culane_lines_path(label_path, archive_root))
+
+
+def prediction_lane_points_raw(
+    lane: dict,
+    raw_shape: tuple[int, int],
+) -> np.ndarray:
+    """Map one decoded normalized lane back to original CULane pixels."""
+    points = np.asarray(lane.get("visible_points_norm", lane["points_norm"]), dtype=np.float64)
+    if points.ndim != 2 or points.shape[1] != 2:
+        raise ValueError(f"Decoded lane points must have shape N x 2, got {points.shape}.")
+    raw_height, raw_width = int(raw_shape[0]), int(raw_shape[1])
+    return points * np.asarray([raw_width, raw_height], dtype=np.float64)
+
+
+def match_culane_lanes(
+    pred_lanes: list[dict],
+    gt_lanes: list[list[tuple[float, float]]],
+    raw_shape: tuple[int, int],
+    lane_width: int = CULANE_LANE_WIDTH,
+    iou_threshold: float = CULANE_IOU_THRESHOLD,
+) -> tuple[dict, list[dict]]:
+    """Match lane regions with the official CULane IoU/Hungarian protocol."""
+    if not 0.0 <= float(iou_threshold) <= 1.0:
+        raise ValueError(f"iou_threshold must be in [0, 1], got {iou_threshold}")
+
+    pred_points = [prediction_lane_points_raw(lane, raw_shape=raw_shape) for lane in pred_lanes]
+    pred_masks = [
+        culane_lane_mask(pred_lane, image_shape=raw_shape, lane_width=lane_width)
+        for pred_lane in pred_points
+    ]
+    gt_masks = [
+        culane_lane_mask(gt_lane, image_shape=raw_shape, lane_width=lane_width)
+        for gt_lane in gt_lanes
+    ]
+    pred_binary = [mask > 0 for mask in pred_masks]
+    gt_binary = [mask > 0 for mask in gt_masks]
+    ious = np.zeros((len(pred_points), len(gt_lanes)), dtype=np.float64)
+    for pred_index, pred_mask in enumerate(pred_binary):
+        pred_area = int(pred_mask.sum())
+        for gt_index, gt_mask in enumerate(gt_binary):
+            intersection = int(np.logical_and(pred_mask, gt_mask).sum())
+            union = pred_area + int(gt_mask.sum()) - intersection
+            ious[pred_index, gt_index] = float(intersection / union) if union else 0.0
+
+    if ious.size:
+        pred_indices, gt_indices = linear_sum_assignment(-ious)
+    else:
+        pred_indices = np.zeros((0,), dtype=np.int64)
+        gt_indices = np.zeros((0,), dtype=np.int64)
+
+    matched: list[dict] = []
+    tp = 0
+    iou_tp: list[float] = []
+    iou_matched_all: list[float] = []
+    iou_fp_matched: list[float] = []
+    for pred_index, gt_index in zip(pred_indices.tolist(), gt_indices.tolist()):
+        value = float(ious[pred_index, gt_index])
+        is_tp = value > float(iou_threshold)
+        tp += int(is_tp)
+        iou_matched_all.append(value)
+        if is_tp:
+            iou_tp.append(value)
+        else:
+            iou_fp_matched.append(value)
+        matched.append(
+            {
+                "pred": int(pred_index),
+                "gt": int(gt_index),
+                "culane_iou": round(value, 6),
+                "tp": bool(is_tp),
+            }
+        )
+
+    metrics = {
+        "metric_name": "culane_iou",
+        "metric_threshold": float(iou_threshold),
+        "tp": int(tp),
+        "fp": int(len(pred_lanes) - tp),
+        "fn": int(len(gt_lanes) - tp),
+        "culane_iou_tp": iou_tp,
+        "culane_iou_matched_all": iou_matched_all,
+        "culane_iou_fp_matched": iou_fp_matched,
+        "strict_match_count": len(matched),
+        "diagnostic_match_count": len(matched),
+        "diagnostic_matches": matched,
+        "curvature_error": [],
+    }
+    return metrics, matched
+
+
 def lane_ape_px(pred: np.ndarray, gt: np.ndarray, valid: np.ndarray, scale: np.ndarray) -> float:
     """Average point error in pixels for one predicted/GT lane pair."""
     mask = valid > 0.5
@@ -273,6 +541,8 @@ def match_lanes(
 
     if n_pred == 0 or n_gt == 0:
         return {
+            "metric_name": "ape",
+            "metric_threshold": float(ape_thr),
             "tp": 0,
             "fp": n_pred,
             "fn": n_gt,
@@ -344,6 +614,8 @@ def match_lanes(
     tp = len(matched_tp_ape)
 
     return {
+        "metric_name": "ape",
+        "metric_threshold": float(ape_thr),
         "tp": tp,
         "fp": n_pred - tp,
         "fn": n_gt - tp,
@@ -378,7 +650,14 @@ def stat_min(values: list[float]) -> float | None:
     return None if not values else round(float(np.min(values)), 4)
 
 
-def summarize(records: list[dict], total_infer: float, total_post: float, ape_thr: float) -> dict:
+def summarize(
+    records: list[dict],
+    total_infer: float,
+    total_post: float,
+    ape_thr: float,
+    metric_name: str = "ape",
+    metric_threshold: float | None = None,
+) -> dict:
     """Aggregate per-image GCS metrics."""
     tp = sum(int(x["metrics"]["tp"]) for x in records)
     fp = sum(int(x["metrics"]["fp"]) for x in records)
@@ -386,7 +665,10 @@ def summarize(records: list[dict], total_infer: float, total_post: float, ape_th
     ape_tp = [float(v) for x in records for v in x["metrics"].get("ape_tp", x["metrics"].get("ape", []))]
     ape_matched_all = [float(v) for x in records for v in x["metrics"].get("ape_matched_all", [])]
     ape_fp_matched = [float(v) for x in records for v in x["metrics"].get("ape_fp_matched", [])]
-    curve = [float(v) for x in records for v in x["metrics"]["curvature_error"]]
+    curve = [float(v) for x in records for v in x["metrics"].get("curvature_error", [])]
+    iou_tp = [float(v) for x in records for v in x["metrics"].get("culane_iou_tp", [])]
+    iou_matched_all = [float(v) for x in records for v in x["metrics"].get("culane_iou_matched_all", [])]
+    iou_fp_matched = [float(v) for x in records for v in x["metrics"].get("culane_iou_fp_matched", [])]
     pred_counts = [int(x["pred_lanes"]) for x in records]
     gt_counts = [int(x["gt_lanes"]) for x in records]
     lane_count_abs_error = sum(abs(p - g) for p, g in zip(pred_counts, gt_counts))
@@ -415,6 +697,8 @@ def summarize(records: list[dict], total_infer: float, total_post: float, ape_th
 
     summary = {
         "images": len(records),
+        "metric_name": str(metric_name),
+        "metric_threshold": None if metric_threshold is None else float(metric_threshold),
         "ape_threshold_px": float(ape_thr),
         "ape_mean_px": stat_mean(ape_tp),
         "ape_median_px": stat_median(ape_tp),
@@ -435,6 +719,15 @@ def summarize(records: list[dict], total_infer: float, total_post: float, ape_th
         "fp_matched_ape_mean_px": stat_mean(ape_fp_matched),
         "fp_matched_ape_median_px": stat_median(ape_fp_matched),
         "fp_matched_ape_max_px": stat_max(ape_fp_matched),
+        "culane_iou_tp_mean": stat_mean(iou_tp),
+        "culane_iou_tp_median": stat_median(iou_tp),
+        "culane_iou_tp_min": stat_min(iou_tp),
+        "culane_iou_tp_max": stat_max(iou_tp),
+        "culane_iou_matched_all_mean": stat_mean(iou_matched_all),
+        "culane_iou_matched_all_median": stat_median(iou_matched_all),
+        "culane_iou_matched_all_min": stat_min(iou_matched_all),
+        "culane_iou_matched_all_max": stat_max(iou_matched_all),
+        "culane_iou_fp_matched_mean": stat_mean(iou_fp_matched),
         "curvature_error_mean_px": None if not curve else round(float(np.mean(curve)), 4),
         "curvature_error_median_px": None if not curve else round(float(np.median(curve)), 4),
         "tp": int(tp),
@@ -493,6 +786,11 @@ def build_eval_config(
     gcs_num_slots: int = 5,
     gcs_min_interval_points: int = 2,
     gcs_bottom_order_margin_px: float = 2.0,
+    metric: str = "ape",
+    culane_archive_root: str | Path | None = None,
+    culane_raw_shape: tuple[int, int] = CULANE_RAW_SHAPE,
+    culane_lane_width: int = CULANE_LANE_WIDTH,
+    culane_iou_thr: float = CULANE_IOU_THRESHOLD,
 ) -> dict:
     """Build the eval_summary.json config block for query or ordered-slot decode."""
     config = {
@@ -501,6 +799,7 @@ def build_eval_config(
         "labels": None if label_dir is None else str(label_dir.resolve()),
         "imgsz": [int(imgsz[0]), int(imgsz[1])],
         "decode_mode": str(decode_mode),
+        "metric_name": str(metric),
         "ape_threshold_px": float(ape_thr),
         "match_gate_px": float(ape_thr if match_gate_px is None else match_gate_px),
         "max_x_dist": float(max_x_dist),
@@ -509,6 +808,17 @@ def build_eval_config(
         "device": str(device),
         "half": bool(half),
     }
+    if str(metric) == "culane_iou":
+        config.update(
+            {
+                "culane_archive_root": None
+                if culane_archive_root is None
+                else str(Path(culane_archive_root).expanduser().resolve()),
+                "culane_raw_shape": [int(culane_raw_shape[0]), int(culane_raw_shape[1])],
+                "culane_lane_width": int(culane_lane_width),
+                "culane_iou_threshold": float(culane_iou_thr),
+            }
+        )
     if decode_mode == "ordered_slot":
         runtime_cfg = ordered_slot_decode_runtime_config(context="eval_gcs")
         ordered_params = ordered_slot_decode_params(
@@ -582,8 +892,28 @@ def evaluate(
     save_img: bool = False,
     save_txt: bool = False,
     line_width: int = 2,
+    metric: str = "ape",
+    culane_archive_root: str | Path | None = DEFAULT_CULANE_ARCHIVE_ROOT,
+    culane_raw_shape: tuple[int, int] = CULANE_RAW_SHAPE,
+    culane_lane_width: int = CULANE_LANE_WIDTH,
+    culane_iou_thr: float = CULANE_IOU_THRESHOLD,
 ) -> dict:
     """Evaluate a GCS-YOLO-Lane checkpoint on image/labels_gcs pairs."""
+    metric = str(metric).lower()
+    if metric not in {"ape", "culane_iou"}:
+        raise ValueError(f"Unsupported evaluation metric: {metric!r}")
+    if metric == "culane_iou":
+        if culane_archive_root is None:
+            raise ValueError("--culane-archive-root is required for metric='culane_iou'.")
+        if tuple(int(x) for x in culane_raw_shape) != CULANE_RAW_SHAPE:
+            raise ValueError(
+                "CULane official evaluation expects raw H,W=(590, 1640); "
+                f"got {tuple(culane_raw_shape)}."
+            )
+        if int(culane_lane_width) <= 0:
+            raise ValueError(f"--culane-lane-width must be positive, got {culane_lane_width}")
+        if not 0.0 <= float(culane_iou_thr) <= 1.0:
+            raise ValueError(f"--culane-iou-thr must be in [0, 1], got {culane_iou_thr}")
     imgsz = normalize_imgsz(imgsz)
     device_obj = select_device(device, verbose=False)
     model = load_gcs_model(weights, device=device_obj, half=half, gcs_imgsz=imgsz)
@@ -638,14 +968,24 @@ def evaluate(
         img = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
         if img is None:
             raise FileNotFoundError(f"Failed to read image: {image_path}")
+        source_shape = DATASET_IMAGE_SHAPES["culane"] if metric == "culane_iou" else imgsz
         assert_gcs_shape(
             img.shape[:2],
-            imgsz,
+            source_shape,
             name="evaluation image",
             context=f"eval_gcs.evaluate({image_path})",
         )
         label_path = label_path_for_image(image_path, label_dir)
         gt_lanes, gt_valid = load_gcs_label(label_path)
+        raw_gt_lanes = (
+            load_culane_ground_truth(
+                label_path,
+                archive_root=culane_archive_root,
+                raw_shape=tuple(int(x) for x in culane_raw_shape),
+            )
+            if metric == "culane_iou"
+            else None
+        )
 
         tensor = preprocess_image(img, imgsz=imgsz, device=device_obj, half=half)
         _sync_if_cuda(device_obj)
@@ -685,16 +1025,25 @@ def evaluate(
                 count_aware_max_k=count_aware_max_k,
                 count_aware_length_norm=count_aware_length_norm,
             )
-        metrics, matches = match_lanes(
-            lanes,
-            gt_lanes,
-            gt_valid,
-            img.shape[:2],
-            ape_thr=ape_thr,
-            match_gate_px=match_gate_px,
-            max_x_dist=max_x_dist,
-            min_overlap=min_overlap,
-        )
+        if metric == "culane_iou":
+            metrics, matches = match_culane_lanes(
+                lanes,
+                raw_gt_lanes or [],
+                raw_shape=tuple(int(x) for x in culane_raw_shape),
+                lane_width=culane_lane_width,
+                iou_threshold=culane_iou_thr,
+            )
+        else:
+            metrics, matches = match_lanes(
+                lanes,
+                gt_lanes,
+                gt_valid,
+                img.shape[:2],
+                ape_thr=ape_thr,
+                match_gate_px=match_gate_px,
+                max_x_dist=max_x_dist,
+                min_overlap=min_overlap,
+            )
         post_s = time.perf_counter() - t1
         total_infer += infer_s
         total_post += post_s
@@ -711,7 +1060,7 @@ def evaluate(
                 "height": int(img.shape[0]),
                 "width": int(img.shape[1]),
                 "pred_lanes": len(lanes),
-                "gt_lanes": int(gt_lanes.shape[0]),
+                "gt_lanes": int(len(raw_gt_lanes) if metric == "culane_iou" else gt_lanes.shape[0]),
                 "inference_ms": round(infer_s * 1000.0, 4),
                 "postprocess_ms": round(post_s * 1000.0, 4),
                 "metrics": metrics,
@@ -719,7 +1068,14 @@ def evaluate(
             }
         )
 
-    summary = summarize(records, total_infer=total_infer, total_post=total_post, ape_thr=ape_thr)
+    summary = summarize(
+        records,
+        total_infer=total_infer,
+        total_post=total_post,
+        ape_thr=ape_thr,
+        metric_name=metric,
+        metric_threshold=culane_iou_thr if metric == "culane_iou" else ape_thr,
+    )
     output = {
         "summary": summary,
         "config": build_eval_config(
@@ -748,6 +1104,11 @@ def evaluate(
             warmup=warmup,
             device=device,
             half=half,
+            metric=metric,
+            culane_archive_root=culane_archive_root,
+            culane_raw_shape=tuple(int(x) for x in culane_raw_shape),
+            culane_lane_width=culane_lane_width,
+            culane_iou_thr=culane_iou_thr,
         ),
     }
     if active_decode_mode == "ordered_slot":
@@ -802,6 +1163,11 @@ def main() -> None:
         save_img=args.save_img,
         save_txt=args.save_txt,
         line_width=args.line_width,
+        metric=args.metric,
+        culane_archive_root=args.culane_archive_root,
+        culane_raw_shape=tuple(args.culane_raw_imgsz),
+        culane_lane_width=args.culane_lane_width,
+        culane_iou_thr=args.culane_iou_thr,
     )
 
 

@@ -1,7 +1,13 @@
-train: ../datasets/culane/images/train
-val: ../datasets/culane/images/val
-test: ../datasets/culane/images/test
+train: ../datasets/culane_fixed_y_590x960/images/train
+val: ../datasets/culane_fixed_y_590x960/images/val
+test: ../datasets/culane_fixed_y_590x960/images/test
 image_shape: [384, 960]  # H, W; CULane is trained as 960x384 (W x H)
+point_mode: fixed_y
+num_points: 56
+fixed_y_original_h: 590
+fixed_y_start_px: 589
+fixed_y_end_px: 39
+fixed_y: [0.9983050847457627, 0.06610169491525424]
 
 names:
   0: lane

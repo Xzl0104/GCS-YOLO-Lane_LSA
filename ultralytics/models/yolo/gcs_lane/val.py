@@ -18,6 +18,7 @@ from ultralytics.models.gcs.loss_ordered_slot import OrderedSlotGCSLoss
 from ultralytics.nn.modules import GCSLaneHead
 from ultralytics.nn.tasks import load_checkpoint
 from ultralytics.utils import ROOT
+from ultralytics.utils.gcs_fixed_y import build_fixed_y_contract
 from ultralytics.utils.gcs_shape import assert_gcs_image_tensor, assert_gcs_shape, normalize_imgsz
 from ultralytics.utils.gcs_postprocess import decode_gcs_predictions
 from ultralytics.utils.torch_utils import select_device
@@ -27,109 +28,22 @@ LOSS_NAMES = (
     "exist_loss",
     "point_loss",
     "point_valid_loss",
-    "smooth_loss",
     "curve_loss",
-    "mask_loss",
-    "edge_loss",
-    "count_loss",
-    "count_under5_loss",
-    "count_boundary_loss",
-    "spurious_neg_loss",
-    "spurious_negative_count",
-    "spur_cand",
-    "spur_prot",
-    "spur_final",
-    "spur_neg",
-    "spur_cnt_gt3",
-    "spur_cnt_gt4",
-    "spur_cnt_gt5",
-    "spur_neg_gt3",
-    "spur_neg_gt4",
-    "spur_neg_gt5",
-    "count_score_mean",
-    "gt5_short_pos_count",
-    "gt5_short_pos_anchor_count",
-    "gt5_short_point_valid_loss",
-    "cnt_bound_5under",
-    "cnt_score",
-    "boundary_pseudo_neg_loss",
-    "boundary_pseudo_count",
-    "boundary_pseudo_score_mean",
-    "query_count_ce_loss",
-    "query_count_acc",
-    "query_count_pred_mean",
+    "visible_line_iou_loss",
 )
 LOSS_GAIN_ARGS = (
     "gcs_exist",
     "gcs_point",
     "gcs_point_valid",
-    "gcs_smooth",
     "gcs_curve",
-    "gcs_mask",
-    "gcs_edge",
-    "gcs_count",
-    "gcs_count_under5",
-    "gcs_count_boundary",
-    (("gcs_spurious_neg", 0.0), ("gcs_spurious_neg_weight", 1.0)),
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    "gcs_boundary_pseudo_neg",
-    None,
-    None,
-    "gcs_query_count_ce",
-    None,
-    None,
+    "gcs_line_iou",
 )
 DEFAULT_LOSS_GAINS = (
     2.0,
     15.0,
     1.0,
-    0.05,
     0.1,
-    0.2,
-    0.2,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-    0.0,
+    1.0,
 )
 METRIC_NAMES = (
     "precision",
@@ -301,7 +215,27 @@ class GCSLaneValidator:
         assert imgsz[0] != imgsz[1], f"GCS validation resolved square H,W={imgsz}; expected rectangular GCS input."
         batch = max(int(self._arg(self.args, "batch", 1) or 1), 1)
         workers = max(int(self._arg(self.args, "workers", 0) or 0), 0)
-        dataset = GCSLaneDataset(img_path=image_dir, imgsz=imgsz, label_dir=label_dir, strict=True)
+        point_mode = data.get("point_mode")
+        fixed_y_contract = None
+        if point_mode is not None and str(point_mode).lower() in {"fixed_y", "fixed-y", "fixedy"}:
+            required = ("num_points", "fixed_y_original_h", "fixed_y_start_px", "fixed_y_end_px")
+            missing = [key for key in required if data.get(key) is None]
+            if missing:
+                raise KeyError(f"fixed_y validation data YAML is missing contract fields: {missing}.")
+            fixed_y_contract = build_fixed_y_contract(
+                original_h=int(data["fixed_y_original_h"]),
+                start_px=float(data["fixed_y_start_px"]),
+                end_px=float(data["fixed_y_end_px"]),
+                k=int(data["num_points"]),
+            )
+        dataset = GCSLaneDataset(
+            img_path=image_dir,
+            imgsz=imgsz,
+            label_dir=label_dir,
+            strict=True,
+            point_mode=point_mode,
+            fixed_y_contract=fixed_y_contract,
+        )
         assert_gcs_shape(dataset.imgsz, imgsz, name="validation dataset.imgsz", context="GCSLaneValidator._build_dataloader")
         return build_dataloader(dataset, batch=batch, workers=workers, shuffle=False, rank=-1, drop_last=False)
 

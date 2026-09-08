@@ -22,7 +22,19 @@ The model is expected to output lane instances as ordered 2D point sequences, no
 
 This branch imports the historical `5-25-3.zip` algorithm and is now the current K56 mainline.
 
-Only the explicit TuSimple contract was changed from the legacy `Q=8/K=32/fixed_y=[0.98,0.25]` setup to the current `Q=12/K=56/fixed_y=710/720 -> 160/720` setup, plus the branch-local default-off `count_boundary_loss`, train-only `gcs_hard_sampling`, default-off E3-lite `gcs_spurious_neg`, training-time `official_best` protocol additions, the default-off `valid_before_maxdet` query decode option present at `424ab1c86`, and the 2026-07-06 user-requested default-off query Count Head ablation. The 5-25-3 algorithm body is intentionally not upgraded to the later mainline Count Head, Quality Head, Survival Head, near-miss, post-`424ab1c86` short-side geometry, far-spurious, or count-contract/ranking machinery.
+Only the explicit TuSimple contract was changed from the legacy
+`Q=8/K=32/fixed_y=[0.98,0.25]` setup to the current
+`Q=12/K=56/fixed_y=710/720 -> 160/720` setup, plus train-only
+`gcs_hard_sampling`, training-time `official_best` protocol additions, the
+default-off `valid_before_maxdet` query decode option present at `424ab1c86`,
+and the 2026-07-06 user-requested default-off query Count Head ablation. As of
+2026-09-08, active query `GCSLoss` is the five-term loss contract; historical
+default-off `count_boundary_loss` and `gcs_spurious_neg` keys remain only for
+old run interpretation and command compatibility unless a future task
+explicitly restores those loss terms. The 5-25-3 algorithm body is
+intentionally not upgraded to the later mainline Count Head, Quality Head,
+Survival Head, near-miss, post-`424ab1c86` short-side geometry, far-spurious,
+or count-contract/ranking machinery.
 
 Previous q12-k56 experiment documentation remains historical context. Do not delete it, and do not read it as the active algorithm unless it is explicitly marked as a legacy run record.
 

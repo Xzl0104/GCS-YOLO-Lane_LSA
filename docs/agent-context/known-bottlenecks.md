@@ -20,6 +20,79 @@ GT4-hard diagnostics, `tools/diagnose_tusimple_count_confusion.py`,
 only. They do not describe currently available code, CLI flags, loss terms,
 diagnostic scripts, configs, model outputs, or active selected candidates.
 
+## 2026-09-05: CULane GT4 E2 Raw-Query Diagnosis
+
+The completed E2 run is a CULane train-split diagnosis, not an active TuSimple
+selection result and not an F1-improvement experiment. It used the baseline
+checkpoint and recorded raw-query coverage before treating postprocessing as
+the explanation for the validation failure:
+
+```text
+workspace = /root/GCS-YOLO-Lane_env30_next
+run = runs/gcs_lane/e2_culane_train_gt4_raw_full
+checkpoint =
+  runs/gcs_lane/culane_fixedy0to4_fp32aux_countce05_4090_full_20260903_r2_archivefix/
+  weights/culane_val_best.pt
+protocol = CULane train, imgsz=384 960, Q=12, K=56,
+           IoU=0.5, point_valid_thr=0.30, conf=0.30,
+           nms_dist_px=60, max_det=5
+```
+
+The run covered `88,880` train images, including `35,859` GT4 images and
+`143,436` GT4 lanes. Its per-lane diagnosis was:
+
+| Category | Count | Ratio |
+| --- | ---: | ---: |
+| `raw_candidate_good` | 129,675 | 90.4062% |
+| `geometry_near_miss` | 8,019 | 5.5906% |
+| `score_failure` | 5,372 | 3.7452% |
+| `geometry_missing` | 335 | 0.2336% |
+| `valid_span_failure` | 5 | 0.0035% |
+| `decoder_failure` | 30 | 0.0209% |
+
+Interpretation:
+
+- The train set usually has a raw query that geometrically covers the GT4
+  lane. Therefore the previously observed validation-set population with no
+  raw visible candidate should be treated as a train-to-validation
+  generalization gap on hard GT4 geometry, not as a train-wide candidate
+  generation failure.
+- The largest train-side geometric bucket is `geometry_near_miss`
+  (`8,019/143,436`). The candidates are often close but fail the IoU gate,
+  consistent with horizontal offset, bottom endpoint, curvature, or visible
+  span errors. Near-miss visualization and train/validation hard-GT4
+  comparison are higher-value than simply increasing query count.
+- `score_failure` is an independent bottleneck (`5,372/143,436`). The
+  geometry is already usable in this bucket, but existence scores are low.
+  The fourth lane slot is especially affected:
+  `gt_index=3` has `score_failure=3,260/35,859=9.091%`, versus
+  `3.790%, 0.719%, 1.380%` for indices `0,1,2`.
+- Decoder and collision explanations are not supported as primary causes:
+  there are only `30` decoder failures, `5` valid-span failures, and `82`
+  best-query collision rows (`0.0572%`).
+
+Actionable bottleneck order:
+
+1. Compare train and validation hard GT4 near-miss samples and visualize
+   endpoint, curvature, edge, short-visible, and occlusion patterns.
+2. Test a selective geometry intervention targeted at the observed
+   near-miss shapes, such as hard-GT4 sampling plus endpoint/visible-anchor
+   supervision or a data-derived reference design, while keeping it
+   default-off and requiring an official-val gate.
+3. Separately test a selective positive existence-score rescue for matched
+   GT4 candidates, with an overcount guard; do not globally relax the
+   existence target because prior evidence showed official-val FN/ACC
+   regressions.
+4. Do not spend the next experiment solely on NMS, `max_det`, valid-loss
+   decode changes, or the inactive later-mainline Count/Quality/Survival
+   mechanisms.
+
+The E2 artifacts are stored remotely as
+`gt4_train_hardset.jsonl`, `gt4_train_hardset.csv`, and
+`gt4_train_hardset_summary.json` under the run directory. These artifacts
+support diagnosis only; they do not justify claiming that CULane F1 has
+reached `0.8`.
+
 ## Data And Geometry
 
 - The active fixed-y anchors must be `710, 700, 690, ..., 160` normalized by original height `720`.

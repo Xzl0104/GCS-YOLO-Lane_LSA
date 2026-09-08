@@ -1,6 +1,8 @@
 # Ultralytics AGPL-3.0 License - https://ultralytics.com/license
 """GCS-YOLO-Lane neural network modules."""
 
+from contextlib import nullcontext
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -215,6 +217,13 @@ class GCSLaneHead(nn.Module):
         max_lanes=5,
         count_classes=None,
         query_count_head: bool = False,
+        fixed_y_original_h=720,
+        fixed_y_start_px=710,
+        fixed_y_end_px=160,
+        geometry_aware_exist: bool = False,
+        two_stage_refine: bool = False,
+        gated_multiscale: bool = False,
+        proposal_state_refine: bool = False,
     ):
         """Initialize the GCS lane query decoder and training-only auxiliary heads."""
         super().__init__()
@@ -257,10 +266,27 @@ class GCSLaneHead(nn.Module):
             if int(num_queries) != 5:
                 raise ValueError(f"GCSLaneHead ordered_slot requires num_queries=5, got {num_queries}.")
         else:
-            self.num_slots = 5
-            self.min_lanes = 2
-            self.max_lanes = 5
-            self.count_classes = 4
+            self.num_slots = int(num_slots)
+            if self.num_slots <= 0:
+                raise ValueError(f"GCSLaneHead num_slots must be positive, got {num_slots}.")
+            self.min_lanes = int(min_lanes)
+            self.max_lanes = int(max_lanes)
+            if self.min_lanes < 0 or self.max_lanes < self.min_lanes:
+                raise ValueError(
+                    f"GCSLaneHead query lane bounds must satisfy 0 <= min_lanes <= max_lanes, "
+                    f"got {min_lanes}/{max_lanes}."
+                )
+            if self.max_lanes > int(num_queries):
+                raise ValueError(
+                    f"GCSLaneHead query max_lanes={self.max_lanes} exceeds num_queries={num_queries}."
+                )
+            expected_count_classes = self.max_lanes - self.min_lanes + 1
+            self.count_classes = int(count_classes) if count_classes is not None else expected_count_classes
+            if self.count_classes != expected_count_classes:
+                raise ValueError(
+                    f"GCSLaneHead query count_classes must be max_lanes-min_lanes+1={expected_count_classes}, "
+                    f"got {self.count_classes}."
+                )
         self.num_queries = int(num_queries)
         self.num_points = int(num_points)
         self.aux = aux
@@ -269,12 +295,44 @@ class GCSLaneHead(nn.Module):
             self.point_mode = "fixed_y"
         if self.point_mode not in {"free", "fixed_y"}:
             raise ValueError(f"GCSLaneHead point_mode must be 'free' or 'fixed_y', got {point_mode!r}.")
+        if proposal_state_refine and not two_stage_refine:
+            raise ValueError(
+                "GCSLaneHead proposal_state_refine requires two_stage_refine=True "
+                "so the updated proposal state can drive a second prediction stage."
+            )
+        if proposal_state_refine and self.point_mode != "fixed_y":
+            raise ValueError(
+                "GCSLaneHead proposal_state_refine currently requires point_mode='fixed_y'."
+            )
         self.fixed_y_start = float(fixed_y_start)
         self.fixed_y_end = float(fixed_y_end)
+        self.fixed_y_original_h = int(fixed_y_original_h)
+        self.fixed_y_start_px = float(fixed_y_start_px)
+        self.fixed_y_end_px = float(fixed_y_end_px)
+        self.geometry_aware_exist = bool(geometry_aware_exist)
+        self.two_stage_refine = bool(two_stage_refine)
+        self.gated_multiscale = bool(gated_multiscale)
+        self.proposal_state_refine = bool(proposal_state_refine)
         if not (0.0 <= self.fixed_y_end < self.fixed_y_start <= 1.0):
             raise ValueError(
                 f"Expected 0 <= fixed_y_end < fixed_y_start <= 1, got "
                 f"{self.fixed_y_end} < {self.fixed_y_start}."
+            )
+        if self.fixed_y_original_h <= 1:
+            raise ValueError(f"GCSLaneHead fixed_y_original_h must be > 1, got {fixed_y_original_h}.")
+        if not (0.0 <= self.fixed_y_end_px < self.fixed_y_start_px < self.fixed_y_original_h):
+            raise ValueError(
+                "GCSLaneHead fixed-y pixel anchors must satisfy "
+                f"0 <= end < start < original_h, got {self.fixed_y_end_px}, "
+                f"{self.fixed_y_start_px}, {self.fixed_y_original_h}."
+            )
+        normalized_start = self.fixed_y_start_px / float(self.fixed_y_original_h)
+        normalized_end = self.fixed_y_end_px / float(self.fixed_y_original_h)
+        if abs(self.fixed_y_start - normalized_start) > 1e-6 or abs(self.fixed_y_end - normalized_end) > 1e-6:
+            raise ValueError(
+                "GCSLaneHead fixed-y normalized and pixel contracts disagree: "
+                f"normalized=({self.fixed_y_start}, {self.fixed_y_end}), "
+                f"pixel=({self.fixed_y_start_px}, {self.fixed_y_end_px})/{self.fixed_y_original_h}."
             )
         if self.point_mode == "fixed_y":
             self._validate_fixed_y_anchors()
@@ -327,11 +385,36 @@ class GCSLaneHead(nn.Module):
             nn.ReLU(inplace=True),
             nn.Linear(c1, 1),
         )
+        if self.two_stage_refine:
+            self.point_refine_mlp_stage2 = nn.Sequential(
+                nn.Linear(c1 * 2, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, 1),
+            )
+        if self.proposal_state_refine:
+            self.proposal_state_update_mlp = nn.Sequential(
+                nn.Linear(c1 * 4 + 9, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, c1),
+            )
+            self.proposal_state_delta_norm = nn.LayerNorm(c1)
+        if self.gated_multiscale:
+            self.multiscale_gate = nn.Sequential(
+                nn.Linear(c1 * 3 + 2, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, 3),
+            )
         self.exist_mlp = nn.Sequential(
             nn.Linear(c1, c1),
             nn.ReLU(inplace=True),
             nn.Linear(c1, 1),
         )
+        if self.geometry_aware_exist:
+            self.geometry_exist_delta_mlp = nn.Sequential(
+                nn.Linear(c1 * 4 + 9, c1),
+                nn.ReLU(inplace=True),
+                nn.Linear(c1, 1),
+            )
         self.query_count_head = self.gcs_mode == "query" and bool(query_count_head)
         if self.query_count_head:
             self.query_count_mlp = nn.Sequential(
@@ -370,6 +453,14 @@ class GCSLaneHead(nn.Module):
         self._init_point_valid_head()
         self._init_point_refine_head()
         self._init_point_valid_refine_head()
+        if self.two_stage_refine:
+            self._init_point_refine_stage2_head()
+        if self.proposal_state_refine:
+            self._init_proposal_state_update()
+        if self.gated_multiscale:
+            self._init_multiscale_gate()
+        if self.geometry_aware_exist:
+            self._init_geometry_exist_delta_head()
         if self.gcs_mode == "ordered_slot":
             self._init_interval_heads()
         if self.query_count_head:
@@ -380,15 +471,25 @@ class GCSLaneHead(nn.Module):
         return torch.linspace(float(self.fixed_y_start), float(self.fixed_y_end), self.num_points)
 
     def _validate_fixed_y_anchors(self) -> None:
-        """Fail fast unless fixed-y anchors match the TuSimple K56 contract."""
+        """Fail fast unless fixed-y anchors match this head's explicit contract."""
         anchors = self._build_fixed_y_anchors().detach().float().reshape(-1)
-        if anchors.numel() != 56:
-            raise ValueError(f"GCSLaneHead fixed_y_anchors: K mismatch, got {anchors.numel()}, expected 56.")
-        anchors_px = anchors * 720.0
-        expected_desc = torch.arange(710.0, 150.0, -10.0, dtype=anchors_px.dtype, device=anchors_px.device)
-        if not torch.allclose(anchors_px, expected_desc, atol=1e-3):
+        if anchors.numel() != self.num_points:
             raise ValueError(
-                "GCSLaneHead fixed_y_anchors mismatch; expected desc 710..160 step -10."
+                f"GCSLaneHead fixed_y_anchors: K mismatch, got {anchors.numel()}, expected {self.num_points}."
+            )
+        anchors_px = anchors * float(self.fixed_y_original_h)
+        expected_desc = torch.linspace(
+            float(self.fixed_y_start_px),
+            float(self.fixed_y_end_px),
+            self.num_points,
+            dtype=anchors_px.dtype,
+            device=anchors_px.device,
+        )
+        if not torch.allclose(anchors_px, expected_desc, atol=1e-3, rtol=0.0):
+            raise ValueError(
+                "GCSLaneHead fixed_y_anchors mismatch with the configured explicit pixel contract: "
+                f"expected {self.fixed_y_start_px:g}..{self.fixed_y_end_px:g} "
+                f"for original_h={self.fixed_y_original_h}, K={self.num_points}."
             )
 
     def _build_point_references(self):
@@ -434,6 +535,30 @@ class GCSLaneHead(nn.Module):
         nn.init.normal_(final.weight, mean=0.0, std=5e-3)
         nn.init.zeros_(final.bias)
 
+    def _init_point_refine_stage2_head(self):
+        """Initialize the second geometry refinement stage as a no-op residual."""
+        final = self.point_refine_mlp_stage2[-1]
+        nn.init.zeros_(final.weight)
+        nn.init.zeros_(final.bias)
+
+    def _init_proposal_state_update(self):
+        """Initialize proposal state refinement as an exact identity residual."""
+        final = self.proposal_state_update_mlp[-1]
+        nn.init.zeros_(final.weight)
+        nn.init.zeros_(final.bias)
+
+    def _init_multiscale_gate(self):
+        """Start gated P2/P3/P4 fusion from the existing equal-weight behavior."""
+        final = self.multiscale_gate[-1]
+        nn.init.zeros_(final.weight)
+        nn.init.zeros_(final.bias)
+
+    def _init_geometry_exist_delta_head(self):
+        """Start geometry-aware existence as a zero residual over the baseline score."""
+        final = self.geometry_exist_delta_mlp[-1]
+        nn.init.zeros_(final.weight)
+        nn.init.zeros_(final.bias)
+
     def _init_interval_heads(self):
         """Initialize ordered-slot interval/count logits near neutral."""
         for mlp in (self.start_mlp, self.end_mlp, self.count_mlp):
@@ -474,7 +599,22 @@ class GCSLaneHead(nn.Module):
             )
             token = token.squeeze(-1).transpose(1, 2).reshape(b, q, k, self.c1)
             sampled.append(token)
-        return torch.stack(sampled, dim=0).mean(dim=0)
+        sampled = torch.stack(sampled, dim=3)
+        if not self.gated_multiscale:
+            return sampled.mean(dim=3)
+        if sampled.shape[3] != 3:
+            raise ValueError(
+                "GCSLaneHead gated multi-scale refinement requires exactly P2/P3/P4 features."
+            )
+        gate_input = torch.cat(
+            (
+                sampled.reshape(b, q, k, self.c1 * 3),
+                points.to(device=sampled.device, dtype=sampled.dtype).clamp(0.0, 1.0),
+            ),
+            dim=-1,
+        )
+        gate = torch.softmax(self.multiscale_gate(gate_input), dim=-1)
+        return (sampled * gate.unsqueeze(-1)).sum(dim=3)
 
     def _point_refine_tokens(self, xs, hs, points):
         """Build point-level tokens from query state, point index, coordinates, and sampled image features."""
@@ -488,16 +628,77 @@ class GCSLaneHead(nn.Module):
         image_tokens = self.point_image_norm(image_tokens)
         return torch.cat((prior_tokens, image_tokens), dim=-1)
 
-    def _refine_fixed_y_logits(self, xs, hs, coarse_logits, fixed_y):
-        """Refine fixed-y x logits with point-level sampled image features."""
-        b, q, k = coarse_logits.shape
-        y = fixed_y.to(device=coarse_logits.device, dtype=coarse_logits.dtype).view(1, 1, k).expand(b, q, -1)
-        coarse_x = torch.sigmoid(coarse_logits)
-        coarse_points = torch.stack((coarse_x, y), dim=-1)
+    def _refine_fixed_y_logits_once(self, xs, hs, logits, fixed_y, refine_head):
+        """Apply one fixed-y point refinement stage using the supplied proposal state."""
+        b, q, k = logits.shape
+        y = fixed_y.to(device=logits.device, dtype=logits.dtype).view(1, 1, k).expand(b, q, -1)
+        current_x = torch.sigmoid(logits)
+        current_points = torch.stack((current_x, y), dim=-1)
+        refine_tokens = self._point_refine_tokens(xs, hs, current_points)
+        refine_delta = refine_head(refine_tokens).squeeze(-1)
+        return logits + refine_delta
 
-        refine_tokens = self._point_refine_tokens(xs, hs, coarse_points)
-        refine_delta = self.point_refine_mlp(refine_tokens).squeeze(-1)
-        return coarse_logits + refine_delta
+    def _update_proposal_state(self, xs, hs, stage1_points):
+        """Update each query state from its stage-1 geometry and sampled image context."""
+        point_features = self._sample_point_features(xs, stage1_points)
+        coarse_valid = self.point_valid_mlp(hs).view(hs.shape[0], self.num_queries, self.num_points)
+        valid_prob = torch.sigmoid(coarse_valid)
+        x = stage1_points[..., 0]
+        dx = x[..., 1:] - x[..., :-1]
+        curvature = dx[..., 1:] - dx[..., :-1]
+        b, q, _, _ = stage1_points.shape
+        bottom_count = min(3, self.num_points)
+        geometry_summary = torch.stack(
+            (
+                x[:, :, 0],
+                x[:, :, -1],
+                x.mean(dim=2),
+                x.std(dim=2, unbiased=False),
+                dx.abs().mean(dim=2) if dx.shape[-1] > 0 else x.new_zeros((b, q)),
+                curvature.abs().mean(dim=2) if curvature.shape[-1] > 0 else x.new_zeros((b, q)),
+            ),
+            dim=-1,
+        )
+        valid_summary = torch.stack(
+            (
+                valid_prob.mean(dim=2),
+                valid_prob.amax(dim=2),
+                valid_prob.std(dim=2, unbiased=False),
+            ),
+            dim=-1,
+        )
+        proposal_context = torch.cat(
+            (
+                hs,
+                point_features.mean(dim=2),
+                point_features.amax(dim=2),
+                point_features[:, :, :bottom_count].mean(dim=2),
+                valid_summary,
+                geometry_summary,
+            ),
+            dim=-1,
+        )
+        delta = self.proposal_state_update_mlp(proposal_context)
+        return hs + self.proposal_state_delta_norm(delta)
+
+    def _refine_fixed_y_logits(self, xs, hs, coarse_logits, fixed_y):
+        """Run stage-wise fixed-y refinement and return final logits plus final query state."""
+        fixed_y = fixed_y.to(device=coarse_logits.device, dtype=coarse_logits.dtype)
+        stage1_logits = self._refine_fixed_y_logits_once(
+            xs, hs, coarse_logits, fixed_y, self.point_refine_mlp
+        )
+        proposal_hs = hs
+        if self.proposal_state_refine:
+            b, q, k = stage1_logits.shape
+            y = fixed_y.view(1, 1, k).expand(b, q, -1)
+            stage1_points = torch.stack((torch.sigmoid(stage1_logits), y), dim=-1)
+            proposal_hs = self._update_proposal_state(xs, hs, stage1_points)
+        if not self.two_stage_refine:
+            return stage1_logits, proposal_hs
+        stage2_logits = self._refine_fixed_y_logits_once(
+            xs, proposal_hs, stage1_logits, fixed_y, self.point_refine_mlp_stage2
+        )
+        return stage2_logits, proposal_hs
 
     def _refine_fixed_y_valid_logits(self, xs, hs, pred_points):
         """Refine fixed-y point visibility logits with point-level sampled image features."""
@@ -539,17 +740,33 @@ class GCSLaneHead(nn.Module):
         refine_mlp_macs = b * q * k * ((2 * d) * d + d)
         valid_refine_mlp_macs = b * q * k * ((2 * d) * d + d)
         exist_mlp_macs = b * q * (d * d + d)
+        refine_passes = 1 + int(self.two_stage_refine)
+        sample_calls = refine_passes + 1 + int(self.geometry_aware_exist)
+        coord_calls = refine_passes + 1
+        geometry_exist_macs = 0
+        gate_macs = 0
+        proposal_state_macs = 0
+        if self.geometry_aware_exist:
+            geometry_exist_macs = b * q * ((4 * d + 9) * d + d)
+        if self.gated_multiscale:
+            gate_macs = sample_calls * b * q * k * ((3 * d + 2) * d + 3 * d)
+        if self.proposal_state_refine:
+            sample_calls += 1
+            proposal_state_macs = b * q * ((4 * d + 9) * d + d)
         return (
             2.0
             * (
                 decoder_macs
                 + point_mlp_macs
                 + point_valid_mlp_macs
-                + 2 * sample_macs
-                + 2 * coord_mlp_macs
-                + refine_mlp_macs
+                + sample_calls * sample_macs
+                + coord_calls * coord_mlp_macs
+                + refine_passes * refine_mlp_macs
                 + valid_refine_mlp_macs
                 + exist_mlp_macs
+                + geometry_exist_macs
+                + gate_macs
+                + proposal_state_macs
             )
             / 1e9
         )
@@ -602,6 +819,7 @@ class GCSLaneHead(nn.Module):
         memory = self.flatten_features(xs)
         query = self.query_embed.weight.unsqueeze(0).expand(b, -1, -1)
         hs = self.decoder(tgt=query, memory=memory)
+        prediction_hs = hs
 
         point_dims = int(getattr(self, "point_dims", 2))
         point_delta = self.point_mlp(hs).view(b, self.num_queries, self.num_points, point_dims)
@@ -616,7 +834,7 @@ class GCSLaneHead(nn.Module):
             fixed_y = getattr(self, "fixed_y_anchors", None)
             if fixed_y is None:
                 fixed_y = self._build_fixed_y_anchors()
-            x_logits = self._refine_fixed_y_logits(xs, hs, x_logits, fixed_y)
+            x_logits, prediction_hs = self._refine_fixed_y_logits(xs, hs, x_logits, fixed_y)
             pred_x = torch.sigmoid(x_logits)
             y = fixed_y.to(device=pred_x.device, dtype=pred_x.dtype).view(1, 1, self.num_points)
             pred_y = y.expand(b, self.num_queries, -1)
@@ -627,14 +845,58 @@ class GCSLaneHead(nn.Module):
         else:
             point_ref = point_ref.to(device=point_delta.device, dtype=point_delta.dtype).unsqueeze(0)
             pred_points = torch.sigmoid(point_delta + point_ref)
-        pred_logits = self.exist_mlp(hs).squeeze(-1)
+        base_pred_logits = self.exist_mlp(prediction_hs).squeeze(-1)
         if hasattr(self, "point_valid_mlp"):
             if point_mode == "fixed_y" and hasattr(self, "point_valid_refine_mlp"):
-                pred_valid_logits = self._refine_fixed_y_valid_logits(xs, hs, pred_points)
+                pred_valid_logits = self._refine_fixed_y_valid_logits(xs, prediction_hs, pred_points)
             else:
-                pred_valid_logits = self.point_valid_mlp(hs).view(b, self.num_queries, self.num_points)
+                pred_valid_logits = self.point_valid_mlp(prediction_hs).view(b, self.num_queries, self.num_points)
         else:
-            pred_valid_logits = pred_logits.new_full((b, self.num_queries, self.num_points), 20.0)
+            pred_valid_logits = base_pred_logits.new_full((b, self.num_queries, self.num_points), 20.0)
+
+        if self.geometry_aware_exist:
+            point_features = self._sample_point_features(xs, pred_points)
+            valid_prob = torch.sigmoid(pred_valid_logits)
+            x = pred_points[..., 0]
+            dx = x[..., 1:] - x[..., :-1]
+            curvature = dx[..., 1:] - dx[..., :-1]
+            point_feature_mean = point_features.mean(dim=2)
+            point_feature_max = point_features.amax(dim=2)
+            bottom_count = min(3, self.num_points)
+            bottom_feature = point_features[:, :, :bottom_count].mean(dim=2)
+            geometry_summary = torch.stack(
+                (
+                    x[:, :, 0],
+                    x[:, :, -1],
+                    x.mean(dim=2),
+                    x.std(dim=2, unbiased=False),
+                    dx.abs().mean(dim=2),
+                    curvature.abs().mean(dim=2) if curvature.shape[-1] > 0 else x.new_zeros((b, self.num_queries)),
+                ),
+                dim=-1,
+            )
+            valid_summary = torch.stack(
+                (
+                    valid_prob.mean(dim=2),
+                    valid_prob.amax(dim=2),
+                    valid_prob.std(dim=2, unbiased=False),
+                ),
+                dim=-1,
+            )
+            exist_features = torch.cat(
+                (
+                    prediction_hs,
+                    point_feature_mean,
+                    point_feature_max,
+                    bottom_feature,
+                    valid_summary,
+                    geometry_summary,
+                ),
+                dim=-1,
+            )
+            pred_logits = base_pred_logits + self.geometry_exist_delta_mlp(exist_features).squeeze(-1)
+        else:
+            pred_logits = base_pred_logits
 
         out = {
             "pred_points": pred_points,
@@ -642,30 +904,37 @@ class GCSLaneHead(nn.Module):
             "pred_valid_logits": pred_valid_logits,
         }
         if getattr(self, "query_count_head", False):
-            out["pred_count_logits"] = self.query_count_mlp(hs.mean(dim=1))
+            out["pred_count_logits"] = self.query_count_mlp(prediction_hs.mean(dim=1))
         if self.gcs_mode == "ordered_slot":
             out["pred_exist_logits"] = pred_logits
-            out["pred_start_logits"] = self.start_mlp(hs).view(b, self.num_queries, self.num_points)
-            out["pred_end_logits"] = self.end_mlp(hs).view(b, self.num_queries, self.num_points)
-            out["pred_count_logits"] = self.count_mlp(hs.mean(dim=1))
+            out["pred_start_logits"] = self.start_mlp(prediction_hs).view(b, self.num_queries, self.num_points)
+            out["pred_end_logits"] = self.end_mlp(prediction_hs).view(b, self.num_queries, self.num_points)
+            out["pred_count_logits"] = self.count_mlp(prediction_hs.mean(dim=1))
 
         if self.aux and (self.training or self.return_aux):
             aux_size = self.aux_output_size(orig_size=orig_size)
-            aux_mask_logits = self.aux_mask(p2)
-            aux_mask_logits = F.interpolate(
-                aux_mask_logits,
-                size=aux_size,
-                mode="bilinear",
-                align_corners=False,
-            )
+            # Keep the dense auxiliary branch in FP32 under AMP. Its BatchNorm
+            # statistics are sensitive to large P2 activations and do not affect
+            # the structured lane output contract.
+            force_fp32_aux = self.training and p2.device.type in {"cuda", "cpu"}
+            aux_context = torch.autocast(device_type=p2.device.type, enabled=False) if force_fp32_aux else nullcontext()
+            with aux_context:
+                aux_input = p2.float() if force_fp32_aux else p2
+                aux_mask_logits = self.aux_mask(aux_input)
+                aux_mask_logits = F.interpolate(
+                    aux_mask_logits,
+                    size=aux_size,
+                    mode="bilinear",
+                    align_corners=False,
+                )
 
-            aux_edge_logits = self.aux_edge(p2)
-            aux_edge_logits = F.interpolate(
-                aux_edge_logits,
-                size=aux_size,
-                mode="bilinear",
-                align_corners=False,
-            )
+                aux_edge_logits = self.aux_edge(aux_input)
+                aux_edge_logits = F.interpolate(
+                    aux_edge_logits,
+                    size=aux_size,
+                    mode="bilinear",
+                    align_corners=False,
+                )
 
             out["aux_mask_logits"] = aux_mask_logits
             out["aux_edge_logits"] = aux_edge_logits

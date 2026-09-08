@@ -1,8 +1,61 @@
-"""Fixed-y anchor contract checks for TuSimple K56 labels and decoders."""
+"""Shared fixed-y anchor contracts for structured lane labels and decoders."""
 
 from __future__ import annotations
 
 import numpy as np
+
+
+def build_fixed_y_anchors(
+    original_h: int,
+    start_px: float,
+    end_px: float,
+    k: int,
+) -> np.ndarray:
+    """Build normalized bottom-to-top anchors from an explicit pixel-space contract."""
+    original_h = int(original_h)
+    k = int(k)
+    start_px = float(start_px)
+    end_px = float(end_px)
+    if original_h <= 1:
+        raise ValueError(f"fixed-y original_h must be > 1, got {original_h}.")
+    if k < 2:
+        raise ValueError(f"fixed-y K must be >= 2, got {k}.")
+    if not (0.0 <= end_px < start_px < float(original_h)):
+        raise ValueError(
+            "fixed-y pixel anchors must satisfy 0 <= end_px < start_px < original_h, "
+            f"got end_px={end_px}, start_px={start_px}, original_h={original_h}."
+        )
+    return (np.linspace(start_px, end_px, k, dtype=np.float32) / float(original_h)).astype(np.float32)
+
+
+def build_fixed_y_contract(
+    original_h: int,
+    start_px: float,
+    end_px: float,
+    k: int,
+) -> dict[str, object]:
+    """Build and validate the explicit fixed-y dataset contract."""
+    original_h = int(original_h)
+    start_px = float(start_px)
+    end_px = float(end_px)
+    k = int(k)
+    anchors = build_fixed_y_anchors(original_h, start_px, end_px, k)
+    validate_fixed_y_contract(
+        anchors,
+        original_h=original_h,
+        start_px=start_px,
+        end_px=end_px,
+        k=k,
+        name="fixed_y contract",
+    )
+    return {
+        "fixed_y": anchors,
+        "fixed_y_original_h": original_h,
+        "fixed_y_start_px": start_px,
+        "fixed_y_end_px": end_px,
+        "num_points": k,
+        "legacy_fallback": False,
+    }
 
 
 def expected_tusimple_h_samples(k: int = 56) -> np.ndarray:
@@ -35,6 +88,30 @@ def _allclose_allowing_fp16_roundoff(anchors_px: np.ndarray, expected: np.ndarra
     return bool(np.max(np.abs(anchors_px - expected)) <= 0.25)
 
 
+def validate_fixed_y_contract(
+    fixed_y,
+    *,
+    original_h: int,
+    start_px: float,
+    end_px: float,
+    k: int,
+    atol: float = 1e-3,
+    name: str = "fixed_y",
+) -> str:
+    """Validate one explicit descending fixed-y anchor contract."""
+    anchors_px = _to_pixel_anchors(fixed_y, original_h=original_h, k=k, name=name)
+    expected = np.linspace(float(start_px), float(end_px), int(k), dtype=np.float32)
+    if not _allclose_allowing_fp16_roundoff(anchors_px, expected, atol=atol):
+        raise ValueError(
+            f"{name}: fixed-y contract violated. Expected descending pixel anchors "
+            f"{float(start_px):.6g}..{float(end_px):.6g} with K={int(k)}, "
+            f"got first/last={anchors_px[0]:.6g}/{anchors_px[-1]:.6g}."
+        )
+    if not bool(np.all(np.diff(anchors_px) < 0.0)):
+        raise ValueError(f"{name}: fixed-y anchors must be strictly descending bottom-to-top.")
+    return "desc"
+
+
 def validate_training_fixed_y_desc(
     fixed_y,
     original_h: int = 720,
@@ -43,14 +120,17 @@ def validate_training_fixed_y_desc(
     name: str = "training fixed_y",
 ) -> str:
     """Validate training labels against the active desc 710..160 fixed-y contract."""
-    anchors_px = _to_pixel_anchors(fixed_y, original_h=original_h, k=k, name=name)
-    expected = expected_training_fixed_y_desc(k=k)
-    if not _allclose_allowing_fp16_roundoff(anchors_px, expected, atol=atol):
-        raise ValueError(
-            f"{name}: training fixed-y contract violated. "
-            f"Expected desc 710..160 step -10, got first/last={anchors_px[0]:.6g}/{anchors_px[-1]:.6g}."
-        )
-    return "desc"
+    if int(original_h) != 720:
+        raise ValueError(f"{name}: TuSimple training fixed-y contract requires original_h=720, got {original_h}.")
+    return validate_fixed_y_contract(
+        fixed_y,
+        original_h=original_h,
+        start_px=710.0,
+        end_px=160.0,
+        k=k,
+        atol=atol,
+        name=name,
+    )
 
 
 def validate_official_h_samples_asc(

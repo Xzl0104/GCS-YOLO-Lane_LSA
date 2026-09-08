@@ -440,6 +440,14 @@ class BaseTrainer:
                         else:
                             loss, self.loss_items = self.model(batch)
                         self.loss = loss.sum()
+                        if not torch.isfinite(self.loss).all() or not torch.isfinite(self.loss_items).all():
+                            LOGGER.warning(
+                                f"Non-finite GCS loss detected at epoch={epoch + 1}, batch={i + 1}; "
+                                "discarding this epoch and restoring the previous checkpoint."
+                            )
+                            self.tloss = self.loss_items
+                            self.optimizer.zero_grad(set_to_none=True)
+                            break
                         if RANK != -1:
                             self.loss *= self.world_size
                         self.tloss = (
@@ -899,6 +907,7 @@ class BaseTrainer:
                 for k in (
                     "imgsz",
                     "batch",
+                    "nbs",
                     "device",
                     "close_mosaic",
                     "augmentations",
@@ -973,9 +982,11 @@ class BaseTrainer:
     def _handle_nan_recovery(self, epoch):
         """Detect and recover from NaN/Inf loss and fitness collapse by loading last checkpoint."""
         loss_nan = self.loss is not None and not self.loss.isfinite()
+        if self.tloss is not None:
+            loss_nan = loss_nan or not torch.isfinite(self.tloss).all()
         fitness_nan = self.fitness is not None and not np.isfinite(self.fitness)
         fitness_collapse = self.best_fitness and self.best_fitness > 0 and self.fitness == 0
-        corrupted = RANK in {-1, 0} and loss_nan and (fitness_nan or fitness_collapse)
+        corrupted = RANK in {-1, 0} and (loss_nan or fitness_nan or fitness_collapse)
         reason = "Loss NaN/Inf" if loss_nan else "Fitness NaN/Inf" if fitness_nan else "Fitness collapse"
         if RANK != -1:  # DDP: broadcast to all ranks
             broadcast_list = [corrupted if RANK == 0 else None]

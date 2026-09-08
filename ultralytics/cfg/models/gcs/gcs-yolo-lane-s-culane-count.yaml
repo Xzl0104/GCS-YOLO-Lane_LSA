@@ -1,0 +1,25 @@
+# GCS-YOLO-Lane query-mode CULane model with the optional 0..4 Count Head.
+
+nc: 1
+imgsz: [384, 960]
+depth_multiple: 0.50
+width_multiple: 0.50
+
+backbone:
+  - [-1, 1, Conv, [64, 3, 2]]
+  - [-1, 1, Conv, [128, 3, 2]]
+  - [-1, 2, C3k2, [256, False, 0.25]]
+  - [-1, 1, Conv, [256, 3, 2]]
+  - [-1, 2, C3k2, [512, False, 0.25]]
+  - [-1, 1, LSEM, []]
+  - [-1, 1, Conv, [512, 3, 2]]
+  - [-1, 2, C3k2, [512, True]]
+  - [-1, 1, LSEM, []]
+  - [-1, 1, Conv, [1024, 3, 2]]
+  - [-1, 2, C3k2, [1024, True]]
+  - [-1, 1, SPPF, [1024, 5]]
+  - [-1, 2, C2PSA, [1024]]
+
+head:
+  - [[2, 5, 8, 12], 1, LaneBiFPN, [128]]
+  - [-1, 1, GCSLaneHead, [12, 56, 3, 8, False, fixed_y, 0.9983050847457627, 0.06610169491525424, query, 5, 0, 4, 5, True, 590, 589, 39, True, True, True, True]]

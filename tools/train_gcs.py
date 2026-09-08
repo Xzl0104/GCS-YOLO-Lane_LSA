@@ -19,6 +19,8 @@ DEFAULT_MODEL = "ultralytics/cfg/models/gcs/gcs-yolo-lane-s.yaml"
 DEFAULT_DATA = "data/tusimple_gcs_fixed_y_960x544.yaml"
 ORDERED_SLOT_DEFAULT_MODEL = "ultralytics/cfg/models/gcs/gcs-yolo-lane-s-q5-slot-k56.yaml"
 ORDERED_SLOT_MODEL = ROOT / ORDERED_SLOT_DEFAULT_MODEL
+CULANE_MODEL = "ultralytics/cfg/models/gcs/gcs-yolo-lane-s-culane.yaml"
+CULANE_DATA = "data/culane_gcs.yaml"
 
 
 def str2bool(value: str | bool) -> bool:
@@ -47,6 +49,15 @@ def dataset_defaults(dataset: str) -> dict[str, Path]:
                 "val_images": fixed_root / "images" / "val",
                 "val_labels": fixed_root / "labels_gcs" / "val",
             }
+    if name == "culane":
+        root = ROOT / "datasets" / "culane_fixed_y_590x960"
+        return {
+            "data": ROOT / CULANE_DATA,
+            "train_images": root / "images" / "train",
+            "train_labels": root / "labels_gcs" / "train",
+            "val_images": root / "images" / "val",
+            "val_labels": root / "labels_gcs" / "val",
+        }
     root = ROOT / "datasets" / name
     return {
         "data": ROOT / "data" / f"{name}_gcs.yaml",
@@ -55,6 +66,112 @@ def dataset_defaults(dataset: str) -> dict[str, Path]:
         "val_images": root / "images" / "val",
         "val_labels": root / "labels_gcs" / "val",
     }
+
+
+def apply_dataset_profile(args: argparse.Namespace) -> argparse.Namespace:
+    """Apply explicit TuSimple/CULane contracts while preserving user-provided overrides."""
+    dataset = str(args.dataset).lower()
+    if dataset == "tusimple":
+        if args.model is None:
+            args.model = DEFAULT_MODEL
+        if args.gcs_min_lanes is None:
+            args.gcs_min_lanes = 2
+        if args.gcs_max_lanes is None:
+            args.gcs_max_lanes = 5
+        if args.gcs_count_classes is None:
+            args.gcs_count_classes = 4
+        if args.gcs_query_count_min_lanes is None:
+            args.gcs_query_count_min_lanes = 2
+        if args.gcs_query_count_max_lanes is None:
+            args.gcs_query_count_max_lanes = 5
+        if args.gcs_culane_val is None:
+            args.gcs_culane_val = False
+        if args.gcs_culane_val_conf is None:
+            args.gcs_culane_val_conf = 0.2
+        if args.gcs_culane_val_point_valid_thr is None:
+            args.gcs_culane_val_point_valid_thr = 0.5
+        if args.gcs_culane_val_nms_dist_px is None:
+            args.gcs_culane_val_nms_dist_px = 50.0
+        if args.gcs_culane_val_max_det is None:
+            args.gcs_culane_val_max_det = 8
+        return args
+
+    if dataset != "culane":
+        raise ValueError(f"Unsupported GCS dataset profile: {args.dataset!r}.")
+    if args.gcs_mode != "query":
+        raise ValueError("CULane supports only --gcs-mode query; ordered_slot is not a valid CULane contract.")
+    if float(args.gcs_query_count_ce or 0.0) > 0.0:
+        raise ValueError(
+            "CULane query five-loss contract does not support --gcs-query-count-ce. "
+            "Use --gcs-query-count-ce 0 with the default CULane query model."
+        )
+    if args.model is None:
+        args.model = CULANE_MODEL
+    if args.data is None:
+        args.data = CULANE_DATA
+    if args.imgsz is None:
+        args.imgsz = [384, 960]
+    if args.gcs_min_lanes is None:
+        args.gcs_min_lanes = 0
+    if args.gcs_max_lanes is None:
+        args.gcs_max_lanes = 4
+    if args.gcs_count_classes is None:
+        args.gcs_count_classes = 5
+    if args.gcs_query_count_min_lanes is None:
+        args.gcs_query_count_min_lanes = 0
+    if args.gcs_query_count_max_lanes is None:
+        args.gcs_query_count_max_lanes = 4
+    if args.gcs_culane_val is None:
+        args.gcs_culane_val = True
+    if args.gcs_culane_val_conf is None:
+        args.gcs_culane_val_conf = 0.2
+    if args.gcs_culane_val_point_valid_thr is None:
+        args.gcs_culane_val_point_valid_thr = 0.4
+    if args.gcs_culane_val_nms_dist_px is None:
+        args.gcs_culane_val_nms_dist_px = 50.0
+    if args.gcs_culane_val_max_det is None:
+        args.gcs_culane_val_max_det = 5
+    return args
+
+
+def assert_dataset_profile_contract(args: argparse.Namespace) -> argparse.Namespace:
+    """Reject explicit arguments that would create a mixed-dataset GCS contract."""
+    dataset = str(args.dataset).lower()
+    if dataset == "tusimple":
+        return args
+    if dataset != "culane":
+        raise ValueError(f"Unsupported GCS dataset profile: {args.dataset!r}.")
+
+    expected = {
+        "gcs_mode": "query",
+        "gcs_min_lanes": 0,
+        "gcs_max_lanes": 4,
+        "gcs_count_classes": 5,
+        "gcs_query_count_min_lanes": 0,
+        "gcs_query_count_max_lanes": 4,
+    }
+    mismatches = []
+    for name, expected_value in expected.items():
+        actual = getattr(args, name)
+        if actual != expected_value:
+            mismatches.append(f"{name}={actual!r} (expected {expected_value!r})")
+
+    actual_imgsz = normalize_imgsz(args.imgsz, dataset=dataset)
+    if actual_imgsz != (384, 960):
+        mismatches.append(f"imgsz={actual_imgsz!r} (expected (384, 960))")
+    if not bool(args.gcs_culane_val):
+        mismatches.append("gcs_culane_val=False (CULane training requires region-IoU val selection)")
+    if int(args.gcs_culane_val_interval) <= 0:
+        mismatches.append(
+            f"gcs_culane_val_interval={args.gcs_culane_val_interval!r} (expected a positive integer)"
+        )
+    if mismatches:
+        raise ValueError(
+            "CULane dataset profile contract violation: "
+            + "; ".join(mismatches)
+            + ". Use CULane values 384x960, query, lane range 0..4, and count_classes=5."
+        )
+    return args
 
 
 def is_ordered_slot_model_yaml(model_path: str | Path) -> bool:
@@ -84,7 +201,7 @@ def maybe_switch_ordered_slot_model(args: argparse.Namespace) -> argparse.Namesp
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train GCS-YOLO-Lane on structured lane labels.")
     parser.add_argument("--dataset", default="tusimple", choices=sorted(DATASET_IMAGE_SHAPES))
-    parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument("--model", default=None)
     parser.add_argument("--data", default=None)
     parser.add_argument("--pretrained", default="yolo11s-seg.pt")
     parser.add_argument(
@@ -163,9 +280,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Disable automatic ordered_slot model YAML switching and fail on non-slot model YAMLs.",
     )
     parser.add_argument("--gcs-num-slots", type=int, default=5)
-    parser.add_argument("--gcs-min-lanes", type=int, default=2, help="ordered_slot minimum supported lane count.")
-    parser.add_argument("--gcs-max-lanes", type=int, default=5, help="ordered_slot maximum supported lane count.")
-    parser.add_argument("--gcs-count-classes", type=int, default=4, help="ordered_slot count classes for 2/3/4/5 lanes.")
+    parser.add_argument("--gcs-min-lanes", type=int, default=None, help="Minimum supported lane count for the selected dataset.")
+    parser.add_argument("--gcs-max-lanes", type=int, default=None, help="Maximum supported lane count for the selected dataset.")
+    parser.add_argument("--gcs-count-classes", type=int, default=None, help="Lane-count class total for the selected dataset.")
     parser.add_argument(
         "--gcs-contiguity-policy",
         choices=("strict", "repair_interp"),
@@ -175,10 +292,45 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--gcs-exist", type=float, default=2.0)
     parser.add_argument("--gcs-point", type=float, default=15.0)
     parser.add_argument("--gcs-point-valid", type=float, default=1.0)
-    parser.add_argument("--gcs-smooth", type=float, default=0.05)
+    parser.add_argument(
+        "--gcs-point-valid-unmatched-ignore",
+        nargs="?",
+        const=True,
+        default=True,
+        type=str2bool,
+        help="Ignore GT-close Hungarian-unmatched visible anchors inside point-valid BCE.",
+    )
+    parser.add_argument(
+        "--no-gcs-point-valid-unmatched-ignore",
+        dest="gcs_point_valid_unmatched_ignore",
+        action="store_false",
+        help="Restore the legacy point-valid path where every unmatched query anchor is target-zero.",
+    )
+    parser.add_argument(
+        "--gcs-point-valid-unmatched-ignore-px",
+        type=float,
+        default=30.0,
+        help="Mean x-distance threshold in training-image pixels for GT-close unmatched query protection.",
+    )
+    parser.add_argument(
+        "--gcs-point-valid-unmatched-ignore-anchor-px",
+        type=float,
+        default=30.0,
+        help="Per-anchor x-distance threshold in pixels for ignored GT-visible anchors.",
+    )
+    parser.add_argument(
+        "--gcs-point-valid-unmatched-ignore-min-overlap",
+        type=int,
+        default=3,
+        help="Minimum GT-visible anchors required before an unmatched query can be protected.",
+    )
+    parser.add_argument("--gcs-smooth", type=float, default=0.0)
     parser.add_argument("--gcs-curve", type=float, default=0.1)
-    parser.add_argument("--gcs-mask", type=float, default=0.2)
-    parser.add_argument("--gcs-edge", type=float, default=0.2)
+    parser.add_argument("--gcs-line-iou", type=float, default=1.0)
+    parser.add_argument("--gcs-line-iou-width-px", type=float, default=18.0)
+    parser.add_argument("--gcs-line-iou-temperature-px", type=float, default=1.0)
+    parser.add_argument("--gcs-mask", type=float, default=0.0)
+    parser.add_argument("--gcs-edge", type=float, default=0.0)
     parser.add_argument(
         "--gcs-count",
         type=float,
@@ -234,8 +386,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Margin around the 4/5 boundary: GT4 upper=4+margin, GT5 lower=5-margin.",
     )
     parser.add_argument("--gcs-query-count-ce", type=float, default=0.0)
-    parser.add_argument("--gcs-query-count-min-lanes", type=int, default=2)
-    parser.add_argument("--gcs-query-count-max-lanes", type=int, default=5)
+    parser.add_argument("--gcs-query-count-min-lanes", type=int, default=None)
+    parser.add_argument("--gcs-query-count-max-lanes", type=int, default=None)
     parser.add_argument(
         "--gcs-count-ce",
         nargs="?",
@@ -475,38 +627,56 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--gcs-exist-quality-alpha",
         type=float,
-        default=1.0,
-        help="Blend factor for quality-aware existence targets. 1 uses pure geometry quality, 0 restores hard matched labels.",
+        default=0.0,
+        help="Legacy compatibility only. Active query five-loss ignores quality-aware existence targets and uses hard matched labels.",
     )
     parser.add_argument(
         "--gcs-exist-quality-mode",
         choices=("linear", "exp"),
         default="linear",
-        help="Quality target shape. linear makes APE >= neg-px a zero target; exp keeps the old exp(-APE/tau) behavior.",
+        help="Legacy compatibility only. Active query five-loss ignores this quality-target mode.",
     )
     parser.add_argument(
         "--gcs-exist-quality-tau",
         type=float,
         default=25.0,
-        help="APE decay scale in pixels for exp quality mode.",
+        help="Legacy compatibility only. Active query five-loss ignores quality-aware existence targets.",
     )
     parser.add_argument(
         "--gcs-exist-quality-floor",
         type=float,
         default=0.0,
-        help="Minimum geometry quality used for exp quality mode.",
+        help="Legacy compatibility only. Active query five-loss ignores quality-aware existence targets.",
     )
     parser.add_argument(
         "--gcs-exist-quality-pos-px",
         type=float,
         default=10.0,
-        help="APE at or below this value receives quality 1.0 in linear quality mode.",
+        help="Legacy compatibility only. Active query five-loss ignores quality-aware existence targets.",
     )
     parser.add_argument(
         "--gcs-exist-quality-neg-px",
         type=float,
         default=20.0,
-        help="APE at or above this value receives quality 0.0 in linear quality mode.",
+        help="Legacy compatibility only. Active query five-loss ignores quality-aware existence targets.",
+    )
+    parser.add_argument(
+        "--gcs-gt4-selective-exist-target-floor",
+        type=float,
+        default=0.0,
+        help="Legacy compatibility only. Active query five-loss uses hard matched existence targets.",
+    )
+    parser.add_argument(
+        "--gcs-gt4-selective-exist-target-ape-max",
+        type=float,
+        default=20.0,
+        help="Legacy compatibility only. Active query five-loss uses hard matched existence targets.",
+    )
+    parser.add_argument(
+        "--gcs-gt4-selective-exist-target-visible-thr",
+        type=int,
+        default=10,
+        help="Legacy compatibility only. Active query five-loss uses hard matched existence targets.",
     )
     parser.add_argument("--gcs-mask-pos-weight-max", type=float, default=20.0)
     parser.add_argument("--gcs-point-valid-pos-weight-max", type=float, default=10.0)
@@ -531,6 +701,38 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Per-point visibility threshold used when decoding fixed-y lanes for validation metrics.",
     )
     parser.add_argument("--gcs-eval-max-det", type=int, default=8)
+    parser.add_argument(
+        "--gcs-culane-val",
+        nargs="?",
+        const=True,
+        default=None,
+        type=str2bool,
+        help="Run CULane region-IoU validation during training. Defaults to true for --dataset culane.",
+    )
+    parser.add_argument(
+        "--gcs-culane-val-interval",
+        type=int,
+        default=5,
+        help="Run CULane region-IoU validation every N epochs; the final/early-stop epoch is evaluated too.",
+    )
+    parser.add_argument("--gcs-culane-val-source", default=None, help="CULane validation image directory.")
+    parser.add_argument("--gcs-culane-val-labels", default=None, help="CULane validation labels_gcs directory.")
+    parser.add_argument(
+        "--gcs-culane-val-archive-root",
+        default=None,
+        help="Extracted CULane root containing original .lines.txt annotations.",
+    )
+    parser.add_argument("--gcs-culane-val-conf", type=float, default=None)
+    parser.add_argument("--gcs-culane-val-point-valid-thr", type=float, default=None)
+    parser.add_argument("--gcs-culane-val-nms-dist-px", type=float, default=None)
+    parser.add_argument("--gcs-culane-val-max-det", type=int, default=None)
+    parser.add_argument("--gcs-culane-val-max-images", type=int, default=0)
+    parser.add_argument("--gcs-culane-val-warmup", type=int, default=5)
+    parser.add_argument(
+        "--gcs-culane-val-half",
+        action="store_true",
+        help="Use FP16 inference for periodic CULane region-IoU validation.",
+    )
     parser.add_argument(
         "--gcs-official-best",
         action="store_true",
@@ -690,7 +892,7 @@ def resolve_project(value: str) -> str:
 
 
 def main() -> None:
-    args = maybe_switch_ordered_slot_model(parse_args())
+    args = maybe_switch_ordered_slot_model(assert_dataset_profile_contract(apply_dataset_profile(parse_args())))
     defaults = dataset_defaults(args.dataset)
     gcs_imgsz = normalize_imgsz(args.imgsz, dataset=args.dataset)
     model_path = args.model
@@ -732,6 +934,7 @@ def main() -> None:
         "val_images": args.val_images,
         "val_gcs_labels": args.val_gcs_labels,
         "gcs_mode": args.gcs_mode,
+        "dataset": args.dataset,
         "gcs_num_slots": args.gcs_num_slots,
         "gcs_min_lanes": args.gcs_min_lanes,
         "gcs_max_lanes": args.gcs_max_lanes,
@@ -740,8 +943,15 @@ def main() -> None:
         "gcs_exist": args.gcs_exist,
         "gcs_point": args.gcs_point,
         "gcs_point_valid": args.gcs_point_valid,
+        "gcs_point_valid_unmatched_ignore": args.gcs_point_valid_unmatched_ignore,
+        "gcs_point_valid_unmatched_ignore_px": args.gcs_point_valid_unmatched_ignore_px,
+        "gcs_point_valid_unmatched_ignore_anchor_px": args.gcs_point_valid_unmatched_ignore_anchor_px,
+        "gcs_point_valid_unmatched_ignore_min_overlap": args.gcs_point_valid_unmatched_ignore_min_overlap,
         "gcs_smooth": args.gcs_smooth,
         "gcs_curve": args.gcs_curve,
+        "gcs_line_iou": args.gcs_line_iou,
+        "gcs_line_iou_width_px": args.gcs_line_iou_width_px,
+        "gcs_line_iou_temperature_px": args.gcs_line_iou_temperature_px,
         "gcs_mask": args.gcs_mask,
         "gcs_edge": args.gcs_edge,
         "gcs_count": args.gcs_count,
@@ -819,6 +1029,9 @@ def main() -> None:
         "gcs_exist_quality_floor": args.gcs_exist_quality_floor,
         "gcs_exist_quality_pos_px": args.gcs_exist_quality_pos_px,
         "gcs_exist_quality_neg_px": args.gcs_exist_quality_neg_px,
+        "gcs_gt4_selective_exist_target_floor": args.gcs_gt4_selective_exist_target_floor,
+        "gcs_gt4_selective_exist_target_ape_max": args.gcs_gt4_selective_exist_target_ape_max,
+        "gcs_gt4_selective_exist_target_visible_thr": args.gcs_gt4_selective_exist_target_visible_thr,
         "gcs_point_valid_pos_weight_max": args.gcs_point_valid_pos_weight_max,
         "gcs_mask_pos_weight_max": args.gcs_mask_pos_weight_max,
         "gcs_edge_pos_weight_max": args.gcs_edge_pos_weight_max,
@@ -837,6 +1050,18 @@ def main() -> None:
         "gcs_eval_nms_dist_px": args.gcs_eval_nms_dist_px,
         "gcs_eval_point_valid_thr": args.gcs_eval_point_valid_thr,
         "gcs_eval_max_det": args.gcs_eval_max_det,
+        "gcs_culane_val": args.gcs_culane_val,
+        "gcs_culane_val_interval": args.gcs_culane_val_interval,
+        "gcs_culane_val_source": args.gcs_culane_val_source,
+        "gcs_culane_val_labels": args.gcs_culane_val_labels,
+        "gcs_culane_val_archive_root": args.gcs_culane_val_archive_root,
+        "gcs_culane_val_conf": args.gcs_culane_val_conf,
+        "gcs_culane_val_point_valid_thr": args.gcs_culane_val_point_valid_thr,
+        "gcs_culane_val_nms_dist_px": args.gcs_culane_val_nms_dist_px,
+        "gcs_culane_val_max_det": args.gcs_culane_val_max_det,
+        "gcs_culane_val_max_images": args.gcs_culane_val_max_images,
+        "gcs_culane_val_warmup": args.gcs_culane_val_warmup,
+        "gcs_culane_val_half": args.gcs_culane_val_half,
         "gcs_official_best": args.gcs_official_best,
         "gcs_allow_internal_best": args.gcs_allow_internal_best,
         "gcs_official_interval": args.gcs_official_interval,
