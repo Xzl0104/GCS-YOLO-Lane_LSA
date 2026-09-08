@@ -28,7 +28,11 @@ class GCSLoss(nn.Module):
     def __init__(self, model: Any = None, **kwargs: Any):
         """Initialize the five-term query loss from a model, args namespace, or plain dict."""
         super().__init__()
-        self.source = model
+        # Keep a plain reference instead of registering the model as a child module.
+        # GCSLaneModel already stores this loss as `criterion`; a normal Module
+        # attribute would create a model -> criterion -> model cycle and break
+        # state_dict()/EMA updates during training.
+        object.__setattr__(self, "source", model)
         self.extra_args = dict(kwargs)
         self.image_size = normalize_imgsz(
             self._arg("gcs_imgsz", self._arg("image_shape", self._arg("imgsz", None))),
