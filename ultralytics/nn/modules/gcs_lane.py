@@ -398,6 +398,12 @@ class GCSLaneHead(nn.Module):
                 nn.Linear(c1, c1),
             )
             self.proposal_state_delta_norm = nn.LayerNorm(c1)
+            # Keep the proposal update a bounded residual. LayerNorm alone
+            # normalizes even a tiny delta to unit variance, defeating the
+            # identity initialization and allowing stage-1 noise to replace
+            # the decoder state abruptly once the last MLP layer moves away
+            # from zero.
+            self.proposal_state_delta_scale = 0.1
         if self.gated_multiscale:
             self.multiscale_gate = nn.Sequential(
                 nn.Linear(c1 * 3 + 2, c1),
@@ -679,7 +685,8 @@ class GCSLaneHead(nn.Module):
             dim=-1,
         )
         delta = self.proposal_state_update_mlp(proposal_context)
-        return hs + self.proposal_state_delta_norm(delta)
+        delta = self.proposal_state_delta_norm(delta)
+        return hs + self.proposal_state_delta_scale * delta
 
     def _refine_fixed_y_logits(self, xs, hs, coarse_logits, fixed_y):
         """Run stage-wise fixed-y refinement and return final logits plus final query state."""

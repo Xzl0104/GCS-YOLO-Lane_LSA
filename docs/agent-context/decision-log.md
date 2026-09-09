@@ -2,6 +2,33 @@
 
 This file records decisions for branch `codex/5-25-3-k56`.
 
+## 2026-09-09: Stabilize CULane proposal residual and distant geometry gradients
+
+The live CULane `proposal_state_refine` run showed a validation F1 peak near
+epoch 40 followed by regression while training losses continued to decrease.
+Two implementation defects were isolated before changing the frozen query
+existence-loss contract:
+
+- proposal-state `LayerNorm` was applied directly to an identity-initialized
+  residual, so even a near-zero MLP output acquired unit variance. The residual
+  is now scaled by `0.1` after normalization before it is added to the decoder
+  state.
+- the visible line-IoU surrogate clamped overlap to zero at distances greater
+  than `gcs_line_iou_width_px`, producing exactly zero geometry gradient for
+  distant proposals. Its overlap is now a smooth exponential tail, preserving
+  finite gradients while keeping exact alignment at zero loss.
+
+This is a CULane architecture/loss implementation fix and requires a fresh
+single-variable remote run for evidence. The active five-term query loss still
+uses hard Hungarian existence targets; quality-aware existence remains a
+separate ablation and was not silently restored.
+
+Validation completed locally:
+
+- `python -m py_compile ultralytics/nn/modules/gcs_lane.py ultralytics/utils/gcs_loss.py tests/test_gcs_root_cause_fixes.py`
+- targeted pytest and CULane contract tests passed
+- `tools/check_model.py --dataset culane --imgsz 384 960` passed
+
 ## 2026-09-08: Protect GT-close unmatched anchors in point-valid loss
 
 Decision:

@@ -347,7 +347,12 @@ class GCSLoss(nn.Module):
         dist = torch.sqrt(dist.square() + temperature * temperature) - temperature
 
         width = max(float(self.line_iou_width_px), 1e-6)
-        overlap = torch.clamp(width - dist, min=0.0)
+        # The previous hard overlap clamp made this loss exactly flat for
+        # dist >= width, while diagnostics show many bad matched points well
+        # beyond that radius. An exponential soft overlap preserves zero loss
+        # at exact alignment and supplies a decaying gradient at every finite
+        # distance, so the term can still pull distant proposals back.
+        overlap = width * torch.exp(-dist / width)
         union = (width + dist).clamp_min(1e-6)
         loss = 1.0 - overlap / union
 
