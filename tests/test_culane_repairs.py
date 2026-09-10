@@ -72,6 +72,25 @@ def test_r2_quality_target_is_detached_and_unmatched_remains_zero():
     assert torch.isfinite(pred_logits.grad).all()
 
 
+def test_r2_internal_quality_tensor_is_detached_with_zero_unmatched():
+    pred_points, gt_points, gt_valid, indices = _lane_case()
+    pred_points = pred_points.repeat(1, 2, 1, 1).requires_grad_(True)
+    pred_valid_logits = torch.full((1, 2, 4), 8.0, requires_grad=True)
+    criterion = GCSLoss({"gcs_imgsz": [384, 960], "gcs_exist_region_quality": True})
+
+    quality = criterion._exist_quality_targets(
+        pred_points,
+        pred_valid_logits,
+        gt_points,
+        gt_valid,
+        indices,
+    )
+    assert quality.shape == (1, 2)
+    assert not quality.requires_grad
+    assert quality[0, 0] > 0.99
+    assert quality[0, 1] == 0.0
+
+
 def test_r1_r2_forward_keeps_five_loss_items():
     pred_points, gt_points, gt_valid, _ = _lane_case()
     pred_points = pred_points.repeat(1, 2, 1, 1).requires_grad_(True)
