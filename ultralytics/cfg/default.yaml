@@ -130,6 +130,8 @@ gcs_curve: 0.1 # (float) GCS adaptive curvature-aware loss gain
 gcs_line_iou: 1.0 # (float) GCS visible lane-region IoU loss gain
 gcs_line_iou_width_px: 18.0 # (float) visible lane-region IoU surrogate lane width in pixels
 gcs_line_iou_temperature_px: 1.0 # (float) smooth distance temperature for visible lane-region IoU loss in pixels
+gcs_line_iou_visibility: false # (bool) R1 prediction-visibility-aware soft region IoU ablation
+gcs_exist_region_quality: false # (bool) R2 detached soft region-quality existence target ablation
 gcs_mask: 0.0 # (float) legacy GCS auxiliary semantic mask loss gain; query five-loss contract ignores it
 gcs_edge: 0.0 # (float) legacy GCS auxiliary edge loss gain; query five-loss contract ignores it
 gcs_count: 0.0 # (float) GCS lane-count/cardinality loss gain; 0 disables
@@ -233,6 +235,7 @@ gcs_eval_max_det: 8 # (int) maximum decoded lane queries kept for GCS validation
 dataset: tusimple # (str) dataset identity used by dataset-specific training hooks
 gcs_culane_val: False # (bool) run periodic CULane region-IoU validation and preserve the best F1 checkpoint
 gcs_culane_val_interval: 5 # (int) epoch interval for periodic CULane region-IoU validation
+gcs_culane_external_fitness: false # (bool) use saved external CULane F1 for early stopping
 gcs_culane_val_source: # (str, optional) CULane validation image directory
 gcs_culane_val_labels: # (str, optional) CULane validation labels_gcs directory
 gcs_culane_val_archive_root: # (str, optional) extracted CULane root containing original .lines.txt annotations

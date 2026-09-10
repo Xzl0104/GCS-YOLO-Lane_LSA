@@ -44,6 +44,8 @@ class GCSLoss(nn.Module):
         self.point_valid_gain = float(self._arg("gcs_point_valid", 1.0) or 0.0)
         self.curve_gain = float(self._arg("gcs_curve", 0.1) or 0.0)
         self.line_iou_gain = float(self._arg("gcs_line_iou", 1.0) or 0.0)
+        self.line_iou_visibility = self._as_bool(self._arg("gcs_line_iou_visibility", False), False)
+        self.exist_region_quality = self._as_bool(self._arg("gcs_exist_region_quality", False), False)
 
         self.line_iou_width_px = float(self._arg("gcs_line_iou_width_px", 18.0) or 18.0)
         self.line_iou_temperature_px = float(self._arg("gcs_line_iou_temperature_px", 1.0) or 1.0)
@@ -185,18 +187,148 @@ class GCSLoss(nn.Module):
 
         return torch.cat(pred_chunks, dim=0), torch.cat(gt_chunks, dim=0), torch.cat(valid_chunks, dim=0)
 
+    @staticmethod
+    def _matched_valid_logits(
+        pred_valid_logits: torch.Tensor,
+        indices: list[tuple[torch.Tensor, torch.Tensor]],
+    ) -> torch.Tensor:
+        """Gather visibility logits for Hungarian-matched query lanes."""
+        chunks: list[torch.Tensor] = []
+        device = pred_valid_logits.device
+        for batch_index, (src_idx, _) in enumerate(indices):
+            if src_idx.numel() == 0:
+                continue
+            chunks.append(pred_valid_logits[batch_index, src_idx.to(device=device, dtype=torch.long)])
+        if not chunks:
+            return pred_valid_logits.new_zeros((0, pred_valid_logits.shape[-1]))
+        return torch.cat(chunks, dim=0)
+
+    def _soft_region_iou_per_lane(
+        self,
+        pred_points: torch.Tensor,
+        pred_valid_logits: torch.Tensor,
+        gt_points: torch.Tensor,
+        gt_valid: torch.Tensor,
+    ) -> torch.Tensor:
+        """Return prediction-visibility-aware soft region-IoU quality per lane.
+
+        ``sigmoid(pred_valid_logits)`` supplies predicted region mass at every
+        fixed-y anchor.  Coordinate agreement uses the same smoothed distance
+        and exponential overlap as R1.  The union includes all predicted
+        anchor mass and all GT-visible anchor mass, so shortening a predicted
+        lane cannot evade this objective.
+        """
+        if pred_points.shape != gt_points.shape or pred_points.shape[-1] != 2:
+            raise ValueError(
+                "Soft region-IoU point tensors must have matching shape N x K x 2, "
+                f"got {tuple(pred_points.shape)} and {tuple(gt_points.shape)}."
+            )
+        if pred_valid_logits.shape != pred_points.shape[:2]:
+            raise ValueError(
+                "Soft region-IoU visibility logits must have shape N x K matching points, "
+                f"got {tuple(pred_valid_logits.shape)} vs {tuple(pred_points.shape[:2])}."
+            )
+        if gt_valid.shape != pred_points.shape[:2]:
+            raise ValueError(
+                "Soft region-IoU GT visibility mask must have shape N x K matching points, "
+                f"got {tuple(gt_valid.shape)} vs {tuple(pred_points.shape[:2])}."
+            )
+
+        h, w = self.image_size
+        scale = pred_points.new_tensor((float(w), float(h))).view(1, 1, 2)
+        distance = torch.linalg.vector_norm((pred_points.float() - gt_points.float()) * scale, dim=-1)
+        smoothing = max(float(self.line_iou_temperature_px), 1e-6)
+        smoothed_distance = torch.sqrt(distance.square() + smoothing * smoothing) - smoothing
+        width = max(float(self.line_iou_width_px), 1e-6)
+        coordinate_overlap = torch.exp(-smoothed_distance / width)
+
+        predicted_mass = torch.sigmoid(pred_valid_logits.float())
+        gt_mass = gt_valid.to(dtype=predicted_mass.dtype)
+        intersection = (predicted_mass * gt_mass * coordinate_overlap).sum(dim=1)
+        union = predicted_mass.sum(dim=1) + gt_mass.sum(dim=1) - intersection
+        return (intersection / union.clamp_min(1e-6)).clamp(0.0, 1.0)
+
+    @torch.no_grad()
+    def _exist_quality_targets(
+        self,
+        pred_points: torch.Tensor,
+        pred_valid_logits: torch.Tensor,
+        gt_points: list[torch.Tensor],
+        gt_valid: list[torch.Tensor],
+        indices: list[tuple[torch.Tensor, torch.Tensor]],
+    ) -> torch.Tensor:
+        """Return detached ``B x Q`` soft region-quality targets for R2."""
+        quality = torch.zeros(
+            pred_points.shape[:2],
+            dtype=torch.float32,
+            device=pred_points.device,
+        )
+        for batch_index, (src_idx, tgt_idx) in enumerate(indices):
+            if src_idx.numel() == 0:
+                continue
+            src_idx = src_idx.to(device=pred_points.device, dtype=torch.long)
+            tgt_idx = tgt_idx.to(device=pred_points.device, dtype=torch.long)
+            gt_batch = gt_points[batch_index].to(device=pred_points.device, dtype=pred_points.dtype)
+            valid_batch = gt_valid[batch_index].to(device=pred_points.device, dtype=torch.bool)
+            quality[batch_index, src_idx] = self._soft_region_iou_per_lane(
+                pred_points[batch_index, src_idx],
+                pred_valid_logits[batch_index, src_idx],
+                gt_batch[tgt_idx],
+                valid_batch[tgt_idx],
+            ).detach().float()
+        return quality
+
     def exist_loss(
         self,
         pred_logits: torch.Tensor,
         indices: list[tuple[torch.Tensor, torch.Tensor]],
+        matched_quality: torch.Tensor | list[torch.Tensor] | tuple[torch.Tensor, ...] | None = None,
     ) -> torch.Tensor:
-        """Hard matched-query BCE: Hungarian-matched queries are 1, all remaining queries are 0."""
+        """Existence BCE with an optional detached quality target.
+
+        The historical two-argument call remains hard matched-query BCE.
+        When R2 is enabled, ``matched_quality`` may contain one value per
+        query (``B x Q``) or one value per matched query per image. Unmatched
+        queries always retain target zero.
+        """
         if pred_logits.ndim == 3 and pred_logits.shape[-1] == 1:
             pred_logits = pred_logits.squeeze(-1)
         target = torch.zeros_like(pred_logits, dtype=torch.float32)
-        for b, (src_idx, _) in enumerate(indices):
-            if src_idx.numel():
-                target[b, src_idx.to(device=pred_logits.device, dtype=torch.long)] = 1.0
+        if self.exist_region_quality and matched_quality is None:
+            raise ValueError("gcs_exist_region_quality=True requires matched_quality targets.")
+
+        for batch_index, (src_idx, _) in enumerate(indices):
+            if src_idx.numel() == 0:
+                continue
+            src_idx = src_idx.to(device=pred_logits.device, dtype=torch.long)
+            values = torch.ones(src_idx.shape, dtype=torch.float32, device=pred_logits.device)
+            if self.exist_region_quality:
+                if isinstance(matched_quality, (list, tuple)):
+                    if batch_index >= len(matched_quality):
+                        raise ValueError(
+                            f"matched_quality has {len(matched_quality)} image entries, "
+                            f"expected at least {batch_index + 1}."
+                        )
+                    values_source = matched_quality[batch_index]
+                else:
+                    values_source = matched_quality[batch_index]
+                values_source = torch.as_tensor(
+                    values_source,
+                    device=pred_logits.device,
+                    dtype=torch.float32,
+                ).reshape(-1)
+                if values_source.numel() == pred_logits.shape[1]:
+                    values = values_source[src_idx]
+                elif values_source.numel() == src_idx.numel():
+                    values = values_source
+                else:
+                    raise ValueError(
+                        "matched_quality must provide one value per query or per matched query, "
+                        f"got {values_source.numel()} values for Q={pred_logits.shape[1]} "
+                        f"and matches={src_idx.numel()}."
+                    )
+                values = torch.nan_to_num(values.detach(), nan=0.0, posinf=1.0, neginf=0.0).clamp(0.0, 1.0)
+            target[batch_index, src_idx] = values
         return F.binary_cross_entropy_with_logits(pred_logits.float(), target, reduction="mean")
 
     def point_loss(
@@ -333,6 +465,7 @@ class GCSLoss(nn.Module):
         gt_points: list[torch.Tensor],
         gt_valid: list[torch.Tensor],
         indices: list[tuple[torch.Tensor, torch.Tensor]],
+        pred_valid_logits: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Differentiable visible lane-region IoU surrogate on GT-visible anchors of matched lanes."""
         pred_match, gt_match, valid_match = self._matched_lane_tensors(pred_points, gt_points, gt_valid, indices)
@@ -356,6 +489,24 @@ class GCSLoss(nn.Module):
         union = (width + dist).clamp_min(1e-6)
         loss = 1.0 - overlap / union
 
+        if self.line_iou_visibility:
+            if pred_valid_logits is None:
+                raise ValueError(
+                    "gcs_line_iou_visibility=True requires pred_valid_logits for the soft region-IoU loss."
+                )
+            valid_logits_match = self._matched_valid_logits(pred_valid_logits, indices)
+            soft_iou = self._soft_region_iou_per_lane(
+                pred_match,
+                valid_logits_match,
+                gt_match,
+                valid_match,
+            )
+            gt_gate = valid_match.to(dtype=loss.dtype)
+            has_visible = gt_gate.sum(dim=1) > 0
+            # Soft visibility is part of the differentiable region overlap.
+            # The decoder's hard contiguous-run rule remains inference-only.
+            return (1.0 - soft_iou[has_visible]).mean() if bool(has_visible.any()) else self._zero_like(pred_points)
+
         valid = valid_match.to(dtype=loss.dtype)
         valid_count = valid.sum(dim=1)
         lane_loss = (loss * valid).sum(dim=1) / valid_count.clamp_min(1.0)
@@ -375,11 +526,18 @@ class GCSLoss(nn.Module):
 
         indices = self.matcher(pred_points, pred_logits, gt_points, gt_valid)
 
-        exist_loss = self.exist_loss(pred_logits, indices)
+        quality_targets = (
+            self._exist_quality_targets(pred_points, pred_valid_logits, gt_points, gt_valid, indices)
+            if self.exist_region_quality
+            else None
+        )
+        exist_loss = self.exist_loss(pred_logits, indices, quality_targets)
         point_loss = self.point_loss(pred_points, gt_points, gt_valid, indices)
         point_valid_loss = self.point_valid_loss(pred_points, pred_valid_logits, gt_points, gt_valid, indices)
         curve_loss = self.curve_loss(pred_points, gt_points, gt_valid, indices)
-        visible_line_iou_loss = self.visible_line_iou_loss(pred_points, gt_points, gt_valid, indices)
+        visible_line_iou_loss = self.visible_line_iou_loss(
+            pred_points, gt_points, gt_valid, indices, pred_valid_logits if self.line_iou_visibility else None
+        )
 
         total = (
             self.exist_gain * exist_loss

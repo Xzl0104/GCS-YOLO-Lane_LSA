@@ -538,13 +538,16 @@ class BaseTrainer:
             self.nan_recovery_attempts = 0
             if RANK in {-1, 0}:
                 self.save_metrics(metrics={**self.label_loss_items(self.tloss), **self.metrics, **self.lr})
-                self.stop |= self.stopper(epoch + 1, self.fitness) or final_epoch
+                if not getattr(self, "_defer_early_stopping_until_save", False):
+                    self.stop |= self.stopper(epoch + 1, self.fitness) or final_epoch
                 if self.args.time:
                     self.stop |= (time.time() - self.train_time_start) > (self.args.time * 3600)
 
                 # Save model
                 if (self.args.save or final_epoch) and self.save_model():
                     self.run_callbacks("on_model_save")
+                if getattr(self, "_defer_early_stopping_until_save", False):
+                    self.stop |= self.stopper(epoch + 1, self.fitness) or final_epoch
 
             # Scheduler
             t = time.time()

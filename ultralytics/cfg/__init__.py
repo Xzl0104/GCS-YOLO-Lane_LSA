@@ -396,6 +396,9 @@ CFG_BOOL_KEYS = frozenset(
         "gcs_spurious_disable_gt5",
         "gcs_spurious_gt_protect",
         "gcs_point_valid_unmatched_ignore",
+        "gcs_line_iou_visibility",
+        "gcs_exist_region_quality",
+        "gcs_culane_external_fitness",
     }
 )
 

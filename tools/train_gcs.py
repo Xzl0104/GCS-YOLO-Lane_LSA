@@ -329,6 +329,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--gcs-line-iou", type=float, default=1.0)
     parser.add_argument("--gcs-line-iou-width-px", type=float, default=18.0)
     parser.add_argument("--gcs-line-iou-temperature-px", type=float, default=1.0)
+    parser.add_argument("--gcs-line-iou-visibility", action="store_true", help="R1 soft visibility-aware region IoU ablation.")
+    parser.add_argument("--gcs-exist-region-quality", action="store_true", help="R2 detached region-quality existence ablation.")
+    parser.add_argument("--gcs-culane-external-fitness", action="store_true", help="R0 use external CULane F1 for early stopping.")
     parser.add_argument("--gcs-mask", type=float, default=0.0)
     parser.add_argument("--gcs-edge", type=float, default=0.0)
     parser.add_argument(
@@ -1052,6 +1055,9 @@ def main() -> None:
         "gcs_eval_max_det": args.gcs_eval_max_det,
         "gcs_culane_val": args.gcs_culane_val,
         "gcs_culane_val_interval": args.gcs_culane_val_interval,
+        "gcs_culane_external_fitness": args.gcs_culane_external_fitness,
+        "gcs_line_iou_visibility": args.gcs_line_iou_visibility,
+        "gcs_exist_region_quality": args.gcs_exist_region_quality,
         "gcs_culane_val_source": args.gcs_culane_val_source,
         "gcs_culane_val_labels": args.gcs_culane_val_labels,
         "gcs_culane_val_archive_root": args.gcs_culane_val_archive_root,

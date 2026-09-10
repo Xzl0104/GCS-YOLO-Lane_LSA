@@ -108,6 +108,10 @@ class GCSLaneTrainer(BaseTrainer):
         self.culane_val_best_summary = self.save_dir / "culane_val_best.json"
         self.culane_val_best_decode = self.wdir / "culane_val_best_decode.yaml"
         self._culane_val_best_state = self._load_culane_val_best_state()
+        self._defer_early_stopping_until_save = bool(
+            self._get_arg_value("gcs_culane_external_fitness", False)
+        ) and self._is_culane_training()
+        self._external_fitness_value = None
         self._lock_gcs_shape_contract()
         self._set_loss_names_for_mode()
         self._warn_if_ordered_slot_without_official_best()
@@ -1453,6 +1457,8 @@ class GCSLaneTrainer(BaseTrainer):
                 },
             )
             self._culane_val_best_state = {"summary": summary, "epoch": epoch_num, "key": new_key}
+        if bool(self._get_arg_value("gcs_culane_external_fitness", False)):
+            self._external_fitness_value = float(summary.get("f1", 0.0))
             LOGGER.info(
                 "Updated culane_val_best.pt: "
                 f"epoch={epoch_num}, F1={float(summary['f1']):.6f}, "
@@ -1481,6 +1487,8 @@ class GCSLaneTrainer(BaseTrainer):
         if saved:
             self._maybe_update_official_best()
             self._maybe_update_culane_val_best()
+            if self._external_fitness_value is not None:
+                self.fitness = float(self._external_fitness_value)
         return saved
 
     def label_loss_items(self, loss_items: list[float] | torch.Tensor | None = None, prefix: str = "train"):
