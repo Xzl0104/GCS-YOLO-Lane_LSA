@@ -430,6 +430,10 @@ ablation.
 For CULane query training, `--gcs-query-count-ce > 0` is invalid under this
 five-loss contract, and the default CULane query YAML must not emit dense
 `aux_mask_logits`, dense `aux_edge_logits`, or `pred_count_logits`.
+The CULane training profile resolves `gcs_line_iou_width_px=30.0` by default
+to match the official evaluator's 30 px lane rasterization width; TuSimple
+continues to resolve the default to 18.0. An explicit CLI width remains an
+ablation override.
 
 Historical query loss/log records from the active `424ab1c86` rollback state
 included many additional items such as `smooth_loss`, `mask_loss`,

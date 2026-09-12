@@ -2,6 +2,23 @@
 
 This file records decisions for branch `codex/5-25-3-k56`.
 
+## 2026-09-13: Align CULane soft region-IoU scale and external-best evidence
+
+The CULane evaluator uses a 30 px rasterized lane width, while the generic
+training surrogate default was 18 px. `tools/train_gcs.py` now resolves the
+soft region-IoU width by dataset profile: 30 px for CULane and 18 px for
+TuSimple. An explicit `--gcs-line-iou-width-px` value remains authoritative
+for controlled ablations.
+
+The CULane external-best hook now records `internal_fitness`,
+`external_culane_fitness`, and `fitness_source` in the selected checkpoint
+metadata and emits `Updated` only when the best checkpoint is actually
+replaced; evaluated but inferior epochs are logged as `Kept`.
+
+This aligns the training geometry scale and removes an evidence-chain logging
+ambiguity. It does not claim that the differentiable surrogate is identical to
+the rasterized evaluator or replace the required full-val ablation evidence.
+
 ## 2026-09-09: Stabilize CULane proposal residual and distant geometry gradients
 
 The live CULane `proposal_state_refine` run showed a validation F1 peak near
@@ -18,8 +35,12 @@ existence-loss contract:
   distant proposals. Its overlap is now a smooth exponential tail, preserving
   finite gradients while keeping exact alignment at zero loss.
 
-This is a CULane architecture/loss implementation fix and requires a fresh
-single-variable remote run for evidence. The active five-term query loss still
+This is a CULane architecture/loss implementation fix. The subsequent
+`culane_20260909_proposal_rootfix_b48_v1` run selected external-val
+F1=0.783619 at epoch 25 and ended at epoch 62 with F1=0.773829. See the
+2026-09-11 current-run diagnosis in `known-bottlenecks.md`; the two fixes
+must not continue to be presented as outstanding defects or proof of 0.8.
+The active five-term query loss still
 uses hard Hungarian existence targets; quality-aware existence remains a
 separate ablation and was not silently restored.
 

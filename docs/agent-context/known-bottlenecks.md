@@ -20,6 +20,86 @@ GT4-hard diagnostics, `tools/diagnose_tusimple_count_confusion.py`,
 only. They do not describe currently available code, CLI flags, loss terms,
 diagnostic scripts, configs, model outputs, or active selected candidates.
 
+## 2026-09-13: Interim CULane R0/R1/R2 assessment
+
+Snapshot at 00:24-00:26 JST: the b48/nbs48 AMP joint run
+`culane_E3_r0r1r2_amp_e60_b48_warmup3_20260912_4090D` has complete external
+val through epoch 9; epoch 10 is evaluating. Best epoch 4 has F1=0.816595,
+P=0.849742, R=0.785937, TP=25686, FP=4542, FN=6996. Epoch 9 has
+F1=0.808886, FP=4931, FN=7139. These are full 9,675-image region-IoU val
+results, not internal APE val or test results. This is an interim record.
+
+The old b24/nbs24 AMP comparator already enabled R0, R1 and R2 and used
+the same donor and checked optimization settings. Its best was F1=0.814002,
+FP=4588, FN=7102. The new best passes the aggregate numerical gates
+(F1 +0.002593, FP -46, FN -106, Recall +0.003243), but this comparison
+does not isolate any repair's causal effect. Single-repair ablations and
+repeatability remain unverified. Do not present the old b24 run as loss-off.
+
+The dedicated external best JSON still selects epoch 4. External F1 is
+connected to deferred early stopping; generic best.pt still follows the
+internal validation/save path, and the Updated-best log can misreport
+non-best epochs. Use culane_val_best.pt plus its JSON/decode metadata.
+R1 includes predicted visibility and R2 supplies detached matched-quality
+targets, but no new fixed-sample candidate-failure, high-score-FP or Cross
+diagnostic has established that those specific root causes are resolved.
+Post-peak FP growth and train/val loss divergence remain observable.
+
+Preserve the current candidate and running protocol. A controlled
+R0-only / R0+R1 / R0+R2 / joint comparison at fixed b48, followed by
+val-only paired diagnostics, is the proposed next verification, not an
+experiment launched by this review. No test-based selection or F1=0.85
+guarantee is supported. Local evidence and detailed assessment are under
+`outputs/culane_r012_assessment_20260913/`.
+
+## 2026-09-11: CULane rootfix validation diagnosis
+
+Run `culane_20260909_proposal_rootfix_b48_v1` finished at epoch 62.
+Full external CULane val (9,675 images, region IoU > 0.5, conf=0.2,
+point_valid_thr=0.4, nms_dist_px=50, max_det=5) selected epoch 25 at
+F1=0.783619; epoch 62 reached 0.773829. The initialization donor E1
+selected 0.786856 under the same external decode. These are different
+training configurations, not an isolated architecture ablation.
+
+A fixed random 512-image val sample (seed 20260910, 1,698 GT lanes) of the
+current selected checkpoint produced 362 FN: 359 had no raw query with
+predicted-visible region IoU > 0.5, one had only below-threshold good
+candidates, and two had NMS/max_det/assignment failures. Post-inference,
+GT-span-assisted geometry evaluation could cover 126 of those 359 missing
+lanes; 233 still lacked qualifying geometry. This is diagnostic evidence
+for coordinate coverage and visibility-span problems, not deployable oracle
+performance or a full-val category estimate. High-score FP (score >= 0.9)
+increased from 118 at epoch 25 to 153 at epoch 62 on the same sample.
+
+Confirmed implementation and training-control mismatches:
+
+- Hard Hungarian existence targets do not encode final visible-region IoU.
+  The geometry-aware existence input does not change that target contract.
+- The GT-visible geometry surrogate does not consume predicted validity;
+  visibility is supervised separately by per-anchor BCE, while decode keeps
+  the longest thresholded contiguous run.
+- Internal fitness uses APE-based F1 with small APE/count penalties. External
+  selection preserves `culane_val_best.pt` separately and does not control
+  early stopping. The run stopped 40 epochs after internal best epoch 22,
+  with lr=0.000415451, still 83.09% of lr0=0.0005.
+- From epoch 25 to 62, train existence/valid losses fell while val existence
+  rose 0.16401 -> 0.20368 and val point-valid rose 0.08469 -> 0.10340.
+  Val geometry-surrogate loss slightly improved, so degradation must not be
+  described as uniformly worsening coordinate regression.
+
+Prioritize coordinate/visibility diagnostics, score-quality alignment, and
+an external-F1-aligned training schedule. Do not attribute this run to the
+already-fixed proposal residual or hard-overlap gradient defects, assume
+NMS is the main bottleneck, or claim that training longer guarantees 0.8.
+No single-module causal attribution or 0.8 architecture ceiling is proved.
+No algorithm change or test-based selection was made in this review.
+
+Local, untracked evidence is under `outputs/culane_rootcause_20260910/`,
+including `root_cause_report.md`, raw run summaries, sample diagnostics,
+and synthetic metric counterexamples. Older E2 proportions below describe
+a different checkpoint and the train split; they are not current-run val
+failure proportions.
+
 ## 2026-09-05: CULane GT4 E2 Raw-Query Diagnosis
 
 The completed E2 run is a CULane train-split diagnosis, not an active TuSimple

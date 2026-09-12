@@ -117,7 +117,20 @@ def test_culane_profile_sets_0_to_4_lane_contract() -> None:
     assert (args.gcs_min_lanes, args.gcs_max_lanes, args.gcs_count_classes) == (0, 4, 5)
     assert (args.gcs_query_count_min_lanes, args.gcs_query_count_max_lanes) == (0, 4)
     assert args.gcs_culane_val is True
+    assert args.gcs_line_iou_width_px == 30.0
     assert_dataset_profile_contract(args)
+
+
+def test_tusimple_profile_keeps_18px_soft_region_width() -> None:
+    args = _profile_args(["--dataset", "tusimple"])
+
+    assert args.gcs_line_iou_width_px == 18.0
+
+
+def test_culane_profile_preserves_explicit_soft_region_width() -> None:
+    args = _profile_args(["--dataset", "culane", "--gcs-line-iou-width-px", "18"])
+
+    assert args.gcs_line_iou_width_px == 18.0
 
 
 def test_culane_profile_rejects_query_count_ce() -> None:

@@ -1288,6 +1288,11 @@ class GCSLaneTrainer(BaseTrainer):
             return False
         if not bool(self._get_arg_value("gcs_culane_val", False)):
             return False
+        # External CULane F1 is used as the trainer's early-stopping fitness.
+        # It must be refreshed every epoch; otherwise the generic trainer would
+        # apply patience to a stale score between interval-based evaluations.
+        if bool(self._get_arg_value("gcs_culane_external_fitness", False)):
+            return True
         interval = int(self._get_arg_value("gcs_culane_val_interval", 5) or 0)
         return self._culane_val_epoch_due(
             epoch=int(self.epoch),
@@ -1415,9 +1420,14 @@ class GCSLaneTrainer(BaseTrainer):
             culane_archive_root=self._culane_val_archive_root(),
         )
         summary = dict(output["summary"])
+        # Capture the generic trainer fitness before external CULane fitness is
+        # installed. This makes the selection evidence explicit and prevents
+        # internal APE fitness from being confused with official region-IoU F1.
+        internal_fitness = float(getattr(self, "fitness", 0.0) or 0.0)
         new_key = self._culane_val_best_key(summary, epoch_num)
         old_key = self._culane_val_best_state.get("key") if self._culane_val_best_state else None
-        if old_key is None or new_key > old_key:
+        updated = old_key is None or new_key > old_key
+        if updated:
             selection_policy = {
                 "primary": "max_f1",
                 "tie_breakers": ["min_fp", "min_fn", "min_ape_mean_px", "max_epoch"],
@@ -1430,6 +1440,9 @@ class GCSLaneTrainer(BaseTrainer):
                 "selection_policy": selection_policy,
                 "summary": summary,
                 "config": output.get("config", {}),
+                "internal_fitness": internal_fitness,
+                "external_culane_fitness": float(summary.get("f1", 0.0)),
+                "fitness_source": "external_culane_f1",
             }
             shutil.copy2(self.last, self.culane_val_best)
             self.culane_val_best_summary.write_text(
@@ -1444,6 +1457,9 @@ class GCSLaneTrainer(BaseTrainer):
                     "eval_summary": str((sweep_dir / "eval_summary.json").resolve()),
                     "selection_policy": selection_policy,
                     "metric": "culane_iou",
+                    "internal_fitness": internal_fitness,
+                    "external_culane_fitness": float(summary.get("f1", 0.0)),
+                    "fitness_source": "external_culane_f1",
                     "culane_metrics": {
                         "f1": float(summary["f1"]),
                         "precision": float(summary["precision"]),
@@ -1459,11 +1475,19 @@ class GCSLaneTrainer(BaseTrainer):
             self._culane_val_best_state = {"summary": summary, "epoch": epoch_num, "key": new_key}
         if bool(self._get_arg_value("gcs_culane_external_fitness", False)):
             self._external_fitness_value = float(summary.get("f1", 0.0))
-            LOGGER.info(
-                "Updated culane_val_best.pt: "
-                f"epoch={epoch_num}, F1={float(summary['f1']):.6f}, "
-                f"TP={int(summary['tp'])}, FP={int(summary['fp'])}, FN={int(summary['fn'])}"
-            )
+            if updated:
+                LOGGER.info(
+                    "Updated culane_val_best.pt: "
+                    f"epoch={epoch_num}, F1={float(summary['f1']):.6f}, "
+                    f"TP={int(summary['tp'])}, FP={int(summary['fp'])}, FN={int(summary['fn'])}"
+                )
+            else:
+                current = self._culane_val_best_state["summary"]
+                LOGGER.info(
+                    "Kept existing culane_val_best.pt: "
+                    f"epoch={self._culane_val_best_state['epoch']}, F1={float(current['f1']):.6f}, "
+                    f"new_epoch={epoch_num}, new_F1={float(summary['f1']):.6f}"
+                )
         else:
             current = self._culane_val_best_state["summary"]
             LOGGER.info(

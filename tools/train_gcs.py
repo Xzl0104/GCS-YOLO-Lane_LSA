@@ -94,6 +94,8 @@ def apply_dataset_profile(args: argparse.Namespace) -> argparse.Namespace:
             args.gcs_culane_val_nms_dist_px = 50.0
         if args.gcs_culane_val_max_det is None:
             args.gcs_culane_val_max_det = 8
+        if args.gcs_line_iou_width_px is None:
+            args.gcs_line_iou_width_px = 18.0
         return args
 
     if dataset != "culane":
@@ -131,6 +133,11 @@ def apply_dataset_profile(args: argparse.Namespace) -> argparse.Namespace:
         args.gcs_culane_val_nms_dist_px = 50.0
     if args.gcs_culane_val_max_det is None:
         args.gcs_culane_val_max_det = 5
+    # The official CULane evaluator rasterizes lanes with a 30 px width.
+    # Keep the differentiable training surrogate on the same geometric scale
+    # by default. An explicit CLI value remains authoritative for ablations.
+    if args.gcs_line_iou_width_px is None:
+        args.gcs_line_iou_width_px = 30.0
     return args
 
 
@@ -327,7 +334,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--gcs-smooth", type=float, default=0.0)
     parser.add_argument("--gcs-curve", type=float, default=0.1)
     parser.add_argument("--gcs-line-iou", type=float, default=1.0)
-    parser.add_argument("--gcs-line-iou-width-px", type=float, default=18.0)
+    parser.add_argument(
+        "--gcs-line-iou-width-px",
+        type=float,
+        default=None,
+        help="Training soft region-IoU lane width in pixels. Defaults to 18 for TuSimple and 30 for CULane.",
+    )
     parser.add_argument("--gcs-line-iou-temperature-px", type=float, default=1.0)
     parser.add_argument("--gcs-line-iou-visibility", action="store_true", help="R1 soft visibility-aware region IoU ablation.")
     parser.add_argument("--gcs-exist-region-quality", action="store_true", help="R2 detached region-quality existence ablation.")
